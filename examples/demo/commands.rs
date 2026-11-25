@@ -62,8 +62,8 @@ const SAMPLES: &[(&str, &str, &str)] = &[
     ),
     (
         "sample-study",
-        "Sample study editor",
-        "Apply a close-difference study and save named source documents locally.",
+        "Script editor",
+        "Write scripted studies with completion, apply them to the chart and save them locally.",
     ),
     (
         "tape",

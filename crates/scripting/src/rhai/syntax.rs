@@ -21,6 +21,7 @@ use egui_charts::studies::{
     FillBoundary, InputKind, InputValue, PlotType, StudyInput, StudyScale, StudySource,
 };
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 /// Most plots, inputs, series, states and other histories a script may declare.
@@ -602,6 +603,7 @@ fn store_series(context: &mut EvalContext, inputs: &[Expression], state: &Dynami
         if let Some(slot) = run.columns.declared[at].last_mut() {
             *slot = value;
         }
+        run.mark(span(inputs[0].position()));
     });
     Ok(Dynamic::UNIT)
 }
@@ -610,7 +612,10 @@ fn store_plot(context: &mut EvalContext, inputs: &[Expression], state: &Dynamic)
     let at = state.as_int().unwrap_or(0) as usize;
     let title = inputs[0].get_string_value().unwrap_or_default().to_owned();
     let value = number(context, &inputs[1], || format!("plot \"{title}\""))?;
-    runtime::with(|run| run.row[at] = value);
+    runtime::with(|run| {
+        run.row[at] = value;
+        run.mark(span(inputs[0].position()));
+    });
     Ok(Dynamic::UNIT)
 }
 
@@ -628,7 +633,12 @@ fn read_study(context: &mut EvalContext, inputs: &[Expression], state: &Dynamic)
         args.push(arg(&value, input.series));
     }
     let name = inputs[0].position();
-    match runtime::with(|run| run.study(site, args, span(name))) {
+    let line = runtime::with(|run| {
+        let line = run.study(site, args, span(name));
+        run.mark(span(name));
+        line
+    });
+    match line {
         None => Ok(Dynamic::from_float(f64::NAN)),
         Some(Ok(line)) => Ok(Dynamic::from(Handle(line))),
         Some(Err((at, message))) => {
@@ -1432,7 +1442,17 @@ impl<'a> Reader<'a> {
 
 /// The tokens of `source`, any text such as a script being written, with their positions.
 pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
-    let mut tokens = Vec::new();
+    let pieces = pieces(source).into_iter();
+    pieces
+        .filter_map(|(token, span, _)| Some((token?, span)))
+        .collect()
+}
+
+/// Every piece of `source` in order, a token or `None` for a comment, with its position and its
+/// byte range. A string's range covers its delimiters; an unterminated string or block comment
+/// runs to the end of the text.
+pub(crate) fn pieces(source: &str) -> Vec<(Option<Token<'_>>, Span, Range<usize>)> {
+    let mut pieces = Vec::new();
     let mut reader = Reader {
         rest: source,
         line: 1,
@@ -1448,7 +1468,7 @@ pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
             column: reader.column + 1,
         };
         let Some(c) = reader.next() else {
-            return tokens;
+            return pieces;
         };
         let token = match c {
             '/' if reader.eat("/") => {
@@ -1459,7 +1479,7 @@ pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
                 if reader.eat("\r") && !reader.rest.starts_with('\n') {
                     (reader.line, reader.column) = (reader.line + 1, 0);
                 }
-                continue;
+                None
             }
             '/' if reader.eat("*") => {
                 let mut depth = 1;
@@ -1472,7 +1492,7 @@ pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
                         reader.next();
                     }
                 }
-                continue;
+                None
             }
             '"' | '\'' => {
                 let from = reader.rest;
@@ -1483,7 +1503,7 @@ pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
                             reader.next();
                         }
                         Some(next) if next != c => {}
-                        _ => break Token::Text(text),
+                        _ => break Some(Token::Text(text)),
                     }
                 }
             }
@@ -1495,7 +1515,7 @@ pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
                 loop {
                     let text = reader.since(from);
                     if reader.eat(&end) || reader.next().is_none() {
-                        break Token::Text(text);
+                        break Some(Token::Text(text));
                     }
                 }
             }
@@ -1504,21 +1524,21 @@ pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
                 if expression {
                     braces.push(0);
                 }
-                Token::Text(text)
+                Some(Token::Text(text))
             }
             '}' if braces.last() == Some(&0) => {
                 let (text, expression) = reader.template();
                 if !expression {
                     braces.pop();
                 }
-                Token::Text(text)
+                Some(Token::Text(text))
             }
             c if c.is_whitespace() => continue,
             c if word(c) => {
                 while reader.rest.starts_with(word) {
                     reader.next();
                 }
-                Token::Word(reader.since(from))
+                Some(Token::Word(reader.since(from)))
             }
             c => {
                 match (c, braces.last_mut()) {
@@ -1526,9 +1546,10 @@ pub(crate) fn tokens(source: &str) -> Vec<(Token<'_>, Span)> {
                     ('}', Some(open)) => *open -= 1,
                     _ => {}
                 }
-                Token::Symbol(c)
+                Some(Token::Symbol(c))
             }
         };
-        tokens.push((token, span));
+        let start = source.len() - from.len();
+        pieces.push((token, span, start..source.len() - reader.rest.len()));
     }
 }

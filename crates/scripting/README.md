@@ -339,6 +339,44 @@ error with its line, column and bar. A host checks a script on the chart's bars 
 a study, with `Script::check`, or with the new study itself, which it calculates off the chart until
 its calculation is done.
 
+## Editors
+
+`tokens` classifies the keywords, declarations, built-in names, numbers, strings and comments of a
+text by byte range, for an editor to colour, with the scanner the compile check uses, so both agree
+on what is a string or a comment. `ScriptError::span` turns an error's line and column into the byte
+range it points at, the name or number there or a single character, for an editor to underline:
+
+```rust
+use egui_charts::studies::IndicatorFactory;
+use egui_charts_scripting::{Script, TokenClass, tokens};
+
+let text = "plot(\"x\", close); // c";
+let classes: Vec<_> = tokens(text)
+    .into_iter()
+    .map(|(range, class)| (&text[range], class))
+    .collect();
+assert_eq!(
+    classes,
+    [
+        ("plot", TokenClass::Declaration),
+        ("\"x\"", TokenClass::Text),
+        ("close", TokenClass::Builtin),
+        ("// c", TokenClass::Comment),
+    ]
+);
+let text = "plot(\"x\", clse);";
+let error = Script::compile("Close", text, &IndicatorFactory::new()).unwrap_err();
+assert_eq!(&text[error.span(text)], "clse");
+```
+
+`Script::with_profiling(true)` makes the studies of a script record, for each line, the runtime
+operations on it and the time they took: the streaming and crossing helpers, history reads with
+`x[n]`, the fields of other histories and the `series`, `plot` and `study` statements, each charged
+the time since the one before, so arithmetic and the other helpers count towards the next of them.
+`Script::profile` returns what the last full recalculation of any of its studies on bars recorded
+when it ended without an error or a limit; an update by a new bar leaves it as it was, and so does a
+study calculated on no bars.
+
 ## Limits
 
 A script study never calculates on the UI thread: natively each study has a worker thread, and on
