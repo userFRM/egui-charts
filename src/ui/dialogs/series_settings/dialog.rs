@@ -340,6 +340,22 @@ mod tests {
                     assert_eq!(styles.hlc_area.low_line.color, low_line);
                     assert_eq!(styles.hlc_area.high_to_close_fill, high_to_close_fill);
                     assert_eq!(styles.hlc_area.close_to_low_fill, close_to_low_fill);
+                    // Unedited column colours follow the theme at their 50% opacity.
+                    let columns = if reset {
+                        let [r, g, b, _] = theme.chart.candle_up.to_srgba_unmultiplied();
+                        let [dr, dg, db, _] = theme.chart.candle_down.to_srgba_unmultiplied();
+                        [
+                            egui::Color32::from_rgba_unmultiplied(r, g, b, 128),
+                            egui::Color32::from_rgba_unmultiplied(dr, dg, db, 128),
+                        ]
+                    } else {
+                        let style = &original.chart_type_params.styles.columns;
+                        [style.up_color, style.down_color]
+                    };
+                    assert_eq!(
+                        [styles.columns.up_color, styles.columns.down_color],
+                        columns
+                    );
                     let volume = &original.chart_type_params.styles.volume_candles;
                     let (ups, downs) = if reset {
                         ([theme.chart.candle_up; 3], [theme.chart.candle_down; 3])

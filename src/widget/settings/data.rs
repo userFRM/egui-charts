@@ -27,7 +27,10 @@ pub struct SessionBackgroundSettings {
     pub shade_premarket: bool,
     /// Highlight the post-market while session highlighting is enabled.
     pub shade_postmarket: bool,
-    /// Overnight fill; `PLACEHOLDER` follows the theme at 16% opacity.
+    /// Highlight overnight windows while session highlighting is enabled.
+    pub shade_overnight: bool,
+    /// Overnight fill; new settings use #D500F9 at 8% opacity, and `PLACEHOLDER` follows the
+    /// theme accent at 16% opacity.
     pub overnight_hours_color: Color32,
 }
 
@@ -41,6 +44,7 @@ impl Default for SessionBackgroundSettings {
             postmarket_color: config.postmarket_color,
             shade_premarket: config.shade_premarket,
             shade_postmarket: config.shade_postmarket,
+            shade_overnight: config.shade_overnight,
             overnight_hours_color: config.overnight_hours_color,
         }
     }

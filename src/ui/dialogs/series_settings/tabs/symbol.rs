@@ -129,10 +129,22 @@ impl SymbolTab {
                     ui.end_row();
                     Self::line_style(ui, &mut styles.baseline.above, "above_style");
                     Self::fill_row(ui, "Above fill", &mut styles.baseline.above_fill);
+                    Self::fill_at_base_row(
+                        ui,
+                        "Above fill at base",
+                        &mut styles.baseline.above_fill_at_base,
+                        styles.baseline.above_fill,
+                    );
                     ui.label(l10n::text(ui.ctx(), "Below base"));
                     ui.end_row();
                     Self::line_style(ui, &mut styles.baseline.below, "below_style");
                     Self::fill_row(ui, "Below fill", &mut styles.baseline.below_fill);
+                    Self::fill_at_base_row(
+                        ui,
+                        "Below fill at base",
+                        &mut styles.baseline.below_fill_at_base,
+                        styles.baseline.below_fill,
+                    );
                     Self::marker_radius_row(ui, &mut styles.baseline.marker_radius);
                 }
                 ChartType::HighLow => Self::high_low(ui, &mut styles.high_low),
@@ -164,6 +176,18 @@ impl SymbolTab {
                 ChartType::PointAndFigure => {
                     let candles = [settings.bullish_color, settings.bearish_color];
                     let style = &mut styles.point_figure;
+                    Self::own_color_rows(
+                        ui,
+                        [
+                            ("Rising column colour", &mut style.up_color),
+                            ("Falling column colour", &mut style.down_color),
+                        ],
+                        candles,
+                    );
+                }
+                ChartType::Columns => {
+                    let candles = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut styles.columns;
                     Self::own_color_rows(
                         ui,
                         [
@@ -1504,16 +1528,19 @@ impl SymbolTab {
         ui.end_row();
     }
 
+    /// A fill at the base that, while `None`, shows `edge`, the colour of a flat fill, and becomes
+    /// a gradient endpoint once picked.
+    fn fill_at_base_row(ui: &mut Ui, label: &str, color: &mut Option<Color32>, edge: Color32) {
+        ui.label(l10n::text(ui.ctx(), label));
+        let mut shown = color.unwrap_or(edge);
+        if Self::color_picker(ui, &mut shown) {
+            *color = Some(shown);
+        }
+        ui.end_row();
+    }
+
     fn candle_colors_section(ui: &mut Ui, settings: &mut SeriesSettings) {
-        let columns = settings.chart_type == ChartType::Columns;
-        ui.label(l10n::text(
-            ui.ctx(),
-            if columns {
-                "Up and down colors"
-            } else {
-                "Body"
-            },
-        ));
+        ui.label(l10n::text(ui.ctx(), "Body"));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             Self::color_picker(ui, &mut settings.bullish_color);
@@ -1521,8 +1548,7 @@ impl SymbolTab {
         });
         ui.end_row();
 
-        // A column is one filled rectangle, so it has no border or wick.
-        if settings.chart_type.is_time_independent() || columns {
+        if settings.chart_type.is_time_independent() {
             return;
         }
 

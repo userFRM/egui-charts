@@ -682,6 +682,62 @@ mod tests {
         }
     }
 
+    /// The default style fades each fill from 28% opacity at its pane edge to 5% at the base, in
+    /// the rising colour above the base and the falling colour below it. On a 0..100 pane with
+    /// the base at 50, a line from 100 to 0 reaches both edges and crosses the base halfway.
+    #[test]
+    fn default_baseline_fades_from_the_pane_edges_to_the_base() {
+        use crate::scales::{PriceRange, PriceTransform};
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let bars = [100.0, 0.0].map(|price| Bar::from_value(chrono::DateTime::UNIX_EPOCH, price));
+        let ctx = Context::default();
+        let output = ctx.run_ui(RawInput::default(), |ui| {
+            draw_baseline_segments(
+                ui.painter(),
+                &bars,
+                0,
+                0..bars.len(),
+                &map,
+                50.0,
+                0.0,
+                |i, _| i as f32 * 10.0,
+                &BaselineStyle::default(),
+                PriceSource::Close,
+            );
+        });
+        let vertices: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Mesh(mesh) => Some(mesh.vertices.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        output.drop_without_applying_deltas();
+        // rgb(8, 153, 129) and rgb(242, 54, 69) at alpha 71 and 13, premultiplied.
+        for (x, price, expected) in [
+            (0.0, 100.0, [2, 43, 36, 71]),
+            (0.0, 50.0, [0, 8, 7, 13]),
+            (10.0, 0.0, [67, 15, 19, 71]),
+            (10.0, 50.0, [12, 3, 4, 13]),
+        ] {
+            assert!(
+                vertices
+                    .iter()
+                    .any(|v| v.pos == pos2(x, map.price_to_y(price))
+                        && v.color.to_array() == expected),
+                "no {expected:?} at {x}, {price}"
+            );
+        }
+    }
+
     #[test]
     fn baseline_dashes_keep_phase_across_short_segments_and_crossings() {
         use crate::model::LineStyle;
@@ -778,6 +834,9 @@ mod tests {
                 if baseline {
                     let mut style = BaselineStyle::default();
                     style.above.line_type = LineType::Curved;
+                    // Flat, so every fill vertex holds the colour.
+                    style.above_fill_at_base = None;
+                    style.below_fill_at_base = None;
                     draw_baseline_segments(
                         ui.painter(),
                         &bars,
