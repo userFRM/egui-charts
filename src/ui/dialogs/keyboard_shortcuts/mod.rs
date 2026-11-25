@@ -76,7 +76,7 @@ fn fixed_categories(options: &ChartOptions) -> Vec<(&'static str, Vec<Entry>)> {
         (
             "Replay",
             vec![
-                entry("Play or pause the replay", vec![key(Key::Space, none)]),
+                entry("Play or pause the replay", vec![key(Key::ArrowDown, shift)]),
                 entry("Go to the replay start", vec![key(Key::Home, none)]),
                 entry("Go to the replay end", vec![key(Key::End, none)]),
                 entry(
@@ -812,6 +812,14 @@ mod tests {
             "Move aligned chart dividers",
         ] {
             assert!(h.query_by_label(label).is_some(), "missing {label}");
+        }
+        // One meaning per key: Space is the list's, Shift+Down the replay's.
+        for (shortcut, count) in [
+            (KeyboardShortcut::new(Modifiers::NONE, Key::Space), 1),
+            (KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowDown), 1),
+        ] {
+            let name = h.ctx.format_shortcut(&shortcut);
+            assert_eq!(h.query_all_by_label(&name).count(), count, "{name}");
         }
     }
 

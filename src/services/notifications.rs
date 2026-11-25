@@ -13,14 +13,18 @@ use crate::data::{MaybeSend, Reply};
 /// thread, runtime or browser task.
 ///
 /// ```
-/// use egui_charts::services::{Events, Notification, Notifications};
+/// use egui_charts::services::{Events, Notification, NotificationTarget, Notifications};
 ///
-/// /// Tells the user once that the session started.
+/// /// Tells the user once that the session started, and of a story an alert found.
 /// struct Session;
 ///
 /// impl Notifications for Session {
 ///     fn watch(&self, events: Events<Notification>) {
 ///         events.push(Notification::new(chrono::Utc::now(), "Session started"));
+///         let mut story = Notification::new(chrono::Utc::now(), "Rates alert");
+///         story.body = "Central bank holds rates".into();
+///         story.target = Some(NotificationTarget::Story("story-7".into()));
+///         events.push(story);
 ///     }
 /// }
 /// ```
@@ -57,11 +61,12 @@ pub struct Notification {
     pub body: String,
     /// The symbol the entry is about, which the panel offers to open.
     pub symbol: Option<String>,
-    /// The profile, chat room or post a social entry is about, which the panel offers to open.
+    /// The profile, chat room, post or news story the entry is about, which the panel offers to
+    /// open.
     pub target: Option<NotificationTarget>,
 }
 
-/// What a social notification opens.
+/// What a notification opens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NotificationTarget {
@@ -72,6 +77,10 @@ pub enum NotificationTarget {
     /// An idea or short post, by the host's identifier: the feed entry identifier the ideas
     /// panel opens and the link [`Posts`](super::Posts) resolves.
     Post(String),
+    /// A news story, by the [`id`](crate::data::NewsStory::id) its feed gave it. The host finds
+    /// the story again by it, so a feed whose stories alerts report keeps one identifier for
+    /// one story.
+    Story(String),
 }
 
 impl Notification {
