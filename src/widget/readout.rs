@@ -10,8 +10,8 @@ pub(crate) type SeriesFingerprint = (usize, String, u64, Option<(i64, u64)>);
 
 impl Chart {
     /// The table is current while this is unchanged: the history revision, a revision moved
-    /// by edits of the last bar, study edits, host-fed study data and the instrument, and the
-    /// decimals of its prices.
+    /// by edits of the last bar, study edits, host-fed study data, the instrument and the
+    /// horizontal scale, and the decimals of its prices.
     #[cfg(feature = "ui")]
     pub(crate) fn data_table_revision(&self) -> (u64, u64, Option<u8>) {
         (
