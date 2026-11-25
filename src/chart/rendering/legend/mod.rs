@@ -51,7 +51,8 @@ impl<'a> LegendStatus<'a> {
     }
 }
 
-/// The quote control clicked by the user. The host decides how to handle the intent.
+/// The quote control the user clicked, or pressed with its key. The host decides how to handle
+/// the intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum QuoteSide {
