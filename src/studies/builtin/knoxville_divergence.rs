@@ -21,8 +21,9 @@
 //! of `e` to the high of `t` (the lows for a bullish signal) on the price chart in the signal's
 //! style. A momentum or RSI without a value, in the warm-up, takes no part. Bars with a
 //! non-finite high, low or close are skipped and do not count toward `lookback`. The study draws
-//! on the price chart, and its momentum is a legend readout. The defaults are a momentum of 20
-//! bars, an RSI of 21, a look-back of 150 bars, and an RSI of 30 and 70. Price divergence lines
+//! on the price chart, and its momentum is its only legend readout: the divergence values only
+//! place the marks, and the price scale starts without their tags. The defaults are a momentum of
+//! 20 bars, an RSI of 21, a look-back of 150 bars, and an RSI of 30 and 70. Price divergence lines
 //! start enabled; older saves keep them off until enabled.
 
 use super::rsi::State as RsiState;
@@ -241,6 +242,15 @@ impl Indicator for KnoxvilleDivergence {
         } else {
             &[]
         }
+    }
+
+    // The divergence values only place their marks; the momentum is the study's reading.
+    fn legend_lines(&self) -> Vec<usize> {
+        vec![0]
+    }
+
+    fn plot_tagged(&self, line: usize) -> bool {
+        line == 0
     }
 
     fn values(&self) -> &IndicatorValues {
