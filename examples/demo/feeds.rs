@@ -1165,6 +1165,7 @@ impl super::DemoApp {
         });
         if self.financials.is_some() {
             self.open_panel = None;
+            self.details_expanded = false;
         }
     }
 }

@@ -477,6 +477,8 @@ pub struct DemoApp {
     symbol_details: Box<SymbolDetailsPanel>,
     /// The chart symbol's financials, shown in place of the chart while they are open.
     financials: Option<(String, egui_charts::ui::financials::FinancialsPanel)>,
+    /// The symbol details are shown in place of the chart, chosen with their Expand button.
+    details_expanded: bool,
     // Synthetic highlights and headlines from the live feed.
     highlights: NewsPanel,
     news: NewsPanel,
@@ -875,6 +877,7 @@ impl DemoApp {
                 .unwrap_or_default(),
             symbol_details: Box::new(SymbolDetailsPanel::new()),
             financials: None,
+            details_expanded: false,
             highlights: NewsPanel::highlights(),
             news: NewsPanel::new(),
             news_hour: None,
@@ -3083,7 +3086,8 @@ impl DemoApp {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
                 SidePanel::Watchlist => {
-                    if ui.available_height() >= 400.0 {
+                    // The expanded details draw in place of the chart instead.
+                    if ui.available_height() >= 400.0 && !self.details_expanded {
                         egui::Panel::bottom("symbol_details")
                             .resizable(true)
                             .default_size(ui.available_height() / 2.0)
@@ -3371,6 +3375,8 @@ impl DemoApp {
         if let Some(own) = &self.own_data {
             let (symbol, timeframe) = (self.chart.symbol(), self.chart.timeframe());
             let tape = own.feed.drain_tape(symbol, timeframe);
+            // The details show synthetic figures, so they leave the chart's place.
+            self.details_expanded = false;
             self.feed_time_and_sales(ctx, tape);
             return;
         }
@@ -3465,6 +3471,14 @@ impl DemoApp {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         self.feed_financials();
+        if self.symbol_details.take_expand_request().is_some() {
+            self.details_expanded = true;
+            self.financials = None;
+            self.open_panel = None;
+        }
+        // Hidden before the larger view first draws, so it never offers itself.
+        self.symbol_details
+            .set_expand_visible(!self.details_expanded);
         self.highlights.set_symbol(&chart_symbol);
         self.news.set_symbol(&chart_symbol);
         let hour = now.timestamp().div_euclid(3600);
@@ -3953,6 +3967,40 @@ impl DemoApp {
                 .show(ui, |ui| financials.show(ui));
             if back.inner {
                 self.financials = None;
+            }
+            return;
+        }
+        if self.details_expanded {
+            self.export_dialog.set_chart_size(None);
+            self.export_dialog.set_layout_size(None);
+            let frame = panel_frame(bg).corner_radius(4).inner_margin(16);
+            let back = egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                // A centred column reads better than rows across the whole chart area.
+                let width = ui.available_width().min(760.0);
+                ui.horizontal_top(|ui| {
+                    ui.add_space((ui.available_width() - width) / 2.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        let back = ui
+                            .horizontal(|ui| {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| ui.button("Back to chart").clicked(),
+                                )
+                                .inner
+                            })
+                            .inner;
+                        self.symbol_details.show(ui);
+                        back
+                    })
+                    .inner
+                })
+                .inner
+            });
+            let action = self.symbol_details.take_news_action();
+            self.handle_news(ui.ctx(), action);
+            if back.inner {
+                self.details_expanded = false;
             }
             return;
         }
@@ -5613,7 +5661,7 @@ mod tests {
     /// The watchlist's details use the chart's bars and feed, list the demo's detail sections,
     /// open headline and document links and honour the three section choices through the demo's
     /// menus and action handler, and the sections hidden there stay hidden after a restart on
-    /// the same storage.
+    /// the same storage. Expand shows the details in place of the chart until Back to chart.
     #[test]
     fn watchlist_details_sections_reach_the_demo() {
         use eframe::App as _;
@@ -5757,6 +5805,39 @@ mod tests {
                 if url.url == "https://demo.invalid/documents/STOCKA/annual-2025")
         }));
         output.drop_without_applying_deltas();
+
+        // Expand shows the details in place of the chart, without its own button, until Back.
+        click(&mut app, Role::Button, "Expand").drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        let offered = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .any(|(_, node)| node.label() == Some("Expand"));
+        output.drop_without_applying_deltas();
+        assert!(app.details_expanded);
+        assert!(app.open_panel.is_none(), "the details leave the side panel");
+        assert!(!offered, "the larger view offers no Expand");
+        for text in ["Back to chart", "Technicals"] {
+            assert!(shown.iter().any(|shown| shown == text), "{text}: {shown:?}");
+        }
+        click(&mut app, Role::Button, "Back to chart").drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        assert!(!app.details_expanded);
+        assert!(
+            !shown.iter().any(|text| text == "Back to chart"),
+            "{shown:?}"
+        );
+        app.open_panel = Some(SidePanel::Watchlist);
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
         click(&mut app, Role::Button, "Layout").drop_without_applying_deltas();
         for title in ["Technicals", "Upcoming events", "News"] {
             click(&mut app, Role::CheckBox, title).drop_without_applying_deltas();

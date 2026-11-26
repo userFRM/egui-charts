@@ -179,6 +179,10 @@ enum Request {
 /// [`take_opened_row`](Self::take_opened_row) for the host to open its document, recording or
 /// page. A section the host does not offer is neither drawn nor listed in the Layout menu, and one
 /// it answers as unavailable is not drawn.
+///
+/// After [`set_expand_visible`](Self::set_expand_visible) the header's Expand button reports the
+/// shown symbol through [`take_expand_request`](Self::take_expand_request), for the host to show
+/// the panel larger, such as in place of the chart.
 pub struct SymbolDetailsPanel {
     instrument: Option<Instrument>,
     quote: Option<Quote>,
@@ -195,6 +199,9 @@ pub struct SymbolDetailsPanel {
     /// The shown symbol's rows of each offered section, from its first request on.
     rows: HashMap<DetailSection, MarketDetail<Vec<DetailRow>>>,
     opened_row: Option<DetailRow>,
+    expand_visible: bool,
+    /// The symbol shown when Expand was chosen.
+    expand_request: Option<String>,
     /// `None` until bars of the shown symbol arrive.
     technicals: Option<Technicals>,
     /// The next earnings and the next ex-dividend event of the shown symbol.
@@ -230,6 +237,8 @@ impl Default for SymbolDetailsPanel {
             offered: HashSet::new(),
             rows: HashMap::new(),
             opened_row: None,
+            expand_visible: false,
+            expand_request: None,
             technicals: None,
             events: [None, None],
             headlines: Vec::new(),
@@ -263,6 +272,8 @@ impl std::fmt::Debug for SymbolDetailsPanel {
             .field("offered", &self.offered)
             .field("rows", &self.rows)
             .field("opened_row", &self.opened_row)
+            .field("expand_visible", &self.expand_visible)
+            .field("expand_request", &self.expand_request)
             .field(
                 "technicals",
                 &self.technicals.as_ref().map(|t| (t.timeframe, t.len)),
@@ -399,6 +410,21 @@ impl SymbolDetailsPanel {
     /// Whether the user chose Financials in the More menu since the last call.
     pub fn take_financials_request(&mut self) -> bool {
         std::mem::take(&mut self.financials_requested)
+    }
+
+    /// Shows or hides the header's Expand button, hidden by default. Show it when the host can
+    /// draw the details larger, such as in place of the chart, and hide it while it does.
+    pub fn set_expand_visible(&mut self, visible: bool) {
+        self.expand_visible = visible;
+        if !visible {
+            self.expand_request = None;
+        }
+    }
+
+    /// The symbol shown when the user chose Expand since the last call, for the host to draw the
+    /// panel larger with [`show`](Self::show).
+    pub fn take_expand_request(&mut self) -> Option<String> {
+        self.expand_request.take()
     }
 
     /// The market detail the sections still lack for the shown symbol, each returned once; it
@@ -891,6 +917,8 @@ impl SymbolDetailsPanel {
             offered,
             rows,
             opened_row,
+            expand_visible,
+            expand_request,
             technicals,
             events,
             headlines,
@@ -953,6 +981,14 @@ impl SymbolDetailsPanel {
                         }
                     }
                 });
+            if *expand_visible
+                && IconButton::new(&icons::MAXIMIZE)
+                    .tooltip("Expand")
+                    .show(ui)
+                    .clicked()
+            {
+                *expand_request = Some(instrument.symbol.clone());
+            }
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 let title = LayoutJob::single_section(
                     l10n::text(ui.ctx(), instrument.symbol.clone()),
@@ -1196,6 +1232,8 @@ impl SymbolDetailsPanel {
                                 .num_columns(4)
                                 .spacing(vec2(theme.spacing.md, theme.spacing.sm))
                                 .show(ui, |ui| {
+                                    // A cell sized on an earlier frame must not break a figure.
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                                     for (index, month) in seasonality
                                         .months
                                         .iter()
