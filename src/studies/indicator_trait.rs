@@ -17,7 +17,7 @@ pub(crate) trait ConcreteStudy {
     fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
     where
         Self: 'static;
-    #[cfg(all(feature = "widget", feature = "studies"))]
+    #[cfg(feature = "widget")]
     fn concrete_study_mut(&mut self, cast: &dyn std::any::Any) -> Option<&mut dyn std::any::Any>
     where
         Self: 'static;
@@ -32,7 +32,7 @@ impl<T: ?Sized> ConcreteStudy for T {
         cast.downcast_ref::<fn(&T) -> &dyn std::any::Any>()
             .map(|cast| cast(self))
     }
-    #[cfg(all(feature = "widget", feature = "studies"))]
+    #[cfg(feature = "widget")]
     fn concrete_study_mut(&mut self, cast: &dyn std::any::Any) -> Option<&mut dyn std::any::Any>
     where
         Self: 'static,
@@ -1215,8 +1215,9 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 }
 
-#[cfg(all(feature = "widget", feature = "studies"))]
+#[cfg(feature = "widget")]
 impl dyn Indicator {
+    #[cfg(feature = "studies")]
     pub(crate) fn concrete<T: 'static>(&self) -> Option<&T> {
         let cast: fn(&T) -> &dyn std::any::Any = |value| value;
         ConcreteStudy::concrete_study(self, &cast)?.downcast_ref()

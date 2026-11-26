@@ -840,7 +840,7 @@ impl ConfiguredStudy {
     }
 
     /// The history the study is calculated on while it runs on another symbol or interval.
-    #[cfg(all(feature = "widget", feature = "studies"))]
+    #[cfg(feature = "widget")]
     pub(crate) fn calculation_history(&self) -> Option<super::StudyDataRequest> {
         (!self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some())
             .then(|| self.calculation_request())
@@ -848,7 +848,7 @@ impl ConfiguredStudy {
 
     /// Sets where a bar replay cut the calculation history and whether its cursor completed the
     /// chart's newest bar; returns whether either changed.
-    #[cfg(all(feature = "widget", feature = "studies"))]
+    #[cfg(feature = "widget")]
     pub(crate) fn set_replay(
         &mut self,
         newest_closed: bool,
