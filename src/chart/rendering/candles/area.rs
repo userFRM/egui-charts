@@ -1127,6 +1127,7 @@ mod tests {
                         heikin_ashi: &HeikinAshiCache::default(),
                         shows_elements: false,
                         range_phantoms: &[],
+                        range_forming: false,
                         start_idx: 0,
                         clock: &BarClock::new(Timeframe::Min1),
                         tpo: None,
