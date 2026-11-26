@@ -167,6 +167,57 @@ fn watchlist_entry_lists_each_list_by_index_and_needs_a_symbol_and_a_list() {
     assert_eq!(submenu(&menu, &shortcuts), None, "no lists");
 }
 
+/// The chart and series menus offer a note on the symbol only once the host routes it, with the
+/// binding of the note key. A regression shows a row hosts do not answer, leaves it out of the
+/// series menu a click on the price opens, or shows a key that no longer writes a note.
+#[test]
+fn note_rows_need_the_option_and_a_symbol_and_show_their_key() {
+    let rows = |menus: &ChartMenus, shortcuts: &crate::widget::ShortcutMap| {
+        let ctx = Context::default();
+        let price = &crate::ui::context_menu::format_price;
+        let chart = menus.chart.build_menu_items(&ctx, shortcuts, price);
+        let series = menus.series.build_menu_items(&ctx, shortcuts, 1.0, price);
+        let chart = chart.into_iter().filter_map(|entry| match entry {
+            MenuEntry::Item(MenuItem {
+                label,
+                shortcut,
+                action: ContextMenuAction::AddNote(symbol),
+                ..
+            }) => Some((label, symbol, shortcut)),
+            _ => None,
+        });
+        let series = series.into_iter().filter_map(|entry| match entry {
+            MenuEntry::Item(MenuItem {
+                label,
+                shortcut,
+                action: SeriesContextMenuAction::AddNote(symbol),
+                ..
+            }) => Some((label, symbol, shortcut)),
+            _ => None,
+        });
+        chart.chain(series).collect::<Vec<_>>()
+    };
+    let mut shortcuts = crate::widget::ShortcutMap::default();
+    let mut menus = ChartMenus::default();
+    menus.chart.symbol = "AAPL".into();
+    menus.series.symbol = "AAPL".into();
+    assert!(rows(&menus, &shortcuts).is_empty(), "off by default");
+    menus.set_add_note_visible(true);
+    let row = |key| ("Add note on AAPL…".to_owned(), "AAPL".to_owned(), key);
+    let alt_n = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::N);
+    assert_eq!(
+        rows(&menus, &shortcuts),
+        [row(Some(alt_n)), row(Some(alt_n))]
+    );
+    shortcuts
+        .bindings
+        .retain(|(_, action)| *action != KeyboardAction::AddNote);
+    assert_eq!(rows(&menus, &shortcuts), [row(None), row(None)]);
+    menus.chart.symbol.clear();
+    menus.series.symbol.clear();
+    assert!(rows(&menus, &shortcuts).is_empty(), "no symbol");
+}
+
 /// Each named control removes its row while leaving unrelated entries available; removing
 /// every row closes the popup instead of leaving separators or stale actions.
 #[test]

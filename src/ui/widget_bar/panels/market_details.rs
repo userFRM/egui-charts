@@ -1,5 +1,6 @@
-//! Host-supplied market detail: period returns and seasonality for a symbol, and the earnings,
-//! dividends and news the wide watchlist lists. The library asks and shows; the host answers.
+//! Host-supplied market detail: period returns, seasonality and the listed detail sections of a
+//! symbol, and the earnings, dividends and news the wide watchlist lists. The library asks and
+//! shows; the host answers.
 
 use crate::data::{CalendarEvent, NewsStory};
 
@@ -20,8 +21,10 @@ pub enum MarketDetail<T> {
 
 /// A request for the symbol details panel's market detail, from
 /// [`SymbolDetailsPanel::take_market_requests`](crate::ui::widget_bar::SymbolDetailsPanel::take_market_requests).
-/// Answer with [`set_period_returns`](crate::ui::widget_bar::SymbolDetailsPanel::set_period_returns) or
-/// [`set_seasonality`](crate::ui::widget_bar::SymbolDetailsPanel::set_seasonality) for the same symbol.
+/// Answer with [`set_period_returns`](crate::ui::widget_bar::SymbolDetailsPanel::set_period_returns),
+/// [`set_seasonality`](crate::ui::widget_bar::SymbolDetailsPanel::set_seasonality) or
+/// [`set_detail_rows`](crate::ui::widget_bar::SymbolDetailsPanel::set_detail_rows) for the same
+/// symbol.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MarketDetailRequest {
@@ -29,6 +32,104 @@ pub enum MarketDetailRequest {
     PeriodReturns(String),
     /// The average return of this symbol in each calendar month.
     Seasonality(String),
+    /// The rows of this section for this symbol, asked for only when the host offers the section.
+    Section(DetailSection, String),
+}
+
+/// A section of the symbol details panel that lists the [`DetailRow`]s the host writes, such as
+/// analyst estimates or a company's filings. Offer the ones the host answers with
+/// [`SymbolDetailsPanel::set_detail_sections`](crate::ui::widget_bar::SymbolDetailsPanel::set_detail_sections).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DetailSection {
+    /// Analyst ratings, price targets and estimates, titled "Analyst estimates".
+    AnalystEstimates,
+    /// Options figures such as implied volatility and the put/call ratio, titled "Options".
+    Options,
+    /// Recordings of earnings calls, titled "Earnings calls".
+    EarningsCalls,
+    /// Filings, reports and other company documents, titled "Documents".
+    Documents,
+    /// The funds that hold the symbol, or the holdings of a fund, titled "Fund holdings".
+    FundHoldings,
+    /// The issuer's debt credit ratings, titled "Credit ratings".
+    CreditRatings,
+    /// The bonds the issuer has outstanding, titled "Bonds".
+    Bonds,
+}
+
+impl DetailSection {
+    /// Every section, in panel order.
+    pub const ALL: [Self; 7] = [
+        Self::AnalystEstimates,
+        Self::Options,
+        Self::EarningsCalls,
+        Self::Documents,
+        Self::FundHoldings,
+        Self::CreditRatings,
+        Self::Bonds,
+    ];
+
+    /// The section's title, its name in the Layout menu and in
+    /// [`hidden_sections`](crate::ui::widget_bar::SymbolDetailsPanel::hidden_sections).
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::AnalystEstimates => "Analyst estimates",
+            Self::Options => "Options",
+            Self::EarningsCalls => "Earnings calls",
+            Self::Documents => "Documents",
+            Self::FundHoldings => "Fund holdings",
+            Self::CreditRatings => "Credit ratings",
+            Self::Bonds => "Bonds",
+        }
+    }
+}
+
+/// One row of a [`DetailSection`], as the host writes it.
+///
+/// ```
+/// use egui_charts::ui::widget_bar::DetailRow;
+/// let report = DetailRow::new("Annual report 2025", "PDF")
+///     .with_note("Filed Mar 2, 2026")
+///     .with_url("https://example.com/reports/2025.pdf");
+/// assert_eq!(report.url.as_deref(), Some("https://example.com/reports/2025.pdf"));
+/// ```
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct DetailRow {
+    /// The name on the left, such as a filing, a fund, a rating agency or a bond.
+    pub label: String,
+    /// The text on the right, such as `"4.2%"`, `"AA-"` or `"Buy"`; empty for none.
+    pub value: String,
+    /// A smaller line under the label, such as a date or an outlook; empty for none.
+    pub note: String,
+    /// The document, recording or page the row opens. A row with one is a link, and choosing it
+    /// is reported by
+    /// [`take_opened_row`](crate::ui::widget_bar::SymbolDetailsPanel::take_opened_row).
+    pub url: Option<String>,
+}
+
+impl DetailRow {
+    /// A row with `label` on the left and `value` on the right.
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Adds `note` under the label.
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.note = note.into();
+        self
+    }
+
+    /// Makes the row open `url` through the host.
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
+        self
+    }
 }
 
 /// The return over one look-back period.

@@ -392,6 +392,9 @@ impl InputsTab {
                 let mut ticks = config.row_ticks().unwrap_or(rows);
                 let mut percent = config.value_area() * 100.0;
                 FormGrid::new("profile_inputs").show(ui, |ui| {
+                    // The up and down colours, then the developing POC's and the VA's high and low.
+                    let pickers = grid_pickers(pickers, 0);
+                    pickers.resize_with(5, ColorPickerState::default);
                     let label = ui.label(l10n::text(ui.ctx(), "Row layout"));
                     ui.label_inputs_by(label.id, |ui| {
                         ui.combo_select(
@@ -477,9 +480,34 @@ impl InputsTab {
                         );
                         ui.end_row();
                     }
+                    let [poc_picker, high_picker, low_picker] = &mut pickers[2..] else {
+                        unreachable!("resized above")
+                    };
+                    // Named in the label column, as the colour rows are, so a narrow dialog keeps
+                    // its width.
+                    let label = ui.label(l10n::text(ui.ctx(), "Developing POC"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.push_id("developing_poc", |ui| {
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut config.show_developing_poc, "");
+                                level_color(ui, &mut config.developing_poc_color, poc_picker);
+                            });
+                        });
+                    });
+                    ui.end_row();
+                    let label = ui.label(l10n::text(ui.ctx(), "Developing VA"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.push_id("developing_va", |ui| {
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut config.show_developing_value_area, "");
+                                let [high, low] = &mut config.developing_value_area_colors;
+                                ui.push_id("high", |ui| level_color(ui, high, high_picker));
+                                ui.push_id("low", |ui| level_color(ui, low, low_picker));
+                            });
+                        });
+                    });
+                    ui.end_row();
                     if config.display != ProfileDisplay::Total {
-                        let pickers = grid_pickers(pickers, 0);
-                        pickers.resize_with(2, ColorPickerState::default);
                         let label = ui.label(l10n::text(ui.ctx(), "Up colour"));
                         ui.label_inputs_by(label.id, |ui| {
                             level_color(ui, &mut config.up_color, &mut pickers[0]);
@@ -3156,9 +3184,10 @@ mod tests {
     }
 
     /// Opening the Inputs tab of a volume profile drawing keeps the display settings the tab
-    /// does not show, and a value area of 64.06%, which times 100 over 100 is not the same share.
-    /// Ticks per row previews on the drawing with them, Cancel
-    /// restores the drawing, and Ok records one undoable edit.
+    /// does not show, the developing switches and colours it does, and a value area of 64.06%,
+    /// which times 100 over 100 is not the same share. Ticks per row and the Developing POC
+    /// switch preview on the drawing with them, Cancel restores the drawing, and Ok records one
+    /// undoable edit.
     #[test]
     fn volume_profile_inputs_keep_settings_they_do_not_edit() {
         use egui::Role;
@@ -3170,6 +3199,9 @@ mod tests {
         config.show_rows = false;
         config.show_value_area_high = true;
         config.value_area_line_colors = [[1, 2, 3, 255]; 2];
+        config.show_developing_value_area = true;
+        config.developing_poc_color = [9, 8, 7, 255];
+        config.developing_value_area_colors = [[4, 5, 6, 255], [6, 5, 4, 255]];
         let mut drawing = Drawing::new(7, Tool::FixedRangeVolumeProfile);
         drawing.completed = true;
         drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
@@ -3188,7 +3220,8 @@ mod tests {
         let saved = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
             h.state().0.drawings().drawings[0].volume_profile
         };
-        let ticks = config.with_row_ticks(Some(24)).unwrap();
+        let mut ticks = config.with_row_ticks(Some(24)).unwrap();
+        ticks.show_developing_poc = true;
         for confirm in [false, true] {
             let (chart, dialog) = h.state_mut();
             dialog.open_for_chart(chart, DrawingId(7));
@@ -3199,6 +3232,9 @@ mod tests {
                 .click();
             h.run();
             h.get_by_label("Ticks per row").click();
+            h.run();
+            h.get_by_role_and_label(Role::CheckBox, "Developing POC")
+                .click();
             h.run();
             assert_eq!(saved(&h), Some(ticks), "previewed");
             assert!(!h.state().0.can_undo());

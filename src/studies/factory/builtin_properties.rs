@@ -189,6 +189,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
             ranges: [[x(0.0), x(10.0)], [x(10.0), x(100.0)], [x(100.0), f64::MAX]],
         })),
         Box::new(OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: l(0) })),
+        Box::new(OrderFlowStudy::new(OrderFlowKind::SideVolume)),
         Box::new(OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
             min: x(100.0),
             max: f64::MAX,

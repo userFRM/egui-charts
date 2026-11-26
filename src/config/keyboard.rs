@@ -197,6 +197,9 @@ pub enum KeyboardAction {
     /// is shown that flag. The host receives a shortcut request and answers with
     /// `WatchlistPanel::add_symbol`, which refuses duplicates.
     AddToWatchlist,
+    /// Write a note on the chart symbol (Alt+N). The host receives a shortcut request and answers
+    /// with `SymbolDetailsPanel::focus_notes`.
+    AddNote,
 
     // Trading
     /// A buy limit order at the pointer's price (Alt+Shift+B). `ChartMenus::show` returns the
@@ -314,6 +317,7 @@ impl KeyboardAction {
             Self::NextWatchlistSymbol => "Next watchlist symbol",
             Self::PreviousWatchlistSymbol => "Previous watchlist symbol",
             Self::AddToWatchlist => "Add symbol to watchlist",
+            Self::AddNote => "Add note",
             Self::BuyLimitAtPointer => "Buy limit at pointer price",
             Self::SellLimitAtPointer => "Sell limit at pointer price",
             Self::BuyMarket => "Buy at market",
@@ -477,6 +481,7 @@ impl KeyboardAction {
                 }
             }
             Self::AddToWatchlist => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::W)] },
+            Self::AddNote => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::N)] },
             Self::NextWatchlistSymbol => const { &[key(Key::ArrowDown), key(Key::Space)] },
             Self::PreviousWatchlistSymbol => {
                 const {
@@ -555,6 +560,7 @@ impl KeyboardAction {
             Self::NextWatchlistSymbol => "↓ / Space",
             Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
             Self::AddToWatchlist => "Alt+W",
+            Self::AddNote => "Alt+N",
             Self::BuyLimitAtPointer => "Alt+Shift+B",
             Self::SellLimitAtPointer => "Alt+Shift+S",
             Self::BuyMarket => "Shift+B",
@@ -649,6 +655,7 @@ impl KeyboardAction {
                     Self::NextWatchlistSymbol,
                     Self::PreviousWatchlistSymbol,
                     Self::AddToWatchlist,
+                    Self::AddNote,
                 ],
             ),
             (
