@@ -8,7 +8,7 @@ use super::{
 use crate::chart::{COVERAGE_CELL, coverage_text, exit_coverage, paint_coverage};
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::model::{OrderRequest, OrderSide, TimeInForce};
+use crate::model::{OrderRequest, OrderSide, OrderType, TimeInForce};
 use crate::scales::decimals;
 use crate::theme::ThemeExt;
 use crate::ui::top_toolbar::buttons::rule_color;
@@ -361,7 +361,18 @@ impl OrderTicket {
         let value = entry * per_point;
         if let Some(leverage) = rules.leverage {
             let margin = value / leverage;
-            let available = market.balance.unwrap_or_default();
+            // Reported funds exclude the modified order's own margin, which the change frees.
+            let held = self.editing.as_ref().map_or(0.0, |order| {
+                let price = match order.request.order_type {
+                    OrderType::Limit(price) | OrderType::Stop(price) => price,
+                    OrderType::StopLimit { limit, .. } => limit,
+                    _ => market.last.unwrap_or_default(),
+                };
+                order.request.quantity * price.abs() * rules.point_value / leverage
+            });
+            let available = (market.available_funds)
+                .map_or(market.balance.unwrap_or_default(), |funds| funds + held);
+            let short = margin > available;
             let row = info(
                 ui,
                 "Est. margin",
@@ -371,7 +382,7 @@ impl OrderTicket {
                     grouped(available, 2, false)
                 ),
                 "",
-                theme.ui.text,
+                if short { theme.ui.error } else { theme.ui.text },
             );
             let help =
                 Rect::from_center_size(pos2(row.left() + 82.0, row.center().y), vec2(14.0, 14.0));
@@ -385,8 +396,15 @@ impl OrderTicket {
             )
             .on_hover_text(l10n::text(
                 ui.ctx(),
-                "Estimated margin: trade value divided by leverage, compared with account balance. \
-                 This does not include margin already used by other positions or working orders.",
+                if market.available_funds.is_some() {
+                    "Estimated margin: trade value divided by leverage, compared with the available \
+                     funds the broker reports, which leave out the margin of open positions and \
+                     working orders. The margin of an order being modified counts as available."
+                } else {
+                    "Estimated margin: trade value divided by leverage, compared with account \
+                     balance. This does not include margin already used by other positions or \
+                     working orders."
+                },
             ));
             let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
             ui.painter().rect_filled(bar, 2.0, theme.ui.border);
@@ -395,7 +413,7 @@ impl OrderTicket {
             } else {
                 1.0
             };
-            let color = if margin > available {
+            let color = if short {
                 theme.ui.error
             } else {
                 theme.ui.accent
