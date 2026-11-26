@@ -404,6 +404,7 @@ pub fn render_chart_type(
                 ctx.price_ctx,
                 shown,
                 ctx.range_phantoms,
+                ctx.range_forming,
                 &params.type_params.styles.range,
                 params.bar_width(),
                 params.wick_width(),

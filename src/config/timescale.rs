@@ -54,6 +54,16 @@ pub struct TimeScaleOptions {
     /// Default: false
     pub lock_visible_time_range_on_resize: bool,
 
+    /// Keep the bar at the left edge of the view there when the interval changes: the bar of the
+    /// new interval whose period holds its open, or else the first one opening within its
+    /// period, takes its place at the same bar spacing, once the new interval's bars replace the
+    /// old ones. With a feed, older history is requested until that bar is loaded. Panning,
+    /// zooming or another scroll before then cancels it, and tracking mode keeps following the
+    /// latest bar instead. Layouts saved without this field leave it off.
+    /// Default: false
+    #[serde(default)]
+    pub keep_left_edge_on_interval_change: bool,
+
     /// Keep the right offset when zooming with the mouse wheel, a pinch or the keyboard, so the
     /// bar at the right edge stays in place instead of the bar under the pointer.
     /// Default: false
@@ -155,6 +165,7 @@ impl Default for TimeScaleOptions {
             fix_left_edge: false,  // Allow scrolling past the first bar
             fix_right_edge: false, // Allow scrolling past latest bar
             lock_visible_time_range_on_resize: false,
+            keep_left_edge_on_interval_change: false,
             right_bar_stays_on_scroll: false,
             shift_visible_range_on_new_bar: true,
             allow_shift_visible_range_on_whitespace_replacement: false,
