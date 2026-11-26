@@ -310,7 +310,8 @@ pub struct OrderRequest {
     /// every other time in force.
     pub expires: Option<DateTime<Utc>>,
     /// Explicit link to the net position in this symbol. Ordinary opposite-side orders are
-    /// not brackets. Brokers should preserve this role on updates.
+    /// not brackets. Brokers should preserve this role on updates. The terminal does not change
+    /// the quantity of such an order: the broker sizes it.
     pub position_bracket: Option<PositionBracket>,
 }
 
