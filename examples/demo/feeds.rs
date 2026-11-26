@@ -17,9 +17,7 @@ use egui_charts::services::{
     ProfileId, Profiles, Quotes, ShareAccess, ShareKind, ShareLink, ShareOffer, Sharing,
 };
 
-use egui_charts::ui::widget_bar::{
-    DetailRow, DetailSection, MarketDetail, PeriodReturn, Seasonality, SeasonalityMonth,
-};
+use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
 
 use super::live::LiveFeed;
 use crate::sampledata::DemoSymbol;
@@ -1165,97 +1163,8 @@ impl super::DemoApp {
         });
         if self.financials.is_some() {
             self.open_panel = None;
-            self.details_expanded = false;
         }
     }
-}
-
-/// The weights of the catalog's stocks in the synthetic fund, which add up to 100%.
-const FUND_WEIGHTS: [(&str, &str); 4] = [
-    ("STOCKA", "34.0%"),
-    ("STOCKB", "27.5%"),
-    ("STOCKC", "21.0%"),
-    ("STOCKD", "17.5%"),
-];
-
-/// Synthetic rows of a symbol details section: estimates, options figures, calls, documents,
-/// ratings and bonds for the catalog's stocks, which the synthetic fund holds, and the fund's
-/// holdings. Other symbols and sections are unavailable, which hides the section.
-pub(super) fn detail_rows(section: DetailSection, symbol: &str) -> MarketDetail<Vec<DetailRow>> {
-    let Some(spec) = DemoSymbol::catalog()
-        .iter()
-        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
-    else {
-        return MarketDetail::Unavailable;
-    };
-    let symbol = spec.symbol;
-    let link = |path: &str| format!("https://demo.invalid/{path}/{symbol}");
-    let rows = match (spec.exchange, section) {
-        ("Synthetic", DetailSection::FundHoldings) => FUND_WEIGHTS
-            .iter()
-            .filter_map(|(held, weight)| {
-                let name = DemoSymbol::catalog()
-                    .iter()
-                    .find(|spec| spec.symbol == *held)?
-                    .company_name;
-                Some(DetailRow::new(*held, *weight).with_note(name))
-            })
-            .collect(),
-        ("Stocks", DetailSection::FundHoldings) => {
-            let fund = DemoSymbol::catalog()
-                .iter()
-                .find(|spec| spec.exchange == "Synthetic");
-            let weight = FUND_WEIGHTS.iter().find(|(held, _)| *held == symbol);
-            match (fund, weight) {
-                (Some(fund), Some((_, weight))) => {
-                    vec![DetailRow::new(fund.symbol, *weight).with_note(fund.company_name)]
-                }
-                _ => return MarketDetail::Unavailable,
-            }
-        }
-        ("Stocks", DetailSection::AnalystEstimates) => {
-            let price = |factor: f64| format!("{:.2}", spec.start_price * factor);
-            vec![
-                DetailRow::new("Price target", price(1.10)).with_note(format!(
-                    "Low {}, high {}",
-                    price(0.90),
-                    price(1.30)
-                )),
-                DetailRow::new("Analysts", (8 + spec.seed % 9).to_string()),
-                DetailRow::new("Rating", "Buy"),
-            ]
-        }
-        ("Stocks", DetailSection::Options) => vec![
-            DetailRow::new("Implied volatility", format!("{}.0%", 20 + spec.seed % 15)),
-            DetailRow::new("Put/call ratio", format!("0.{}", 70 + spec.seed % 25)),
-        ],
-        ("Stocks", DetailSection::EarningsCalls) => vec![
-            DetailRow::new("Q3 2026 earnings call", "Play")
-                .with_note("Oct 28, 2026")
-                .with_url(format!("{}/q3-2026", link("calls"))),
-            DetailRow::new("Q2 2026 earnings call", "Play")
-                .with_note("Jul 29, 2026")
-                .with_url(format!("{}/q2-2026", link("calls"))),
-        ],
-        ("Stocks", DetailSection::Documents) => vec![
-            DetailRow::new("Annual report 2025", "PDF")
-                .with_note("Filed Mar 2, 2026")
-                .with_url(format!("{}/annual-2025", link("documents"))),
-            DetailRow::new("Quarterly report Q3 2026", "PDF")
-                .with_note("Filed Nov 4, 2026")
-                .with_url(format!("{}/q3-2026", link("documents"))),
-        ],
-        ("Stocks", DetailSection::CreditRatings) => vec![
-            DetailRow::new("Demo Ratings", "A+").with_note("Stable outlook, Sep 12, 2026"),
-            DetailRow::new("Sample Credit", "A1").with_note("Positive outlook, Aug 3, 2026"),
-        ],
-        ("Stocks", DetailSection::Bonds) => vec![
-            DetailRow::new(format!("{symbol} 4.25% notes due 2031"), "Yield 4.60%"),
-            DetailRow::new(format!("{symbol} 5.10% notes due 2036"), "Yield 5.05%"),
-        ],
-        _ => return MarketDetail::Unavailable,
-    };
-    MarketDetail::Ready(rows)
 }
 
 /// Synthetic financials for the catalog's stocks: five fiscal years scaled from the catalog price,

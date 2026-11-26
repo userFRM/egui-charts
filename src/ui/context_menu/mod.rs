@@ -62,6 +62,10 @@ pub enum ContextMenuAction {
         /// Instrument identifier used by the host.
         symbol: String,
     },
+    /// Write a note on this symbol, such as with
+    /// [`SymbolDetailsPanel::focus_notes`](crate::ui::widget_bar::SymbolDetailsPanel::focus_notes).
+    /// Offered after [`ChartMenus::set_add_note_visible`].
+    AddNote(String),
     /// A limit, stop or stop-limit order at the clicked price, for the user to confirm in the order
     /// ticket ([`Trading::open_ticket`](crate::ui::trading::Trading::open_ticket)).
     Order(OrderRequest),
@@ -111,6 +115,7 @@ impl ContextMenuAction {
             Self::CopyPrice(_) => MenuRowId::CopyPrice,
             Self::AddAlert { .. } => MenuRowId::AddAlert,
             Self::AddToWatchlist { list, .. } => MenuRowId::Watchlist(*list),
+            Self::AddNote(_) => MenuRowId::AddNote,
             Self::Order(order) => match order.order_type {
                 OrderType::Limit(_) => MenuRowId::LimitOrder,
                 OrderType::Stop(_) => MenuRowId::StopOrder,
@@ -200,6 +205,8 @@ pub struct ChartContextMenu {
     pub watchlists: Vec<String>,
     /// The list the add-to-watchlist key uses. Its row shows the binding; `None` shows none.
     pub active_watchlist: Option<usize>,
+    /// Offer writing a note on the symbol, set through [`ChartMenus::set_add_note_visible`].
+    pub(crate) add_note: bool,
     /// The quantity of the order entries.
     pub order_quantity: f64,
     /// The order types the account accepts; entries for the others are left out.
@@ -242,6 +249,7 @@ impl ChartContextMenu {
             price_decimals: None,
             watchlists: Vec::new(),
             active_watchlist: None,
+            add_note: false,
             order_quantity: 1.0,
             order_types: Capabilities {
                 limit: true,
@@ -390,6 +398,16 @@ impl ChartContextMenu {
                     })
                     .collect(),
             });
+        }
+        if self.add_note && !symbol.is_empty() {
+            trading.push(MenuEntry::Item(
+                MenuItem::new(
+                    l10n::format_text(ctx, "Add note on {symbol}…", &[("symbol", symbol.as_str())]),
+                    ContextMenuAction::AddNote(symbol.clone()),
+                )
+                .with_icon(&embedded_icons::NOTE)
+                .with_shortcut(shortcuts.shortcut(KeyboardAction::AddNote)),
+            ));
         }
         let requests = self.order_requests(self.click_price);
         if !requests.is_empty() {

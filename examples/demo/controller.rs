@@ -1021,6 +1021,8 @@ impl DemoApp {
         app.symbol_details.set_storage(app.storage.clone());
         app.symbol_details
             .set_detail_sections(egui_charts::ui::widget_bar::DetailSection::ALL);
+        app.watchlist.set_add_note_visible(true);
+        app.menus.set_add_note_visible(true);
         if let Some(hidden) = cc
             .storage
             .and_then(|storage| eframe::get_value::<Vec<String>>(storage, "symbol_details_hidden"))
@@ -3550,9 +3552,23 @@ impl DemoApp {
         }
     }
 
+    /// Shows the notes of `symbol` with their field focused, beneath the watchlist or in the
+    /// expanded details, and keeps the chart on its symbol.
+    fn add_note(&mut self, symbol: &str) {
+        if self.synthetic_only("Symbol notes") {
+            return;
+        }
+        self.financials = None;
+        if !self.details_expanded {
+            self.open_panel = Some(SidePanel::Watchlist);
+        }
+        self.symbol_details.focus_notes(symbol);
+    }
+
     fn show_watchlist(&mut self, ui: &mut egui::Ui) {
         match self.watchlist.show(ui) {
             WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
             WatchlistAction::AddSymbol => {
                 self.watchlist_search = true;
                 self.symbol_search.open();
@@ -3617,6 +3633,7 @@ impl DemoApp {
             .show(ctx, |ui| action = self.watchlist.show_wide(ui, &details));
         match action {
             WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
             WatchlistAction::CompactView => open = false,
             _ => {}
         }
@@ -4443,6 +4460,10 @@ impl DemoApp {
                         .format(price),
                 );
             }
+            ChartContextAction::Chart(ContextMenuAction::AddNote(symbol))
+            | ChartContextAction::Series(SeriesContextMenuAction::AddNote(symbol)) => {
+                self.add_note(&symbol)
+            }
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
             ChartContextAction::Study { id, action } => self.handle_study_context(ctx, id, action),
@@ -4925,6 +4946,10 @@ impl DemoApp {
                         self.notify(format!("{symbol} is already in that watchlist"));
                     }
                 }
+            }
+            A::AddNote => {
+                let symbol = self.chart.symbol().to_owned();
+                self.add_note(&symbol);
             }
             A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
                 let step = if action == A::NextWatchlistSymbol {
@@ -5877,6 +5902,111 @@ mod tests {
             app.symbol_details.hidden_sections(),
             ["Technicals", "Upcoming events", "News"]
         );
+    }
+
+    /// Notes open from the chart menu, a watchlist row's menu, Alt+N and All notes, each on its
+    /// symbol with the field focused, while the chart keeps its symbol. A regression drops a
+    /// route, leaves the field unfocused or types into another symbol's notes.
+    #[test]
+    fn notes_open_from_the_menus_the_key_and_all_notes() {
+        use eframe::App;
+        use egui::{Event, Key, Modifiers, PointerButton};
+        let ctx = egui::Context::default();
+        // The demo builds its bars from the clock; a fixed time gives every run the same chart.
+        let now = "2026-11-22T02:05:02Z".parse().unwrap();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new_at(&cc, now, true);
+        app.open_catalog_symbol("STOCKA");
+        settle(&mut app, &ctx);
+        app.open_panel = Some(SidePanel::Watchlist);
+        // Tall enough for every details section above the notes.
+        let size = egui::vec2(1440.0, 6000.0);
+        let frame = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            })
+        };
+        let press = |app: &mut DemoApp, pos, button| {
+            frame(app, vec![Event::PointerMoved(pos)]);
+            frame(
+                app,
+                [true, false]
+                    .map(|pressed| Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    })
+                    .to_vec(),
+            );
+        };
+        // The topmost painted `text`, so a menu's row wins over the text beneath it.
+        let click_text = |app: &mut DemoApp, text: &str, button| {
+            let shown = frame(app, vec![]);
+            let pos = shown
+                .iter()
+                .rev()
+                .find(|(shown, _)| shown == text)
+                .unwrap_or_else(|| panic!("missing {text}: {shown:?}"))
+                .1
+                .center();
+            press(app, pos, button);
+        };
+        // The text typed once the field has its focus, and the painted notes after it.
+        let typed = |app: &mut DemoApp, text: &str| {
+            frame(app, vec![]);
+            frame(app, vec![]);
+            frame(app, vec![Event::Text(text.into())]);
+            frame(app, vec![])
+        };
+        let shows = |shown: &[(String, egui::Rect)], words: &[&str]| {
+            shown
+                .iter()
+                .any(|(text, _)| words.iter().all(|word| text.contains(word)))
+        };
+
+        frame(&mut app, vec![]);
+        let chart = app.chart.get_chart_mapping().rect.center();
+        press(&mut app, chart, PointerButton::Secondary);
+        click_text(&mut app, "Add note on STOCKA…", PointerButton::Primary);
+        let shown = typed(&mut app, "chart note");
+        assert!(shows(&shown, &["chart note"]), "{shown:?}");
+
+        click_text(&mut app, "STOCKB", PointerButton::Secondary);
+        click_text(&mut app, "Add note", PointerButton::Primary);
+        let shown = typed(&mut app, "row note");
+        assert!(shows(&shown, &["row note"]), "{shown:?}");
+        assert!(!shows(&shown, &["chart note"]), "{shown:?}");
+
+        // Clicks this soon after the menu's would be a double click on the chart.
+        for _ in 0..20 {
+            frame(&mut app, vec![]);
+        }
+        press(&mut app, chart, PointerButton::Primary);
+        let key = |pressed| Event::Key {
+            key: Key::N,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::ALT,
+        };
+        frame(
+            &mut app,
+            vec![
+                Event::ModifiersChanged(Modifiers::ALT),
+                key(true),
+                key(false),
+            ],
+        );
+        let shown = typed(&mut app, "key");
+        assert!(shows(&shown, &["chart note", "key"]), "{shown:?}");
+
+        click_text(&mut app, "All notes", PointerButton::Primary);
+        click_text(&mut app, "STOCKB", PointerButton::Primary);
+        let shown = frame(&mut app, vec![]);
+        assert!(shows(&shown, &["row note"]), "{shown:?}");
+        assert_eq!(app.chart.symbol(), "STOCKA");
+        assert!(app.open_panel == Some(SidePanel::Watchlist));
     }
 
     /// One frame of the demo's dialogs with `events`, returning its AccessKit nodes.
