@@ -111,6 +111,13 @@ impl Chart {
             self.frozen_source_events,
         ));
         indicator.set_bar_clock(&self.bar_clock());
+        self.study_data.set_replay_cut(
+            indicator.as_mut(),
+            &self.symbol,
+            self.timeframe,
+            self.replay_time(),
+            self.replay_newest_closed(),
+        );
         indicator
     }
 
@@ -500,11 +507,22 @@ impl Chart {
         let clock = self.bar_clock();
         let bars = &self.state.data().bars;
         let events = held_events(&self.time_scale_events, self.frozen_source_events);
+        let (replay, newest_closed) = (self.replay_time(), self.replay_newest_closed());
         for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
             let instrument_changed = study.set_instrument(instrument.as_ref());
             let symbol_changed = study.set_chart_symbol(&self.symbol);
             let clock_changed = study.set_bar_clock(&clock);
             let events_changed = study.set_time_scale_events(events);
+            let replay_changed = self.study_data.set_replay_cut(
+                study.as_mut(),
+                &self.symbol,
+                self.timeframe,
+                replay,
+                newest_closed,
+            );
+            if replay_changed {
+                self.pending_from[at] = Some(0);
+            }
             if instrument_changed || symbol_changed || clock_changed || events_changed {
                 // The inputs a study offers can follow the chart's symbol and interval.
                 self.study_captions[at].take();
@@ -568,6 +586,16 @@ impl Chart {
 
     pub(super) fn recalculate_studies(&mut self) {
         self.readout_revision = crate::model::next_revision();
+        let (replay, newest_closed) = (self.replay_time(), self.replay_newest_closed());
+        for study in self.studies.indicators_mut() {
+            self.study_data.set_replay_cut(
+                study.as_mut(),
+                &self.symbol,
+                self.timeframe,
+                replay,
+                newest_closed,
+            );
+        }
         let requests = self
             .studies
             .indicators()
