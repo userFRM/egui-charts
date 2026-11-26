@@ -190,7 +190,7 @@ impl Chart {
     /// and each visible TPO study, come the extended levels it draws of completed profiles that no
     /// later bar has reached, at their current prices, named `TPO {session}: {level} {price}` or
     /// after the study, the session written as [`Self::format_time`] writes it; see
-    /// [`TPOLevelSource`](crate::model::TPOLevelSource).
+    /// [`TPOLevelSource`].
     ///
     /// [`Indicator::alert_outputs`]: crate::studies::Indicator::alert_outputs
     pub fn alert_sources(&self) -> Vec<(AlertSource, AlertSourceName)> {
@@ -1165,7 +1165,11 @@ mod tests {
         let bars = crate::chart::rendering::candles::tpo::tpo_level_bars();
         let bars = &bars[..9];
         let [d0, d1] = [bars[0].time, bars[4].time];
-        let rows: [(fn(&mut ChartTypeParams), Vec<_>); 7] = [
+        type Row = (
+            fn(&mut ChartTypeParams),
+            Vec<(DateTime<Utc>, crate::model::TPOLevel, f64)>,
+        );
+        let rows: [Row; 7] = [
             (|_| {}, vec![]),
             (
                 |p| p.tpo_extend_poc = true,
