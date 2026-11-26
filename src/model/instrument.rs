@@ -197,8 +197,9 @@ pub struct Instrument {
     /// The fraction prices are quoted in, such as thirty-seconds for `117'16`. A chart then
     /// labels its price scale, price tags, crosshair, legend, data window and chart data table
     /// in it, unless decimals or another fraction are chosen in the chart settings or on the
-    /// [`PriceScale`](crate::scales::PriceScale). Other readouts and the data exports keep
-    /// [`price_decimals`](Self::price_decimals). `None`, the default, writes decimals.
+    /// [`PriceScale`](crate::scales::PriceScale), and the symbol header writes its prices in it.
+    /// Other readouts and the data exports keep [`price_decimals`](Self::price_decimals). `None`,
+    /// the default, writes decimals.
     pub price_fraction: Option<PriceFraction>,
     /// Decimals of volume readouts, of studies in volume units without a precision chosen in
     /// their settings, of measured volume, of footprint volumes and of volume profile row values.
