@@ -43,8 +43,10 @@ pub enum CrosshairStyle {
     #[default]
     Full,
     /// The crosshair lines of `Full`, following their visibility, colour, width and style, with a
-    /// dot where they cross, drawn over the standard pointer in the vertical line's colour. Hiding
-    /// a line removes only that line; with both hidden the dot remains.
+    /// dot where they cross in the vertical line's colour. Over a plot the dot stands in for the
+    /// pointer, which is hidden; where no dot is drawn, as over an axis or under an open menu, the
+    /// standard pointer shows. Hiding a line removes only that line; with both hidden the dot
+    /// remains.
     Dot,
     /// Standard arrow cursor and axis readouts, without crosshair lines
     Arrow,

@@ -1629,9 +1629,13 @@ impl Chart {
                     .painter()
                     .with_clip_rect(panel_rect.intersect(ui.clip_rect()));
                 if let Some((pos, options)) = series_crosshair {
+                    let pos = Pos2::new(pos.x, anchor_y.unwrap_or(pos.y));
+                    self.pointer_dot |=
+                        crate::chart::rendering::paints_dot(&options, chart_rect, pos)
+                            && ui.rect_contains_pointer(chart_rect);
                     crate::chart::rendering::render_crosshair_lines(
                         &crate::chart::rendering::RenderContext::new(&painter, chart_rect),
-                        Pos2::new(pos.x, anchor_y.unwrap_or(pos.y)),
+                        pos,
                         &options,
                         chart_rect.bottom(),
                     );

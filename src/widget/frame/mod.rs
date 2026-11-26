@@ -4131,6 +4131,8 @@ impl Chart {
                         main_options.style = crate::config::CrosshairStyle::Full;
                     }
                 }
+                self.pointer_dot |= rendering::paints_dot(&main_options, price_rect, snapped)
+                    && ui.rect_contains_pointer(price_rect);
                 crosshair_tags = rendering::render_crosshair_at_time(
                     &price_ctx,
                     snapped,
@@ -4206,6 +4208,8 @@ impl Chart {
                     let mut options = crosshair_options.resolved(ui.ctx());
                     options.vert_line_visible = false;
                     let context = RenderContext::new(&painter, volume_rect);
+                    self.pointer_dot |= rendering::paints_dot(&options, volume_rect, pos)
+                        && ui.rect_contains_pointer(volume_rect);
                     rendering::render_crosshair_lines(
                         &context,
                         pos,
