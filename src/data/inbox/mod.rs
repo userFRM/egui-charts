@@ -21,7 +21,7 @@ use super::depth::Book;
 use super::depth_history::{DepthColumn, DepthHistory, DepthHistoryConfig, Sampler};
 use super::merge::Origin;
 use super::trades::Trades;
-use super::{FeedError, FeedStatus, OrderQueue, SubscriptionId};
+use super::{FeedError, FeedStatus, OrderQueue, SubscriptionId, ViewId};
 use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Placement};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::any::Any;
@@ -36,6 +36,7 @@ pub(crate) type Answer = Box<dyn Any + Send>;
 /// One chart's inbox, shared with every `Reply` and `Sink` it hands out.
 #[derive(Default)]
 pub(crate) struct Inbox {
+    view_id: OnceLock<ViewId>,
     state: Mutex<State>,
     waker: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
@@ -189,6 +190,12 @@ impl Updates {
 }
 
 impl Inbox {
+    fn view_id(&self) -> ViewId {
+        *self
+            .view_id
+            .get_or_init(|| ViewId(crate::model::next_revision()))
+    }
+
     /// Current time in a subscription's server clock, including between pushes.
     #[cfg(feature = "widget")]
     pub(crate) fn server_time(&self, id: SubscriptionId) -> Option<DateTime<Utc>> {
@@ -364,6 +371,13 @@ impl<T: Send + 'static> std::fmt::Debug for Reply<T> {
 }
 
 impl<T: Send + 'static> Reply<T> {
+    /// Identity of the chart feed attachment this reply belongs to. It matches the
+    /// [`Sink::view_id`] of that attachment's subscriptions, but it survives a symbol or
+    /// interval change, so compare the request's symbol and interval too. See [`ViewId`].
+    pub fn view_id(&self) -> ViewId {
+        self.inbox.view_id()
+    }
+
     /// Delivers `result` to the chart.
     pub fn send(mut self, result: Result<T, FeedError>) {
         self.sent = true;

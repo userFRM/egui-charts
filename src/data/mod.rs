@@ -1217,6 +1217,19 @@ impl Subscription {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SubscriptionId(u64);
 
+/// Identifies one chart feed attachment: the binding between a chart (or one other-symbol
+/// study series) and a [`Datafeed`], as seen by [`Reply::view_id`] and [`Sink::view_id`].
+///
+/// Unique within the process and opaque. Every history reply and live sink of one attachment
+/// reports the same id, so a feed serving two charts of the same symbol and interval can tell
+/// their requests apart. The id changes when `Chart::set_feed` binds a new feed, and each
+/// other-symbol study series has its own. It does **not** change when the chart's symbol or
+/// interval does, so a provider must still match the request's symbol and interval, never the
+/// id alone, before tying a pending reply to a subscription. Replies that no chart requested
+/// (storage, chats, alerts) carry an id of their own that matches no sink.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ViewId(u64);
+
 /// Connection state of a live subscription.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
