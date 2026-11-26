@@ -3994,7 +3994,7 @@ impl DemoApp {
             self.export_dialog.set_layout_size(None);
             let frame = panel_frame(bg).corner_radius(4).inner_margin(16);
             let back = egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-                // A centred column reads better than rows across the whole chart area.
+                // A centred column stays readable where rows across the whole chart area do not.
                 let width = ui.available_width().min(760.0);
                 ui.horizontal_top(|ui| {
                     ui.add_space((ui.available_width() - width) / 2.0);
