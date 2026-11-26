@@ -153,6 +153,10 @@ pub struct FootprintConfig {
     /// `None` hides them. Used by the footprint chart type and [`crate::widget::Chart::show_footprint`].
     #[cfg(feature = "studies")]
     pub studies: Option<crate::studies::FootprintStudyConfig>,
+    /// The instrument's coarser ticks by price range; a bar's rows are at least as tall as the
+    /// step of the ranges it spans. Set by the chart for its Volume Footprint chart type.
+    #[serde(skip)]
+    pub(crate) tick_tiers: Vec<(f64, f64)>,
 }
 
 impl Default for FootprintConfig {
@@ -196,6 +200,7 @@ impl Default for FootprintConfig {
             session_cumulative_delta: false,
             #[cfg(feature = "studies")]
             studies: None,
+            tick_tiers: Vec::new(),
         }
     }
 }
@@ -1175,6 +1180,25 @@ pub(crate) fn fixed_row_group(flow: FootprintView<'_>, row_ticks: u32) -> i64 {
     i64::from(row_ticks.div_ceil(input_ticks).clamp(1, 1_000_000))
 }
 
+/// Input rows per displayed row of `bar` before zoom: the manual group, raised so that a row
+/// covers the step of the instrument tick ranges the bar spans.
+pub(crate) fn min_row_group(bar: &Bar, flow: FootprintView<'_>, config: &FootprintConfig) -> i64 {
+    let manual = fixed_row_group(flow, config.row_ticks);
+    if config.tick_tiers.is_empty() {
+        return manual;
+    }
+    let step =
+        crate::scales::TickGrid::new(flow.tick_size(), &config.tick_tiers).step(bar.low, bar.high);
+    let rows = step / flow.price_step();
+    // A step of whole input rows stays whole; floating-point noise must not add a row.
+    let rows = if (rows - rows.round()).abs() <= rows * 1e-9 {
+        rows.round()
+    } else {
+        rows.ceil()
+    };
+    manual.max(rows.clamp(1.0, 1_000_000.0) as i64)
+}
+
 /// The automatic row height, when it is a usable one: the renderer ignores a height that is not
 /// finite and positive.
 pub(crate) fn automatic_row_height(config: &FootprintConfig) -> Option<f32> {
@@ -1191,7 +1215,7 @@ pub(crate) fn row_group(
 ) -> i64 {
     let raw_height =
         (mapping.price_to_y(bar.close + flow.price_step()) - mapping.price_to_y(bar.close)).abs();
-    let manual = fixed_row_group(flow, config.row_ticks);
+    let manual = min_row_group(bar, flow, config);
     automatic_row_height(config).map_or(manual, |height| {
         (height / raw_height.max(0.01))
             .ceil()
@@ -3436,6 +3460,33 @@ mod tests {
             assert!(
                 (extent.0 - top).abs() < 0.01 && (extent.1 - bottom).abs() < 0.01,
                 "spacing {spacing}, tick {tick}, ticks {ticks}, auto {auto:?}: {extent:?}, expected {top}..{bottom}"
+            );
+        }
+    }
+
+    /// A bar's rows cover the step of the tick ranges it spans: 0.05 above 25, 0.10 across it,
+    /// in rows of one 0.01 input tick. A larger manual group wins.
+    #[test]
+    fn rows_cover_the_ticks_of_the_ranges_a_bar_spans() {
+        let flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.01, 1).unwrap();
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        for (low, high, row_ticks, expected) in [
+            (29.0, 31.0, 1, 5),
+            (24.0, 26.0, 1, 10),
+            (5.0, 6.0, 1, 1),
+            (5.0, 12.0, 1, 2),
+            (29.0, 31.0, 20, 20),
+        ] {
+            let config = FootprintConfig {
+                row_ticks,
+                tick_tiers: vec![(10.0, 0.02), (25.0, 0.05)],
+                ..FootprintConfig::default()
+            };
+            let bar = Bar::new(time, low, high, low, high, 1.0);
+            assert_eq!(
+                min_row_group(&bar, (&flow).into(), &config),
+                expected,
+                "{low}..{high}, {row_ticks} ticks"
             );
         }
     }

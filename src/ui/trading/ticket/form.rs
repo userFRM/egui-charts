@@ -8,8 +8,8 @@ use super::{
 use crate::chart::{COVERAGE_CELL, coverage_text, exit_coverage, paint_coverage};
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::model::{OrderRequest, OrderSide, TimeInForce};
-use crate::scales::{decimals, to_step};
+use crate::model::{OrderRequest, OrderSide, OrderType, TimeInForce};
+use crate::scales::decimals;
 use crate::theme::ThemeExt;
 use crate::ui::top_toolbar::buttons::rule_color;
 use crate::ui::trading::widgets::{
@@ -76,18 +76,14 @@ impl OrderTicket {
         if let Some(entry) = self.entry(market) {
             for (bracket, profit) in [(&mut self.take_profit, true), (&mut self.stop_loss, false)] {
                 if !bracket.0 && bracket.1.mode == BracketMode::Price && bracket.1.value == 0.0 {
-                    bracket.1.value = to_step(
-                        entry + Bracket::sign(self.side, profit) * 100.0 * market.tick,
-                        market.tick,
-                        f64::round,
-                    );
+                    bracket.1.value = market
+                        .grid()
+                        .offset(entry, Bracket::sign(self.side, profit) * 100.0);
                 }
             }
         }
         let request = self.request(ui.ctx(), market);
-        let entry = self
-            .entry(market)
-            .map(|price| to_step(price, market.tick, f64::round));
+        let entry = self.entry(market).map(|price| market.grid().snap(price));
         let rules = market.rules;
         let quantity = request
             .as_ref()
@@ -116,9 +112,9 @@ impl OrderTicket {
             field(ui, |ui| {
                 match touch.filter(|_| in_ticks) {
                     Some(touch) => {
-                        let mut ticks = ((*price - touch) / market.tick).round();
+                        let mut ticks = market.grid().steps_between(touch, *price);
                         if number(ui, (label, "ticks"), &mut ticks, 0).changed() {
-                            *price = to_step(touch + ticks * market.tick, market.tick, f64::round);
+                            *price = market.grid().offset(touch, ticks);
                         }
                     }
                     None => {
@@ -136,7 +132,7 @@ impl OrderTicket {
                                 (OrderSide::Sell, _, Some(_)) => "Bid",
                                 _ => "Last",
                             };
-                            let ticks = ((*price - touch) / market.tick).round();
+                            let ticks = market.grid().steps_between(touch, *price);
                             let key = match (reference, ticks < 0.0) {
                                 ("Ask", false) => "Ask + {ticks}",
                                 ("Ask", true) => "Ask - {ticks}",
@@ -365,7 +361,18 @@ impl OrderTicket {
         let value = entry * per_point;
         if let Some(leverage) = rules.leverage {
             let margin = value / leverage;
-            let available = market.balance.unwrap_or_default();
+            // Reported funds exclude the modified order's own margin, which the change frees.
+            let held = self.editing.as_ref().map_or(0.0, |order| {
+                let price = match order.request.order_type {
+                    OrderType::Limit(price) | OrderType::Stop(price) => price,
+                    OrderType::StopLimit { limit, .. } => limit,
+                    _ => market.last.unwrap_or_default(),
+                };
+                order.request.quantity * price.abs() * rules.point_value / leverage
+            });
+            let available = (market.available_funds)
+                .map_or(market.balance.unwrap_or_default(), |funds| funds + held);
+            let short = margin > available;
             let row = info(
                 ui,
                 "Est. margin",
@@ -375,7 +382,7 @@ impl OrderTicket {
                     grouped(available, 2, false)
                 ),
                 "",
-                theme.ui.text,
+                if short { theme.ui.error } else { theme.ui.text },
             );
             let help =
                 Rect::from_center_size(pos2(row.left() + 82.0, row.center().y), vec2(14.0, 14.0));
@@ -389,8 +396,15 @@ impl OrderTicket {
             )
             .on_hover_text(l10n::text(
                 ui.ctx(),
-                "Estimated margin: trade value divided by leverage, compared with account balance. \
-                 This does not include margin already used by other positions or working orders.",
+                if market.available_funds.is_some() {
+                    "Estimated margin: trade value divided by leverage, compared with the available \
+                     funds the broker reports, which leave out the margin of open positions and \
+                     working orders. The margin of an order being modified counts as available."
+                } else {
+                    "Estimated margin: trade value divided by leverage, compared with account \
+                     balance. This does not include margin already used by other positions or \
+                     working orders."
+                },
             ));
             let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), Sense::hover());
             ui.painter().rect_filled(bar, 2.0, theme.ui.border);
@@ -399,7 +413,7 @@ impl OrderTicket {
             } else {
                 1.0
             };
-            let color = if margin > available {
+            let color = if short {
                 theme.ui.error
             } else {
                 theme.ui.accent
@@ -408,7 +422,7 @@ impl OrderTicket {
             ui.painter().rect_filled(fill, 2.0, color);
             info(ui, "Leverage", &format!("{leverage}:1"), "", theme.ui.text);
         }
-        let tick_value = market.tick * per_point;
+        let tick_value = market.grid().tick_at(entry) * per_point;
         let places = market.decimals.max(2);
         info(
             ui,
@@ -653,7 +667,7 @@ impl OrderTicket {
             return;
         }
         let side = self.side;
-        let tick = market.tick;
+        let grid = market.grid();
         let balance = market.positive_balance();
         // An exit's title, with `control` at its right, and its field. `control` says whether the
         // field is enabled.
@@ -671,10 +685,8 @@ impl OrderTicket {
                     && (mode != BracketMode::BalancePercent || balance.is_some())
             };
             let exit = entry.filter(|_| priced(bracket.mode)).and_then(|entry| {
-                let price = bracket.price(side, entry, tick, per_point, balance, profit);
-                price
-                    .is_finite()
-                    .then(|| (entry, to_step(price, tick, f64::round)))
+                let price = bracket.price(side, entry, grid, per_point, balance, profit);
+                price.is_finite().then(|| (entry, grid.snap(price)))
             });
             let mut mode = bracket.mode;
             let enabled = ui
@@ -733,7 +745,7 @@ impl OrderTicket {
                                     "{0} ticks",
                                     &[(
                                         "0",
-                                        ((price - entry) / tick).abs().round().to_string().as_str(),
+                                        grid.steps_between(entry, price).abs().to_string().as_str(),
                                     )],
                                 )
                             } else {
@@ -754,7 +766,7 @@ impl OrderTicket {
                 // The exit stays where it is: its distance is written in the new way.
                 *bracket = match exit {
                     Some((entry, price)) if priced(mode) => {
-                        Bracket::at(mode, price, side, entry, tick, per_point, balance, profit)
+                        Bracket::at(mode, price, side, entry, grid, per_point, balance, profit)
                     }
                     _ => Bracket { mode, ..*bracket },
                 };
@@ -918,14 +930,10 @@ impl OrderTicket {
             let bracket = match price.zip(entry) {
                 Some((price, entry)) => Bracket::at(
                     last.mode,
-                    to_step(
-                        price + Bracket::sign(side, true) * 100.0 * tick,
-                        tick,
-                        f64::round,
-                    ),
+                    grid.offset(price, Bracket::sign(side, true) * 100.0),
                     side,
                     entry,
-                    tick,
+                    grid,
                     per_point * share / 100.0,
                     balance,
                     true,
