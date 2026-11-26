@@ -509,6 +509,10 @@ pub struct ScalesAndLinesSettings {
     /// Whether crosshair, tooltip and forecast dates name the weekday. `None` keeps the chart's
     /// choice, as do settings saved without this field.
     pub weekday_names: Option<crate::scales::WeekdayNames>,
+    /// Whether an interval change keeps the bar at the left edge in place, as
+    /// [`TimeScaleOptions::keep_left_edge_on_interval_change`](crate::config::TimeScaleOptions::keep_left_edge_on_interval_change)
+    /// does. `None` keeps the chart's choice, as do settings saved without this field.
+    pub keep_left_edge_on_interval_change: Option<bool>,
     /// Whether to show countdown.
     pub show_countdown: bool,
     /// Whether to show the bid and ask tags.
@@ -564,6 +568,7 @@ impl Default for ScalesAndLinesSettings {
             date_format: None,
             use_24_hour: None,
             weekday_names: None,
+            keep_left_edge_on_interval_change: None,
             show_countdown: true,
             show_bid_ask: false,
             show_bid_ask_lines: None,
