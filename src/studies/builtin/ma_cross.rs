@@ -11,12 +11,11 @@ pub struct MACross {
 impl MACross {
     /// Create two simple averages with lengths clamped to at least one.
     pub fn new(fast_period: usize, slow_period: usize) -> Self {
-        let mut inner = MACombination::new(vec![
+        let inner = MACombination::new(vec![
             AverageLine::new(AverageType::Simple, fast_period, palette::ORANGE),
             AverageLine::new(AverageType::Simple, slow_period, palette::DARK_GREEN),
         ])
         .unwrap();
-        inner.wait_for_all = true;
         Self { inner }
     }
 }
