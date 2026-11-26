@@ -118,7 +118,6 @@ pub struct MACombination {
     /// The two averages whose crossings are marked, numbered from 1; 0 picks none.
     cross: [usize; 2],
     default_cross: [usize; 2],
-    pub(super) wait_for_all: bool,
     /// Whether each line is coloured by its own direction, the slowest wide and filled.
     directional: bool,
     default_directional: bool,
@@ -135,7 +134,6 @@ impl std::fmt::Debug for MACombination {
             .field("markers", &self.markers)
             .field("cross", &self.cross)
             .field("default_cross", &self.default_cross)
-            .field("wait_for_all", &self.wait_for_all)
             .field("directional", &self.directional)
             .field("default_directional", &self.default_directional)
             .field("visible", &self.visible)
@@ -168,7 +166,6 @@ impl MACombination {
             markers: Vec::new(),
             cross: [1, 2],
             default_cross: [1, 2],
-            wait_for_all: false,
             directional: false,
             default_directional: false,
             visible: true,
@@ -491,9 +488,7 @@ impl Indicator for MACombination {
                     .iter()
                     .map(|average| average.values().value(0, i).unwrap_or(f64::NAN))
                     .collect();
-                if lines.iter().all(|v| !v.is_finite())
-                    || (self.wait_for_all && lines.iter().any(|v| !v.is_finite()))
-                {
+                if lines.iter().all(|v| !v.is_finite()) {
                     state.1 = None;
                     return IndicatorValue::None;
                 }
@@ -721,5 +716,48 @@ mod tests {
                 "{name} past its averages"
             );
         }
+    }
+
+    /// MA Cross draws each average from its own warm-up, as a standalone SMA does, and still
+    /// marks only bars where both exist. On the closes above, SMA(9) is 4 on bar 8 (closes 0 to
+    /// 8) and 15 on bar 19 (11 to 19), and SMA(21) is 10 on bar 20 (0 to 20). The one crossing
+    /// is down on bar 70: the 9-bar mean of closes 58 to 50 is 54, below the 21-bar mean 1150/21.
+    #[test]
+    fn ma_cross_draws_each_average_from_its_own_warm_up() {
+        use crate::studies::{CrossDirection, Indicator, SMA};
+        let bars: Vec<Bar> = (0..60)
+            .chain((1..=60).rev())
+            .map(|close| make_bar(f64::from(close)))
+            .collect();
+        let mut study = IndicatorFactory::new().create("MA Cross").unwrap();
+        study.calculate(&bars);
+        let drawn = |line, bar| study.values().value(line, bar);
+        assert_eq!(
+            [
+                drawn(0, 7),
+                drawn(0, 8),
+                drawn(0, 19),
+                drawn(1, 19),
+                drawn(1, 20)
+            ],
+            [None, Some(4.0), Some(15.0), None, Some(10.0)]
+        );
+        for (line, period) in [(0, 9), (1, 21)] {
+            let mut sma = SMA::new(period);
+            sma.calculate(&bars);
+            for bar in 0..bars.len() {
+                assert_eq!(
+                    drawn(line, bar),
+                    sma.values().value(0, bar),
+                    "line {line} bar {bar}"
+                );
+            }
+        }
+        let markers: Vec<_> = study
+            .markers()
+            .iter()
+            .map(|marker| (marker.bar, marker.direction, marker.value))
+            .collect();
+        assert_eq!(markers, [(70, CrossDirection::Down, 54.0)]);
     }
 }

@@ -283,6 +283,9 @@ impl Chart {
         }
         // Panes share the available height and the lowest time axis.
         let has_panes = self.has_panes();
+        let footprint_range = self
+            .footprint_history_by_view
+            .then(|| self.state.visible_range());
         let response = if has_panes {
             self.show_with_panes(ui, footprint)
         } else {
@@ -416,6 +419,15 @@ impl Chart {
             self.pending_visible_range = None;
         }
         self.restore_history_view(ui.ctx());
+        // The pump saw the pre-input range. Page only if the settled view needs different bars.
+        if footprint_range.is_some_and(|before| before != self.state.visible_range())
+            && !ui.ctx().will_discard()
+            && self.can_scroll_prepared_footprints()
+            && let Some(mut link) = self.feed_link.take()
+        {
+            self.scroll_footprints(&mut link);
+            self.feed_link = Some(link);
+        }
         self.record_host_events(ui);
         let needs_info = response.clicked()
             || response.double_clicked()
