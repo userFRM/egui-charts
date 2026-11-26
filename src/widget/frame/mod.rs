@@ -4085,8 +4085,9 @@ impl Chart {
                 if volume_rect.contains(hover_pos) {
                     main_options.horz_line_visible = false;
                     main_options.horz_label_visible = false;
+                    // No price for the dot: the time line alone, as Full draws it.
                     if main_options.style == crate::config::CrosshairStyle::Dot {
-                        main_options.style = crate::config::CrosshairStyle::Arrow;
+                        main_options.style = crate::config::CrosshairStyle::Full;
                     }
                 }
                 crosshair_tags = rendering::render_crosshair_at_time(
@@ -4308,8 +4309,9 @@ impl Chart {
                         if !main_target || self.synced_crosshair_price.is_none() {
                             options.horz_line_visible = false;
                             options.horz_label_visible = false;
+                            // No price for the dot: the time line alone, as Full draws it.
                             if options.style == crate::config::CrosshairStyle::Dot {
-                                options.style = crate::config::CrosshairStyle::Arrow;
+                                options.style = crate::config::CrosshairStyle::Full;
                             }
                         }
                         let y = match self.synced_crosshair_price {
