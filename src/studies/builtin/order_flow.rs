@@ -324,6 +324,7 @@ impl Indicator for OrderFlowStudy {
             OrderFlowKind::LevelsExecuted { .. } => "Levels Executed",
             OrderFlowKind::SizeDelta { .. } => "Multi-Range Delta",
             OrderFlowKind::FlowSum { .. } => "Rolling Volume and Delta",
+            OrderFlowKind::SideVolume => "Buy and Sell Volume",
             OrderFlowKind::FilteredCvd { .. } => "Size-Filtered CVD",
             OrderFlowKind::LevelsTradedThrough { .. } => "Levels Traded Through",
         }
@@ -519,6 +520,9 @@ impl Indicator for OrderFlowStudy {
                     .collect();
             }
             OrderFlowKind::FlowSum { .. } => &["Volume sum (lots)", "Delta sum (lots)"],
+            OrderFlowKind::SideVolume => {
+                &["Buy volume (lots)", "Sell volume (lots)", "Delta (lots)"]
+            }
             OrderFlowKind::FilteredCvd { .. } => &["CVD (lots)"],
             OrderFlowKind::Spread => &["Last (ticks)", "Mean (ticks)", "Maximum (ticks)"],
             OrderFlowKind::BookSize { .. } => {
@@ -543,7 +547,11 @@ impl Indicator for OrderFlowStudy {
         PlotStyle {
             color: self.colors[line.min(2)],
             plot_type: if self.delta == Some(false)
-                || (line == 2 && matches!(self.kind, OrderFlowKind::BookSize { .. }))
+                || (line == 2
+                    && matches!(
+                        self.kind,
+                        OrderFlowKind::BookSize { .. } | OrderFlowKind::SideVolume
+                    ))
                 || (self.histogram && matches!(self.kind, OrderFlowKind::FlowSum { .. }))
             {
                 PlotType::Histogram
@@ -620,7 +628,7 @@ impl Indicator for OrderFlowStudy {
         )
         .with_default(InputValue::Toggle(false));
         match self.kind {
-            OrderFlowKind::Spread => vec![],
+            OrderFlowKind::Spread | OrderFlowKind::SideVolume => vec![],
             OrderFlowKind::BookSize { levels, distance } => {
                 let mut inputs = vec![
                     length("levels", "Nearest levels", levels, 1, 10000),
@@ -2291,6 +2299,100 @@ mod tests {
                 ],
                 "cumulative {cumulative}"
             );
+        }
+    }
+
+    /// Buy and Sell Volume outputs feed study alerts (#4262). Hand values per 1-minute bar: minute
+    /// 0 sells 60; minute 1 sells 25 and 15, so 40, beside 30 of unknown side that count for
+    /// neither side; minute 2 buys 70 and sells 60, delta 10; minute 3, forming, runs its delta
+    /// 50, 120, 80, 130. Sell volume less than 50 at bar close fires on minute 1 alone. Delta
+    /// exiting -100 to 100 once per bar fires at 120 and not again at 130 in the same bar.
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn buy_and_sell_volume_alerts_read_closed_and_forming_bars() {
+        use crate::model::{Alert, AlertCondition, AlertFrequency, AlertSource};
+        use OrderSide::{Buy, Sell};
+        use std::sync::{Arc, Mutex};
+        let mut study = crate::studies::IndicatorFactory::new()
+            .create("Buy and Sell Volume")
+            .expect("the factory offers Buy and Sell Volume");
+        let input = study.order_flow_inputs()[0].clone();
+        let clock = BarClock::new(Timeframe::Min1);
+        let mut second = 0;
+        let mut trade = |minute: i64, size: f64, side: Option<OrderSide>| {
+            second += 1;
+            let at = start() + TimeDelta::minutes(minute) + TimeDelta::seconds(second % 60);
+            input.push_trade(&clock, &Tick::new(at, 100.0, size, side));
+        };
+        let alert = |output, condition, frequency| {
+            let mut alert = Alert::new("SYM", condition);
+            alert.source = AlertSource::Study {
+                id: "flow".into(),
+                output,
+            };
+            alert.frequency = frequency;
+            alert.timeframe = Some(Timeframe::Min1);
+            alert
+        };
+        let fired = Arc::new(Mutex::new(Vec::new()));
+        let log = fired.clone();
+        let engine = crate::services::AlertEngine::new()
+            .with_alerts(vec![
+                alert(
+                    1,
+                    AlertCondition::Below(50.0),
+                    AlertFrequency::OncePerBarClose,
+                ),
+                alert(
+                    2,
+                    AlertCondition::ExitingChannel {
+                        lower: -100.0,
+                        upper: 100.0,
+                    },
+                    AlertFrequency::OncePerBar,
+                ),
+            ])
+            .on_trigger(move |alert, _| {
+                if let AlertSource::Study { output, .. } = alert.source {
+                    log.lock().unwrap().push(output);
+                }
+            });
+        let data = bars();
+        let step = |study: &mut Box<dyn Indicator>, len: usize, want: &[usize]| {
+            study.calculate(&data[..len]);
+            engine.update(
+                "SYM",
+                None,
+                Timeframe::Min1,
+                &data[..len],
+                data[len - 1].time + TimeDelta::seconds(59),
+                |source, at| match source {
+                    AlertSource::Study { output, .. } => study.values().value(*output, at),
+                    _ => None,
+                },
+            );
+            assert_eq!(*fired.lock().unwrap(), want, "{len} bars");
+        };
+        trade(0, 60.0, Some(Sell));
+        trade(1, 25.0, Some(Sell));
+        trade(1, 30.0, None);
+        trade(1, 15.0, Some(Sell));
+        // Minute 0 closed with 60 sold.
+        step(&mut study, 2, &[]);
+        trade(2, 70.0, Some(Buy));
+        trade(2, 60.0, Some(Sell));
+        // Minute 1 closed with 40 sold.
+        step(&mut study, 3, &[1]);
+        trade(3, 50.0, Some(Buy));
+        // Minute 2 closed with 60 sold; minute 3's delta of 50 is inside the channel.
+        step(&mut study, 4, &[1]);
+        for (size, side, want) in [
+            (70.0, Buy, &[1, 2][..]),
+            (40.0, Sell, &[1, 2]),
+            (50.0, Buy, &[1, 2]),
+        ] {
+            trade(3, size, Some(side));
+            step(&mut study, 4, want);
         }
     }
 

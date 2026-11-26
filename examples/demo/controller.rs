@@ -15254,6 +15254,50 @@ mod tests {
         }
     }
 
+    /// Buy and Sell Volume on the demo chart offers its buy volume, sell volume and delta as
+    /// alert sources, read from the demo's sided executions (#4262): on a bar with executions,
+    /// buy minus sell volume is the delta.
+    #[test]
+    fn buy_and_sell_volume_outputs_are_demo_alert_sources() {
+        use egui_charts::studies::IndicatorFactory;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T17:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        let study = app.chart.add_indicator(
+            IndicatorFactory::new()
+                .create("Buy and Sell Volume")
+                .unwrap(),
+        );
+        settle(&mut app, &ctx);
+        let (sources, names): (Vec<_>, Vec<_>) = (app.chart.alert_sources().into_iter())
+            .filter(|(source, _)| {
+                matches!(source, AlertSource::Study { id, .. } if *id == study.0.to_string())
+            })
+            .map(|(source, name)| (source, name.to_string()))
+            .unzip();
+        assert_eq!(
+            names,
+            [
+                "Buy and Sell Volume: Buy volume (lots)",
+                "Buy and Sell Volume: Sell volume (lots)",
+                "Buy and Sell Volume: Delta (lots)",
+            ]
+        );
+        let traded = (0..app.chart.bars(SeriesId::MAIN).len()).find_map(|bar| {
+            let [buy, sell, delta] = [0, 1, 2].map(|i| app.chart.alert_value(&sources[i], bar));
+            Some((buy?, sell?, delta?)).filter(|(buy, sell, _)| buy + sell > 0.0)
+        });
+        let (buy, sell, delta) = traded.expect("a bar with executions");
+        assert!(
+            (buy - sell - delta).abs() <= 1e-9 * (buy + sell),
+            "{buy} - {sell} = {delta}"
+        );
+    }
+
     /// An alert created with the dialog's defaults requests the alert sound chosen in the chart
     /// settings when it fires, with no other switch; one with Sound unticked requests none.
     #[test]
