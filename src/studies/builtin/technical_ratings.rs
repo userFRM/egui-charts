@@ -1202,7 +1202,8 @@ mod tests {
     /// HMA is 300.6 below close 302, the drawn cloud is 297 > 288.5 > 266.75 > 249.5,
     /// Momentum rises 10 to 12, MACD is 7.1595 > 7.0319 and UO is 82.87. ADX rises
     /// above 20 on both trends, so it buys the rise but does not sell the fall.
-    /// A flat stretch has no CCI, so its vote is missing.
+    /// A flat stretch has no CCI, and an RSI without a loss stays at 100, so the flat stretch and
+    /// the rise have no Stochastic RSI: their votes are missing.
     #[test]
     fn scores_coverage_and_ratings_follow_the_votes() {
         let fixture = |direction: f64| {
@@ -1234,7 +1235,7 @@ mod tests {
         for (direction, oscillator, last_votes) in [
             (
                 1.0,
-                4.0 / 11.0,
+                4.0 / 10.0,
                 [0., 0., 0., 1., 0., 1., 1., 0., 0., 0., 1.],
             ),
             (
@@ -1245,12 +1246,14 @@ mod tests {
             (0.0, 0.0, [0.; 11]),
         ] {
             let mut last_votes = last_votes.map(Some);
-            let oscillator_coverage = if direction == 0.0 {
+            if direction == 0.0 {
                 last_votes[2] = None;
-                10. / 11.
-            } else {
-                1.
-            };
+            }
+            if direction >= 0.0 {
+                last_votes[7] = None;
+            }
+            let voted = last_votes.iter().flatten().count() as f64;
+            let oscillator_coverage = voted / 11.;
             let bars = fixture(direction);
             for basis in [
                 RatingBasis::All,
@@ -1275,7 +1278,7 @@ mod tests {
                     RatingBasis::Oscillators => oscillator,
                 };
                 let coverage = match basis {
-                    RatingBasis::All if direction == 0.0 => 25. / 26.,
+                    RatingBasis::All => (15. + voted) / 26.,
                     RatingBasis::Oscillators => oscillator_coverage,
                     _ => 1.,
                 };
@@ -1304,7 +1307,13 @@ mod tests {
                     assert_eq!(
                         table(&study),
                         vec![(
-                            ["Chart", label, "100%"].map(String::from).to_vec(),
+                            [
+                                "Chart",
+                                label,
+                                &format!("{:.0}%", oscillator_coverage * 100.0)
+                            ]
+                            .map(String::from)
+                            .to_vec(),
                             vec![Color32::from_rgb(41, 91, 121), fill]
                         )]
                     );
@@ -1319,14 +1328,15 @@ mod tests {
         let bars = fixture(1.0);
         let mut full = TechnicalRatings::new();
         full.calculate(&bars);
+        // Stochastic RSI waits for an RSI window with a range, which this rise never has.
         for (at, expected) in [
             (0, [6. / 15., 0., 6. / 26.]),
-            (34, [11. / 15., 9. / 11., 20. / 26.]),
-            (35, [11. / 15., 10. / 11., 21. / 26.]),
-            (75, [12. / 15., 1., 23. / 26.]),
-            (76, [13. / 15., 1., 24. / 26.]),
-            (198, [14. / 15., 1., 25. / 26.]),
-            (199, [1.; 3]),
+            (34, [11. / 15., 8. / 11., 19. / 26.]),
+            (35, [11. / 15., 9. / 11., 20. / 26.]),
+            (75, [12. / 15., 10. / 11., 22. / 26.]),
+            (76, [13. / 15., 10. / 11., 23. / 26.]),
+            (198, [14. / 15., 10. / 11., 24. / 26.]),
+            (199, [1., 10. / 11., 25. / 26.]),
         ] {
             for (i, value) in expected.into_iter().enumerate() {
                 assert_eq!(
@@ -1363,10 +1373,17 @@ mod tests {
                 full.values.value(line, 259)
             );
         }
-        // Only VWMA reads volume: a missing volume removes its vote, while the other 25
-        // components retain their price history. With no volume at all VWMA is the SMA.
-        for volume in [f64::NAN, f64::INFINITY] {
-            let mut missing_volume = bars.clone();
+        // Only VWMA reads volume: a missing volume, or none in its window, removes its vote,
+        // while the other 25 components retain their price history.
+        let mut no_volume = bars.clone();
+        for bar in &mut no_volume {
+            bar.volume = 0.0;
+        }
+        for (volume, mut missing_volume) in [
+            (f64::NAN, bars.clone()),
+            (f64::INFINITY, bars.clone()),
+            (0.0, no_volume),
+        ] {
             missing_volume[259].volume = volume;
             let mut study = TechnicalRatings::new();
             study.calculate(&missing_volume);
@@ -1382,24 +1399,13 @@ mod tests {
             assert_eq!(votes, expected);
             for (line, value) in [
                 (0, 1.0),
-                (1, 4.0 / 11.0),
-                (2, 15.0 / 22.0),
+                (1, 4.0 / 10.0),
+                (2, 7.0 / 10.0),
                 (3, 14.0 / 15.0),
-                (4, 1.0),
-                (5, 25.0 / 26.0),
+                (4, 10.0 / 11.0),
+                (5, 24.0 / 26.0),
             ] {
                 assert!((study.values.value(line, 259).unwrap() - value).abs() < 1e-12);
-            }
-        }
-        let mut no_volume = bars.clone();
-        for bar in &mut no_volume {
-            bar.volume = 0.0;
-        }
-        let mut study = TechnicalRatings::new();
-        study.calculate(&no_volume);
-        for line in 0..6 {
-            for at in 0..bars.len() {
-                assert_eq!(study.values.value(line, at), full.values.value(line, at));
             }
         }
         let n = f64::NAN;

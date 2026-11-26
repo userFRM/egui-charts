@@ -647,3 +647,28 @@ pub(super) fn hlc_bars(hlc: &[(f64, f64, f64)]) -> Vec<Bar> {
         })
         .collect()
 }
+
+/// Asserts that line `line` of `study` has, bar by bar, the value `want[line]` gives, within
+/// 1e-9, and that `want` covers every bar.
+#[cfg(test)]
+pub(super) fn assert_lines(
+    label: &str,
+    study: &dyn crate::studies::Indicator,
+    want: &[Vec<Option<f64>>],
+) {
+    let values = study.values();
+    for (line, want) in want.iter().enumerate() {
+        assert_eq!(values.len(), want.len(), "{label} line {line}");
+        for (bar, want) in want.iter().enumerate() {
+            match (values.value(line, bar), want) {
+                (Some(got), Some(want)) => {
+                    assert!(
+                        (got - want).abs() < 1e-9,
+                        "{label} line {line} bar {bar}: {got}"
+                    )
+                }
+                (got, want) => assert_eq!(got, *want, "{label} line {line} bar {bar}"),
+            }
+        }
+    }
+}

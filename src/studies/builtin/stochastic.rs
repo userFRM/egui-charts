@@ -12,6 +12,9 @@
 //! %K = 100 * (Close - Lowest Low) / (Highest High - Lowest Low)
 //! %D = SMA(%K, d_period)
 //!
+//! A window without range, where the formula is 0 / 0, keeps the previous raw %K, and there is
+//! no value before the first one; the %K smoothing and %D average those values.
+//!
 //! # Example
 //! ```
 //! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
@@ -75,6 +78,12 @@ impl Default for Stochastic {
     }
 }
 
+/// The raw %K of `close` in a window from `lowest` to `highest`, before clamping: NaN when the
+/// window has no range and the close sits at it (0 / 0).
+fn raw_k(close: f64, highest: f64, lowest: f64) -> f64 {
+    100.0 * (close - lowest) / (highest - lowest)
+}
+
 impl Stochastic {
     /// The values over `data`, every bar of which has finite inputs.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
@@ -90,24 +99,20 @@ impl Stochastic {
         // Calculate raw %K (Fast Stochastic)
         let highest = rolling_max(data.iter().map(|b| b.high), self.k_period);
         let lowest = rolling_min(data.iter().map(|b| b.low), self.k_period);
-        let mut raw_k = Vec::with_capacity(data.len());
+        let mut raw = Vec::with_capacity(data.len());
+        // A window without range keeps the previous %K; there is none before the first.
+        let mut carried = f64::NAN;
         for i in 0..data.len() {
-            if i < self.k_period - 1 {
-                raw_k.push(f64::NAN);
-            } else {
-                let (highest, lowest) = (highest[i], lowest[i]);
-                let range = highest - lowest;
-
-                if range == 0.0 {
-                    raw_k.push(50.0); // Middle value when no range
-                } else {
-                    let k = 100.0 * (data[i].close - lowest) / range;
-                    raw_k.push(k.clamp(0.0, 100.0));
+            if i + 1 >= self.k_period {
+                let k = raw_k(data[i].close, highest[i], lowest[i]);
+                if !k.is_nan() {
+                    carried = k.clamp(0.0, 100.0);
                 }
             }
+            raw.push(carried);
         }
 
-        let smooth_k = helpers::sma(&raw_k, self.k_smooth);
+        let smooth_k = helpers::sma(&raw, self.k_smooth);
         let d_values = helpers::sma(&smooth_k, self.d_period);
 
         // Build output values
@@ -156,7 +161,27 @@ impl Indicator for Stochastic {
             &mut values,
             data,
             from,
-            usable_behind(behind, usable),
+            |data: &[Bar], from: usize| {
+                let read = usable_behind(behind, usable)(data, from);
+                // The first %K read from `read` carries an older one when its window has no range.
+                // shortcut: such a window recomputes from bar 0; walk back to the last window with
+                // a range if long flat histories show up in update profiles.
+                let window: Vec<&Bar> = data[read..]
+                    .iter()
+                    .filter(|b| usable(b))
+                    .take(self.k_period)
+                    .collect();
+                let carries = window.len() == self.k_period
+                    && window.last().is_some_and(|last| {
+                        let highest = window
+                            .iter()
+                            .map(|b| b.high)
+                            .fold(f64::NEG_INFINITY, f64::max);
+                        let lowest = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
+                        raw_k(last.close, highest, lowest).is_nan()
+                    });
+                if carries { 0 } else { read }
+            },
             |data| over_finite_bars(data, usable, |data| self.compute(data)),
         );
         self.values = values;
@@ -233,5 +258,50 @@ impl Indicator for Stochastic {
             format!("%K({},{},{})", self.k_period, self.k_smooth, self.d_period),
             "%D".to_string(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stochastic(3, 2, 2) over a series that turns flat and one flat from the start. Raw %K is
+    /// 100 (close - lowest low) / (highest high - lowest low): 20 on bar 2 (0 to 5, close 1), 40
+    /// on bar 3 (0 to 5, close 2) and 200/3 on bar 4 (0 to 3, close 2); from bar 5 the window
+    /// has no range and keeps 200/3. %K is the two-bar mean of raw %K and %D the two-bar mean of
+    /// %K. Over flat bars only, no window has a range, so there is no value. Live updates must
+    /// see the carried %K too, however far back it is.
+    #[test]
+    fn flat_windows_keep_the_last_k() {
+        // (label, (high, low, close) bars, %K and %D by bar)
+        type Row = (&'static str, Vec<(f64, f64, f64)>, [Vec<Option<f64>>; 2]);
+        let flat = (2.0, 2.0, 2.0);
+        let carried = Some(200.0 / 3.0);
+        let mut turns_flat = vec![(4.0, 0.0, 2.0), (5.0, 1.0, 4.0), (3.0, 0.0, 1.0)];
+        turns_flat.extend([flat; 9]);
+        let k = [None, None, None, Some(30.0), Some(160.0 / 3.0)];
+        let d = [None, None, None, None, Some(125.0 / 3.0), Some(60.0)];
+        let rows: [Row; 2] = [
+            (
+                "turns flat",
+                turns_flat,
+                [
+                    k.into_iter().chain([carried; 7]).collect(),
+                    d.into_iter().chain([carried; 6]).collect(),
+                ],
+            ),
+            (
+                "flat from start",
+                vec![flat; 8],
+                [vec![None; 8], vec![None; 8]],
+            ),
+        ];
+        for (label, hlc, lines) in rows {
+            let bars = super::super::hlc_bars(&hlc);
+            let mut stoch = Stochastic::new(3, 2, 2);
+            stoch.calculate(&bars);
+            super::super::assert_lines(label, &stoch, &lines);
+            super::super::assert_replay_matches_batch(&Stochastic::new(3, 2, 2), &bars);
+        }
     }
 }

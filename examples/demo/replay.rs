@@ -2849,6 +2849,66 @@ mod tests {
         );
     }
 
+    /// Exit replay brings every replayed chart of the layout back to its newest bar with the
+    /// zoom it had, as many bars across the plot, even when each was scrolled back during the
+    /// session.
+    #[test]
+    fn exit_replay_shows_the_newest_bar_after_scrolling_back() {
+        use super::super::tests::settle;
+        fn chart(app: &mut DemoApp, index: usize) -> &mut egui_charts::widget::Chart {
+            match index {
+                0 => &mut app.chart,
+                n => &mut app.extra_charts[n - 1].chart,
+            }
+        }
+        // Whether the newest bar is in view, and the bars across the plot.
+        fn view(chart: &egui_charts::widget::Chart) -> (bool, f32) {
+            let newest = (chart.bars(SeriesId::MAIN).len() - 1) as f64;
+            let range = chart.visible_logical_range().unwrap();
+            let shown = f64::from(range.left) <= newest && newest <= f64::from(range.right);
+            (shown, range.right - range.left)
+        }
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        app.switch_timeframe(Timeframe::Min1);
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Four);
+        settle(&mut app, &ctx);
+        let count = app.chart.bars(SeriesId::MAIN).len();
+        app.start_replay_at(count / 2);
+        settle(&mut app, &ctx);
+        let replayed: Vec<_> = (0..=app.extra_charts.len())
+            .filter(|&index| chart(&mut app, index).replay_time().is_some())
+            .collect();
+        assert!(replayed.len() > 1, "{replayed:?}");
+        for &index in &replayed {
+            chart(&mut app, index).scroll_to_position(-30.0, false);
+        }
+        settle(&mut app, &ctx);
+        let mut spans = Vec::new();
+        for &index in &replayed {
+            let (shown, span) = view(chart(&mut app, index));
+            assert!(!shown, "chart {index}");
+            spans.push(span);
+        }
+        click_replay_ui(&mut app, &ctx, "Exit replay");
+        assert!(app.replay.is_none());
+        settle(&mut app, &ctx);
+        for (&index, before) in replayed.iter().zip(spans) {
+            let (shown, span) = view(chart(&mut app, index));
+            assert!(shown, "chart {index}");
+            assert!(
+                (span - before).abs() < 1e-3,
+                "chart {index}: {before} {span}"
+            );
+        }
+    }
+
     /// The bar offers daily and second updates where supported, with Automatic on every time
     /// chart. A replay on a weekly or monthly chart starts with daily updates, which grow the
     /// forming bar from completed daily bars only, and keeps a step picked by hand.

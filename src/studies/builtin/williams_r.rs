@@ -18,6 +18,9 @@
 //! high and lowest low stay those of the bars, and a source outside their range gives a value
 //! outside -100 to 0.
 //!
+//! A window without range, where the formula divides by zero, keeps the previous %R, and there
+//! is no value before the first one; the smoothing averages those values.
+//!
 //! # Example
 //! ```
 //! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
@@ -49,10 +52,12 @@ pub struct WilliamsR {
     visible: bool,
 }
 
-/// The highs and lows of the last `period` bars with a finite high and low, and the average of %R.
+/// The highs and lows of the last `period` bars with a finite high and low, the last %R of a
+/// window with a range, and the average of %R.
 #[derive(Clone, Debug, Default)]
 struct Rolling {
     window: VecDeque<(f64, f64)>,
+    carried: Option<f64>,
     smoothed: Smoothed,
 }
 
@@ -156,11 +161,13 @@ impl Indicator for WilliamsR {
                 }
                 let highest = state.window.iter().fold(f64::MIN, |max, w| max.max(w.0));
                 let lowest = state.window.iter().fold(f64::MAX, |min, w| min.min(w.1));
-                let range = highest - lowest;
-                let r = if range == 0.0 {
-                    -50.0 // Middle value
-                } else {
-                    (highest - bar.close) / range * -100.0
+                // A window without range keeps the previous %R; there is none before the first.
+                let r = (highest - bar.close) / (highest - lowest) * -100.0;
+                if r.is_finite() {
+                    state.carried = Some(r);
+                }
+                let Some(r) = state.carried else {
+                    return IndicatorValue::None;
                 };
                 state.smoothed.next(kind, length, deviation, r, bar.volume)
             });
@@ -248,6 +255,53 @@ mod tests {
                 Bar::new(time, high, high, low, close, 1.0)
             })
             .collect()
+    }
+
+    /// Williams %R(3) over a series that turns flat and one flat from the start. %R is
+    /// -100 (highest high - close) / (highest high - lowest low): -80 on bar 2 (5 to 0, close 1),
+    /// -60 on bar 3 (5 to 0, close 2) and -100/3 on bar 4 (3 to 0, close 2); from bar 5 the window
+    /// has no range and keeps -100/3. A two-bar SMA of %R averages those values: -70, -140/3, then
+    /// -100/3. Over flat bars only, no window has a range, so there is no value.
+    #[test]
+    fn flat_windows_keep_the_last_r() {
+        // (label, SMA length, (high, low, close) bars, values by line and bar)
+        type Row = (
+            &'static str,
+            Option<usize>,
+            Vec<(f64, f64, f64)>,
+            Vec<Vec<Option<f64>>>,
+        );
+        let flat = (2.0, 2.0, 2.0);
+        let carried = Some(-100.0 / 3.0);
+        let mut turns_flat = vec![(4.0, 0.0, 2.0), (5.0, 1.0, 4.0), (3.0, 0.0, 1.0)];
+        turns_flat.extend([flat; 9]);
+        let r: Vec<_> = [None, None, Some(-80.0), Some(-60.0)]
+            .into_iter()
+            .chain([carried; 8])
+            .collect();
+        let average: Vec<_> = [None, None, None, Some(-70.0), Some(-140.0 / 3.0)]
+            .into_iter()
+            .chain([carried; 7])
+            .collect();
+        let rows: [Row; 3] = [
+            ("turns flat", None, turns_flat.clone(), vec![r.clone()]),
+            ("turns flat, SMA 2", Some(2), turns_flat, vec![r, average]),
+            ("flat from start", None, vec![flat; 8], vec![vec![None; 8]]),
+        ];
+        for (label, sma, hlc, lines) in rows {
+            let bars = super::super::hlc_bars(&hlc);
+            let mut study = WilliamsR::new(3);
+            if let Some(length) = sma {
+                study.set_input("smoothing", InputValue::Choice(1)).unwrap();
+                study
+                    .set_input("smoothing_length", InputValue::Length(length))
+                    .unwrap();
+            }
+            let fresh = study.clone();
+            study.calculate(&bars);
+            super::super::assert_lines(label, &study, &lines);
+            super::super::assert_replay_matches_batch(&fresh, &bars);
+        }
     }
 
     /// A source stands in for the close alone. By hand, with the median price of 10.5 on bar 1 and
