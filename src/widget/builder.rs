@@ -635,6 +635,42 @@ impl Chart {
         &self.chart_type_params
     }
 
+    /// Instrument ticks per row of the footprint this chart draws from its feed's executions on
+    /// the Volume Footprint chart type, for its newest bar at the last frame's zoom: the fixed or
+    /// average true range row size, raised to cover the instrument's coarser ticks across that
+    /// bar and, while rows group by zoom, until a row is as tall as the automatic row height.
+    /// Before the first frame, zoom raises nothing. 1 on other chart types, without bars and
+    /// while the feed has supplied no executions. Pass it to `FootprintRule::follow_chart` so
+    /// that footprint alerts read the rows the chart shows.
+    pub fn footprint_row_ticks(&self) -> u32 {
+        let bars = &self.state.data().bars;
+        let flow = (self.feed_link.as_ref())
+            .and_then(|link| link.footprint.as_ref())
+            .map(|flow| flow.view())
+            .filter(|_| self.chart_type == ChartType::VolumeFootprint);
+        let (Some(flow), Some(bar)) = (flow, bars.iter().rev().find(|bar| !bar.is_whitespace()))
+        else {
+            return 1;
+        };
+        let mut config = crate::chart::overlays::FootprintConfig::from_chart_params(
+            &self.chart_type_params,
+            [egui::Color32::TRANSPARENT; 4],
+            self.chart_type_params
+                .footprint_row_size(bars, flow.tick_size()),
+        );
+        config.tick_tiers = self
+            .instrument()
+            .map_or_else(Vec::new, |instrument| instrument.tick_tiers.clone());
+        let mapping = self.get_chart_mapping();
+        let group = if mapping.rect.height() > 0.0 {
+            crate::chart::overlays::row_group(&mapping, bar, flow, &config)
+        } else {
+            crate::chart::overlays::min_row_group(bar, flow, &config)
+        };
+        let input_ticks = (flow.price_step() / flow.tick_size()).round().max(1.0);
+        (group as f64 * input_ticks).clamp(1.0, 1_000_000.0) as u32
+    }
+
     /// Calculates the bar spacing (pixels per bar) needed to fit the desired
     /// number of bars in the given pixel width.
     pub(crate) fn calculate_bar_spacing(&self, width: f32, visible_bars: usize) -> f32 {

@@ -1629,6 +1629,7 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
             ..Default::default()
         });
         let shapes = draw(&mut chart);
+        assert_eq!(chart.footprint_row_ticks(), ticks, "ticks per row {ticks}");
         let map = chart.get_chart_mapping();
         assert!(map.price_to_y(99.5) <= map.rect.bottom());
         assert!(map.price_to_y(101.5) >= map.rect.top());
@@ -1698,6 +1699,25 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         draw(&mut atr);
     }
     // Rows of 100..105 traded 1, 2, 4, 8, 16 and 32, so every row has a number at its centre.
+    let heights = |chart: &Chart, shapes: &[egui::epaint::ClippedShape]| -> Vec<f64> {
+        let map = chart.get_chart_mapping();
+        let mut centres: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(text)
+                    if (text.pos.x - map.idx_to_x(3)).abs() < 70.0
+                        && text.pos.y > map.rect.top() + 40.0
+                        && text.pos.y < map.rect.bottom() - 20.0
+                        && text.galley.text().parse::<u32>().is_ok() =>
+                {
+                    Some(map.y_to_price(text.pos.y + text.galley.size().y / 2.0))
+                }
+                _ => None,
+            })
+            .collect();
+        centres.sort_by(f64::total_cmp);
+        centres.windows(2).map(|pair| pair[1] - pair[0]).collect()
+    };
     for (length, ticks) in [(14, 2.0), (2, 3.0)] {
         atr.set_chart_type_params(ChartTypeParams {
             footprint_modes: vec![FootprintMode::Volume],
@@ -1711,29 +1731,38 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
             atr.price_scale_mut().set_range(low, high);
             draw_at(&mut atr, spacing);
             let shapes = draw_at(&mut atr, spacing);
-            let map = atr.get_chart_mapping();
-            let mut centres: Vec<_> = shapes
-                .iter()
-                .filter_map(|s| match &s.shape {
-                    Shape::Text(text)
-                        if (text.pos.x - map.idx_to_x(3)).abs() < 70.0
-                            && text.pos.y > map.rect.top() + 40.0
-                            && text.pos.y < map.rect.bottom() - 20.0
-                            && text.galley.text().parse::<u32>().is_ok() =>
-                    {
-                        Some(map.y_to_price(text.pos.y + text.galley.size().y / 2.0))
-                    }
-                    _ => None,
-                })
-                .collect();
-            centres.sort_by(f64::total_cmp);
-            let heights: Vec<_> = centres.windows(2).map(|pair| pair[1] - pair[0]).collect();
+            let heights = heights(&atr, &shapes);
             assert!(
                 heights.len() >= 2 && heights.iter().all(|row| (row - ticks).abs() < 0.25),
                 "length {length}, spacing {spacing}, prices {low} to {high}: rows {heights:?}"
             );
+            assert_eq!(atr.footprint_row_ticks(), ticks as u32, "length {length}");
         }
     }
+    // Rows grouped by zoom: 60 prices over a plot about 870 points tall give 14.5 points a tick,
+    // so a row of the automatic 16 points holds 2 ticks.
+    atr.set_chart_type_params(ChartTypeParams {
+        footprint_modes: vec![FootprintMode::Volume],
+        footprint_row_ticks: 0,
+        footprint_poc: false,
+        ..Default::default()
+    });
+    atr.price_scale_mut().set_range(80.0, 140.0);
+    draw_at(&mut atr, 160.0);
+    let shapes = draw_at(&mut atr, 160.0);
+    let rows = heights(&atr, &shapes);
+    assert!(
+        rows.len() >= 2 && rows.iter().all(|row| (row - 2.0).abs() < 0.25),
+        "automatic rows {rows:?}"
+    );
+    assert_eq!(atr.footprint_row_ticks(), 2, "automatic rows");
+    atr.set_chart_type(ChartType::Candles);
+    draw(&mut atr);
+    assert_eq!(
+        atr.footprint_row_ticks(),
+        1,
+        "candles have no footprint rows"
+    );
     let params = ChartTypeParams {
         footprint_modes: vec![FootprintMode::Delta],
         footprint_row_ticks: 1,
