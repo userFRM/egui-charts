@@ -1856,6 +1856,16 @@ impl Chart {
         } else {
             Vec::new()
         };
+        // The newest range bar is drawn apart while it is in view and still in progress.
+        let range_forming = self.chart_type == ChartType::Range
+            && self.state.shows_elements()
+            && start_idx + visible_data.len() == self.state.shown().len()
+            && rendering::candles::price_based::range_forming(
+                &self.execution_ranges,
+                &self.state.data().bars,
+                self.state.revision(),
+                &self.chart_type_params,
+            );
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
             volume_ctx: &clipped_volume_ctx,
@@ -1867,6 +1877,7 @@ impl Chart {
             full_data: &self.state.data().bars,
             shows_elements: self.state.shows_elements(),
             range_phantoms: &range_phantoms,
+            range_forming,
             revision: self.state.revision(),
             heikin_ashi: &self.heikin_ashi,
             start_idx,

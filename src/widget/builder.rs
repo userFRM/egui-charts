@@ -104,6 +104,7 @@ impl Chart {
             pending_start_idx: None,
             pending_scroll_time: None,
             pending_scroll_next: false,
+            pending_left_edge: None,
             pending_visible_range: None,
             scroll_animation: None,
             time_axis_rect: egui::Rect::NOTHING,
@@ -467,6 +468,7 @@ impl Chart {
         self.history.clear_view_restore();
         self.pending_scroll_time = Some(time);
         self.pending_scroll_next = false;
+        self.pending_left_edge = None;
         self.pending_start_idx = None;
         self.disable_tracking_mode();
         self.kinetic_scroll = KineticScrollState::new();

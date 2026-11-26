@@ -2126,6 +2126,7 @@ mod tests {
                 charts: vec![chart.snapshot().unwrap()],
                 sizing: None,
                 link_groups: None,
+                tab_split: None,
             }
             .to_json()
             .unwrap();
@@ -2172,6 +2173,7 @@ mod tests {
                 charts: vec![chart.snapshot().unwrap()],
                 sizing: None,
                 link_groups: None,
+                tab_split: None,
             }
             .to_json()
             .unwrap();

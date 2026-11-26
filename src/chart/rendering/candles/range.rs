@@ -147,12 +147,14 @@ fn render_high_low_labels(
 }
 
 /// Range bars at their element slots, each over its whole range from its low to its high:
-/// filled, or as thin OHLC bars under `style`, and outlined where `phantoms` marks a bar that
-/// closed without a trade while `style` draws them so.
+/// filled, or as thin OHLC bars under `style`, outlined where `phantoms` marks a bar that
+/// closed without a trade while `style` draws them so, and the last bar, while `forming` marks
+/// it as the bar in progress, in the forming colours of `style`.
 pub(super) fn render_range_bars(
     context: &RenderContext,
     range_bars: &[Bar],
     phantoms: &[bool],
+    forming: bool,
     style: &RangeStyle,
     bar_width: f32,
     wick_width: f32,
@@ -165,7 +167,17 @@ pub(super) fn render_range_bars(
         thin_bars: true,
         color_by_previous_close: false,
     };
+    let forming_colors = StyleColors {
+        bullish: crate::model::or_candle(style.forming_up, colors.bullish),
+        bearish: crate::model::or_candle(style.forming_down, colors.bearish),
+        ..*colors
+    };
     for (i, range_bar) in range_bars.iter().enumerate() {
+        let colors = if forming && i + 1 == range_bars.len() {
+            &forming_colors
+        } else {
+            colors
+        };
         let x = x_of(i);
         let rising = range_bar.close > range_bar.open;
         let color = colors.bar_color(rising);
