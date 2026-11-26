@@ -430,6 +430,12 @@ impl ChartMenus {
             .instrument()
             .and_then(|instrument| instrument.tick_size)
             .filter(|tick| tick.is_finite() && *tick > 0.0);
+        let tiers = chart
+            .instrument()
+            .filter(|_| self.chart.tick_size.is_some())
+            .map_or(&[][..], |instrument| &instrument.tick_tiers);
+        self.chart.tick_tiers.clear();
+        self.chart.tick_tiers.extend_from_slice(tiers);
         self.chart.symbol_price = chart
             .pane_at_position(pos)
             .is_none_or(|pane| Some(pane) == chart.series_pane(SeriesId::MAIN));
