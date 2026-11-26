@@ -836,7 +836,7 @@ mod tests {
     }
 
     /// Guards #3658: studies offer alerts only on outputs that can hold values, each read at
-    /// the bars it covers, and zone studies list no empty values in the legend.
+    /// the bars it covers, and zone and mark studies list no empty values in the legend.
     #[test]
     fn studies_offer_only_outputs_that_hold_values() {
         // Feb 3: 3/4 volume at 30 in [30, 31), so POC=30.5, VAL=30, VAH=31.
@@ -915,28 +915,28 @@ mod tests {
             (
                 Box::new(ChartPatterns::all()),
                 vec![offered(0, "Bullish"), offered(1, "Bearish")],
-                2,
+                0,
             ),
             // A one-sided formation fails on a break the other way.
-            (create("Double Top"), vec![offered(1, "Bearish")], 2),
-            (create("Double Bottom"), vec![offered(0, "Bullish")], 2),
+            (create("Double Top"), vec![offered(1, "Bearish")], 0),
+            (create("Double Bottom"), vec![offered(0, "Bullish")], 0),
             (
                 create("Rectangle"),
                 vec![offered(0, "Bullish"), offered(1, "Bearish")],
-                2,
+                0,
             ),
-            // A single candlestick pattern marks its own side on output 0, with one legend value.
+            // A single candlestick pattern marks its own side on output 0.
             (
                 create("Engulfing - Bullish"),
                 vec![offered(0, "Bullish")],
-                1,
+                0,
             ),
             (
                 create("Engulfing - Bearish"),
                 vec![offered(0, "Bearish")],
-                1,
+                0,
             ),
-            (create("Doji"), vec![offered(0, "Neutral")], 1),
+            (create("Doji"), vec![offered(0, "Neutral")], 0),
             (
                 create("All Candlestick Patterns"),
                 vec![
@@ -944,7 +944,7 @@ mod tests {
                     offered(1, "Bearish"),
                     offered(2, "Neutral"),
                 ],
-                3,
+                0,
             ),
             // Wicks only colours the candle blocks.
             (

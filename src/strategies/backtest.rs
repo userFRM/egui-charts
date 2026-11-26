@@ -77,7 +77,7 @@ pub struct BacktestSettings {
     /// empty code uses [`Backtest::instrument_currency`]; another currency converts the run's
     /// amounts at [`Backtest::exchange_rates`].
     pub currency: Option<String>,
-    /// Annual risk-free fraction passed to the report's performance metrics.
+    /// Annual risk-free fraction passed to the report's performance metrics, 0.02 by default.
     pub risk_free_rate: f64,
     /// Size used by entries that do not supply their own quantity.
     pub order_size: OrderSize,
@@ -147,7 +147,7 @@ impl Default for BacktestSettings {
         Self {
             initial_capital: 10_000.0,
             currency: None,
-            risk_free_rate: 0.0,
+            risk_free_rate: 0.02,
             order_size: OrderSize::Fixed(1.0),
             pyramiding: 1,
             commission: Commission::Fraction(0.0),
@@ -3638,7 +3638,7 @@ mod tests {
         let terms = BacktestSettings {
             initial_capital: 1000.0,
             currency: Some("USD".into()),
-            risk_free_rate: 0.02,
+            risk_free_rate: 0.03,
             order_size: OrderSize::Fixed(2.0),
             ..Default::default()
         };
@@ -4996,6 +4996,10 @@ mod tests {
                 .collect();
             let mut engine =
                 Backtest::new("Terms", "TEST", Timeframe::Hour1, settings.initial_capital);
+            assert_eq!(
+                engine.settings.risk_free_rate, 0.02,
+                "the default a host can override"
+            );
             engine.settings = settings;
             engine.instrument_currency = Some("USD".into());
             engine.exchange_rates = vec![rate(0, 0.9), rate(2, 0.8)];
@@ -5052,7 +5056,7 @@ mod tests {
             }
 
             assert_eq!(report.currency, engine.settings.currency, "{name}");
-            assert_eq!(report.risk_free_rate, 0.02, "{name}");
+            assert_eq!(report.risk_free_rate, 0.03, "{name}");
             assert!(
                 report
                     .properties
