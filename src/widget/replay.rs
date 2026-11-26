@@ -530,6 +530,18 @@ impl Chart {
         }
     }
 
+    /// Whether the replay cursor completed the newest bar of a chart on a calendar interval.
+    pub(super) fn replay_newest_closed(&self) -> bool {
+        let (Some(time), Some(_), Some(last)) = (
+            self.replay_time(),
+            self.calendar_timeframe(),
+            self.state.data().bars.last(),
+        ) else {
+            return false;
+        };
+        !completed(std::slice::from_ref(last), &self.bar_clock(), time).is_empty()
+    }
+
     /// Retains the bars of `series` as it enters the chart, leaving it those the cutoff completed.
     pub(super) fn replay_admit(&mut self, series: &mut PriceSeries) {
         let clock = self
