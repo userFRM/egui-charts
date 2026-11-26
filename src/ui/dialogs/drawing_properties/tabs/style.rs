@@ -507,21 +507,15 @@ impl StyleTab {
                 }
             }
 
-            if tool.is_some_and(|tool| tool.supports_extend()) {
+            // A date and price range offers its extensions with its border, in `range_rows`.
+            if tool.is_some_and(|tool| {
+                tool.supports_extend() && tool != DrawingToolType::DateAndPriceRange
+            }) {
                 ui.label(l10n::text(ui.ctx(), "Extend"));
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut props.extend_left, l10n::text(ui.ctx(), "Left"));
                     ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
                     ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
-                    if let Some(template) = &mut props.tool_settings
-                        && template.settings.tool_type == DrawingToolType::DateAndPriceRange
-                    {
-                        let settings = &mut template.settings.range_settings;
-                        ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
-                        ui.checkbox(&mut settings.extend_top, l10n::text(ui.ctx(), "Top"));
-                        ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
-                        ui.checkbox(&mut settings.extend_bottom, l10n::text(ui.ctx(), "Bottom"));
-                    }
                 });
                 ui.end_row();
             }
@@ -556,6 +550,7 @@ impl StyleTab {
                     ui,
                     template.settings.tool_type,
                     &mut template.settings.range_settings,
+                    (&mut props.extend_left, &mut props.extend_right),
                     (exact, props.line_width, props.line_style),
                     badge_pickers,
                     glyph_picker,
@@ -742,12 +737,14 @@ fn badge_rows(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerS
     ui.end_row();
 }
 
-/// Rows for a range's border, reach, readout label and card, and individual readouts.
-/// Palette colours keep the current opacity; the custom editor sets it.
+/// Rows for a range's border, readout label and card, and individual readouts, with its edge
+/// extensions while the border is shown. Palette colours keep the current opacity; the custom
+/// editor sets it.
 fn range_rows(
     ui: &mut Ui,
     tool: DrawingToolType,
     settings: &mut RangeSettings,
+    (extend_left, extend_right): (&mut bool, &mut bool),
     (color, width, style): ([u8; 4], f32, LineStyle),
     pickers: &mut [ColorPickerState; 3],
     shadow_picker: &mut ColorPickerState,
@@ -793,11 +790,19 @@ fn range_rows(
         }
         ui.end_row();
     }
-    if tool == DrawingToolType::DateRange {
+    // The switches extend the border's edges, so they show with it.
+    if settings.border {
         ui.label(l10n::text(ui.ctx(), "Extend"));
         ui.horizontal(|ui| {
+            let gap = ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x;
+            if tool == DrawingToolType::DateAndPriceRange {
+                ui.checkbox(extend_left, l10n::text(ui.ctx(), "Left"));
+                ui.add_space(gap);
+                ui.checkbox(extend_right, l10n::text(ui.ctx(), "Right"));
+                ui.add_space(gap);
+            }
             ui.checkbox(&mut settings.extend_top, l10n::text(ui.ctx(), "Top"));
-            ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
+            ui.add_space(gap);
             ui.checkbox(&mut settings.extend_bottom, l10n::text(ui.ctx(), "Bottom"));
         });
         ui.end_row();
@@ -1861,8 +1866,9 @@ mod tests {
         }
     }
 
-    /// Badges and ranges offer their border, label and readout settings on the Style tab;
-    /// a palette colour keeps the border's opacity.
+    /// Badges and ranges offer their border, label and readout settings on the Style tab, a
+    /// range its extensions only once its border is shown; a palette colour keeps the border's
+    /// opacity.
     #[test]
     fn price_label_and_note_style_their_badge() {
         let chart = Chart::new(BarData::new());
@@ -1940,7 +1946,7 @@ mod tests {
                 DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
             );
             if range {
-                drawing.range_settings.border = true;
+                drawing.range_settings.border = false;
                 drawing.range_settings.border_color = Some([10, 20, 30, 128]);
             } else {
                 drawing.border_color = Some([10, 20, 30, 128]);
@@ -1948,7 +1954,8 @@ mod tests {
             let mut props = DrawingProps::from_drawing(&drawing, &chart);
             let original = (drawing.text_color, props.fill_color);
             let mut badge_pickers: [ColorPickerState; 3] = Default::default();
-            badge_pickers[2].is_open = true;
+            // A range's border swatch shows only with its border; the test opens it there.
+            badge_pickers[2].is_open = !range;
             let mut frame = |events| {
                 let output = ctx.run_ui(
                     egui::RawInput {
@@ -1974,6 +1981,30 @@ mod tests {
                 output.drop_without_applying_deltas();
                 shapes
             };
+            if range {
+                frame(vec![]);
+                let shapes = frame(vec![]);
+                for row in ["Left", "Right", "Top", "Bottom", "Border width"] {
+                    assert!(
+                        !shapes.iter().any(|shape| matches!(
+                            shape,
+                            Shape::Text(text) if text.galley.job.text == row
+                        )),
+                        "{tool:?} hides {row} without a border"
+                    );
+                }
+                frame(click(text_pos(&shapes, "Show border")));
+                let shapes = frame(vec![]);
+                let swatch = Color32::from_rgba_unmultiplied(10, 20, 30, 128);
+                let swatch = shapes
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                        _ => None,
+                    })
+                    .expect("the border shows its swatch");
+                frame(click(swatch));
+            }
             frame(vec![]);
             let shapes = frame(vec![]);
             let rows: Vec<_> = shapes
