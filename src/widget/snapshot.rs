@@ -2,7 +2,7 @@
 //! documents.
 
 use super::{
-    Chart, ChartLayoutMode, ChartLayoutSizing, ChartLinkGroups, PaneId, SeriesOptions,
+    Chart, ChartLayoutMode, ChartLayoutSizing, ChartLinkGroups, PaneId, SeriesOptions, TabSplit,
     trade_profile::TradeProfiles,
 };
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
@@ -1147,6 +1147,12 @@ pub struct SavedLayout {
     /// setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_groups: Option<Vec<ChartLinkGroups>>,
+    /// The chart of the tab preset shown on its own beside the others, as
+    /// [`ChartLayout::tab_split`](super::ChartLayout::tab_split) gives it; restore it with
+    /// [`ChartLayout::set_tab_split`](super::ChartLayout::set_tab_split). `None`, also read from
+    /// documents saved before splits were kept, shows the tabs unsplit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_split: Option<TabSplit>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1161,14 +1167,16 @@ impl SavedLayout {
     pub const VERSION: u32 = 3;
 
     /// `charts` in the order of their slots, arranged as `mode` in the preset proportions and
-    /// following the layout setting: assign [`sizing`](Self::sizing) and
-    /// [`link_groups`](Self::link_groups) to keep other sizes and groups.
+    /// following the layout setting, without a split tab: assign [`sizing`](Self::sizing),
+    /// [`link_groups`](Self::link_groups) and [`tab_split`](Self::tab_split) to keep other
+    /// sizes, groups and splits.
     pub fn new(mode: ChartLayoutMode, charts: Vec<ChartSnapshot>) -> Self {
         Self {
             mode,
             charts,
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
     }
 
@@ -1310,6 +1318,7 @@ mod tests {
             charts: vec![chart.snapshot_with(&factory).unwrap()],
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
         .to_json()
         .unwrap();
@@ -1661,6 +1670,7 @@ mod tests {
             charts: vec![chart.snapshot().unwrap()],
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
         .to_json()
         .unwrap();
@@ -1849,6 +1859,7 @@ mod tests {
             charts: vec![chart.snapshot().unwrap()],
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
         .to_json()
         .unwrap();
@@ -2092,6 +2103,7 @@ mod tests {
             charts: vec![original.snapshot().unwrap()],
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
         .to_json()
         .unwrap();
@@ -2189,6 +2201,7 @@ mod tests {
                     charts: vec![snapshot],
                     sizing: None,
                     link_groups: None,
+                    tab_split: None,
                 }
                 .to_json()
                 .unwrap();
@@ -2488,12 +2501,15 @@ mod tests {
         );
     }
 
-    /// Symbol and interval groups come back with the layout. A layout without them writes the
-    /// document it wrote before they were kept, which opens with every chart following the
-    /// layout setting.
+    /// Symbol and interval groups and a split tab come back with the layout. A layout without
+    /// them writes the document it wrote before they were kept, which opens with every chart
+    /// following the layout setting and the tabs unsplit; a split saved without its share
+    /// takes half the area.
     #[test]
-    fn saved_layout_keeps_symbol_and_interval_groups() {
-        use crate::widget::{ChartLayoutMode, ChartLink, ChartLinkGroups, SavedLayout};
+    fn saved_layout_keeps_groups_and_the_tab_split() {
+        use crate::widget::{
+            ChartLayoutMode, ChartLink, ChartLinkGroups, SavedLayout, TabSplit, TabSplitSide,
+        };
         let chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
         let mut layout = SavedLayout::new(
             ChartLayoutMode::TwoHorizontal,
@@ -2515,6 +2531,23 @@ mod tests {
         layout.link_groups = Some(groups.clone());
         let restored = SavedLayout::from_json(&layout.to_json().unwrap()).unwrap();
         assert_eq!(restored.link_groups, Some(groups));
+        // A tab layout as releases before splits saved it.
+        let older = r#"{"version":3,"mode":"Tabs","charts":[]}"#;
+        assert_eq!(SavedLayout::from_json(older).unwrap().tab_split, None);
+        let mut split = TabSplit::new(1, TabSplitSide::Bottom);
+        split.ratio = 0.3;
+        layout.tab_split = Some(split);
+        let json = layout.to_json().unwrap();
+        assert!(json.contains(r#""tab_split":{"slot":1,"side":"Bottom","ratio":0.3}"#));
+        assert_eq!(
+            SavedLayout::from_json(&json).unwrap().tab_split,
+            Some(split)
+        );
+        let without_share = json.replace(r#","ratio":0.3"#, "");
+        assert_eq!(
+            SavedLayout::from_json(&without_share).unwrap().tab_split,
+            Some(TabSplit::new(1, TabSplitSide::Bottom))
+        );
     }
 
     /// Missing axis label switches inherit their saved lines through restore and resave.
@@ -2582,6 +2615,7 @@ mod tests {
                 charts: vec![chart.snapshot().unwrap()],
                 sizing: None,
                 link_groups: None,
+                tab_split: None,
             };
             let mut document: serde_json::Value =
                 serde_json::from_str(&layout.to_json().unwrap()).unwrap();

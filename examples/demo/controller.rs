@@ -947,6 +947,8 @@ impl DemoApp {
             annotation_editor: false,
             annotation_series: SeriesId::MAIN,
         });
+        // The demo applies the requests of the tab strip's controls.
+        app.layout.tab_controls = true;
         app.settings_dialog
             .templates
             .set_storage(app.storage.clone());
@@ -3989,6 +3991,9 @@ impl DemoApp {
                         load_view(&mut extra.chart, &extra.live, session, adjusted);
                     }
                 }
+                for request in self.layout.take_tab_requests() {
+                    self.apply_tab_request(request);
+                }
                 self.highlight_strategy_trade(ui);
                 let mapping = self.chart.get_chart_mapping();
                 if self.own_data.is_none() {
@@ -5077,11 +5082,15 @@ fn browser_download(bytes: &[u8], path: &std::path::Path) -> Result<(), String> 
 }
 
 /// Whether the layout paints the extra chart at `index`: inside the arrangement, and among tabs
-/// only when detached.
+/// only when detached or while a tab is split beside another.
 fn slot_shown(layout: &ChartLayout, active: usize, index: usize) -> bool {
     let slot = if index >= active { index + 1 } else { index };
+    // shortcut: a split runs every tab's feed, as the layout does not name the tab beside the
+    // split one; name it if many tabs with costly feeds make a split slow.
     slot < layout.mode.chart_count()
-        && (layout.mode != ChartLayoutMode::Tabs || layout.is_detached(slot))
+        && (layout.mode != ChartLayoutMode::Tabs
+            || layout.is_detached(slot)
+            || layout.tab_split().is_some())
 }
 
 fn panel_frame(bg: egui::Color32) -> egui::Frame {

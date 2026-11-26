@@ -3380,6 +3380,28 @@ mod tests {
         (layout, charts)
     }
 
+    /// A host that moves a chart with `move_slot`, as a tab dragged along the strip asks, and
+    /// then closes it with `remove_slot` keeps the mirrored line linked between the charts that
+    /// hold it: an edit made before the next show reaches the other charts once, and after the
+    /// chart that drew the line is closed, an edit of either copy still reaches the other.
+    #[test]
+    fn moved_and_closed_tabs_keep_their_mirrored_drawings() {
+        let (mut layout, mut charts) = three_charts(["SAMPLE"; 3]);
+        // The first chart, which drew the line, moves to the end and edits it at once.
+        charts.rotate_left(1);
+        layout.move_slot(0, 2);
+        move_first(&mut charts[2], 95.0);
+        frames(&mut layout, &mut charts);
+        assert_eq!(prices(&charts), [vec![95.0], vec![95.0], vec![95.0]]);
+        let [first, second, _] = charts;
+        let mut charts = [first, second];
+        layout.remove_slot(2);
+        frames(&mut layout, &mut charts);
+        move_first(&mut charts[1], 90.0);
+        frames(&mut layout, &mut charts);
+        assert_eq!(prices(&charts), [vec![90.0], vec![90.0]]);
+    }
+
     /// A chart that leaves a symbol and returns takes its mirrored drawings up again: each chart
     /// holds one line however often it happens, also when the chart that stayed changed the line
     /// meanwhile. A line deleted on another chart of the symbol, also in the frame of the return,

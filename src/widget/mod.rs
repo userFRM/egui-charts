@@ -156,6 +156,7 @@ pub use snapshot::{
 mod volume;
 pub use layout::{
     ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
+    ChartTabRequest, TabSplit, TabSplitSide,
 };
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
