@@ -665,9 +665,9 @@ pub enum RightClickTarget {
 }
 
 impl Chart {
-    /// Supplies instrument metadata for a chart without a feed, including price precision
-    /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence,
-    /// and so does a precision chosen in the chart settings or with
+    /// Supplies instrument metadata for a chart without a feed, including the price precision or
+    /// fraction and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes
+    /// precedence, and so does a precision chosen in the chart settings or with
     /// [`PriceScale::set_price_precision`]. Pass `None` to clear the metadata. Feed metadata
     /// takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
@@ -952,10 +952,13 @@ impl Chart {
     /// body color, and these colors win over the same colors in `chart_type_params`. A new
     /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
     /// are in the old mode's units. An ATR or percentage size whose method is unchanged keeps
-    /// its resolved value. Call this when the user changes series appearance in a settings
-    /// dialog.
+    /// its resolved value. A changed TPO period length, row size or profile period drops the TPO
+    /// merges and splits carried over from the chart, which were made for the old values;
+    /// [`Chart::set_chart_type_params`] sets them as given. Call this when the user changes
+    /// series appearance in a settings dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
         let mut params = settings.chart_type_params.clone();
+        params.drop_stale_tpo_edits(&self.chart_type_params);
         if let Some(
             [
                 body_up,

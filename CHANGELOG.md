@@ -12,7 +12,13 @@ All notable changes to this project are documented in this file. The format is b
 
 - Chart data tables can have independent window IDs and display a fixed symbol without intercepting typed input. ([#4156](https://github.com/userFRM/egui-charts/issues/4156))
 
+### Changed
+
+- With viewport-sized footprint history enabled, panning into missing rows starts the same bounded request on the pan frame instead of waiting for the next feed pump. ([#4238](https://github.com/userFRM/egui-charts/issues/4238))
+
 ### Fixed
+
+- Trade Rate no longer reports a partial time candle's retained executions as its total. Its rolling rates use their own windows' coverage. ([#4202](https://github.com/userFRM/egui-charts/issues/4202))
 
 - An empty Watchlist keeps its hint above symbol details when the window shrinks. Scroll the list if the hint does not fit. ([#4161](https://github.com/userFRM/egui-charts/issues/4161))
 

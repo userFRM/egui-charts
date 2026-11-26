@@ -2612,7 +2612,10 @@ impl DemoApp {
             }
             TopToolbarAction::Undo | TopToolbarAction::Redo => {}
             TopToolbarAction::AddIndicator(name) => {
-                if let Some(study) = self.indicator_dialog.factory().create(&name) {
+                // A study with symbols to choose opens the dialog's prompt and arrives from `show`.
+                if let Some(IndicatorDialogAction::AddIndicator(study)) =
+                    self.indicator_dialog.add(&name)
+                {
                     self.chart.begin_user_action();
                     self.chart.add_indicator(study);
                     self.chart.end_user_action();
@@ -5450,8 +5453,11 @@ mod tests {
         h.get_by_role_and_label(egui::Role::Button, "Rates");
     }
 
+    /// Guards the demo's news alerts: a new story of the alert whose selection the open News
+    /// panel shows stays quiet, the next one notifies while the panel is closed, and its Open
+    /// story button reopens News on that headline among the alert's stories.
     #[test]
-    fn calendar_news_demo_delivers_named_alerts_after_the_feed_advances() {
+    fn calendar_news_demo_alert_quiet_while_shown_opens_its_story() {
         let mut h = calendar_news_harness(SidePanel::News);
         h.run_steps(5);
         h.get_by_role(egui::Role::TextInput).focus();
@@ -5464,14 +5470,27 @@ mod tests {
         h.get_by_label("Alert: Rates alert");
         finish_feed(&h.state().live);
         let now = chrono::Utc::now();
-        h.state().live.set_paused(false);
-        h.state().live.advance(now + chrono::Duration::hours(1));
-        assert_eq!(h.state().live.now(), now + chrono::Duration::hours(1));
-        h.state().live.set_paused(true);
-        h.run_steps(8);
+        let advance = |h: &mut Harness<'static, Box<DemoApp>>, hours| {
+            h.state().live.set_paused(false);
+            h.state().live.advance(now + chrono::Duration::hours(hours));
+            assert_eq!(h.state().live.now(), now + chrono::Duration::hours(hours));
+            h.state().live.set_paused(true);
+            h.run_steps(8);
+        };
+        advance(&mut h, 1);
         h.state_mut().open_panel = Some(SidePanel::Notifications);
         h.run_steps(5);
+        assert!(h.query_by_label("Rates alert").is_none());
+        advance(&mut h, 2);
         h.get_by_label("Rates alert");
+        h.get_by_label("Open story").click();
+        h.run_steps(5);
+        assert!(h.state().open_panel == Some(SidePanel::News));
+        let mut query = egui_charts::data::NewsQuery::new(1);
+        query.symbols = vec![h.state().chart.symbol().into()];
+        let story = feeds::news(&query, h.state().live.now()).remove(0);
+        h.get_by_role_and_label(egui::Role::Label, &story.headline);
+        h.get_by_role_and_label(egui::Role::Button, "Next");
     }
 
     /// Guards the demo's chat author menu: Reply answers the message through the demo host, View
@@ -5749,6 +5768,76 @@ mod tests {
                         }))
             })
             .unwrap_or_else(|| panic!("missing control: {label}"))
+    }
+
+    /// The demo's series settings reach the TPO chart type's statistics rows and hours, and the
+    /// study settings the Time Price Opportunity study's statistics rows.
+    #[test]
+    fn tpo_statistics_and_hours_reach_the_demo_chart() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        use egui_charts::model::{ChartType, ProfileSession};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T17:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        // Clicks through AccessKit, which reaches rows below the fold of the dialog.
+        let click = |app: &mut DemoApp, label: &str| {
+            let nodes = draw(&ctx, app, vec![]);
+            let target_node = control(&nodes, label).0;
+            draw(
+                &ctx,
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: None,
+                })],
+            );
+        };
+        app.chart.set_chart_type(ChartType::TimePriceOpportunity);
+        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in [
+            "Statistics",
+            "Statistics: Total volume",
+            "Hours",
+            "Regular hours",
+            "Ok",
+        ] {
+            click(&mut app, label);
+        }
+        assert!(!app.series_settings.is_open);
+        let params = app.chart.chart_type_params();
+        assert!(params.tpo_statistics && params.tpo_statistics_rows.total_volume);
+        assert_eq!(params.tpo_session, ProfileSession::Regular);
+
+        let study = IndicatorFactory::new()
+            .create("Time Price Opportunity")
+            .unwrap();
+        let id = app.chart.add_indicator(study);
+        app.open_indicator_settings(id);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in ["Statistics", "Total volume", "Apply"] {
+            click(&mut app, label);
+        }
+        assert!(!app.indicator_settings.is_open());
+        let inputs = app.chart.indicator_mut(id).unwrap().inputs();
+        for input in ["statistics", "statistics_total_volume"] {
+            assert_eq!(
+                inputs.iter().find(|i| i.id == input).map(|i| &i.value),
+                Some(&InputValue::Toggle(true)),
+                "{input}"
+            );
+        }
     }
 
     /// Study settings use the own-data chart's zones and apply the edited session clock.
@@ -10388,30 +10477,54 @@ mod tests {
             );
         }
 
+        // With the replay bar shown its keys step and play, and the chart keeps its own: the jump
+        // keys, which hold Alt beside the replay's Shift and arrow, and the list keys below.
         app.start_replay();
         app.handle_replay_control(ReplayControlAction::Pause);
         settle(&mut app, &ctx);
-        let before = app.replay.as_ref().unwrap().state.curr_bar;
-        for (key, modifiers, offset, playing) in [
-            (Key::ArrowRight, Modifiers::NONE, 1, false),
-            (Key::ArrowLeft, Modifiers::NONE, 0, false),
-            (Key::Space, Modifiers::NONE, 0, true),
-            (Key::Space, Modifiers::SHIFT, 0, false),
+        let jump = Modifiers::ALT | Modifiers::SHIFT;
+        // The cursor's move, unchecked while the replay plays, and whether it plays afterwards.
+        for (key, modifiers, moved, playing) in [
+            (Key::ArrowRight, Modifiers::NONE, Some(1), false),
+            (Key::ArrowLeft, Modifiers::NONE, Some(-1), false),
+            (Key::ArrowDown, Modifiers::SHIFT, None, true),
+            (Key::ArrowDown, Modifiers::SHIFT, None, false),
+            (Key::ArrowRight, jump, Some(0), false),
+            (Key::ArrowLeft, jump, Some(0), false),
+            (Key::ArrowRight, Modifiers::SHIFT, Some(1), false),
         ] {
+            let before = app.replay.as_ref().unwrap().state.curr_bar;
             press(&mut app, key, modifiers);
             assert_eq!(app.chart.symbol(), "STOCKA");
             let replay = app.replay.as_ref().unwrap();
-            if key != Key::Space {
-                assert_eq!(replay.state.curr_bar, before + offset);
+            if let Some(moved) = moved {
+                assert_eq!(
+                    replay.state.curr_bar as isize - before as isize,
+                    moved,
+                    "{key:?} / {modifiers:?}"
+                );
             }
-            assert_eq!(replay.state.is_playing(), playing);
+            assert_eq!(
+                replay.state.is_playing(),
+                playing,
+                "{key:?} / {modifiers:?}"
+            );
         }
-        press(&mut app, Key::ArrowDown, Modifiers::NONE);
-        assert_eq!(app.chart.symbol(), "STOCKB");
-        assert!(
-            app.replay.is_none(),
-            "a symbol change exits replay as a row click does"
-        );
+        // The list keys flip the list beside the replay bar too. A symbol change exits replay as
+        // a row click does.
+        for (key, modifiers, symbol) in [
+            (Key::Space, Modifiers::NONE, "STOCKB"),
+            (Key::Space, Modifiers::SHIFT, "STOCKA"),
+            (Key::ArrowDown, Modifiers::NONE, "STOCKB"),
+        ] {
+            settle(&mut app, &ctx);
+            app.start_replay();
+            settle(&mut app, &ctx);
+            assert!(app.replay.is_some() && app.replay_control.is_visible());
+            press(&mut app, key, modifiers);
+            assert_eq!(app.chart.symbol(), symbol, "{key:?} / {modifiers:?}");
+            assert!(app.replay.is_none(), "{key:?} / {modifiers:?}");
+        }
     }
 
     #[test]

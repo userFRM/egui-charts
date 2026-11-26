@@ -346,9 +346,10 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 
     /// Whether plot `line` holds per-bar values. Return false for a plot that only styles the
-    /// study's [`zones`](Self::zones): their edges are lines whatever the plot type, and a plot
-    /// without values puts no tag on the price scale and draws no latest value line, so the
-    /// settings dialog offers such a plot only its visibility, colour, width and line pattern.
+    /// study's [`zones`](Self::zones) or drawings, which the chart strokes as lines whatever the
+    /// plot type: a plot without values puts no tag on the price scale and draws no latest value
+    /// line, so the settings dialog offers such a plot only its visibility, colour, width and
+    /// line pattern.
     /// True by default.
     fn plot_holds_values(&self, line: usize) -> bool {
         let _ = line;
@@ -431,7 +432,8 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 
     /// Optional text beside the shape a circle, cross, triangle or character plot draws at a
-    /// source bar: under an upward triangle and over the other shapes, in the shape's colour.
+    /// source bar: beyond a triangle drawn beside its value, otherwise under an upward triangle
+    /// and over the other shapes, in the shape's colour.
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         let _ = (line, bar);
         None
@@ -443,6 +445,19 @@ pub trait Indicator: Send + ConcreteStudy {
     fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
         let _ = (line, bar);
         None
+    }
+
+    /// Which side of its value each triangle of the zero-based output `line` is drawn on, while
+    /// the line is drawn as [`PlotType::TriangleUp`](super::PlotType::TriangleUp) or
+    /// [`PlotType::TriangleDown`](super::PlotType::TriangleDown). A study whose triangles mark
+    /// bars at their high or low returns [`ShapeSide::Above`](super::ShapeSide::Above) or
+    /// [`ShapeSide::Below`](super::ShapeSide::Below), and each triangle is drawn a small gap
+    /// beyond its value, whichever way it points. Other plot types stay centred.
+    /// [`ShapeSide::Centred`](super::ShapeSide::Centred), the default, centres each triangle on
+    /// its value.
+    fn plot_shape_side(&self, line: usize) -> super::ShapeSide {
+        let _ = line;
+        super::ShapeSide::Centred
     }
 
     /// The character a [`PlotType::Character`](super::PlotType::Character) plot of the zero-based

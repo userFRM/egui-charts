@@ -6,8 +6,8 @@ use super::DemoApp;
 use egui_charts::services::StoreKind;
 use egui_charts::strategies::StrategyFactory;
 use egui_charts::studies::{
-    Calculation, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue, InputKind,
-    InputValue, StudyInput,
+    Calculation, ConfiguredStudy, CustomIndicator, Indicator, IndicatorFactory, IndicatorValue,
+    InputKind, InputValue, StudyInput,
 };
 use egui_charts::ui::dialogs::templates::TemplateStore;
 use egui_charts::ui::study_editor::{
@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 /// The native sample study, still registered so that charts saved with it open.
 const TITLE: &str = "Sample close difference";
-const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. alert(\"message\", condition) declares an alert condition: after Apply, Add alert offers it as a condition of the study. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally; Profile lines takes effect at the next Apply. Other charts showing a script of the same title keep the version they run until they are opened again. A script that places orders is a strategy: Apply saves it and selects it in the strategy tester, where Run backtests it.";
+const GUIDE: &str = "Scripts are Rhai with declarations for inputs, plots and study calls; Examples opens the bundled ones. alert(\"message\", condition) declares an alert condition: after Apply, Add alert offers it as a condition of the study. plot(..., color = EXPR) colours a plot per bar with rgb(r, g, b), rgba(r, g, b, alpha), \"#RRGGBB\" or a color input, and the colour set in the study's settings paints the bars where EXPR is na; style = \"bar_color\" or \"background_color\" paints the price bars or the background; label, segment, zone and marker draw on the chart in the colour of the plot they name. Apply checks the script on the active chart's bars, then adds it to the chart and saves it locally; Profile lines takes effect at the next Apply. Other charts showing a script of the same title keep the version they run until they are opened again. A script that places orders is a strategy: Apply saves it and selects it in the strategy tester, where Run backtests it.";
 
 pub(super) struct SampleStudyEditor {
     pub open: bool,
@@ -187,6 +187,37 @@ fn done(doing: &str) -> &'static str {
     }
 }
 
+/// What `script` changes of the shape the charts, layouts, templates and alerts holding the study
+/// `saved` restore it with: its plot count, the ids and accepted values of the inputs a chart saves
+/// for it, or its alert conditions in order, which saved alerts know by position. `None` when the
+/// shape is the same.
+fn changed_shape(saved: &Script, script: &Script) -> Option<String> {
+    let shape = |script: &Script| {
+        let study = ConfiguredStudy::new(Box::new(script.study()));
+        // `InputKind` has no `PartialEq`; its `Debug` text names every bound and choice.
+        let mut inputs: Vec<_> = (study.inputs().into_iter())
+            .map(|input| (input.id, format!("{:?}", input.kind)))
+            .collect();
+        inputs.sort();
+        (study.line_count(), inputs, study.alert_conditions())
+    };
+    let ((plots, inputs, alerts), (new_plots, new_inputs, new_alerts)) =
+        (shape(saved), shape(script));
+    let changed: Vec<_> = [
+        (plots != new_plots, "plots"),
+        (inputs != new_inputs, "inputs"),
+        (alerts != new_alerts, "alerts"),
+    ]
+    .into_iter()
+    .filter_map(|(changed, what)| changed.then_some(what))
+    .collect();
+    match changed.as_slice() {
+        [] => None,
+        [what] => Some((*what).to_owned()),
+        [first @ .., last] => Some(format!("{} and {last}", first.join(", "))),
+    }
+}
+
 /// The colours of a script's words for the editor, from the theme.
 fn colours(text: &str, visuals: &egui::Visuals) -> Vec<(Range<usize>, egui::Color32)> {
     // Dark themes draw links close to the text colour; there keywords take the accent, which
@@ -295,8 +326,7 @@ impl DemoApp {
             StudyEditorAction::Save { title, text } => {
                 let title = title.trim();
                 let compiled = Script::compile(title, &text, &IndicatorFactory::new());
-                let orders = compiled.as_ref().ok().map(Script::places_orders);
-                let saved = self.check_title(title, "saving", orders).and_then(|()| {
+                let saved = (self.check_title(title, "saving", compiled.as_ref().ok())).and_then(|()| {
                     match compiled {
                         // Charts and saved layouts hold the registered version, which start-up
                         // registers again from the stored text only when it compiles.
@@ -317,8 +347,7 @@ impl DemoApp {
                 self.sample_study.pending = None;
                 self.sample_study.message.clear();
                 let compiled = Script::compile(title, &text, &IndicatorFactory::new());
-                let orders = compiled.as_ref().ok().map(Script::places_orders);
-                if let Err(message) = self.check_title(title, "applying", orders) {
+                if let Err(message) = self.check_title(title, "applying", compiled.as_ref().ok()) {
                     self.sample_study.message = message;
                     return;
                 }
@@ -354,10 +383,12 @@ impl DemoApp {
     /// and for a strategy the name of a built-in strategy, so that a script never replaces a
     /// built-in study, the native sample, a feed's metric or a built-in strategy. A title saved
     /// as a study cannot take a strategy or the reverse, since the charts, layouts and tester
-    /// holding it would no longer open it. `orders` says whether the text places orders, `None`
-    /// when it does not compile.
-    fn check_title(&self, title: &str, doing: &str, orders: Option<bool>) -> Result<(), String> {
+    /// holding it would no longer open it, and a saved study cannot take other plots, inputs or
+    /// alerts, which they restore with. `script` is the compiled text, `None` when it does not
+    /// compile.
+    fn check_title(&self, title: &str, doing: &str, script: Option<&Script>) -> Result<(), String> {
         let saved = self.sample_study.scripts.get(title);
+        let orders = script.map(Script::places_orders);
         if title.is_empty() {
             Err(format!("Enter a document title before {doing}."))
         } else if orders == Some(true) {
@@ -380,6 +411,13 @@ impl DemoApp {
         } else if orders == Some(false) && saved.is_some_and(Script::places_orders) {
             Err(format!(
                 "Not {}: {title} is saved as a strategy; save this study under another title.",
+                done(doing)
+            ))
+        } else if let (Some(saved), Some(script)) = (saved, script)
+            && let Some(changed) = changed_shape(saved, script)
+        {
+            Err(format!(
+                "Not {}: {title} is in use by saved charts and this text changes its {changed}; saving it under another title keeps both.",
                 done(doing)
             ))
         } else {
@@ -473,7 +511,7 @@ impl DemoApp {
         self.chart.user_action(|chart| {
             let previous: Vec<_> = chart
                 .indicators()
-                .filter(|(_, study)| study.name() == title)
+                .filter(|(_, study)| study.registered_name() == title)
                 .map(|(id, _)| id)
                 .collect();
             for id in previous {
@@ -531,8 +569,10 @@ mod tests {
     use super::DemoApp;
     use eframe::App;
     use egui::{Event, Key, Modifiers, Pos2, RawInput};
+    use egui_charts::data::MetricSeries;
     use egui_charts::model::{Bar, BarData};
-    use egui_charts::studies::{Calculation, IndicatorFactory, InputValue};
+    use egui_charts::scales::StudyFormat;
+    use egui_charts::studies::{Calculation, IndicatorFactory, InputValue, MetricStudy};
     use egui_charts::widget::{ChartLayoutMode, SeriesId};
     use std::time::Duration;
 
@@ -555,13 +595,9 @@ mod tests {
         fn flush(&mut self) {}
     }
 
-    /// The text shapes of one frame.
-    fn frame(
-        app: &mut DemoApp,
-        ctx: &egui::Context,
-        events: Vec<Event>,
-    ) -> Vec<egui::epaint::TextShape> {
-        let output = ctx.run_ui(
+    /// The shapes of one frame.
+    fn shapes(app: &mut DemoApp, ctx: &egui::Context, events: Vec<Event>) -> Vec<egui::Shape> {
+        let mut output = ctx.run_ui(
             RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     Pos2::ZERO,
@@ -572,14 +608,36 @@ mod tests {
             },
             |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
         );
-        let texts = (output.shapes.iter())
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text.clone()),
+        let shapes = output.shapes.drain(..).map(|shape| shape.shape).collect();
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    /// The text shapes of one frame.
+    fn frame(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        events: Vec<Event>,
+    ) -> Vec<egui::epaint::TextShape> {
+        (shapes(app, ctx, events).into_iter())
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) => Some(text),
                 _ => None,
             })
-            .collect();
-        output.drop_without_applying_deltas();
-        texts
+            .collect()
+    }
+
+    /// Every shape of one frame, those of nested lists included.
+    fn painted(app: &mut DemoApp, ctx: &egui::Context) -> Vec<egui::Shape> {
+        let mut nested = shapes(app, ctx, Vec::new());
+        let mut flat = Vec::new();
+        while let Some(shape) = nested.pop() {
+            match shape {
+                egui::Shape::Vec(shapes) => nested.extend(shapes),
+                shape => flat.push(shape),
+            }
+        }
+        flat
     }
 
     fn render(app: &mut DemoApp, ctx: &egui::Context, events: Vec<Event>) -> Vec<(String, Pos2)> {
@@ -781,6 +839,7 @@ mod tests {
         // The copy of this test chart is still reading its drawings, which would keep the
         // workspace from being saved below.
         app.ensure_chart_slots(ChartLayoutMode::Single);
+        let layout = app.capture_layout().unwrap();
 
         edit(&mut app, &ctx, negated, LOOKBACK);
         click(&mut app, &ctx, "Save");
@@ -797,6 +856,67 @@ mod tests {
             render(&mut app, &ctx, Vec::new())
                 .iter()
                 .any(|(text, _)| text == LOOKBACK)
+        );
+        // Nor one with other plots, inputs or alerts, which the charts holding it restore with.
+        let renamed = LOOKBACK.replace("lookback", "bars_back");
+        for (text, button, refused, changed) in [
+            (
+                format!("{LOOKBACK}\nplot(\"Close\", close);"),
+                "Save",
+                "Not saved",
+                "plots",
+            ),
+            (renamed.clone(), "Save", "Not saved", "inputs"),
+            (
+                format!("{LOOKBACK}\nalert(\"Rising\", close > close[1]);"),
+                "Save",
+                "Not saved",
+                "alerts",
+            ),
+            // A first label takes away the Offset, Symbol and Interval inputs of the charts.
+            (
+                format!("{LOOKBACK}\nlabel(\"Difference\", bar_index, close, \"x\");"),
+                "Save",
+                "Not saved",
+                "inputs",
+            ),
+            (
+                format!("{renamed}\nplot(\"Close\", close);"),
+                "Apply",
+                "Not applied",
+                "plots and inputs",
+            ),
+        ] {
+            edit(&mut app, &ctx, LOOKBACK, &text);
+            click(&mut app, &ctx, button);
+            let message = format!(
+                "{refused}: Close difference is in use by saved charts and this text changes its {changed}; saving it under another title keeps both."
+            );
+            assert!(
+                render(&mut app, &ctx, Vec::new())
+                    .iter()
+                    .any(|(drawn, _)| *drawn == message),
+                "{button} {text}"
+            );
+            click(&mut app, &ctx, "Reload saved");
+        }
+        // Colours are not part of what the charts restore with.
+        let coloured = LOOKBACK.replace(
+            "close - close[lookback]);",
+            "close - close[lookback], color = if close > open { \"#26A69A\" } else { na });",
+        );
+        edit(&mut app, &ctx, LOOKBACK, &coloured);
+        click(&mut app, &ctx, "Save");
+        assert!(
+            !render(&mut app, &ctx, Vec::new())
+                .iter()
+                .any(|(text, _)| text.starts_with("Not saved"))
+        );
+        click(&mut app, &ctx, "Reload saved");
+        assert!(
+            render(&mut app, &ctx, Vec::new())
+                .iter()
+                .any(|(text, _)| *text == coloured)
         );
         // The restarted application has storage: its first-visit choice is already answered.
         let answered = super::super::owndata::store::Saved {
@@ -816,7 +936,7 @@ mod tests {
         assert!(
             render(&mut restored, &ctx, Vec::new())
                 .iter()
-                .any(|(text, _)| text == LOOKBACK)
+                .any(|(text, _)| *text == coloured)
         );
 
         // The workspace kept the applied study with its input and opened it as saved, and the
@@ -840,6 +960,8 @@ mod tests {
         assert_eq!(restored_study(&restored).len(), 2);
         restored.load_study_template(&app.chart.study_template_set());
         assert_eq!(restored_study(&restored), [saved_version]);
+        // A layout saved before those edits opens too.
+        assert!(restored.restore_layout("Before the edits".into(), layout, Ok(Vec::new())));
     }
 
     #[test]
@@ -1049,6 +1171,141 @@ mod tests {
     }
 
     #[test]
+    fn editor_scripts_paint_colours_and_drawings() {
+        use egui::{Color32, Shape};
+        use egui_charts::studies::Indicator;
+        let ctx = egui::Context::default();
+        let mut app = editor_app(&ctx);
+        // Bar i opens at 100 + i and rises by 1 on even bars, falls by 0.5 on odd ones.
+        let bar = |i: usize, close: f64| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i as i64);
+            let open = 100.0 + i as f64;
+            Bar::new(time, open, open.max(close), open.min(close), close, 1.0)
+        };
+        let rise = |i: usize| if i % 2 == 0 { 1.0 } else { -0.5 };
+        let bars = (0..12)
+            .map(|i| bar(i, 100.0 + i as f64 + rise(i)))
+            .collect();
+        *app.chart = egui_charts::Chart::new(BarData::from_bars(bars));
+        let script = r##"display(overlay = true);
+input up = color("Up", "#0A7B83");
+plot("Close", close, color = if close > open { up } else { na });
+plot("Bars", close, style = "bar_color", color = if close > open { "#7209B7" } else { na });
+plot("Shade", 1.0, style = "background_color", color = if bar_index % 3 == 0.0 { "#F7258540" } else { na });
+plot("Marks", na, color = "#B5179E");
+if bar_index == 6 {
+    label("Marks", bar_index, high, "Top");
+    segment("Marks", bar_index - 6, low[6], bar_index, high);
+    zone("Marks", bar_index - 3, bar_index, high[3], low);
+    marker(bar_index, low, "up");
+}"##;
+        app.sample_study.editor.open_document("Painted", script);
+        let before = painted(&mut app, &ctx);
+        click(&mut app, &ctx, "Apply");
+        calculated(&mut app, &ctx);
+
+        // What the chart paints beyond what it painted before Apply.
+        let added = |shapes: &[Shape], test: &dyn Fn(&Shape) -> bool| {
+            let count = |shapes: &[Shape]| shapes.iter().filter(|shape| test(shape)).count();
+            count(shapes) - count(&before)
+        };
+        let filled = |fill: Color32| move |shape: &Shape| matches!(shape, Shape::Rect(rect) if rect.fill == fill);
+        let stroked = |color: Color32| {
+            move |shape: &Shape| match shape {
+                Shape::LineSegment { stroke, .. } => stroke.color == color,
+                Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                _ => false,
+            }
+        };
+        let up = Color32::from_rgb(0x0A, 0x7B, 0x83);
+        let bars_color = Color32::from_rgb(0x72, 0x09, 0xB7);
+        let shade = Color32::from_rgba_unmultiplied(0xF7, 0x25, 0x85, 0x40);
+        let marks = Color32::from_rgb(0xB5, 0x17, 0x9E);
+        let success = egui_charts::tokens::DESIGN_TOKENS.semantic.extended.success;
+        let after = painted(&mut app, &ctx);
+        // The bodies of the rising bars, the background of bars 0, 3, 6 and 9, and the zone.
+        assert_eq!(added(&after, &filled(bars_color)), 6);
+        assert_eq!(added(&after, &filled(shade)), 4);
+        assert_eq!(added(&after, &filled(marks.gamma_multiply(0.15))), 1);
+        // The segment and the zone's edges, then the rising parts of the close.
+        assert!(added(&after, &stroked(marks)) >= 3);
+        assert!(added(&after, &stroked(up)) >= 1);
+        assert!(after.iter().any(|shape| matches!(shape, Shape::Text(text)
+            if text.galley.text() == "Top" && text.fallback_color == marks)));
+        let triangle = |shape: &Shape| {
+            matches!(shape, Shape::Path(path)
+            if path.closed && path.points.len() == 3 && path.fill == success)
+        };
+        assert_eq!(added(&after, &triangle), 1);
+        let id = study_id(&app.chart, "Painted");
+        let (_, study) = (app.chart.indicators())
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap();
+        let colors: Vec<_> = (0..12).map(|bar| study.plot_color(0, bar)).collect();
+        let expected: Vec<_> = (0..12).map(|bar| (bar % 2 == 0).then_some(up)).collect();
+        assert_eq!(colors, expected);
+
+        // A tick paints the forming bar as a full calculation does, and nothing where its colour
+        // is missing.
+        for (close, rising) in [(113.0, 7), (111.5, 6)] {
+            app.chart.update(SeriesId::MAIN, bar(12, close));
+            calculated(&mut app, &ctx);
+            let shapes = painted(&mut app, &ctx);
+            assert_eq!(added(&shapes, &filled(bars_color)), rising);
+            assert_eq!(added(&shapes, &filled(shade)), 5);
+            let bars = app.chart.bars(SeriesId::MAIN);
+            let mut fresh = app.sample_study.scripts["Painted"].study();
+            fresh.calculate(bars);
+            while matches!(fresh.calculation(), Some(Calculation::Running(_))) {
+                fresh.update(bars, bars.len());
+            }
+            let (_, study) = (app.chart.indicators())
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap();
+            for (line, bar) in (0..4).flat_map(|line| (0..bars.len()).map(move |bar| (line, bar))) {
+                assert_eq!(
+                    study.plot_color(line, bar),
+                    fresh.plot_color(line, bar),
+                    "{line} {bar}"
+                );
+            }
+            assert_eq!(study.labels(), fresh.labels());
+            assert_eq!(study.price_segments(), fresh.price_segments());
+            assert_eq!(study.zones(), fresh.zones());
+            assert_eq!(
+                format!("{:?}", study.markers()),
+                format!("{:?}", fresh.markers())
+            );
+        }
+    }
+
+    #[test]
+    fn applying_a_script_keeps_a_feed_metric_shown_under_its_title() {
+        let ctx = egui::Context::default();
+        let mut app = editor_app(&ctx);
+        *app.chart = egui_charts::Chart::new(BarData::from_bars(minute_bars([100.0, 103.0])));
+        // A feed's metric is registered, and saved, under its own key, not its display name.
+        let metric = MetricSeries::new("open_interest", "Open interest", StudyFormat::Volume);
+        let mut factory = IndicatorFactory::new();
+        factory.register("Metric: open_interest", move || {
+            Box::new(MetricStudy::new(metric.clone()))
+        });
+        let study = factory.create("Metric: open_interest").unwrap();
+        app.chart.add_indicator(study);
+        app.sample_study
+            .editor
+            .open_document("Open interest", LOOKBACK);
+        click(&mut app, &ctx, "Apply");
+        calculated(&mut app, &ctx);
+        let keys: Vec<_> = (app.chart.indicators())
+            .map(|(_, study)| study.registered_name().to_owned())
+            .collect();
+        for key in ["Metric: open_interest", "Open interest"] {
+            assert!(keys.iter().any(|kept| kept == key), "{key} not in {keys:?}");
+        }
+    }
+
+    #[test]
     fn editor_completes_at_the_caret_and_keeps_the_study_on_errors() {
         let ctx = egui::Context::default();
         let mut app = editor_app(&ctx);
@@ -1098,16 +1355,18 @@ mod tests {
                 .any(|(text, _)| text.contains("line 1, column 11"))
         );
         assert_eq!(underlined(&mut app, &ctx, unknown), ["nope"]);
-        let mut text = unknown;
+        // The scripts below keep the applied script's input, as a saved study's inputs stay.
+        let input = LOOKBACK.lines().next().unwrap();
+        let mut text = unknown.to_owned();
         for (script, shown) in [
-            ("plot(\"x\", close[-1]);", "on bar 0"),
+            (format!("{input}\nplot(\"x\", close[-1]);"), "on bar 0"),
             (
-                "loop {}\nplot(\"x\", close);",
+                format!("{input}\nloop {{}}\nplot(\"x\", close);"),
                 "time limit of 500 ms for one bar reached",
             ),
         ] {
-            edit(&mut app, &ctx, text, script);
-            text = script;
+            edit(&mut app, &ctx, &text, &script);
+            text = script.clone();
             click(&mut app, &ctx, "Apply");
             calculated(&mut app, &ctx);
             assert!(
@@ -1121,8 +1380,9 @@ mod tests {
         }
 
         // An error of the applied script on a later bar is shown too.
-        let late = "plot(\"x\", if bar_index > 2 { close[-1] } else { close });";
-        edit(&mut app, &ctx, text, late);
+        let late =
+            format!("{input}\nplot(\"x\", if bar_index > 2 {{ close[-1] }} else {{ close }});");
+        edit(&mut app, &ctx, &text, &late);
         click(&mut app, &ctx, "Apply");
         calculated(&mut app, &ctx);
         assert_ne!(study_id(&app.chart, "Close difference"), id);

@@ -20,6 +20,21 @@ impl Chart {
         self.footprint_history_by_view && self.replay.is_none() && self.market_replay.is_none()
     }
 
+    pub(in crate::widget) fn can_scroll_prepared_footprints(&self) -> bool {
+        self.footprint_by_view()
+            && self.feed_link.as_ref().is_some_and(|link| {
+                !link.paused
+                    && !link.reload_pending
+                    && !link.resumed
+                    && link
+                        .footprint
+                        .as_ref()
+                        .is_some_and(|flow| flow.live.prepared_before().is_some())
+                    // Pane input can change the calendar after the pump checked this binding.
+                    && link.clock == self.bar_clock()
+            })
+    }
+
     /// Inclusive bar opens needed by the chart and its footprint consumers.
     fn footprint_demand(&self, studies: bool) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         let shown = self.state.shown();
@@ -95,7 +110,7 @@ impl Chart {
             .min(limit)
     }
 
-    pub(super) fn scroll_footprints(&mut self, link: &mut FeedLink) {
+    pub(in crate::widget) fn scroll_footprints(&mut self, link: &mut FeedLink) {
         let studies = link
             .study_inputs
             .iter()
@@ -308,7 +323,7 @@ impl Chart {
             }
             held.record_prepared_span(from, before, supplied);
         } else {
-            incoming.prepare_history(before, &link.trades, link.trades_from_start);
+            incoming.prepare_history(before, &link.trades, link.trades.from_start);
             incoming.record_prepared_span(from, before, supplied);
             incoming.live.rebuild_prepared(&link.trades);
             link.footprint = Some(incoming);

@@ -1175,6 +1175,9 @@ impl OrderFlowInput {
     /// footprint source whose held executions do not rebuild the chart's bars holds none of them
     /// and takes the sink's allocations, of the executions still queued too. Without a loss, a
     /// source whose executions do not match the chart's bars groups them from the oldest live one.
+    /// On a time interval, until a page reaches the start of history, the bar holding the oldest
+    /// paged execution has no values, as an execution of that bar, even one at the same instant,
+    /// may be missing, and a rolling window gives no value while it reaches that execution.
     #[cfg(feature = "widget")]
     pub(crate) fn replace_trades(
         &self,
@@ -1268,15 +1271,25 @@ impl OrderFlowInput {
                     .map(|trade| trade.ts)
                     .max()
             });
+            // On time bars, executions before the oldest paged one can be missing, even at its
+            // own timestamp, until a page reaches the start of history.
+            let unconfirmed = trades.unconfirmed_page_start().filter(|_| !trade_based);
             {
                 let mut state = self.state();
-                let lost = lost.max(left_out);
+                // Keep the prints. Each (now - window, now] becomes known independently.
+                let lost = lost.max(left_out).max(unconfirmed);
                 state.checkpoint_state_changed();
                 state.window.lost_until = lost;
                 state.instant.lost_until = lost;
                 state.extremes.lost_until = lost;
                 for distinct in &mut state.distinct {
                     distinct.lost_until = lost;
+                }
+                if let Some(first) = unconfirmed {
+                    let open = clock.instant_open(first);
+                    state.cut = open.checked_sub_signed(TimeDelta::nanoseconds(1));
+                    // A page can split a timestamp even at the candle open.
+                    state.bars.insert(open, ([f64::NAN; 3], 0));
                 }
             }
             let rebuilt = run.is_some();
@@ -1495,7 +1508,9 @@ impl OrderFlowInput {
     /// source grouped its own bar holding the cutoff apart from them, and a page's copy counts for
     /// a live execution the store dropped as a repeat. Once the store has lost an execution to its
     /// limit, that bar is filled there only when the executions held after the loss group into
-    /// `history` from that bar or an older one.
+    /// `history` from that bar or an older one. On a time interval, a source that sums executions
+    /// leaves the cutoff's bar empty while it holds the oldest execution of a page that did not
+    /// reach the start of history.
     #[cfg(feature = "widget")]
     pub(crate) fn set_replay(
         &self,
@@ -1681,7 +1696,11 @@ impl OrderFlowInput {
                         && sums
                     {
                         replay.row = part.bars.get(&open).map(|(row, _)| *row);
-                    } else if !trade_based && sums {
+                    } else if !trade_based
+                        && sums
+                        && (trades.and_then(|trades| trades.unconfirmed_page_start()))
+                            .is_none_or(|first| first < start)
+                    {
                         let part = OrderFlowInput::new(kind).with_size_basis(state.basis);
                         // The store's executions are valid, and those held are the cutoff bar's.
                         held.for_each(|trade| {
@@ -2353,6 +2372,45 @@ impl State {
 mod tests {
     use super::*;
     use crate::model::{OrderBook, OrderBookLevel, Timeframe};
+
+    /// Hand counts on a 1-minute clock: buys of one lot at 10:00:05 and 10:00:15 from a page.
+    /// A replay cut at 10:00:30 shows the 10:00 candle's volume and delta of 2 only once a page
+    /// proved that no execution precedes them.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn replay_leaves_an_unconfirmed_page_start_candle_blank() {
+        let clock = BarClock::new(Timeframe::Min1);
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let buy = |secs| {
+            Tick::new(
+                start + TimeDelta::seconds(secs),
+                100.0,
+                1.0,
+                Some(OrderSide::Buy),
+            )
+            .with_id(secs as u64)
+        };
+        for from_start in [false, true] {
+            let mut held = super::super::trades::Trades::new(10);
+            held.prepend(vec![buy(5), buy(15)], &mut |_, _| ());
+            held.from_start = from_start;
+            let flow = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+            flow.replace_trades(&clock, &held, &[], None);
+            flow.set_replay(
+                &clock,
+                Some(start + TimeDelta::seconds(30)),
+                Some(&held),
+                &[],
+            );
+            let rows: Vec<_> = flow.values().into_iter().collect();
+            let whole = vec![(start, [2.0, 2.0, 0.0])];
+            assert_eq!(
+                rows,
+                if from_start { whole } else { vec![] },
+                "{from_start}"
+            );
+        }
+    }
 
     #[test]
     fn frozen_input_shares_completed_rows_and_detaches_mutable_state() {

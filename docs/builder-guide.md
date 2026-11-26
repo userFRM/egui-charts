@@ -78,14 +78,18 @@ with CORS. The adapter uses GET with percent-encoded query values.
 A symbol object requires `name` (`symbol` is also accepted). Optional `ticker`
 is the identifier used for subsequent requests. Metadata fields are `description`,
 `exchange`, `country`, `sector`, `source`, `root`, `logo`, `exchange_logo`,
-`type` (lowercase model symbol type), `minmov`, `pricescale`,
+`type` (lowercase model symbol type), `minmov`, `pricescale`, `minmove2`, `fractional`,
 `volume_precision`, `currency_code`, `unit` (the price unit shown beside the
 currency above the price scale, such as `barrel`), `timezone`, `session`,
 `session_extended` and `session_overnight` (pre-market and post-market, and
 overnight windows, as below), `supported_resolutions`, `data_status`
 (`streaming`, `delayed_streaming` or `endofday`) and `dividend_adjustment`
 (`true` when `/history` serves dividend-adjusted bars for `adjusted=true`). Price tick size
-is `minmov / pricescale`, with `minmov` defaulting to one. Time zones use the
+is `minmov / pricescale`, with `minmov` defaulting to one. A `pricescale` that is
+a power of ten, such as 100, also sets the price decimals (two), so `minmov` 50 with
+`pricescale` 100 writes `101.50` on a 0.50 tick; another `pricescale`, or a `minmov`
+that is not a whole number, takes the decimals from the tick. A precision chosen in
+the chart settings takes precedence. Time zones use the
 library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.TimezoneId.html) parser. Sessions accept `24x7` or
 `HHMM-HHMM[,HHMM-HHMM]:days` windows (one day suffix for all windows), where 1 is Sunday and 7 is Saturday; an overnight
 window belongs to its closing day. Omitted days mean Monday through Friday.
@@ -95,6 +99,8 @@ regular `session` other than `24x7`. With `session_overnight`, the time axis
 offers overnight hours. Unsupported
 session syntax or unavailable time zones report invalid data rather than guessing;
 search leaves out a result it cannot read and lists the others.
+
+`fractional: true` writes prices as whole units and a count of fractions, such as `117'16` for 117 16/32, in place of decimals. `pricescale` is then the number of fractions in one unit: 2, 4, 8, 16, 32, 64, 128 or 256. A `minmove2` other than zero divides thirty-seconds instead: 2 with `pricescale` 64 for halves (`117'165`), 4 with 128 for quarters and 8 with 256 for eighths. Any other combination keeps decimals. The tick size stays `minmov / pricescale`, and a precision chosen in the chart settings takes precedence.
 
 Configuration lists may be omitted (unknown, unrestricted) or empty (none).
 Exchange and type entries use their `value` field. Optional feed services are

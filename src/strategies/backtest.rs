@@ -453,6 +453,7 @@ pub struct StrategyContext<'a> {
     tick: u64,
     order_delay: u32,
     price_increment: f64,
+    bar_clock: Option<&'a BarClock>,
 }
 
 impl std::fmt::Debug for StrategyContext<'_> {
@@ -473,6 +474,18 @@ impl StrategyContext<'_> {
     /// See [`Self::is_forming_bar`].
     pub fn bars(&self) -> &[Bar] {
         self.bars
+    }
+
+    /// Open time of the daily bar of [`Backtest::bar_clock`] that holds the latest bar: on a
+    /// clock with a session the bar of its trading date, so a session that crosses midnight UTC
+    /// stays one day; the bar's UTC date without a clock. `None` before the first bar.
+    pub(crate) fn trading_day(&self) -> Option<DateTime<Utc>> {
+        let time = self.bars.last()?.time;
+        let day = (self.bar_clock).map_or_else(
+            || BarClock::new(Timeframe::Day1),
+            |clock| clock.for_timeframe(Timeframe::Day1),
+        );
+        Some(day.instant_open(time))
     }
 
     /// The open position: positive when long, negative when short, 0 when flat.
@@ -927,6 +940,7 @@ impl Backtest {
             rate: if rates.is_some() { f64::NAN } else { 1.0 },
             rates,
             unconverted: Cell::new(false),
+            bar_clock: self.bar_clock.as_ref(),
         };
         run.start_equity(self.timeframe, &bars[..last], &mut report);
         let mut processed = cooperative.then_some(0);
@@ -1273,6 +1287,7 @@ struct Run<'a> {
     rate: f64,
     /// Whether an amount needed a rate where none applied.
     unconverted: Cell<bool>,
+    bar_clock: Option<&'a BarClock>,
 }
 
 impl<'a> Run<'a> {
@@ -1578,6 +1593,7 @@ impl<'a> Run<'a> {
             tick: self.tick,
             order_delay: self.settings.order_delay,
             price_increment: self.settings.price_increment,
+            bar_clock: self.bar_clock,
         });
         // A strategy that stopped deciding leaves no order working, so nothing of it fills later.
         if self.strategy.failure().is_some() {

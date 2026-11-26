@@ -240,6 +240,15 @@ impl Indicator for PivotPointsHighLow {
         }
     }
 
+    fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
+        // A pivot high is its bar's high, a pivot low its low.
+        if line == 0 {
+            crate::studies::ShapeSide::Above
+        } else {
+            crate::studies::ShapeSide::Below
+        }
+    }
+
     fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
         Some((
             if line == 0 {

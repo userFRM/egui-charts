@@ -50,9 +50,11 @@ pub enum PlotType {
     /// broken at missing bars.
     #[serde(rename = "Area")]
     AreaWithBreaks,
-    /// An upward triangle centred on each defined value.
+    /// An upward triangle on each defined value, centred on it or beside it as
+    /// [`Indicator::plot_shape_side`](super::Indicator::plot_shape_side) chooses.
     TriangleUp,
-    /// A downward triangle centred on each defined value.
+    /// A downward triangle on each defined value, centred on it or beside it as
+    /// [`Indicator::plot_shape_side`](super::Indicator::plot_shape_side) chooses.
     TriangleDown,
     /// Repaint the source price bars using this plot's per-bar colour.
     BarColor,
@@ -136,6 +138,24 @@ impl PlotType {
             Self::Line | Self::StepLine | Self::StepLineWithDiamonds | Self::Area
         )
     }
+}
+
+/// Which side of its value a triangle plot draws each triangle on.
+///
+/// A study that marks bars at their high or low draws its triangles beyond that price, so a
+/// mark never covers the bar it marks. Above and below are in prices: on an inverted scale a
+/// triangle above its value is drawn under it on screen. See
+/// [`Indicator::plot_shape_side`](super::Indicator::plot_shape_side).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ShapeSide {
+    /// Centred on the value.
+    #[default]
+    Centred,
+    /// Wholly above the value, toward higher prices, for a mark on a bar's high.
+    Above,
+    /// Wholly below the value, toward lower prices, for a mark on a bar's low.
+    Below,
 }
 
 /// Editable presentation of one output line.
@@ -1780,6 +1800,9 @@ impl Indicator for ConfiguredStudy {
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         self.study.plot_text(line, self.inner_bar(bar)?)
     }
+    fn plot_shape_side(&self, line: usize) -> ShapeSide {
+        self.study.plot_shape_side(line)
+    }
     fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
         self.study.plot_tooltip(line, self.inner_bar(bar)?)
     }
@@ -1841,30 +1864,34 @@ impl Indicator for ConfiguredStudy {
         snapshot: &StudySettingsSnapshot,
     ) -> Result<(), crate::studies::StudyError> {
         let mut inputs: Vec<_> = snapshot.inputs.iter().collect();
-        while !inputs.is_empty() {
-            let remaining = inputs.len();
-            let mut error = None;
-            // An input can change another input's accepted range.
-            inputs.retain(|(id, value)| {
-                if self
-                    .study
-                    .inputs()
-                    .iter()
-                    .any(|input| input.id == *id && input.value == *value)
-                {
-                    return false;
+        // The study held these values, a restored one outside its input's range included.
+        super::inputs::restoring(snapshot.inputs.clone(), || {
+            while !inputs.is_empty() {
+                let remaining = inputs.len();
+                let mut error = None;
+                // An input can change another input's accepted range.
+                inputs.retain(|(id, value)| {
+                    if self
+                        .study
+                        .inputs()
+                        .iter()
+                        .any(|input| input.id == *id && input.value == *value)
+                    {
+                        return false;
+                    }
+                    if let Err(message) = self.study.set_input(id, value.clone()) {
+                        error = Some(message);
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if inputs.len() == remaining {
+                    return Err(error.expect("a retained input failed to apply"));
                 }
-                if let Err(message) = self.study.set_input(id, value.clone()) {
-                    error = Some(message);
-                    true
-                } else {
-                    false
-                }
-            });
-            if inputs.len() == remaining {
-                return Err(error.expect("a retained input failed to apply"));
             }
-        }
+            Ok(())
+        })?;
         self.study.set_colors(snapshot.colors.clone());
         self.study.set_visible(snapshot.visible);
         self.study.set_label_precision(snapshot.settings.precision);
