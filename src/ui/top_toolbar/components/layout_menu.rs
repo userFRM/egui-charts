@@ -1364,6 +1364,7 @@ mod tests {
             charts: Vec::new(),
             sizing: None,
             link_groups: None,
+            tab_split: None,
         };
         let host = Arc::new(Host::default());
         host.0
@@ -1404,6 +1405,7 @@ mod tests {
             charts: Vec::new(),
             sizing: None,
             link_groups: None,
+            tab_split: None,
         };
         let host = Arc::new(Host::default());
         host.0
@@ -1491,6 +1493,7 @@ mod tests {
             charts: Vec::new(),
             sizing: None,
             link_groups: None,
+            tab_split: None,
         };
         let mut latest = layout.clone();
         latest.mode = crate::widget::ChartLayoutMode::Single;
@@ -1605,6 +1608,7 @@ mod tests {
             charts: Vec::new(),
             sizing: None,
             link_groups: None,
+            tab_split: None,
         };
         let document = |mode| layout(mode).to_json().unwrap();
         let stored = |host: &Revised, name: &str| {
@@ -1685,6 +1689,7 @@ mod tests {
             charts: charts.to_vec(),
             sizing: None,
             link_groups: None,
+            tab_split: None,
         };
         let empty = SavedLayout {
             charts: Vec::new(),
@@ -1805,6 +1810,7 @@ mod tests {
             charts: Vec::new(),
             sizing: None,
             link_groups: None,
+            tab_split: None,
         };
         // Whether `A` is shared first, the service holds its answer and moves the sharing, and the
         // layouts stored and shared afterwards, with the status shown.
