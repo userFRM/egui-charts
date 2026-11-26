@@ -66,7 +66,12 @@ macro_rules! register_builtins {
 type Renamed = (&'static str, &'static str, fn() -> Box<dyn Indicator>);
 
 /// Earlier built-in keys kept for saved studies, stored drawing panes and browser favourites.
-const RENAMED: [Renamed; 1] = [("VPT", "PVT", || Box::new(VolumePriceTrend::default()))];
+const RENAMED: [Renamed; 2] = [
+    ("VPT", "PVT", || Box::new(VolumePriceTrend::default())),
+    ("RankCorr", "RCI", || {
+        Box::new(RankCorrelationIndex::default())
+    }),
+];
 
 /// A factory that creates [`Indicator`] instances by name.
 ///
@@ -78,9 +83,10 @@ const RENAMED: [Renamed; 1] = [("VPT", "PVT", || Box::new(VolumePriceTrend::defa
 /// [`create`](Self::create) and [`has`](Self::has) also resolve the names of five exported
 /// studies the catalogue leaves out, so that a template, a copied study or a saved layout of
 /// one is recreated: `CVD`, `HL2`, `HLC3`, `Ehlers Fisher` and `MA Combination`, which creates
-/// [`MACombination::ribbon`] for its inputs to reshape. They also resolve `VPT`, the earlier
-/// name of Price Volume Trend (`PVT`), which a saved study restores under. They have no category
-/// and are not in [`list`](Self::list) or [`count`](Self::count).
+/// [`MACombination::ribbon`] for its inputs to reshape. They also resolve the earlier names `VPT`
+/// of Price Volume Trend (`PVT`) and `RankCorr` of the Rank Correlation Index (`RCI`), which saved
+/// studies restore under. They have no category and are not in [`list`](Self::list) or
+/// [`count`](Self::count).
 pub struct IndicatorFactory {
     /// The category of each name, `None` for a built-in outside the catalogue, and its constructor.
     constructors: HashMap<String, (Option<&'static str>, IndicatorConstructor)>,

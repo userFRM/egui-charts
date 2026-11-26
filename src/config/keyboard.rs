@@ -188,7 +188,7 @@ pub enum KeyboardAction {
     // Watchlist
     /// Show the next symbol of the active watchlist (Down or Space). The chart passes it to the
     /// host as a shortcut request; answer it with `WatchlistPanel::select_next_symbol`. A
-    /// selected drawing takes Down first, and a shown replay bar takes Space.
+    /// selected drawing takes Down first.
     NextWatchlistSymbol,
     /// Show the previous symbol of the active watchlist (Up or Shift+Space), as
     /// [`NextWatchlistSymbol`](Self::NextWatchlistSymbol) does the next one.
@@ -206,6 +206,13 @@ pub enum KeyboardAction {
     /// A sell limit order at the pointer's price (Alt+Shift+S), as
     /// [`BuyLimitAtPointer`](Self::BuyLimitAtPointer) is for buying.
     SellLimitAtPointer,
+    /// Buy at market (Shift+B). The key presses the chart's Buy button: the host takes it from
+    /// [`Chart::take_quote_action`](crate::widget::Chart::take_quote_action) as
+    /// [`QuoteSide::Buy`](crate::widget::QuoteSide::Buy), as it takes a click. While the chart
+    /// draws no Buy and Sell buttons the key is left to typing, and a held key acts once.
+    BuyMarket,
+    /// Sell at market (Shift+S), as [`BuyMarket`](Self::BuyMarket) is for buying.
+    SellMarket,
 }
 
 impl KeyboardAction {
@@ -309,6 +316,8 @@ impl KeyboardAction {
             Self::AddToWatchlist => "Add symbol to watchlist",
             Self::BuyLimitAtPointer => "Buy limit at pointer price",
             Self::SellLimitAtPointer => "Sell limit at pointer price",
+            Self::BuyMarket => "Buy at market",
+            Self::SellMarket => "Sell at market",
         }
     }
 
@@ -413,9 +422,21 @@ impl KeyboardAction {
                 }
             }
             Self::MaximizeChart => const { &[KeyboardShortcut::new(Modifiers::ALT, Key::Enter)] },
-            Self::CycleChartFocus => const { &[key(Key::Tab)] },
+            Self::CycleChartFocus => {
+                const {
+                    &[
+                        key(Key::Tab),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowRight),
+                    ]
+                }
+            }
             Self::CycleChartFocusBack => {
-                const { &[KeyboardShortcut::new(Modifiers::SHIFT, Key::Tab)] }
+                const {
+                    &[
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::Tab),
+                        KeyboardShortcut::new(Modifiers::SHIFT, Key::ArrowLeft),
+                    ]
+                }
             }
             Self::DeleteSelectedDrawing => const { &[key(Key::Delete), key(Key::Backspace)] },
             Self::Cancel => const { &[key(Key::Escape)] },
@@ -481,6 +502,8 @@ impl KeyboardAction {
                     )]
                 }
             }
+            Self::BuyMarket => const { &[KeyboardShortcut::new(Modifiers::SHIFT, Key::B)] },
+            Self::SellMarket => const { &[KeyboardShortcut::new(Modifiers::SHIFT, Key::S)] },
             _ => &[],
         }
     }
@@ -527,13 +550,15 @@ impl KeyboardAction {
             Self::Cancel => "Esc",
             Self::CompleteDrawing => "Enter",
             Self::ShowKeyboardHelp => "Ctrl+/ / ? / F1",
-            Self::CycleChartFocus => "Tab",
-            Self::CycleChartFocusBack => "Shift+Tab",
+            Self::CycleChartFocus => "Tab / Shift+→",
+            Self::CycleChartFocusBack => "Shift+Tab / Shift+←",
             Self::NextWatchlistSymbol => "↓ / Space",
             Self::PreviousWatchlistSymbol => "↑ / Shift+Space",
             Self::AddToWatchlist => "Alt+W",
             Self::BuyLimitAtPointer => "Alt+Shift+B",
             Self::SellLimitAtPointer => "Alt+Shift+S",
+            Self::BuyMarket => "Shift+B",
+            Self::SellMarket => "Shift+S",
             Self::DrawingTool(crate::config::DrawingToolType::TrendLine) => "Alt+T",
             Self::DrawingTool(crate::config::DrawingToolType::HorizontalLine) => "Alt+H",
             Self::DrawingTool(crate::config::DrawingToolType::VerticalLine) => "Alt+V",
@@ -628,7 +653,12 @@ impl KeyboardAction {
             ),
             (
                 "Trading",
-                vec![Self::BuyLimitAtPointer, Self::SellLimitAtPointer],
+                vec![
+                    Self::BuyMarket,
+                    Self::SellMarket,
+                    Self::BuyLimitAtPointer,
+                    Self::SellLimitAtPointer,
+                ],
             ),
         ]
     }

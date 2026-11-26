@@ -8,6 +8,12 @@ use crate::theme::ThemeExt;
 use egui::Color32;
 
 /// Crosshair mode
+///
+/// While a drawing tool is active, or a drawing is dragged, the crosshair of the pane under the
+/// pointer, the price pane or a study pane, shows where a click places the next anchor or where the
+/// dragged point lands instead, following the drawing magnet options (`DrawingManagerOptions`) and
+/// their Ctrl or Command inversion. Size and rotation handles follow the pointer, and so does the
+/// crosshair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum CrosshairMode {
@@ -36,7 +42,9 @@ pub enum CrosshairStyle {
     /// Full crosshair with vertical and horizontal lines (default)
     #[default]
     Full,
-    /// Only a dot at the intersection point
+    /// The crosshair lines of `Full`, following their visibility, colour, width and style, with a
+    /// dot where they cross, drawn over the standard pointer in the vertical line's colour. Hiding
+    /// a line removes only that line; with both hidden the dot remains.
     Dot,
     /// Standard arrow cursor and axis readouts, without crosshair lines
     Arrow,

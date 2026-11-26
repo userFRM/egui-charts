@@ -6,7 +6,7 @@
 //! bar instead; a chart bar without finer bars keeps the estimate, so no volume is lost.
 //! With an instrument tick size and Whole ticks per row, Row count picks whole tick rows too.
 //! While the source interval follows the chart, the study reads the interval the chart
-//! instrument suggests for the length of its profiles,
+//! instrument suggests for the length and dates of each profile,
 //! [`Instrument::profile_resolutions`](crate::model::Instrument::profile_resolutions).
 //! [`ProfileInput`] tells how much of a profile the finer bars cover.
 //! The chart notes each profile "Estimated from bars", also when finer bars cover all of it:
@@ -127,16 +127,17 @@ struct ProfileStudy {
     /// The instrument's volume decimals, which row values are written in, from `set_instrument`.
     volume_decimals: Option<u8>,
     resolutions: Vec<ProfileResolution>,
-    /// The finer interval and data start stated before the chart emptied the profile to wait
-    /// for its full recompute, still stated until it has bars again.
-    held: Option<(Option<Timeframe>, Option<DateTime<Utc>>)>,
+    /// The finer intervals and their data starts stated before the chart emptied the profile
+    /// to wait for its full recompute, still stated until it has bars again.
+    held: Option<Vec<(Timeframe, Option<DateTime<Utc>>)>>,
     /// Chart bars in view, from `set_visible_range`.
     view: Range<usize>,
     days: ExchangeDays,
     /// The instrument's exchange zone, UTC without one, and trading hours, from `set_instrument`.
     hours: (TimezoneId, Option<Session>),
     data: Vec<Bar>,
-    fine: Vec<Bar>,
+    /// The finer bars held, by interval, as the chart supplied each requested history.
+    fine: Vec<(Timeframe, Vec<Bar>)>,
     /// Each bar's executions by price, one level per tick. Clones share the chart-fed source.
     flow: OrderFlowInput,
     ranges: Vec<Range<usize>>,
@@ -893,21 +894,80 @@ impl ProfileStudy {
         Ok(())
     }
 
-    /// An explicit interval shorter than the chart's, or the shortest suggested interval
-    /// that serves the profile length while the source follows the chart; the held one while
-    /// emptied for a recompute.
-    fn finer(&self) -> Option<Timeframe> {
-        let shorter = |source: &Timeframe| {
-            !source.is_trade_based() && source.duration_ms() < self.interval.duration_ms()
-        };
+    /// Whether `source` is a time interval shorter than the chart's.
+    fn shorter(&self, source: Timeframe) -> bool {
+        !source.is_trade_based() && source.duration_ms() < self.interval.duration_ms()
+    }
+
+    /// Whether the instrument's suggestions choose the interval of each profile by its dates.
+    /// Otherwise every profile reads the same interval.
+    fn by_date(&self) -> bool {
+        self.source.is_none()
+            && self.feed_source
+            && self
+                .resolutions
+                .iter()
+                .any(|hint| hint.since.is_some() || hint.before.is_some())
+    }
+
+    /// The interval the profile of chart bars `range` reads: an explicit interval shorter than
+    /// the chart's, or the shortest suggested interval that serves `span`, the study's profile
+    /// length, and holds the profile's dates while the source follows the chart.
+    fn finer_of(&self, span: Option<TimeDelta>, range: &Range<usize>) -> Option<Timeframe> {
+        if self.source.is_some() || !self.feed_source || self.resolutions.is_empty() {
+            return self.source.filter(|source| self.shorter(*source));
+        }
+        let end = range.end.min(self.data.len());
+        let first = self.data.get(range.start).filter(|_| range.start < end)?;
+        let dates = (first.time, self.close(self.data[end - 1].time));
+        ProfileResolution::suggested(&self.resolutions, self.interval, span?, dates)
+    }
+
+    /// The index in `self.fine` of the bars the profile of chart bars `range` reads, when it
+    /// holds any.
+    fn fine_at(&self, span: Option<TimeDelta>, range: &Range<usize>) -> Option<usize> {
+        let wanted = self.finer_of(span, range)?;
+        self.fine
+            .iter()
+            .position(|(timeframe, bars)| *timeframe == wanted && !bars.is_empty())
+    }
+
+    /// The chart bar ranges of every profile: the clamped view for a visible profile.
+    fn all_ranges(&self) -> impl Iterator<Item = Range<usize>> + '_ {
+        let view = self.view.start.min(self.data.len())..self.view.end.min(self.data.len());
+        let own = (self.kind == Kind::Visible && !view.is_empty()).then_some(view);
+        own.into_iter().chain(self.ranges.iter().cloned())
+    }
+
+    /// The intervals the profiles read, shortest first; the held ones while emptied for a
+    /// recompute.
+    fn finer_intervals(&self) -> Vec<Timeframe> {
         // The chart interval may have changed since.
-        if let Some((timeframe, _)) = self.held.filter(|_| self.data.is_empty()) {
-            return timeframe.filter(shorter);
+        if let Some(held) = self.held.as_ref().filter(|_| self.data.is_empty()) {
+            return held
+                .iter()
+                .map(|(timeframe, _)| *timeframe)
+                .filter(|timeframe| self.shorter(*timeframe))
+                .collect();
         }
         if self.source.is_some() || !self.feed_source || self.resolutions.is_empty() {
-            return self.source.filter(shorter);
+            return self
+                .source
+                .filter(|source| self.shorter(*source))
+                .into_iter()
+                .collect();
         }
-        ProfileResolution::suggested(&self.resolutions, self.interval, self.span()?)
+        let span = self.span();
+        // Without dates every profile reads the interval of the first.
+        let profiles = if self.by_date() { usize::MAX } else { 1 };
+        let mut intervals: Vec<_> = self
+            .all_ranges()
+            .filter_map(|range| self.finer_of(span, &range))
+            .take(profiles)
+            .collect();
+        intervals.sort_by_key(|timeframe| timeframe.duration_ms());
+        intervals.dedup();
+        intervals
     }
 
     /// Profile length from first open to last close: visible bars for a visible profile,
@@ -932,13 +992,13 @@ impl ProfileStudy {
     }
 
     fn data_requests(&self) -> Vec<StudyDataRequest> {
-        self.finer()
+        self.finer_intervals()
+            .into_iter()
             .map(|timeframe| StudyDataRequest {
                 symbol: String::new(),
                 timeframe: Some(timeframe),
                 metric: None,
             })
-            .into_iter()
             .collect()
     }
 
@@ -954,51 +1014,71 @@ impl ProfileStudy {
         own.into_iter().chain(overlapping.cloned())
     }
 
-    /// The open of the first chart bar a profile in view reads, from which its finer bars are
-    /// needed; the open of the newest bar with no profile in view, the held start while emptied
-    /// for a recompute, and `None` without bars otherwise; the first bar while a level extends.
-    fn data_start(&self) -> Option<DateTime<Utc>> {
+    /// Where the finer bars of `timeframe`, or of any interval for `None`, are needed from: the
+    /// open of the first chart bar of the profiles in view that read them, else the open of the
+    /// newest bar; the held start while emptied for a recompute, and `None` without bars
+    /// otherwise. While a level extends, the first bar of the earliest profile that reads them,
+    /// and the chart's first bar when that is the earliest profile.
+    fn data_start(&self, timeframe: Option<Timeframe>) -> Option<DateTime<Utc>> {
+        let wanted =
+            |held: Option<Timeframe>| timeframe.is_none_or(|timeframe| held == Some(timeframe));
         if self.data.is_empty() {
-            return self.held.and_then(|(_, start)| start);
+            let held = self.held.as_ref()?.iter();
+            return held
+                .filter(|(held, _)| wanted(Some(*held)))
+                .filter_map(|(_, start)| *start)
+                .min();
         }
+        let span = self.span();
+        let by_date = self.by_date();
+        let reads = |range: &Range<usize>| !by_date || wanted(self.finer_of(span, range));
         // A finished profile anywhere left of the view can carry a level into it.
         if self.extend.contains(&true) {
-            return self.data.first().map(|bar| bar.time);
+            let earliest = |reading: bool| {
+                let ranges = self.all_ranges().filter(|range| !reading || reads(range));
+                ranges.map(|range| range.start).min()
+            };
+            let at = earliest(true).filter(|at| Some(*at) != earliest(false));
+            return self.data.get(at.unwrap_or(0)).map(|bar| bar.time);
         }
         self.ranges_in(self.view.clone())
+            .filter(reads)
             .map(|range| range.start)
             .min()
             .map_or(self.data.last(), |at| self.data.get(at))
             .map(|bar| bar.time)
     }
 
-    /// Takes the finer bars, replacing all of them from bar 0 and from the first changed chart
-    /// bar on otherwise, so a reply for another interval is dropped.
+    /// Takes the finer bars of each requested interval, replacing all of them from bar 0 and
+    /// from the first changed chart bar on otherwise, so a reply for another interval is dropped.
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
-        let had_finer = !self.fine.is_empty();
-        let wanted = self.finer();
-        match sources
-            .iter()
-            .find(|source| Some(source.timeframe) == wanted)
-        {
-            Some(source) if from > 0 && !data.is_empty() => {
-                let cut = data[from.min(data.len() - 1)].time;
-                self.fine
-                    .truncate(self.fine.partition_point(|bar| bar.time < cut));
-                let skip = source.bars.partition_point(|bar| bar.time < cut);
-                self.fine.extend_from_slice(&source.bars[skip..]);
-            }
-            Some(source) => self.fine = source.bars.to_vec(),
-            None => self.fine.clear(),
+        let mut old = std::mem::take(&mut self.fine);
+        for timeframe in self.finer_intervals() {
+            let Some(source) = sources.iter().find(|source| source.timeframe == timeframe) else {
+                continue;
+            };
+            let bars = match old.iter().position(|(held, _)| *held == timeframe) {
+                Some(at) if from > 0 && !data.is_empty() => {
+                    let mut bars = old.swap_remove(at).1;
+                    let cut = data[from.min(data.len() - 1)].time;
+                    bars.truncate(bars.partition_point(|bar| bar.time < cut));
+                    let skip = source.bars.partition_point(|bar| bar.time < cut);
+                    bars.extend_from_slice(&source.bars[skip..]);
+                    bars
+                }
+                _ => source.bars.to_vec(),
+            };
+            self.fine.push((timeframe, bars));
         }
-        self.update(
-            data,
-            if had_finer && self.fine.is_empty() {
-                0
-            } else {
-                from
-            },
-        );
+        // Profiles that read finer bars no longer held are estimated again from the start.
+        let lost = old.iter().any(|(timeframe, bars)| {
+            !bars.is_empty()
+                && !self
+                    .fine
+                    .iter()
+                    .any(|(held, bars)| held == timeframe && !bars.is_empty())
+        });
+        self.update(data, if lost { 0 } else { from });
     }
 
     /// What each profile in `visible` was built from.
@@ -1150,7 +1230,11 @@ impl ProfileStudy {
     fn update(&mut self, data: &[Bar], from: usize) {
         if data.is_empty() && !self.data.is_empty() {
             // Keeps requesting what it read, so the chart keeps those bars for the recompute.
-            self.held = Some((self.finer(), self.data_start()));
+            let held = self.finer_intervals().into_iter();
+            self.held = Some(
+                held.map(|interval| (interval, self.data_start(Some(interval))))
+                    .collect(),
+            );
         }
         let from = from.min(data.len()).min(self.data.len());
         let times_changed = self.data.len() != data.len()
@@ -1201,26 +1285,24 @@ impl ProfileStudy {
         self.refresh_developing(developing_from);
     }
 
+    /// The profile of chart bars `range`, from the finer bars `fine` its profile reads where
+    /// they exist.
     fn estimated_profile(
         &self,
         range: Range<usize>,
+        fine: &[Bar],
         config: VolumeProfileConfig,
         span: (f64, f64),
     ) -> Option<VolumeProfile> {
         let mut profile = VolumeProfile::empty(span.0, span.1, config.rows(), config.row_size())?;
-        let finer = self.finer().is_some() && !self.fine.is_empty();
         for i in range {
             let bar = &self.data[i];
             let end = self
                 .data
                 .get(i + 1)
                 .map_or_else(|| self.close(bar.time), |next| next.time);
-            let inside = if finer {
-                &self.fine[self.fine.partition_point(|fine| fine.time < bar.time)
-                    ..self.fine.partition_point(|fine| fine.time < end)]
-            } else {
-                &[]
-            };
+            let inside = &fine[fine.partition_point(|fine| fine.time < bar.time)
+                ..fine.partition_point(|fine| fine.time < end)];
             for input in if inside.is_empty() {
                 &self.data[i..=i]
             } else {
@@ -1264,8 +1346,12 @@ impl ProfileStudy {
         let Some(base) = self.config(&[]) else {
             return;
         };
-        let finer = self.finer().is_some() && !self.fine.is_empty();
+        let profile_span = self.span();
         for range in ranges.into_iter().filter(|range| range.end > keep) {
+            let fine: &[Bar] = self
+                .fine_at(profile_span, &range)
+                .map_or(&[], |at| &self.fine[at].1);
+            let finer = !fine.is_empty();
             let cached = self.developing.remove(&range.start);
             let mut state = cached
                 .as_ref()
@@ -1305,14 +1391,8 @@ impl ProfileStudy {
                     .data
                     .get(i + 1)
                     .map_or_else(|| self.close(self.data[i].time), |bar| bar.time);
-                let inside = if finer {
-                    &self.fine[self
-                        .fine
-                        .partition_point(|bar| bar.time < self.data[i].time)
-                        ..self.fine.partition_point(|bar| bar.time < end)]
-                } else {
-                    &[]
-                };
+                let inside = &fine[fine.partition_point(|bar| bar.time < self.data[i].time)
+                    ..fine.partition_point(|bar| bar.time < end)];
                 let added = if inside.is_empty() {
                     &self.data[i..=i]
                 } else {
@@ -1351,7 +1431,7 @@ impl ProfileStudy {
                         state.profile = if state.source.fill(&mut profile).is_some() {
                             Some(profile)
                         } else {
-                            self.estimated_profile(range.start..i + 1, config, span)
+                            self.estimated_profile(range.start..i + 1, fine, config, span)
                         };
                     }
                 }
@@ -1378,7 +1458,7 @@ impl ProfileStudy {
                                 VolumeProfile::of_finer(
                                     bars,
                                     self.data[i].time,
-                                    &self.fine,
+                                    fine,
                                     config.rows(),
                                     config.row_size(),
                                 )
@@ -1397,8 +1477,12 @@ impl ProfileStudy {
                         })
                         .or_else(|| {
                             // A moving grid needs the prefix in the final layout for subsequent ticks.
-                            opening =
-                                self.estimated_profile(range.start..i, config, state.input_span?);
+                            opening = self.estimated_profile(
+                                range.start..i,
+                                fine,
+                                config,
+                                state.input_span?,
+                            );
                             opening.clone().map(|mut profile| {
                                 added.iter().for_each(|bar| profile.add(bar));
                                 profile
@@ -1478,6 +1562,7 @@ impl ProfileStudy {
                         self.interval,
                         regular.as_ref(),
                         self.hours_only,
+                        None,
                     )
                     .into_iter()
                     .map(|p| p.bars)
@@ -1733,6 +1818,7 @@ impl ProfileStudy {
         let mut profiles = Vec::new();
         // Copied once, from the bar before the first profile built here on.
         let mut held: Option<Option<OrderFlowFootprints>> = None;
+        let span = self.span();
         for range in ranges {
             let effective = self.range_config(
                 crate::data::price_span(&self.data[range.clone()]),
@@ -1771,7 +1857,7 @@ impl ProfileStudy {
                     coverage: 0.0,
                     dirty: false,
                 });
-            } else if self.finer().is_some() && !self.fine.is_empty() {
+            } else if let Some(at) = self.fine_at(span, &range) {
                 let end = self.data.get(range.end).map_or_else(
                     || self.close(self.data[range.end - 1].time),
                     |next| next.time,
@@ -1779,14 +1865,17 @@ impl ProfileStudy {
                 let (profile, covered) = VolumeProfile::of_finer(
                     &self.data[range.clone()],
                     end,
-                    &self.fine,
+                    &self.fine[at].1,
                     effective.rows(),
                     effective.row_size(),
                 );
                 let coverage = covered as f64 / range.len() as f64;
-                let Some(profile) = profile else {
+                let Some(mut profile) = profile else {
                     continue;
                 };
+                if covered == 0 {
+                    self.count_one_bar(&range, &mut profile);
+                }
                 let plot = StudyProfile {
                     bars: range.clone(),
                     profile: Arc::new(profile),
@@ -1830,9 +1919,10 @@ impl ProfileStudy {
                     .as_ref()
                     .and_then(|p| p.with_bar(&self.data[range.end - 1]))
                     .or_else(|| VolumeProfile::from_bars(&self.data[range.clone()], effective));
-                let Some(profile) = profile else {
+                let Some(mut profile) = profile else {
                     continue;
                 };
+                self.count_one_bar(&range, &mut profile);
                 let plot = StudyProfile {
                     bars: range.clone(),
                     profile: Arc::new(profile),
@@ -1859,6 +1949,14 @@ impl ProfileStudy {
         let excess = cache.len().saturating_sub(keep);
         cache.drain(..excess);
         profiles
+    }
+
+    /// Count a fixed range or anchored profile estimated from the single chart bar of `range` as
+    /// that bar's volume ([`VolumeProfile::count_single_bar`]), as the profile drawings do.
+    fn count_one_bar(&self, range: &Range<usize>, profile: &mut VolumeProfile) {
+        if matches!(self.kind, Kind::Fixed | Kind::Anchored) && range.len() == 1 {
+            profile.count_single_bar(&self.data[range.start]);
+        }
     }
 
     /// The levels of finished profiles that reach into `visible`, each from the bar after its
@@ -2129,8 +2227,8 @@ macro_rules! profile_study {
             fn data_requests(&self) -> Vec<StudyDataRequest> {
                 self.profile.data_requests()
             }
-            fn data_start(&self, _: &StudyDataRequest) -> Option<DateTime<Utc>> {
-                self.profile.data_start()
+            fn data_start(&self, request: &StudyDataRequest) -> Option<DateTime<Utc>> {
+                self.profile.data_start(request.timeframe)
             }
             fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
                 self.profile.update_data(data, from, sources);
@@ -2153,8 +2251,11 @@ macro_rules! profile_study {
                 self.profile.levels(visible)
             }
             fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
-                self.profile.resolutions =
+                let resolutions =
                     instrument.map_or_else(Vec::new, |i| i.profile_resolutions.clone());
+                // A profile whose dates move it to another held interval is built again.
+                let hints_changed = self.profile.resolutions != resolutions;
+                self.profile.resolutions = resolutions;
                 let tick_size = instrument
                     .and_then(|i| i.tick_size)
                     .filter(|t| t.is_finite() && *t > 0.0);
@@ -2168,7 +2269,7 @@ macro_rules! profile_study {
                 });
                 // Sessions of regular or extended hours read what the trading day ignores: the
                 // extended windows, holidays and date-specific hours.
-                let changed = tick_changed || self.profile.hours != hours;
+                let changed = tick_changed || self.profile.hours != hours || hints_changed;
                 self.profile.hours = hours;
                 self.profile.days.set(instrument) || changed
             }
@@ -3173,6 +3274,214 @@ mod tests {
                 "case {case}"
             );
         }
+    }
+
+    /// Dated suggestions choose the interval of each session profile: a day inside the
+    /// one-minute history reads one-minute bars, an earlier day of equal length hourly bars,
+    /// each requested back to its own first profile. Without dates one interval serves all.
+    #[test]
+    fn dated_suggestions_choose_each_profiles_interval() {
+        use crate::model::BarClock;
+        let at = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
+        let bar = |time, low, high, volume| Bar::new(at(time), low, high, low, high, volume);
+        let chart: Vec<_> = [
+            "2026-03-02T08:00:00Z",
+            "2026-03-02T12:00:00Z",
+            "2026-03-03T08:00:00Z",
+            "2026-03-03T12:00:00Z",
+        ]
+        .into_iter()
+        .map(|time| Bar::new(at(time), 100.0, 110.0, 100.0, 105.0, 100.0))
+        .collect();
+        let hourly = [
+            bar("2026-03-02T08:00:00Z", 100.0, 100.9, 70.0),
+            bar("2026-03-02T09:00:00Z", 109.1, 110.0, 30.0),
+            bar("2026-03-03T08:00:00Z", 104.0, 104.9, 100.0),
+        ];
+        let minutes = [
+            bar("2026-03-03T08:00:00Z", 100.0, 100.9, 70.0),
+            bar("2026-03-03T08:01:00Z", 109.1, 110.0, 30.0),
+        ];
+        let study = |minute: ProfileResolution| {
+            let mut study = VolProfileSession::new(10);
+            study.set_timeframe(Timeframe::Hour4);
+            study.set_instrument(Some(&Instrument::new("SYNTH").with_profile_resolutions([
+                minute,
+                ProfileResolution::new(Timeframe::Hour1, None),
+            ])));
+            study.calculate(&chart);
+            study.set_visible_range(0..4);
+            study
+        };
+        let requested = |study: &VolProfileSession| -> Vec<_> {
+            study
+                .data_requests()
+                .into_iter()
+                .map(|request| (request.timeframe, study.data_start(&request)))
+                .collect()
+        };
+        let source = |timeframe, bars| StudyData {
+            request: StudyDataRequest {
+                symbol: String::new(),
+                timeframe: Some(timeframe),
+                metric: None,
+            },
+            bars,
+            clock: BarClock::new(timeframe),
+            instrument: None,
+            timeframe,
+            chart: None,
+        };
+
+        let since = at("2026-03-03T00:00:00Z");
+        let mut dated =
+            study(ProfileResolution::new(Timeframe::Min1, None).with_history(Some(since), None));
+        assert_eq!(
+            requested(&dated),
+            [
+                (Some(Timeframe::Min1), Some(chart[2].time)),
+                (Some(Timeframe::Hour1), Some(chart[0].time)),
+            ]
+        );
+        dated.update_data(
+            &chart,
+            0,
+            &[
+                source(Timeframe::Min1, &minutes),
+                source(Timeframe::Hour1, &hourly),
+            ],
+        );
+        // 70 of the first bar's 100 in the bottom row and 30 in the top row, the second bar's
+        // 100 spread at 10 a row.
+        let expected = [80.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 40.0];
+        let profiles = dated.volume_profiles(0..4);
+        assert_eq!(profiles.len(), 2);
+        for profile in &profiles {
+            let volume = profile.profile.volume();
+            assert!(
+                volume
+                    .iter()
+                    .zip(expected)
+                    .all(|(v, e)| (v - e).abs() < 1e-9),
+                "{:?}: {volume:?}",
+                profile.bars
+            );
+        }
+        assert_eq!(
+            dated.profile_inputs(0..4),
+            [
+                ProfileInput {
+                    bars: 0..2,
+                    coverage: 0.5
+                },
+                ProfileInput {
+                    bars: 2..4,
+                    coverage: 0.5
+                },
+            ]
+        );
+
+        let undated = study(ProfileResolution::new(Timeframe::Min1, None));
+        assert_eq!(
+            requested(&undated),
+            [(Some(Timeframe::Min1), Some(chart[0].time))]
+        );
+    }
+
+    /// A fixed range or anchored profile estimated from one chart bar counts its volume as up
+    /// only when the bar closes above its open, as the profile drawings do, so a bar that closes
+    /// at its open is down volume. Over two bars, also once the next bar opens after the forming
+    /// bar, an unchanged close is up, and executions keep their aggressor side.
+    #[test]
+    fn one_bar_profile_counts_an_unchanged_close_as_down() {
+        use crate::model::{BarClock, OrderSide::Buy, Tick};
+        let time = |minute: i64| DateTime::from_timestamp(minute * 60, 0).unwrap();
+        // From 10 to 11 with 100 traded, opening at 10.50: 50 in each of the two rows.
+        let bar = |minute, close| Bar::new(time(minute), 10.5, 11.0, 10.0, close, 100.0);
+        let flat: Vec<_> = (0..3).map(|minute| bar(minute, 10.5)).collect();
+        let fixed = |first, last| -> Box<dyn Indicator> {
+            Box::new(VolProfileFixed::new(2).with_range(time(first), time(last)))
+        };
+        let anchored =
+            || -> Box<dyn Indicator> { Box::new(VolProfileAnchored::new(2).with_anchor(time(1))) };
+        let rising = vec![bar(0, 10.75), flat[1].clone()];
+        for (case, mut study, bars, executed, range, up, down) in [
+            (
+                "flat bar",
+                fixed(0, 0),
+                flat[..2].to_vec(),
+                false,
+                0..1,
+                [0.0, 0.0],
+                [50.0, 50.0],
+            ),
+            (
+                "rising bar",
+                fixed(0, 0),
+                rising,
+                false,
+                0..1,
+                [50.0, 50.0],
+                [0.0, 0.0],
+            ),
+            (
+                "two bars",
+                fixed(0, 1),
+                flat[..2].to_vec(),
+                false,
+                0..2,
+                [100.0, 100.0],
+                [0.0, 0.0],
+            ),
+            (
+                "forming bar",
+                anchored(),
+                flat[..2].to_vec(),
+                false,
+                1..2,
+                [0.0, 0.0],
+                [50.0, 50.0],
+            ),
+            // A buy of 5 at 10 in the first bar, in one row of one tick.
+            (
+                "executions",
+                fixed(0, 0),
+                flat[..2].to_vec(),
+                true,
+                0..1,
+                [5.0, f64::NAN],
+                [0.0, f64::NAN],
+            ),
+        ] {
+            if executed {
+                let flow = study.order_flow_inputs()[0].clone();
+                flow.set_tick_size(Some(1.0));
+                let trade = Tick::new(
+                    time(0) + chrono::Duration::seconds(10),
+                    10.0,
+                    5.0,
+                    Some(Buy),
+                );
+                flow.push_trade(&BarClock::new(Timeframe::Min1), &trade);
+            }
+            study.calculate(&bars);
+            let got = &study.volume_profiles(0..bars.len())[0];
+            assert_eq!(got.bars, range, "{case}");
+            let rows = if executed { 1 } else { 2 };
+            assert_eq!(got.profile.up(), &up[..rows], "{case}");
+            assert_eq!(got.profile.down(), &down[..rows], "{case}");
+        }
+        // The next bar extends the cached profile of the forming bar.
+        let mut study = anchored();
+        study.calculate(&flat[..2]);
+        assert_eq!(study.volume_profiles(0..2)[0].profile.down(), [50.0, 50.0]);
+        study.update(&flat, 2);
+        let got = &study.volume_profiles(0..3)[0];
+        assert_eq!(got.bars, 1..3);
+        assert_eq!(
+            (got.profile.up(), got.profile.down()),
+            (&[100.0, 100.0][..], &[0.0, 0.0][..])
+        );
     }
 
     /// Range selection uses bar opens and inclusive saved times; calendar profiles retain

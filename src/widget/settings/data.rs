@@ -27,7 +27,10 @@ pub struct SessionBackgroundSettings {
     pub shade_premarket: bool,
     /// Highlight the post-market while session highlighting is enabled.
     pub shade_postmarket: bool,
-    /// Overnight fill; `PLACEHOLDER` follows the theme at 16% opacity.
+    /// Highlight overnight windows while session highlighting is enabled.
+    pub shade_overnight: bool,
+    /// Overnight fill; new settings use #D500F9 at 8% opacity, and `PLACEHOLDER` follows the
+    /// theme accent at 16% opacity.
     pub overnight_hours_color: Color32,
 }
 
@@ -41,6 +44,7 @@ impl Default for SessionBackgroundSettings {
             postmarket_color: config.postmarket_color,
             shade_premarket: config.shade_premarket,
             shade_postmarket: config.shade_postmarket,
+            shade_overnight: config.shade_overnight,
             overnight_hours_color: config.overnight_hours_color,
         }
     }
@@ -698,9 +702,8 @@ impl TradingNotifications {
 #[serde(default)]
 #[non_exhaustive]
 pub struct AlertsSettings {
-    /// Ask the host to play a local sound when an alert fires.
-    pub play_sound: bool,
-    /// Host sound name; empty selects its first available sound.
+    /// Host sound name played when an alert whose delivery keeps Sound fires; empty selects its
+    /// first available sound.
     pub sound: String,
     /// Local alert sound gain, from zero (muted) to one.
     pub sound_volume: f32,
@@ -726,7 +729,6 @@ pub struct AlertsSettings {
 impl Default for AlertsSettings {
     fn default() -> Self {
         Self {
-            play_sound: false,
             sound: String::new(),
             sound_volume: 1.0,
             show_alerts: true,
@@ -779,7 +781,7 @@ pub struct OrderFlowSettings {
 /// settings.candle_colors.show_wick = false;
 /// settings.status_line.show_logo = false;
 /// settings.trading.instant_orders = true;
-/// settings.alerts.play_sound = false;
+/// settings.alerts.sound_volume = 0.5;
 /// settings.session_background = Some(egui_charts::widget::settings::SessionBackgroundSettings::default());
 /// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

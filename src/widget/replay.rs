@@ -84,8 +84,9 @@ impl Chart {
 
     /// Replaces the live feed with a shared recording-backed driver, or restores it with `None`.
     /// Retains the live bars, quotes, pause state and feed configuration for exit, which gives
-    /// back the ATR and percentage sizes as [`Self::set_replay_time`] describes. Recorded trades
-    /// build partial bars through the normal feed path, alongside quotes, orders and depth.
+    /// back the ATR and percentage sizes and returns to the newest bar as
+    /// [`Self::set_replay_time`] describes. Recorded trades build partial bars through the
+    /// normal feed path, alongside quotes, orders and depth.
     /// Analyst targets come from the driver, which answers none, and from the live feed on exit.
     /// Attach the same driver to every participating chart, then advance it once per frame before
     /// drawing. Its time is inclusive; [`Self::replay_time`] reports the exclusive cutoff one
@@ -212,9 +213,11 @@ impl Chart {
     /// host corrections behind the window. `None` exits, restores all retained bars and quotes
     /// and the sizes from before the session, and restores the feed's previous pause state; a
     /// feed that resumes keeps the restored bars and depth history as [`Self::set_feed_paused`]
-    /// describes. Sizes whose parameters were set during the session, and all of them once its
-    /// main history was replaced, resolve from the restored history instead. Hosts own source
-    /// data and session storage.
+    /// describes. The exit shows the newest bar at the configured right offset and keeps the
+    /// zoom, as [`Self::scroll_to_real_time`] does, wherever the view was during the session.
+    /// Sizes whose parameters were set during the session, and all of them once its main history
+    /// was replaced, resolve from the restored history instead. Hosts own source data and
+    /// session storage.
     /// With a market driver attached this dispatches a seek; call outside egui context locks,
     /// as with [`ReplayDriver::seek`]. The rebuilt bars arrive on the next frame, and the view
     /// follows them as it follows playback: near the live edge it follows the cursor, and a view
@@ -259,6 +262,10 @@ impl Chart {
                 self.set_feed_paused(replay.feed_paused);
                 self.invalidate_study_data();
                 self.replay_order_flow(replay.time);
+                // Leaving replay returns to the present wherever the session left the view. The
+                // shown elements and slots rebuild first, so the next frame keeps the new view.
+                self.show_elements();
+                self.scroll_to_real_time(false);
             }
             return;
         };
@@ -523,6 +530,18 @@ impl Chart {
         }
     }
 
+    /// Whether the replay cursor completed the newest bar of a chart on a calendar interval.
+    pub(super) fn replay_newest_closed(&self) -> bool {
+        let (Some(time), Some(_), Some(last)) = (
+            self.replay_time(),
+            self.calendar_timeframe(),
+            self.state.data().bars.last(),
+        ) else {
+            return false;
+        };
+        !completed(std::slice::from_ref(last), &self.bar_clock(), time).is_empty()
+    }
+
     /// Retains the bars of `series` as it enters the chart, leaving it those the cutoff completed.
     pub(super) fn replay_admit(&mut self, series: &mut PriceSeries) {
         let clock = self
@@ -550,22 +569,11 @@ impl Chart {
 
 pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Utc>) -> &'a [Bar] {
     let end = bars.partition_point(|bar| {
-        bar_close(clock, clock.bar_open(bar.time)).map_or(bar.time < time, |end| end <= time)
+        clock
+            .bar_close(clock.bar_open(bar.time))
+            .map_or(bar.time < time, |end| end <= time)
     });
     &bars[..end]
-}
-
-/// When the bar of `clock` opening at `open` closes in bar replay: at its next open, or for a
-/// daily, multi-day, weekly or monthly bar of a clock with an exchange session when its last
-/// trading window closes. A bar without a trading window closes at its next open.
-/// `ReplayController::cutoff` and `seek_cutoff` close bars here too.
-pub(crate) fn bar_close(clock: &BarClock, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    (clock.timeframe())
-        .filter(|timeframe| {
-            clock.has_session() && timeframe.duration_ms() >= Timeframe::Day1.duration_ms()
-        })
-        .and_then(|timeframe| clock.sessions().bar_session_close(open, timeframe, true))
-        .or_else(|| clock.next_open(open))
 }
 
 /// The chart bars that `bars` of the `source` clock build under `chart`, or `None` when they do
@@ -1824,6 +1832,114 @@ mod tests {
                 ("seek to 20", (time(20), 0.0)),
                 ("near the live edge, seek to 79", (time(79), 2.5)),
                 ("candle seek to 79", (time(79), -40.0)),
+            ]
+        );
+    }
+
+    /// Leaving replay shows the newest bar at the default right offset of 2.5 bars, keeping the
+    /// zoom, however far the view was scrolled back: a candle replay at minute 100 of 200 bars,
+    /// a market replay at minute 69 of the same history, and, with
+    /// `shift_visible_range_on_new_bar` off, a Renko chart whose 1.0 bricks of closes 100 to 299
+    /// rebuild on the next frame and a chart whose only bars are an added series. A chart a
+    /// layout replay leaves out keeps its view.
+    #[test]
+    fn leaving_replay_shows_the_newest_bar() {
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{ChartType, Instrument, Tick};
+        use crate::widget::test_frames::frame;
+        let ctx = egui::Context::default();
+        let minutes: Vec<_> = (0..200)
+            .map(|m| {
+                let close = 100.0 + m as f64;
+                bar(m, [close - 1.0, close + 0.5, close - 1.5, close, 1.0])
+            })
+            .collect();
+        let chart = |follow: bool| {
+            let mut chart = Chart::new(BarData::from_bars(minutes.clone()));
+            chart.set_symbol("A");
+            chart.set_timeframe(Timeframe::Min1);
+            let mut options = chart.chart_options().clone();
+            options.time_scale.shift_visible_range_on_new_bar = follow;
+            chart.set_chart_options(options);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart
+        };
+        let scroll_back = |chart: &mut Chart| {
+            frame(&ctx, chart, 1.0, vec![]);
+            chart.state.time_scale_mut().set_bar_spacing(9.0);
+            chart.scroll_to_position(-30.0, false);
+            frame(&ctx, chart, 2.0, vec![]);
+        };
+        let view = |chart: &mut Chart| {
+            frame(&ctx, chart, 3.0, vec![]);
+            let scale = chart.state.time_scale();
+            let newest = (chart.state.shown().len() - 1) as f64;
+            let range = chart.visible_logical_range().unwrap();
+            let shown = f64::from(range.left) <= newest && newest <= f64::from(range.right);
+            (scale.right_offset(), scale.bar_spacing(), shown)
+        };
+        let mut rows = Vec::new();
+        let mut candles = chart(true);
+        candles.set_replay_time(Some(time(100)));
+        scroll_back(&mut candles);
+        candles.set_replay_time(None);
+        rows.push(("candle replay", view(&mut candles)));
+
+        let events = (0..100)
+            .map(|minute| {
+                let fill = Tick::new(time(minute), 100.0 + minute as f64, 1.0, None)
+                    .with_id(minute as u64);
+                ReplayEvent::new("A", time(minute), minute as u64, MarketEvent::Trade(fill))
+            })
+            .collect();
+        let instrument = Instrument::new("A").with_tick_size(1.0);
+        let driver = Arc::new(ReplayDriver::new(events, vec![instrument]).unwrap());
+        driver.set_speed(0.0).unwrap();
+        driver.seek(time(69));
+        let mut market = chart(true);
+        market.set_market_replay(Some(driver));
+        for _ in 0..4 {
+            market.pump(&ctx);
+        }
+        scroll_back(&mut market);
+        market.set_market_replay(None);
+        rows.push(("market replay", view(&mut market)));
+
+        let mut renko = chart(false);
+        renko.set_chart_type(ChartType::Renko);
+        renko.set_replay_time(Some(time(100)));
+        scroll_back(&mut renko);
+        renko.set_replay_time(None);
+        rows.push(("renko without following", view(&mut renko)));
+
+        let mut added = Chart::new(BarData::new());
+        added.set_timeframe(Timeframe::Min1);
+        let mut options = added.chart_options().clone();
+        options.time_scale.shift_visible_range_on_new_bar = false;
+        added.set_chart_options(options);
+        let series = added.add_series(Default::default());
+        added.set_data(series, minutes.clone());
+        frame(&ctx, &mut added, 0.0, vec![]);
+        added.set_replay_time(Some(time(100)));
+        scroll_back(&mut added);
+        added.set_replay_time(None);
+        rows.push(("added series without following", view(&mut added)));
+
+        let (mut covered, mut outside) = (chart(true), chart(true));
+        scroll_back(&mut outside);
+        let layout = ChartLayout::default();
+        let scope = ReplayScope::ThisChart;
+        layout.set_replay_time(&mut [&mut covered, &mut outside], 0, scope, Some(time(100)));
+        layout.set_replay_time(&mut [&mut covered, &mut outside], 0, scope, None);
+        rows.push(("outside a layout replay", view(&mut outside)));
+        assert_eq!(
+            rows,
+            [
+                ("candle replay", (2.5, 9.0, true)),
+                ("market replay", (2.5, 9.0, true)),
+                ("renko without following", (2.5, 9.0, true)),
+                ("added series without following", (2.5, 9.0, true)),
+                ("outside a layout replay", (-30.0, 9.0, false)),
             ]
         );
     }

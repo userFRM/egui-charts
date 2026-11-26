@@ -211,7 +211,11 @@ impl DemoApp {
         let first = self.extra_charts.remove(0);
         self.extra_charts.insert(slot - 1, first);
         self.layout.swap_slots(0, slot);
-        for replayed in &mut self.replay_slots {
+        for replayed in self
+            .replay_slots
+            .iter_mut()
+            .chain([&mut self.fixed_data_table.1])
+        {
             if *replayed == 0 {
                 *replayed = slot;
             } else if *replayed == slot {
@@ -358,7 +362,7 @@ impl DemoApp {
             self.close_layout(index);
         }
         if new {
-            self.new_layout(None);
+            self.new_layout(None, false);
         }
     }
 
@@ -405,6 +409,8 @@ impl DemoApp {
             slot: std::mem::take(&mut self.layout_slot),
         };
         self.layout_tabs[self.layout_tab].workspace = Some(workspace);
+        // The fixed table names its chart by slot, which now holds another workspace's chart.
+        self.fixed_data_table.0.close();
     }
 
     /// Brings back the workspace `park_workspace` set aside and points the toolbars at it.
@@ -424,6 +430,8 @@ impl DemoApp {
 
     /// Points storage, the toolbars and the grid selector at the workspace on show.
     fn refresh_workspace(&mut self) {
+        // The fixed table names its chart by slot, which now holds another workspace's chart.
+        self.fixed_data_table.0.close();
         // Other tabs may have edited the same symbol since this workspace was last shown.
         self.chart.set_storage(self.storage.clone());
         for chart in &mut self.extra_charts {
@@ -436,9 +444,10 @@ impl DemoApp {
         self.top_toolbar.chart_grid_selector.sync = self.layout.sync.clone();
     }
 
-    fn new_layout(&mut self, name: Option<String>) {
+    /// Opens a tab named `name`, or `Unnamed`, with a numeric suffix while that name is taken;
+    /// with `duplicate` it holds a copy of the whole layout, otherwise a copy of the active chart.
+    fn new_layout(&mut self, name: Option<String>, duplicate: bool) {
         let copy = self.copy_chart(&self.chart, &self.live, &self.comparisons, &self.spreads);
-        let duplicate = name.is_some();
         let layout = if duplicate {
             self.layout.clone()
         } else {
@@ -541,16 +550,16 @@ impl DemoApp {
                 self.grid_edits += 1;
                 self.ensure_chart_slots(mode);
             }
-            LayoutAction::DownloadData => self.export_csv(None),
+            LayoutAction::DownloadData => self.export_csv(&Default::default(), None),
             LayoutAction::OpenLayout => self.open_layout = true,
-            LayoutAction::CreateNew => self.new_layout(None),
+            LayoutAction::CreateNew(name) => self.new_layout(Some(name), false),
             LayoutAction::SaveAs(name) => match self
                 .capture_layout()
                 .and_then(|layout| Ok((layout, self.capture_comparisons()?)))
             {
                 Ok((layout, comparisons)) => {
                     let groups = self.layout_groups();
-                    self.new_layout(Some(name));
+                    self.new_layout(Some(name), true);
                     let name = self.layout_tabs[self.layout_tab].name.clone();
                     if let Err(error) = self
                         .storage
@@ -786,6 +795,8 @@ impl DemoApp {
                 return false;
             }
         }
+        // The fixed table names its chart by slot, which now holds the layout's chart.
+        self.fixed_data_table.0.close();
         self.layout_tabs[self.layout_tab].name = name;
         if self.layout_slot >= layout.charts.len() {
             self.activate_chart_slot(0);
@@ -1214,7 +1225,7 @@ mod tests {
                     }
                 }
             }
-            app.new_layout(None);
+            app.new_layout(None, false);
             ctx.run_ui(egui::RawInput::default(), |ui| {
                 let top = ui.available_rect_before_wrap().top();
                 app.show_layout_tabs(ui);
@@ -1279,7 +1290,12 @@ mod tests {
             repeat: false,
             modifiers,
         };
-        for (modifiers, expected) in [(Modifiers::NONE, 1), (Modifiers::SHIFT, 0)] {
+        for (pressed, modifiers, expected) in [
+            (Key::Tab, Modifiers::NONE, 1),
+            (Key::Tab, Modifiers::SHIFT, 0),
+            (Key::ArrowRight, Modifiers::SHIFT, 1),
+            (Key::ArrowLeft, Modifiers::SHIFT, 0),
+        ] {
             app.time_and_sales.push(egui_charts::model::Tick::new(
                 chrono::Utc::now(),
                 987.65,
@@ -1288,7 +1304,7 @@ mod tests {
             ));
             frame(
                 &mut app,
-                vec![Event::ModifiersChanged(modifiers), key(Key::Tab, modifiers)],
+                vec![Event::ModifiersChanged(modifiers), key(pressed, modifiers)],
             );
             assert_eq!(app.layout_slot, expected);
             assert_eq!(app.layout.saved_link_groups(), memberships);
@@ -1491,7 +1507,7 @@ mod tests {
         ));
         assert!(app.range_fit.is_some());
         let before = app.chart.get_time_scale_state();
-        app.new_layout(Some("Saved".into()));
+        app.new_layout(Some("Saved".into()), true);
         assert!(
             app.range_fit.is_none(),
             "a pending fit belongs to its original chart"
@@ -1677,5 +1693,135 @@ mod tests {
         app.handle_layout_action(LayoutAction::SelectGrid(ChartLayoutMode::Single));
         settle(&mut app, &ctx);
         assert_eq!(counts(&app), [1, 1, 1, 1]);
+    }
+
+    /// Lines drawn on the charts a replay covers stay on them, off another layout of the same
+    /// symbol and out of the stored drawings, until the user shares their folder. Once the
+    /// replay has ended, a new line is shared again.
+    #[test]
+    fn lines_drawn_during_replay_stay_on_their_chart_until_shared() {
+        use egui_charts::drawings::persistence::DrawingStorage;
+        use egui_charts::drawings::{DrawingToolType, FolderSync};
+
+        fn place(chart: &mut Chart, price: f32) {
+            chart.user_action(|chart| {
+                chart.drawings_mut().start_drawing_with_coords(
+                    DrawingToolType::HorizontalLine,
+                    egui::pos2(1.0, price),
+                    |x| x,
+                    f64::from,
+                );
+            });
+        }
+        fn prices(chart: &Chart) -> Vec<f64> {
+            let drawings = chart.drawings().drawings.iter();
+            drawings
+                .filter_map(|d| d.chart_points.first().map(|p| p.price))
+                .collect()
+        }
+        /// The prices of the drawings the demo keeps in storage for `symbol`.
+        fn stored(app: &mut DemoApp, symbol: &str) -> Vec<f64> {
+            assert!(app.chart.flush_stored_drawings());
+            for extra in &mut app.extra_charts {
+                assert!(extra.chart.flush_stored_drawings());
+            }
+            let mut saved = super::super::tests::AppStorage::default();
+            app.storage.persist(&mut saved);
+            // The key `DemoStorage::persist` writes its documents under.
+            let documents: std::collections::HashMap<String, String> =
+                eframe::get_value(&saved, "templates").unwrap();
+            documents
+                .get(&format!("Drawings/{symbol}"))
+                .map_or_else(Vec::new, |json| {
+                    let (stored, skipped) = DrawingStorage::from_json(json).unwrap();
+                    assert!(skipped.is_empty(), "{skipped:?}");
+                    stored
+                        .drawings()
+                        .iter()
+                        .filter_map(|d| d.points.first().map(|p| p.price))
+                        .collect()
+                })
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(ChartLayoutMode::TwoHorizontal);
+        // Another layout of the same symbol, set aside while this one replays.
+        app.new_layout(None, false);
+        app.select_layout(0);
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        assert_eq!(app.extra_charts[0].chart.symbol(), symbol);
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() / 2);
+        assert_eq!(app.replay_slots, [0, 1], "the replay covers both charts");
+        place(&mut app.chart, 123.375);
+        settle(&mut app, &ctx);
+        place(&mut app.extra_charts[0].chart, 117.625);
+        settle(&mut app, &ctx);
+        assert!(prices(&app.chart).contains(&123.375));
+        assert!(prices(&app.extra_charts[0].chart).contains(&117.625));
+        let kept = stored(&mut app, &symbol);
+        assert!(
+            !kept.contains(&123.375) && !kept.contains(&117.625),
+            "stored: {kept:?}"
+        );
+        // Showing the other layout ends the replay; the practice lines stay off it.
+        app.select_layout(1);
+        settle(&mut app, &ctx);
+        assert!(app.replay.is_none());
+        let other = prices(&app.chart);
+        assert!(
+            !other.contains(&123.375) && !other.contains(&117.625),
+            "other layout: {other:?}"
+        );
+
+        app.select_layout(0);
+        settle(&mut app, &ctx);
+        assert!(prices(&app.chart).contains(&123.375), "kept on its chart");
+        app.handle_object_tree(
+            ObjectTreeAction::SetFolderSync(vec!["Practice".into()], Some(FolderSync::AllLayouts)),
+            &[],
+        );
+        // Placed after the share, so that it would stay local if the replay had left the
+        // chart's placement folder set.
+        place(&mut app.chart, 131.125);
+        settle(&mut app, &ctx);
+        let kept = stored(&mut app, &symbol);
+        assert!(
+            kept.contains(&123.375) && kept.contains(&131.125) && !kept.contains(&117.625),
+            "stored: {kept:?}"
+        );
+        app.select_layout(1);
+        settle(&mut app, &ctx);
+        let other = prices(&app.chart);
+        assert!(
+            other.contains(&123.375) && other.contains(&131.125) && !other.contains(&117.625),
+            "other layout: {other:?}"
+        );
+    }
+
+    /// The fixed table names its chart by slot, so opening a layout must close it rather than
+    /// show the new layout's chart with the old columns: #4162.
+    #[test]
+    fn opening_a_layout_closes_the_fixed_data_table() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.ensure_chart_slots(ChartLayoutMode::TwoHorizontal);
+        app.extra_charts[0].live.set_paused(true);
+        settle(&mut app, &ctx);
+        let saved = app.capture_layout().unwrap();
+        app.fixed_data_table.1 = 1;
+        app.fixed_data_table.0.open();
+        let mut invalid = saved.clone();
+        invalid.charts.pop();
+        assert!(!app.restore_layout("Two".into(), invalid, Ok(Vec::new())));
+        assert!(
+            app.fixed_data_table.0.is_open,
+            "a layout that fails to open changes nothing"
+        );
+        assert!(app.restore_layout("Two".into(), saved, Ok(Vec::new())));
+        assert!(!app.fixed_data_table.0.is_open);
     }
 }

@@ -33,6 +33,9 @@ pub enum NotificationsAction {
     /// Show the idea or post an entry is about, by the host's identifier, as the ideas panel's
     /// [`IdeasAction::Open`](crate::ui::ideas::IdeasAction::Open) does.
     OpenPost(String),
+    /// Show the news story an entry is about, by the feed's identifier: find the story and pass
+    /// it to [`NewsPanel::open_story`](crate::ui::widget_bar::NewsPanel::open_story).
+    OpenStory(String),
 }
 
 /// The log pushed by the host's [`Notifications`] service.
@@ -178,6 +181,10 @@ impl NotificationsPanel {
                                         NotificationTarget::Post(id) => {
                                             ("Open post", NotificationsAction::OpenPost(id.clone()))
                                         }
+                                        NotificationTarget::Story(id) => (
+                                            "Open story",
+                                            NotificationsAction::OpenStory(id.clone()),
+                                        ),
                                     };
                                     if Button::new(l10n::text(ui.ctx(), label))
                                         .small()
@@ -245,6 +252,12 @@ mod tests {
                 Some(NotificationTarget::Post(String::new())),
                 "Open post",
                 NotificationsAction::OpenPost(String::new()),
+            ),
+            (
+                Some("AAPL"),
+                Some(NotificationTarget::Story("story-7".into())),
+                "Open story",
+                NotificationsAction::OpenStory("story-7".into()),
             ),
         ] {
             let mut panel = NotificationsPanel::new();

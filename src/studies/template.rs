@@ -363,7 +363,33 @@ impl StudyTemplate {
         if !study.draws_on_other_bars() {
             inputs.retain(|(id, _)| !super::settings::CHART_INPUT_IDS[1..].contains(&id.as_str()));
         }
-        study.apply_settings(&inputs, settings.clone())?;
+        // Studies saved before an input's range narrowed restore with the value they were saved
+        // with, from the bottom of the range the input took then; only edits are bounded.
+        const NARROWED: [(&str, &str); 8] = [
+            ("BB", "std_dev"),
+            ("BBTrend", "multiplier"),
+            ("LinReg Slope", "period"),
+            ("MFI", "period"),
+            ("RCI", "smoothing_deviation"),
+            ("SuperTrend", "multiplier"),
+            ("Woodies CCI", "turbo_length"),
+            ("Woodies CCI", "cci_length"),
+        ];
+        let saved = inputs
+            .iter()
+            .filter(|(id, value)| {
+                NARROWED.contains(&(study.name(), id.as_str()))
+                    && match value {
+                        InputValue::Length(value) => *value >= 1,
+                        InputValue::Number(value) => *value >= 0.0,
+                        _ => false,
+                    }
+            })
+            .cloned()
+            .collect();
+        crate::studies::inputs::restoring(saved, || {
+            study.apply_settings(&inputs, settings.clone())
+        })?;
         study.set_visible(template.visible);
         if let Some(scale) = template.scale {
             study.set_scale(scale);
@@ -373,11 +399,11 @@ impl StudyTemplate {
 
     /// This template under the current input ids of a built-in study whose inputs changed after
     /// it was saved, with inputs added since set to draw what it drew, or `None` when it needs no
-    /// change. Hours saved as minute counts and zones saved as text are converted for the inputs
-    /// `own` declares as a time of day or a time zone. `study` names the study being restored,
-    /// which a host may register under another name. `own` holds the inputs of the study
-    /// registered under the saved name, or the chart's study a stored pane is matched against; a
-    /// saved input that study takes as saved is neither renamed nor converted.
+    /// change. Hours saved as minute counts, zones saved as text and whole numbers are converted
+    /// for the inputs `own` declares as a time of day, a time zone or a decimal. `study` names
+    /// the study being restored, which a host may register under another name. `own` holds the
+    /// inputs of the study registered under the saved name, or the chart's study a stored pane is
+    /// matched against; a saved input that study takes as saved is neither renamed nor converted.
     pub(crate) fn upgraded(&self, study: &str, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
@@ -515,6 +541,13 @@ impl StudyTemplate {
                         *id = "percent".to_owned();
                     }
                 }
+            }
+            // A Moving Average Channel saved before band styles were saved fills its band as it
+            // opened then, fainter than it opens now.
+            "MA Channel" if self.settings.fills.is_empty() => {
+                template.settings.fills = vec![crate::studies::FillStyle::new(
+                    crate::studies::palette::LIGHT_BLUE.gamma_multiply_u8(13),
+                )];
             }
             // Pivot levels had no labels before they could be labelled.
             "Pivot Points Standard" | "Intraday Pivot Points" | "Projected Pivot Points"
@@ -724,7 +757,7 @@ impl StudyTemplate {
             }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
-            "RankCorr" if !has("smoothing") || self.settings.levels.is_empty() => {
+            "RCI" if !has("smoothing") || self.settings.levels.is_empty() => {
                 if !has("smoothing") {
                     template
                         .inputs
@@ -944,7 +977,10 @@ impl StudyTemplate {
                 }
             }
             // Multi-Range Delta ranges included their largest size before they excluded their
-            // limit. The next larger number keeps each saved range counting the sizes it did.
+            // limit. The smallest number above that size with one more decimal place, 9.1 for 9,
+            // keeps each saved range counting the sizes it counted that are written to that
+            // precision and stays short; where that rounds back to the size, the next larger
+            // number keeps the range exact.
             "Multi-Range Delta"
                 if !declares("max0") && ["max0", "max1", "max2"].into_iter().any(has) =>
             {
@@ -954,7 +990,12 @@ impl StudyTemplate {
                         if let InputValue::Number(max) = value
                             && *max < f64::MAX
                         {
-                            *max = max.next_up();
+                            let text = max.to_string();
+                            let point = if text.contains('.') { "" } else { "." };
+                            *max = match format!("{text}{point}1").parse::<f64>() {
+                                Ok(limit) if limit > *max => limit,
+                                _ => max.next_up(),
+                            };
                         }
                     }
                 }
@@ -1027,7 +1068,8 @@ impl StudyTemplate {
             _ => changed = false,
         }
         // Hours saved as minute counts and zones saved as text, before inputs had a time of day
-        // and a time zone, in the form `own` declares them now.
+        // and a time zone, and whole numbers saved for inputs that now take decimals, in the
+        // form `own` declares them now.
         for (id, value) in &mut template.inputs {
             if let Some(input) = own.iter().find(|input| input.id == *id) {
                 let upgraded = super::inputs::upgrade_saved_value(&input.kind, value.clone());
@@ -1107,6 +1149,30 @@ impl StudyTemplate {
                 template.inputs.push(("ratio_color".to_owned(), puts));
                 changed = true;
             }
+        }
+        // An options profile drew a wall while its Call wall or Put wall input, off by default,
+        // and its line in the style tab were both on, before the line alone switched it. A save
+        // with neither the inputs nor the put/call switch, listed since walls were listed for
+        // every measure, had its walls off.
+        if study == "Options Volume Profile" && declares("expiry") && !declares("call_wall") {
+            for (line, id) in [(3, "call_wall"), (4, "put_wall")] {
+                let saved = self.inputs.iter().find_map(|(saved, value)| match value {
+                    InputValue::Toggle(on) if saved == id => Some(*on),
+                    _ => None,
+                });
+                if let Some(plot) = template.settings.plots.get_mut(line)
+                    && plot.visible
+                    && !saved.unwrap_or(has("put_call"))
+                {
+                    plot.visible = false;
+                    changed = true;
+                }
+            }
+            let listed = template.inputs.len();
+            template
+                .inputs
+                .retain(|(id, _)| id != "call_wall" && id != "put_wall");
+            changed |= template.inputs.len() != listed;
         }
         // A single candlestick pattern study saved while it drew the bullish, bearish and
         // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
@@ -1382,6 +1448,7 @@ mod tests {
             extend_poor_extremes: false,
             show_single_prints: false,
             show_statistics: false,
+            statistics_rows: crate::model::TPOStatisticsRows::default(),
             show_opening_range: true,
             labels: crate::model::TPOLabels::default(),
             show_closing_price: false,
@@ -1420,11 +1487,32 @@ mod tests {
             ("poor_low", InputValue::Toggle(true)),
             ("extend_poor", InputValue::Toggle(true)),
             ("volume_profile", InputValue::Toggle(true)),
+            ("statistics_high_low_range", InputValue::Toggle(true)),
+            ("statistics_poc", InputValue::Toggle(false)),
+            ("statistics_value_area_high", InputValue::Toggle(false)),
+            ("statistics_value_area_low", InputValue::Toggle(true)),
+            ("statistics_value_area_range", InputValue::Toggle(true)),
+            ("statistics_initial_balance_high", InputValue::Toggle(true)),
+            ("statistics_initial_balance_low", InputValue::Toggle(true)),
+            (
+                "statistics_initial_balance_range",
+                InputValue::Toggle(false),
+            ),
+            ("statistics_tpos_above", InputValue::Toggle(true)),
+            ("statistics_tpos_below", InputValue::Toggle(false)),
+            ("statistics_total_tpos", InputValue::Toggle(true)),
+            ("statistics_total_volume", InputValue::Toggle(true)),
+            ("statistics_rotation_factor", InputValue::Toggle(false)),
+            ("statistics_range_extension", InputValue::Toggle(false)),
+            // Merges and splits are saved after the period and row size they were made for.
             (
                 "composites",
-                InputValue::Text("1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
+                InputValue::Text("30,0|1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
             ),
-            ("splits", InputValue::Text("1970-01-02T01:00:00Z".into())),
+            (
+                "splits",
+                InputValue::Text("30,0|1970-01-02T01:00:00Z".into()),
+            ),
         ] {
             tpo.set_input(id, value.clone()).unwrap();
             assert_eq!(
@@ -1823,9 +1911,11 @@ mod tests {
 
     /// A template restores the inputs it holds whatever the study's default has become, with every
     /// line it showed, and an input it lacks takes the value the saved inputs had before the
-    /// study offered it. Values outside a narrowed input range load clamped to that range.
-    /// Multi-Range Delta ranges saved with an inclusive largest size restore with the limit just
-    /// above it.
+    /// study offered it. Values outside a narrowed input range load clamped to that range, except
+    /// those of the inputs that restore as saved, which a style edit keeps and an undone edit
+    /// brings back.
+    /// Multi-Range Delta ranges saved with an inclusive largest size restore with the smallest
+    /// limit above it that has one more decimal place, and their names write it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::{Choice, Length, Number, Text, Toggle};
@@ -1844,6 +1934,48 @@ mod tests {
                 "%B",
                 vec![("multiplier", Number(80.0))],
                 vec![("multiplier", Number(50.0))],
+            ),
+            // Saved before these ranges narrowed: restored as saved.
+            (
+                "BB",
+                vec![("std_dev", Number(0.0))],
+                vec![("std_dev", Number(0.0))],
+            ),
+            (
+                "BB",
+                vec![("std_dev", Number(80.0))],
+                vec![("std_dev", Number(80.0))],
+            ),
+            (
+                "BBTrend",
+                vec![("multiplier", Number(0.0))],
+                vec![("multiplier", Number(0.0))],
+            ),
+            (
+                "Woodies CCI",
+                vec![("turbo_length", Length(1)), ("cci_length", Length(30))],
+                vec![("turbo_length", Length(1)), ("cci_length", Length(30))],
+            ),
+            (
+                "MFI",
+                vec![("period", Length(5000))],
+                vec![("period", Length(5000))],
+            ),
+            (
+                "SuperTrend",
+                vec![("multiplier", Number(0.005))],
+                vec![("multiplier", Number(0.005))],
+            ),
+            (
+                "LinReg Slope",
+                vec![("period", Length(1))],
+                vec![("period", Length(1))],
+            ),
+            // Saved under the earlier name.
+            (
+                "RankCorr",
+                vec![("smoothing_deviation", Number(80.0))],
+                vec![("smoothing_deviation", Number(80.0))],
             ),
             (
                 "Vol Profile Session",
@@ -2121,7 +2253,8 @@ mod tests {
                     ("as_drawings", Toggle(true)),
                 ],
             ),
-            // Saved while each range included its largest size: the limit is the next number up.
+            // Saved while each range included its largest size: the limit is the smallest number
+            // above it with one more decimal place.
             (
                 "Multi-Range Delta",
                 vec![
@@ -2134,15 +2267,36 @@ mod tests {
                 ],
                 vec![
                     ("min0", Number(0.0)),
-                    ("limit0", Number(9.000000000000002)),
+                    ("limit0", Number(9.1)),
                     ("min1", Number(10.0)),
-                    ("limit1", Number(99.00000000000001)),
+                    ("limit1", Number(99.1)),
                     ("min2", Number(100.0)),
                     ("limit2", Number(f64::MAX)),
                 ],
             ),
         ];
         let factory = IndicatorFactory::new();
+        // A study saved with the former default largest sizes 9 and 99 writes the limits it
+        // restores as briefly (#4064).
+        let multi_range = StudyTemplate {
+            name: "Multi-Range Delta".to_owned(),
+            inputs: vec![
+                ("max0".to_owned(), Number(9.0)),
+                ("max1".to_owned(), Number(99.0)),
+            ],
+            settings: factory.create("Multi-Range Delta").unwrap().settings(),
+            visible: true,
+            scale: None,
+            metric: None,
+        };
+        assert_eq!(
+            multi_range.create().unwrap().line_names(),
+            [
+                "Delta [0, 9.1) lots",
+                "Delta [10, 99.1) lots",
+                "Delta [100, ∞) lots"
+            ]
+        );
         let periods = (0..7).map(|period| {
             (
                 "Vol Profile Periodic",
@@ -2180,6 +2334,29 @@ mod tests {
                 let input = inputs.iter().find(|input| input.id == id);
                 assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
             }
+            // A style edit applies every input as it stands, which keeps its value.
+            let values = |study: &dyn Indicator| {
+                let inputs = study.inputs().into_iter();
+                inputs
+                    .map(|input| (input.id, input.value))
+                    .collect::<Vec<_>>()
+            };
+            let mut edited = study.clone_box();
+            edited
+                .apply_settings(&values(study.as_ref()), study.settings())
+                .unwrap();
+            assert_eq!(values(edited.as_ref()), values(study.as_ref()), "{name}");
+            // Undoing an edit, or cancelling its preview, brings every input back.
+            let defaults: Vec<_> = (study.inputs().into_iter())
+                .map(|input| (input.id, input.default))
+                .collect();
+            edited.apply_settings(&defaults, study.settings()).unwrap();
+            edited.restore_settings(&study.snapshot_settings()).unwrap();
+            assert_eq!(
+                values(edited.as_ref()),
+                values(study.as_ref()),
+                "{name} undone"
+            );
             assert!(
                 (0..study.line_count()).all(|line| study.plot_style(line).visible),
                 "{name}"
@@ -2469,10 +2646,13 @@ mod tests {
     /// and a Rank Correlation saved before it had an average, levels and a filled band, and a
     /// Majority Rule saved before its guide at 50, restore without them. So do an SMI, a
     /// Stochastic RSI and a Connors RSI saved before their guides, a Stochastic saved before its
-    /// guides had styles, a Donchian channel saved before its band and a band saved with its
-    /// boundary plots hidden before it could be drawn without them. Older per-bar studies keep
+    /// guides had styles, a Donchian channel saved before its band, a Moving Average Channel saved
+    /// before its band had a style and a band saved with its boundary plots hidden before it
+    /// could be drawn without them. Studies whose default colours changed keep the saved ones. Older per-bar studies keep
     /// the colours and widths they drew before every state had its own style control. Renamed
-    /// input labels retain the ids, values and styles of the saved studies.
+    /// input labels retain the ids, values and styles of the saved studies. Booker Reversal and
+    /// Ziv Ghost Pivots saved before their marks changed keep their colours and crosses, and
+    /// Booker levels saved as whole numbers restore as the same decimals.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
@@ -2879,6 +3059,21 @@ mod tests {
         band[0].visible = true;
         assert_eq!(band, fresh.settings().fills);
 
+        // HMA, Advance/Decline Line and MA Channel as the release before their default colours
+        // changed saved them keep the colours they drew, and an MA Channel saved before its band
+        // had a style fills it as faintly as that release did.
+        let hma = r#"{"name":"HMA","inputs":[["period",{"Length":9}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.HMA.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let breadth = r#"{"name":"Advance/Decline Line","inputs":[["advancing_symbol",{"Symbol":"ADVANCING_ISSUES"}],["declining_symbol",{"Symbol":"DECLINING_ISSUES"}],["timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/type.AdvanceDeclineLine.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let channel = r#"{"name":"MA Channel","inputs":[["upper_length",{"Length":20}],["upper_offset",{"Integer":0}],["lower_length",{"Length":20}],["lower_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MAChannel.html","plots":[{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,9,15,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[{"color":[2,8,12,13],"inverted_color":null,"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        for saved in [hma, breadth, channel] {
+            let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
+            let restored = saved.create().unwrap();
+            assert_eq!(restored.settings(), saved.settings, "{}", saved.name);
+        }
+        let mut older: StudyTemplate = serde_json::from_str(channel).unwrap();
+        let band = std::mem::take(&mut older.settings.fills);
+        assert_eq!(older.create().unwrap().settings().fills, band);
+
         // Bollinger Bands as a release before bands ignored their boundary plots saved them, the
         // upper and lower lines hidden and the band switch on: no band is drawn, and its switch
         // is off. Saved since with the same lines hidden, the band stays drawn.
@@ -3029,6 +3224,91 @@ mod tests {
                 json
             );
         }
+
+        // Ziv Ghost Pivots opens with a character for each pivot. One saved while the pivots
+        // were crosses keeps them, and its plots still name their characters for the Style tab.
+        use crate::studies::PlotType;
+        let factory = IndicatorFactory::new();
+        let fresh = ConfiguredStudy::new(factory.create("Ziv Ghost Pivots").unwrap());
+        let kinds: Vec<_> = fresh
+            .settings()
+            .plots
+            .iter()
+            .map(|plot| plot.plot_type)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                PlotType::Character('8'),
+                PlotType::Character('d'),
+                PlotType::Character('w'),
+                PlotType::Character('m'),
+                PlotType::Line,
+            ]
+        );
+        // Saved on origin/main ebd125251.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Ziv Ghost Pivots","inputs":[["show_four_hour",{"Toggle":true}],["show_day",{"Toggle":true}],["show_week",{"Toggle":true}],["show_month",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ZivGhostPivots.html","plots":[{"color":[0,188,212,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[103,58,183,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[233,30,99,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[0,188,212,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[0,12,13,16],"untagged_plots":[0,1,2,3,4],"price_line_plots":[],"plot_variants":[[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings().plots, saved.settings.plots);
+        assert_eq!(restored.plot_style(1).plot_type, PlotType::Crosses);
+        assert_eq!(restored.plot_character(1), Some('d'));
+
+        // Booker Reversal opens with teal buys and red sells at half opacity and levels that
+        // take decimals. One saved with green and red marks and whole levels keeps its colours,
+        // restores the same levels as decimals and keeps the price scale tags it was saved with.
+        let marks = |study: &dyn Indicator| {
+            (0..2)
+                .map(|line| study.plot_style(line))
+                .map(|plot| (plot.color, plot.plot_type))
+                .collect::<Vec<_>>()
+        };
+        let levels = |study: &dyn Indicator| {
+            let inputs = study.inputs();
+            ["stoch_upper", "stoch_lower"].map(|id| {
+                let input = inputs.iter().find(|input| input.id == id);
+                input.map(|input| input.value.clone())
+            })
+        };
+        let fresh = ConfiguredStudy::new(factory.create("Booker Reversal").unwrap());
+        assert_eq!(
+            marks(&fresh),
+            [
+                (
+                    Color32::from_rgba_unmultiplied(0, 150, 136, 128),
+                    PlotType::TriangleUp
+                ),
+                (
+                    Color32::from_rgba_unmultiplied(244, 67, 54, 128),
+                    PlotType::TriangleDown
+                ),
+            ]
+        );
+        assert_eq!(
+            levels(&fresh),
+            [70.0, 30.0].map(|level| Some(InputValue::Number(level)))
+        );
+        // Saved on origin/main ebd125251, with the levels set to 72 and 25.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Booker Reversal","inputs":[["fast_period",{"Length":12}],["slow_period",{"Length":26}],["k_period",{"Length":70}],["slowing",{"Length":10}],["stoch_upper",{"Length":72}],["stoch_lower",{"Length":25}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.BookerReversal.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings().plots, saved.settings.plots);
+        assert!((0..2).all(|line| restored.plot_tagged(line)));
+        assert_eq!(
+            marks(restored.as_ref()),
+            [
+                (Color32::from_rgb(76, 175, 80), PlotType::TriangleUp),
+                (Color32::from_rgb(242, 54, 69), PlotType::TriangleDown),
+            ]
+        );
+        assert_eq!(
+            levels(restored.as_ref()),
+            [72.0, 25.0].map(|level| Some(InputValue::Number(level)))
+        );
     }
 
     /// A Connors RSI saved with guides at 70, 50 and 30 and a Correlation Coefficient saved with

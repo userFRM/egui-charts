@@ -22,7 +22,6 @@ use crate::data::{CalendarEvent, NewsStory};
 use crate::icons::icons;
 use crate::model::{Instrument, Quote, SymbolType};
 use crate::painting::symbol_mark::paint_symbol_mark;
-use crate::scales::StudyFormat;
 use crate::services::{Listener, Quotes, ShareKind, Sharing};
 use crate::theme::{Theme, ThemeExt};
 use crate::ui::share_controls::ShareControls;
@@ -153,13 +152,16 @@ const GROUPINGS: [(WatchlistGrouping, &str); 6] = [
     (WatchlistGrouping::Currency, "Currency"),
 ];
 
-/// The details of a symbol the wide view groups by, from its instrument.
+/// The details the panel takes from a symbol's instrument: those the wide view groups by and
+/// the decimals of its volumes.
 #[derive(Clone, Debug, Default)]
 struct InstrumentGroups {
     exchange: Option<String>,
     kind: Option<SymbolType>,
     sector: Option<String>,
     currency: Option<String>,
+    /// Decimals of the Vol column, as `Instrument::volume_decimals`.
+    volume_decimals: Option<u8>,
 }
 
 /// A numeric column the host added to the wide view.
@@ -517,8 +519,13 @@ impl WatchlistPanel {
             .insert(symbol.to_owned(), description.into());
     }
 
-    /// Groups `instrument.symbol` in the wide view by its exchange, type, sector or currency.
-    /// A symbol without the detail grouped by, or without an instrument, is listed under Other.
+    /// Takes the details of `instrument.symbol` the panel shows. The wide view groups the symbol
+    /// by its exchange, type, sector or currency; a symbol without the detail grouped by, or
+    /// without an instrument, is listed under Other. The Vol column writes its volumes with the
+    /// instrument's `volume_decimals`, as the chart's volume readouts do: values below 1,000 take
+    /// them, and K, M and B values take two decimals, or the volume decimals when they are more.
+    /// Without them, values below 1,000 have no decimals. A summary row takes the most volume
+    /// decimals among its symbols. Passing the symbol's instrument again replaces these details.
     pub fn set_instrument(&mut self, instrument: &Instrument) {
         self.groups.insert(
             instrument.symbol.clone(),
@@ -527,6 +534,7 @@ impl WatchlistPanel {
                 kind: instrument.symbol_type,
                 sector: instrument.sector.clone(),
                 currency: instrument.currency.clone(),
+                volume_decimals: instrument.volume_decimals,
             },
         );
     }
@@ -614,7 +622,8 @@ impl WatchlistPanel {
     /// [`ShareKind::Watchlist`] by the list's [`Watchlist::id`]. A saved copy holds the list as it
     /// was when Save a copy was chosen, whatever its name or place when the host answers, and is
     /// added under the name the host answers, with an id of its own; like a duplicate, it is not
-    /// starred. [`poll`](Self::poll) receives the answers.
+    /// starred. [`poll`](Self::poll) receives the answers. Delete list stays disabled while the
+    /// service reports the active list shared or a sharing request for it waits for an answer.
     pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
         self.share.set_service(sharing);
         self.copy_source = None;
@@ -834,6 +843,16 @@ impl WatchlistPanel {
     }
 
     fn show_with(&mut self, ui: &mut Ui, wide: Option<&WatchlistDetails>) -> WatchlistAction {
+        // A host's bottom panel, such as symbol details, ends the space left in `ui` but not its
+        // clip rect, so nothing here may paint or take clicks below that space.
+        let clip = ui.clip_rect();
+        ui.set_clip_rect(clip.with_max_y(clip.max.y.min(ui.available_rect_before_wrap().bottom())));
+        let action = self.show_contents(ui, wide);
+        ui.set_clip_rect(clip);
+        action
+    }
+
+    fn show_contents(&mut self, ui: &mut Ui, wide: Option<&WatchlistDetails>) -> WatchlistAction {
         self.wide = wide.is_some();
         let mut action = WatchlistAction::None;
         let shown_symbols: Vec<String> = self.symbols().map(str::to_owned).collect();
@@ -1066,12 +1085,12 @@ impl WatchlistPanel {
                     ui.close();
                 }
                 // A deleted list's link could not be revoked from the panel any more.
-                let stoppable = share.can_stop_sharing(ShareKind::Watchlist, &lists[*active].id);
+                let kept = share.blocks_delete(ShareKind::Watchlist, &lists[*active].id);
                 let mut delete = ui.add_enabled(
-                    flag_filter.is_none() && lists.len() > 1 && !stoppable,
+                    flag_filter.is_none() && lists.len() > 1 && !kept,
                     egui::Button::new(l10n::text(ui.ctx(), "Delete list")),
                 );
-                if stoppable {
+                if kept {
                     delete = delete.on_disabled_hover_text(l10n::text(
                         ui.ctx(),
                         "Stop sharing the list before deleting it",
@@ -1539,7 +1558,15 @@ impl WatchlistPanel {
                 EmptyState::new("This list is empty")
                     .description("Add symbols with the add button above.")
             };
-            empty.icon(&icons::WATCHLIST).fill_height().show(ui);
+            egui::ScrollArea::vertical()
+                .id_salt("empty_watchlist")
+                .min_scrolled_height(0.0)
+                .auto_shrink([false, false])
+                // Keep the instruction in view before the decorative icon when space runs out.
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    empty.icon(&icons::WATCHLIST).fill_height().show(ui);
+                });
             return action;
         }
 
@@ -1565,6 +1592,11 @@ impl WatchlistPanel {
                         .find(|c| c.name == *name)
                         .map(|c| c.decimals)
                         .unwrap_or(2),
+                    TableColumn::Quote(WatchlistColumn::Volume) => symbols
+                        .iter()
+                        .filter_map(|s| groups.get(*s)?.volume_decimals)
+                        .max()
+                        .unwrap_or(0),
                     TableColumn::Quote(_) => symbols
                         .iter()
                         .filter_map(|s| {
@@ -1580,6 +1612,8 @@ impl WatchlistPanel {
             })
             .collect();
         egui::ScrollArea::vertical()
+            // Scroll inside whatever height is left, never egui's 64-point minimum.
+            .min_scrolled_height(0.0)
             .max_height(if show_summary {
                 (ui.available_height() - 4.0 * SUMMARY_ROW_HEIGHT - 1.0).max(0.0)
             } else {
@@ -1779,14 +1813,21 @@ impl WatchlistPanel {
                             }
                             for (at, column) in all_columns.iter().enumerate().skip(1) {
                                 let precision = match column {
-                                    TableColumn::Quote(_) => {
+                                    TableColumn::Quote(quote_column) => {
                                         let Some(quote) = quotes.get(symbol.as_str()) else {
                                             continue;
                                         };
-                                        decimals
-                                            .get(symbol.as_str())
-                                            .copied()
-                                            .unwrap_or_else(|| price_decimals(quote.last))
+                                        if *quote_column == WatchlistColumn::Volume {
+                                            groups
+                                                .get(symbol.as_str())
+                                                .and_then(|details| details.volume_decimals)
+                                                .unwrap_or(0)
+                                        } else {
+                                            decimals
+                                                .get(symbol.as_str())
+                                                .copied()
+                                                .unwrap_or_else(|| price_decimals(quote.last))
+                                        }
                                     }
                                     TableColumn::Host(name) => host_columns
                                         .iter()
@@ -2328,7 +2369,8 @@ fn set_column_width(list: &mut Watchlist, column: &TableColumn, width: Option<f3
     }
 }
 
-/// The text and colour shared by numeric cells and their summaries.
+/// The text and colour shared by numeric cells and their summaries, with the column's
+/// `decimals`: volume decimals in the Vol column, price decimals in other quote columns.
 fn cell_text(
     column: &TableColumn,
     value: Option<f64>,
@@ -2339,7 +2381,9 @@ fn cell_text(
         return ("-".into(), theme.ui.text);
     };
     let text = match column {
-        TableColumn::Quote(WatchlistColumn::Volume) => StudyFormat::Volume.format(value, None),
+        TableColumn::Quote(WatchlistColumn::Volume) => {
+            crate::chart::rendering::axes::volume_text(value, Some(decimals), None)
+        }
         TableColumn::Quote(
             WatchlistColumn::ChangePercent | WatchlistColumn::ExtendedChangePercent,
         ) => format!("{}%", grouped(value, 2, true)),
@@ -2541,6 +2585,178 @@ mod tests {
             symbol: symbol.into(),
             flag: None,
         }
+    }
+
+    /// One frame of `panel`, 300 points wide, above a 300-point bottom panel: the bottom
+    /// panel's top edge and the visible part of every text, in painting order.
+    fn above_details(
+        ctx: &egui::Context,
+        panel: &mut WatchlistPanel,
+        height: f32,
+        events: Vec<egui::Event>,
+    ) -> (f32, Vec<(String, egui::Rect)>) {
+        let mut bottom = 0.0;
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(300.0, height),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::Panel::bottom("details")
+                    .exact_size(300.0)
+                    .show(ui, |ui| {
+                        ui.label("Symbol details");
+                    });
+                bottom = ui.available_rect_before_wrap().bottom();
+                panel.show(ui);
+            },
+        );
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                let Shape::Text(t) = &s.shape else {
+                    return None;
+                };
+                let rect = (s.transform_after_tessellation * t.visual_bounding_rect())
+                    .intersect(s.clip_rect);
+                rect.is_positive()
+                    .then(|| (t.galley.text().to_owned(), rect))
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        (bottom, texts)
+    }
+
+    #[test]
+    fn empty_watchlist_stays_above_the_reserved_panel_after_resize() {
+        let ctx = egui::Context::default();
+        let mut panel = WatchlistPanel::default();
+        let mut frame = |height, events| {
+            let (bottom, texts) = above_details(&ctx, &mut panel, height, events);
+            let visible = |label| {
+                texts
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .map(|(_, rect)| *rect)
+            };
+            let labels = [
+                "This list is empty",
+                "Add symbols with the add button above.",
+            ]
+            .map(visible);
+            let details = visible("Symbol details").expect("sibling stays visible");
+            (bottom, labels, details)
+        };
+        let (tall_bottom, [tall_title, tall_hint], _) = frame(700.0, vec![]);
+        let tall_hint = tall_hint.expect("hint visible at normal height");
+        assert!(tall_hint.bottom() < tall_bottom);
+        let (bottom, labels, details) = frame(420.0, vec![]);
+        assert!(details.top() >= bottom);
+        assert!(
+            labels.into_iter().flatten().all(|r| r.bottom() <= bottom),
+            "empty text {labels:?} crosses the panel edge {bottom}"
+        );
+        let wheel = |dy| {
+            vec![
+                egui::Event::PointerMoved(pos2(150.0, bottom - 8.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, dy),
+                    modifiers: Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                },
+            ]
+        };
+        frame(420.0, wheel(180.0));
+        assert!(
+            (0..12).any(|_| frame(420.0, vec![]).1[1].is_none()),
+            "scrolling toward the icon moves the hint out of view"
+        );
+        frame(420.0, wheel(-180.0));
+        let scrolled = (0..12)
+            .find_map(|_| frame(420.0, vec![]).1[1].filter(|r| r.height() == tall_hint.height()));
+        assert!(
+            scrolled.is_some_and(|r| r.bottom() <= bottom),
+            "the whole hint is reachable inside the compact list"
+        );
+        frame(700.0, vec![]);
+        assert_eq!(
+            frame(700.0, vec![]).1,
+            [tall_title, Some(tall_hint)],
+            "growing restores both labels"
+        );
+    }
+
+    #[test]
+    fn populated_watchlist_stays_above_the_reserved_panel_when_short() {
+        let ctx = egui::Context::default();
+        let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAA,BBB,CCC")]);
+        let mut settled = |height, events| {
+            above_details(&ctx, &mut panel, height, events);
+            let mut frame = (0.0, Vec::new());
+            for _ in 0..10 {
+                frame = above_details(&ctx, &mut panel, height, vec![]);
+            }
+            frame
+        };
+        let find = |texts: &[(String, egui::Rect)], label: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .map(|(_, rect)| *rect)
+        };
+        // A 40-point header, 3-point item spacing, the 22-point column header, then 30-point rows.
+        let (_, texts) = settled(700.0, vec![]);
+        for (label, centre) in [
+            ("Symbol", 54.0),
+            ("AAA", 83.0),
+            ("BBB", 113.0),
+            ("CCC", 143.0),
+        ] {
+            let rect =
+                find(&texts, label).unwrap_or_else(|| panic!("{label} shown at normal height"));
+            assert!(
+                (rect.center().y - centre).abs() <= 1.0,
+                "{label} at {rect:?} moved from its normal centre {centre}"
+            );
+        }
+        let last_row = find(&texts, "CCC").unwrap();
+        // List heights of 100 and 50 points: short of the rows, then of the column header too.
+        for height in [400.0, 350.0] {
+            let (bottom, texts) = settled(height, vec![]);
+            let details = find(&texts, "Symbol details").expect("sibling stays visible");
+            assert!(details.top() >= bottom);
+            let crossing: Vec<_> = texts
+                .iter()
+                .filter(|(text, rect)| text != "Symbol details" && rect.bottom() > bottom)
+                .collect();
+            assert!(
+                crossing.is_empty(),
+                "{crossing:?} cross the panel edge {bottom}"
+            );
+        }
+        let wheel = vec![
+            egui::Event::PointerMoved(pos2(150.0, 90.0)),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -500.0),
+                modifiers: Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
+            },
+        ];
+        let (bottom, texts) = settled(400.0, wheel);
+        let scrolled = find(&texts, "CCC");
+        assert!(
+            scrolled.is_some_and(|r| r.size() == last_row.size() && r.bottom() <= bottom),
+            "the last row {scrolled:?} scrolls into view inside the list edge {bottom}"
+        );
     }
 
     #[test]
@@ -3140,6 +3356,72 @@ mod tests {
         h.get_by_label("Renamed").click();
         h.run();
         assert!(!h.get_by_label("Delete list").accesskit_node().is_disabled());
+    }
+
+    /// Delete list waits, saying why, while the list is shared through the switch of a host that
+    /// offers no Stop sharing or its link is on its way, and is offered again once that ends.
+    #[test]
+    fn delete_list_waits_while_the_list_is_shared_or_its_link_is_pending() {
+        use crate::ui::share_controls::tests::Shares;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for switch in [false, true] {
+            let mut offer = crate::services::ShareOffer::new(!switch, false);
+            offer.switch = switch;
+            let shares = Arc::new(Shares {
+                offer,
+                ..Default::default()
+            });
+            let mut panel = WatchlistPanel::new(vec![
+                Watchlist::from_text("Main", "A"),
+                Watchlist::from_text("Other", "B"),
+            ]);
+            panel.set_sharing(shares.clone());
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(vec2(300.0, 800.0))
+                .build_ui_state(
+                    |ui, panel: &mut WatchlistPanel| {
+                        panel.poll(ui.ctx());
+                        panel.show(ui);
+                    },
+                    panel,
+                );
+            let share = if switch { "Share list" } else { "Copy link" };
+            // Opens the list menu, which holds Delete list.
+            let deletable = |h: &mut Harness<'_, WatchlistPanel>| {
+                h.get_by_label("Main").click();
+                h.run();
+                !h.get_by_label("Delete list").accesskit_node().is_disabled()
+            };
+            h.get_by_label("More").click();
+            h.run();
+            h.get_by_label(share).click();
+            h.run();
+            assert!(!deletable(&mut h), "{share}");
+            h.get_by_label("Delete list").hover();
+            h.run_steps(4);
+            assert!(
+                h.query_by_label("Stop sharing the list before deleting it")
+                    .is_some(),
+                "{share}"
+            );
+            h.key_press(egui::Key::Escape);
+            h.run();
+            // Stopping sharing, or the answer to the link, lets the list go.
+            if switch {
+                h.get_by_label("More").click();
+                h.run();
+                h.get_by_label(share).click();
+            } else {
+                let link = shares.link.lock().unwrap().take().unwrap();
+                link.send(Err(crate::data::FeedError::Other("offline".into())));
+            }
+            h.run();
+            assert!(deletable(&mut h), "{share}");
+        }
     }
 
     /// Equal section titles collapse separately, and rename, move, undo, heading drag and
@@ -4373,6 +4655,81 @@ mod tests {
         for label in ["Energy", "Tech", "Other"] {
             h.get_by_role_and_label(Role::Button, &format!("T:{label}"));
             assert!(painted.contains(&format!("T:{}", label.to_uppercase())));
+        }
+    }
+
+    /// The Vol column and its summaries write volumes with the instrument's volume decimals, and
+    /// keep the plain volume text without them, also after the instrument drops them.
+    #[test]
+    fn volumes_follow_the_instrument_volume_decimals() {
+        use egui_kittest::Harness;
+        // Rows: AAA 0.375, BBB 1,234.5678, CCC 5. Summaries over the three: average
+        // 1,239.9428 / 3 = 413.3142..., median 5, minimum 0.375, maximum 1,234.5678.
+        for (decimals, cells, summary) in [
+            (
+                Some(3),
+                ["0.375", "1.235K", "5.000"],
+                ["413.314", "5.000", "0.375", "1.235K"],
+            ),
+            (
+                Some(1),
+                ["0.4", "1.23K", "5.0"],
+                ["413.3", "5.0", "0.4", "1.23K"],
+            ),
+            (None, ["0", "1.23K", "5"], ["413", "5", "0", "1.23K"]),
+        ] {
+            let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("List", "AAA,BBB,CCC")]);
+            for (symbol, volume) in [("AAA", 0.375), ("BBB", 1234.5678), ("CCC", 5.0)] {
+                let quote = Quote::new(10.0, 9.0, Default::default()).with_volume(volume);
+                panel.set_quote(symbol, quote);
+                // A later instrument replaces the earlier one's decimals.
+                panel.set_instrument(&Instrument::new(symbol).with_volume_decimals(3));
+                let mut instrument = Instrument::new(symbol);
+                instrument.volume_decimals = decimals;
+                panel.set_instrument(&instrument);
+            }
+            panel.set_summary(true);
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(vec2(1000.0, 700.0))
+                .build_ui_state(
+                    |ui, panel: &mut WatchlistPanel| {
+                        panel.show_wide(ui, &WatchlistDetails::default());
+                    },
+                    panel,
+                );
+            h.run();
+            let texts: Vec<String> = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            // Wide columns: Last, Chg, Chg%, Vol, Ext, Ext Chg, Ext Chg%. 1 / 9 = 11.11%.
+            for (symbol, volume) in ["AAA", "BBB", "CCC"].into_iter().zip(cells) {
+                let at = texts.iter().position(|t| t == symbol).unwrap();
+                assert_eq!(
+                    texts[at + 1..at + 8],
+                    ["10.00", "+1.00", "+11.11%", volume, "-", "-", "-"],
+                    "{symbol} at {decimals:?}"
+                );
+            }
+            // Summary rows: their label, then the same seven columns.
+            let rows = &texts[texts.len() - 32..];
+            for (row, (label, volume)) in ["Average", "Median", "Minimum", "Maximum"]
+                .into_iter()
+                .zip(summary)
+                .enumerate()
+            {
+                assert_eq!(
+                    rows[row * 8..row * 8 + 8],
+                    [label, "10.00", "+1.00", "+11.11%", volume, "-", "-", "-"],
+                    "{label} at {decimals:?}"
+                );
+            }
         }
     }
 

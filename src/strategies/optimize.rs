@@ -31,8 +31,9 @@ pub struct StrategyTrial {
 /// its exact error; either ends the iterator without running that trial. A combination
 /// [`Strategy::validate_inputs`] refuses yields its error in place of that trial, which does
 /// not run, and iteration continues with the next combination. A trial whose run needs an exchange
-/// rate where none applies yields `Err("exchange rates unavailable")` in its place, and iteration
-/// continues.
+/// rate where none applies yields `Err("exchange rates unavailable")` in its place, one whose
+/// strategy stopped before the run ended ([`Strategy::failure`]) yields `Err("strategy stopped")`,
+/// and iteration continues.
 /// `lower` has the same meaning as in [`Backtest::run`]; pass `&[]` for chart bars alone.
 ///
 /// # Panics
@@ -91,6 +92,7 @@ pub fn optimise<'a>(
         let trial = strategy.validate_inputs().and_then(|()| {
             let report = backtest.run(strategy.as_mut(), bars, lower);
             match report.unavailable {
+                Some(_) if strategy.failure().is_some() => Err("strategy stopped"),
                 Some(_) => Err("exchange rates unavailable"),
                 None => Ok(StrategyTrial {
                     inputs: values,

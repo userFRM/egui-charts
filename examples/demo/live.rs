@@ -2,15 +2,16 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
-    CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
+    CalendarEvent, CalendarQuery, Datafeed, DepthColumn, DepthHistory, DepthPage, DepthRequest,
+    FeedError, FeedStatus, Footprint, FootprintPage, FootprintRequest, HistoryPage, HistoryRequest,
     HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries,
     MetricSubscription, NewsQuery, NewsStory, OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink,
-    Reply, ScreenerQuery, ScreenerRow, Subscription, SubscriptionId, SymbolDetails,
-    aggregate_trades, resample,
+    OrderFilter, Reply, ScreenerQuery, ScreenerRow, Subscription, SubscriptionId, SymbolDetails,
+    TradePage, TradeRequest, aggregate_trades, resample,
 };
 use egui_charts::model::{
-    Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, Instrument, Level1Quote,
-    OrderSide, Quote, Tick, Timeframe,
+    Bar, BarClock, DataStatus, ExtendedHoursQuote, ExtendedSession, FeedService, Instrument,
+    Level1Quote, OrderSide, Quote, Tick, Timeframe,
 };
 use egui_charts::model::{Direction, Signal, SignalId, SignalShape};
 use egui_charts::services::{Events, SignalEvent, Signals};
@@ -29,6 +30,34 @@ use egui_charts::ui::timeframe_toolbar::SessionType;
 
 const RETAINED_TRADES: usize = 100_000;
 
+/// Ids of the executions re-created for archived minutes, above every streamed id: the minute's
+/// index since the epoch from bit 16 on and the execution's place in the minute below it.
+const SYNTHETIC_IDS: u64 = 1 << 63;
+
+/// A 64-bit mix (the splitmix64 finalizer) for values that depend only on their key, so that every
+/// fork of a feed and every page re-creates the same history.
+fn mix(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+/// Resting size at `level`, a price in ticks `distance` ticks behind the touch, in the book a depth
+/// page shows during `minute` (minutes since the epoch): the base, wall share and noise of the live
+/// book, with walls that stay at their price for five minutes.
+fn resting_at(seed: u64, level: i64, distance: i64, minute: i64) -> f64 {
+    let key = seed ^ (level as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let base = 20.0 + 4.0 * distance.min(20) as f64;
+    let wall = if mix(key ^ minute.div_euclid(5) as u64).is_multiple_of(15) {
+        4.0
+    } else {
+        1.0
+    };
+    let noise = (mix(key ^ (minute as u64).rotate_left(32)) % 500) as f64 / 1000.0;
+    (wall * base * (0.75 + noise)).round()
+}
+
 /// Bound initialization work in each scheduled frame, including retained-tick delivery.
 const LOAD_BATCH: usize = 512;
 
@@ -40,6 +69,10 @@ pub(super) const ORDER_LEVEL_SYMBOL: &str = "INDEXFZ2026";
 
 /// The only demo symbol whose feed answers analyst price targets.
 pub(super) const TARGETS_SYMBOL: &str = "SAMPLE";
+
+/// The only demo symbol whose feed prepares footprint rows, for one-minute bars. Its charts
+/// load the trade tape only when a reader such as time and sales asks for it.
+pub(super) const PREPARED_FOOTPRINT_SYMBOL: &str = "INDEXFH2027";
 
 /// Driven by the UI timer on both native and web; there is no background worker.
 pub(super) struct LiveFeed(
@@ -87,6 +120,12 @@ struct Simulation {
     /// The next retained execution to deliver to a new subscription.
     bootstrap: Option<usize>,
     history_requests: VecDeque<(HistoryRequest, Reply<HistoryPage>)>,
+    /// Trade pages asked for while retained executions are still being generated.
+    trade_requests: VecDeque<(TradeRequest, Reply<TradePage>)>,
+    /// Depth pages asked for while retained executions are still being generated.
+    depth_requests: VecDeque<(DepthRequest, Reply<DepthPage>)>,
+    /// Footprint pages asked for while retained executions are still being generated.
+    footprint_requests: VecDeque<(FootprintRequest, Reply<FootprintPage>)>,
     paused: bool,
     continuous: bool,
     adjusted: bool,
@@ -142,6 +181,9 @@ impl LiveFeed {
             initializing: Some(now),
             bootstrap: None,
             history_requests: VecDeque::new(),
+            trade_requests: VecDeque::new(),
+            depth_requests: VecDeque::new(),
+            footprint_requests: VecDeque::new(),
             paused: false,
             continuous: true,
             adjusted: false,
@@ -213,6 +255,9 @@ impl LiveFeed {
                 initializing: sim.initializing,
                 bootstrap: None,
                 history_requests: VecDeque::new(),
+                trade_requests: VecDeque::new(),
+                depth_requests: VecDeque::new(),
+                footprint_requests: VecDeque::new(),
                 paused: sim.paused,
                 continuous: sim.continuous,
                 adjusted: sim.adjusted,
@@ -443,7 +488,11 @@ impl LiveFeed {
             .with_currency("USD")
             .with_price_decimals(if sim.tick_size < 0.01 { 4 } else { 2 })
             .with_tick_size(sim.tick_size)
-            .with_services([egui_charts::model::FeedService::Depth])
+            .with_services([
+                FeedService::Depth,
+                FeedService::DepthHistory,
+                FeedService::Trades,
+            ])
             .with_native_timeframes([Timeframe::Min1, Timeframe::Day1]);
         if sim.cents {
             instrument.currency = None;
@@ -620,6 +669,9 @@ impl LiveFeed {
         sim.initializing.is_some()
             || sim.bootstrap.is_some()
             || !sim.history_requests.is_empty()
+            || !sim.trade_requests.is_empty()
+            || !sim.depth_requests.is_empty()
+            || !sim.footprint_requests.is_empty()
             || sim.streams.iter().any(LiveFeed::loading)
             || self
                 .2
@@ -656,6 +708,17 @@ impl LiveFeed {
                 sim.trade();
             }
             loading = true;
+        }
+        if sim.initializing.is_none() {
+            while let Some((request, reply)) = sim.trade_requests.pop_front() {
+                reply.send(Ok(sim.trade_page(&request)));
+            }
+            while let Some((request, reply)) = sim.depth_requests.pop_front() {
+                reply.send(sim.depth_page(&request));
+            }
+            while let Some((request, reply)) = sim.footprint_requests.pop_front() {
+                reply.send(sim.footprint_page(&request));
+            }
         }
         if sim.initializing.is_none()
             && let Some(start) = sim.bootstrap
@@ -922,20 +985,334 @@ impl Simulation {
                 open, last.close, last.close, last.close, last.close, 0.0,
             ));
         }
-        let cents = request
-            .conversion
-            .as_deref()
-            .is_some_and(|c| c.starts_with("cents"));
-        if cents != self.cents {
-            let factor = if cents { 100.0 } else { 0.01 };
-            for bar in &mut bars {
-                bar.open *= factor;
-                bar.high *= factor;
-                bar.low *= factor;
-                bar.close *= factor;
-            }
+        let factor = self.unit_factor(request.conversion.as_deref());
+        for bar in &mut bars {
+            bar.open *= factor;
+            bar.high *= factor;
+            bar.low *= factor;
+            bar.close *= factor;
         }
         super::feeds::history_page(&bars, request.since, request.before, request.count)
+    }
+
+    /// The factor from this source's price unit to the one `conversion` asks for: 100 from
+    /// dollars to cents, 0.01 back and otherwise 1.
+    fn unit_factor(&self, conversion: Option<&str>) -> f64 {
+        match (
+            conversion.is_some_and(|c| c.starts_with("cents")),
+            self.cents,
+        ) {
+            (true, false) => 100.0,
+            (false, true) => 0.01,
+            _ => 1.0,
+        }
+    }
+
+    /// Up to `request.count` executions of `[since, before)`, the newest when there are more, on
+    /// the chart's session and price basis: the retained ones and, before them, those re-created
+    /// for the archived minutes. History ends with the first archived minute. Every execution has
+    /// a millisecond of its own, so the count never splits an instant.
+    fn trade_page(&self, request: &TradeRequest) -> TradePage {
+        let before = request.before.unwrap_or(DateTime::<Utc>::MAX_UTC);
+        let since = request.since.unwrap_or(DateTime::<Utc>::MIN_UTC);
+        let count = request.count;
+        if count == 0 || since >= before {
+            return TradePage::new(Vec::new(), false);
+        }
+        let extended = self.extended_hours().unwrap_or(false);
+        let shown = |trade: &Tick| {
+            (since..before)
+                .contains(&trade.ts)
+                .then(|| self.shown_trade(trade, extended))
+                .flatten()
+        };
+        let end = self.trades.partition_point(|trade| trade.ts < before);
+        let mut page: Vec<_> = (self.trades.range(..end).rev())
+            .take_while(|trade| trade.ts >= since)
+            .filter_map(|trade| self.shown_trade(trade, extended))
+            .take(count)
+            .collect();
+        let archived = &self.history[..self.archived_end()];
+        let end = archived.partition_point(|bar| bar.time < before);
+        for bar in archived[..end].iter().rev() {
+            if page.len() == count || bar.time + TimeDelta::minutes(1) <= since {
+                break;
+            }
+            // A closed minute shows no executions, so it need not be re-created.
+            if self.shown_price(bar.time, bar.close, extended).is_some() {
+                let left = count - page.len();
+                let trades = self.minute_trades(bar);
+                page.extend(trades.iter().rev().filter_map(shown).take(left));
+            }
+        }
+        let full = page.len() == count;
+        let end_of_history = !full && self.history.first().is_none_or(|first| first.time >= since);
+        page.reverse();
+        let factor = self.unit_factor(request.conversion.as_deref());
+        for trade in &mut page {
+            trade.price *= factor;
+        }
+        if page.is_empty() && !end_of_history {
+            // The walk stopped at `since`; older executions continue before it.
+            return TradePage::new(page, false).with_continue_before(since);
+        }
+        TradePage::new(page, end_of_history)
+    }
+
+    /// The footprint rows of the newest four hours at most of `request`'s range, built from the
+    /// executions [`Self::trade_page`] answers for it. A latest range runs from the bar of the
+    /// first retained execution to the open of the bar of the newest one, whose executions reach
+    /// the chart on the stream.
+    fn footprint_page(&self, request: &FootprintRequest) -> Result<FootprintPage, FeedError> {
+        let (Some(first), Some(newest)) = (self.trades.front(), self.trades.back()) else {
+            return Err(FeedError::NotSupported);
+        };
+        let clock = &request.clock;
+        let before = request.before.unwrap_or_else(|| clock.bar_open(newest.ts));
+        let since = request.since.unwrap_or_else(|| clock.bar_open(first.ts));
+        let mut trades = TradeRequest::new(request.symbol.clone(), usize::MAX);
+        trades.before = Some(before);
+        // Re-created minutes hold a few hundred executions each; the chart asks again for the rest.
+        trades.since = Some(since.max(before - TimeDelta::hours(4)));
+        trades.conversion = request.conversion.clone();
+        let page = self.trade_page(&trades);
+        let mut rows = Footprint::new(clock.clone(), request.tick_size, request.ticks_per_row)?;
+        for trade in &page.trades {
+            rows.push(trade)?;
+        }
+        let mut bars: Vec<_> = rows.bars().values().cloned().collect();
+        let start = bars.len().saturating_sub(request.count);
+        let bars = bars.split_off(start);
+        let end_of_history = page.end_of_history && start == 0;
+        Ok(FootprintPage::new(bars, before, end_of_history))
+    }
+
+    /// Up to `request.count` columns of `[since, before)` on the request's cadence grid, the
+    /// newest when there are more: in each, a book quoted one tick around the last shown execution
+    /// before the column ends, rows as the request groups them. A latest page ends with the last
+    /// whole period. Only periods in the session have columns, and history ends with the first
+    /// archived minute.
+    fn depth_page(&self, request: &DepthRequest) -> Result<DepthPage, FeedError> {
+        let config = &request.config;
+        DepthHistory::new(config.clone())?;
+        let Some(cadence) = config.cadence.num_nanoseconds() else {
+            return Err(FeedError::InvalidData(format!(
+                "depth history cadence {} is too long",
+                config.cadence
+            )));
+        };
+        if !(request.tick_size.is_finite() && request.tick_size > 0.0) {
+            return Err(FeedError::InvalidData(format!(
+                "depth tick size must be finite and positive, got {}",
+                request.tick_size
+            )));
+        }
+        if (config.orders.as_ref()).is_some_and(|filter| *filter != OrderFilter::default()) {
+            // Re-created history has no individual orders to filter.
+            return Err(FeedError::NotSupported);
+        }
+        if request.count == 0
+            || request
+                .since
+                .zip(request.before)
+                .is_some_and(|(s, b)| s >= b)
+        {
+            return Ok(DepthPage::new(Vec::new(), false));
+        }
+        let Some(oldest) = self.history.first().map(|bar| bar.time) else {
+            return Ok(DepthPage::new(Vec::new(), true));
+        };
+        let nanos = |time: DateTime<Utc>| {
+            time.timestamp_nanos_opt()
+                .unwrap_or(if time.timestamp() < 0 {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                })
+        };
+        // The newest column opens before `before`, or ends by `now` on a latest page.
+        let mut start = match request.before {
+            Some(before) => nanos(before).saturating_sub(1).div_euclid(cadence),
+            None => nanos(self.now).div_euclid(cadence).saturating_sub(1),
+        }
+        .saturating_mul(cadence);
+        let lower = request.since.map_or(i64::MIN, |since| {
+            let since = nanos(since);
+            since
+                .div_euclid(cadence)
+                .saturating_add(i64::from(since.rem_euclid(cadence) > 0))
+                .saturating_mul(cadence)
+        });
+        let extended = self.extended_hours().unwrap_or(false);
+        let factor = self.unit_factor(request.conversion.as_deref());
+        let seed = DemoSymbol::find(&self.symbol).seed;
+        let archived = &self.history[..self.archived_end()];
+        // Sessions and re-created executions change by the minute: keep both for the minute at hand.
+        let mut session = (i64::MIN, false);
+        let mut minute = (DateTime::<Utc>::MIN_UTC, Vec::new());
+        let mut columns = Vec::new();
+        let mut end_of_history = false;
+        while start >= lower && columns.len() < request.count {
+            let time = DateTime::from_timestamp_nanos(start);
+            let end = time + config.cadence;
+            if end <= oldest {
+                end_of_history = true;
+                break;
+            }
+            let opened = time.timestamp().div_euclid(60);
+            if session.0 != opened {
+                session = (opened, self.shown_price(time, 0.0, extended).is_some());
+            }
+            if session.1 {
+                let last = end - TimeDelta::nanoseconds(1);
+                let at = archived.partition_point(|bar| bar.time <= last);
+                let price = match at.checked_sub(1).map(|at| &archived[at]) {
+                    Some(bar)
+                        if last - bar.time < TimeDelta::minutes(1)
+                            && self.shown_price(bar.time, bar.close, extended).is_some() =>
+                    {
+                        if minute.0 != bar.time {
+                            minute = (bar.time, self.minute_trades(bar));
+                        }
+                        (minute.1.iter().rev())
+                            .find(|trade| trade.ts < end)
+                            .and_then(|trade| self.shown_price(trade.ts, trade.price, extended))
+                    }
+                    _ => self.newest_shown(end, extended).map(|(_, price)| price),
+                };
+                let Some(price) = price else {
+                    end_of_history = true;
+                    break;
+                };
+                let ticks = (price / self.tick_size).round() as i64;
+                // Levels run away from the touch, so the rows they fall in come best first.
+                let side = |sign: i64| {
+                    let mut rows: Vec<(i64, f64)> = Vec::new();
+                    for distance in 0..super::market::DEPTH {
+                        let level = ticks + sign * (1 + distance);
+                        let price = level as f64 * self.tick_size * factor;
+                        let row = ((price / request.tick_size).round() as i64)
+                            .div_euclid(i64::from(config.ticks_per_row));
+                        let size = resting_at(seed, level, distance, opened);
+                        if let Some((held, total)) = rows.last_mut()
+                            && *held == row
+                        {
+                            *total += size;
+                        } else if rows.len() == config.rows {
+                            break;
+                        } else {
+                            rows.push((row, size));
+                        }
+                    }
+                    rows
+                };
+                let mut column = DepthColumn::default();
+                column.time = time;
+                column.span = config.cadence;
+                column.bids = side(-1);
+                column.asks = side(1);
+                columns.push(column);
+            }
+            let Some(earlier) = start.checked_sub(cadence) else {
+                break;
+            };
+            start = earlier;
+        }
+        columns.reverse();
+        if columns.is_empty() && !end_of_history {
+            // Only `since` can stop a walk that found no column; it lies before `before`.
+            if let Some(since) = request.since {
+                return Ok(DepthPage::new(columns, false).with_continue_before(since));
+            }
+        }
+        Ok(DepthPage::new(columns, end_of_history))
+    }
+
+    /// The executions of the archived minute `bar`, re-created so that they fold back into it:
+    /// the first at its open, one at its high and one at its low, the last at its close, sizes
+    /// adding up to its volume, each at its own millisecond and with its own id.
+    fn minute_trades(&self, bar: &Bar) -> Vec<Tick> {
+        let mut random = mix(DemoSymbol::find(&self.symbol).seed ^ bar.time.timestamp() as u64);
+        let mut draw = move || {
+            random = mix(random);
+            random
+        };
+        let volume = bar.volume;
+        // Archived volumes are whole: generated minutes hold at least 400, streamed ones a fill of
+        // at least 10.
+        let whole = volume >= 4.0 && volume.fract() == 0.0;
+        debug_assert!(whole, "volume {volume}");
+        if !whole {
+            return Vec::new();
+        }
+        // Fill sizes as the stream draws them.
+        let mut sizes = Vec::new();
+        let mut left = volume;
+        while left > 0.0 {
+            let u = (draw() % 1000 + 1) as f64 / 1001.0;
+            let size = (10.0 / u.sqrt()).round().min(left);
+            sizes.push(size);
+            left -= size;
+        }
+        if sizes.len() < 4 {
+            let quarter = (volume / 4.0).floor();
+            sizes = vec![quarter, quarter, quarter, volume - 3.0 * quarter];
+        }
+        let n = sizes.len();
+        // Distinct milliseconds and ids within the minute.
+        debug_assert!(n <= 60_000, "{n} executions");
+        let tick = |price: f64| (price / self.tick_size).round() as i64;
+        let (open, high, low, close) = (
+            tick(bar.open),
+            tick(bar.high),
+            tick(bar.low),
+            tick(bar.close),
+        );
+        let at_high = 1 + (draw() % (n as u64 - 2)) as usize;
+        let mut at_low = 1 + (draw() % (n as u64 - 3)) as usize;
+        if at_low >= at_high {
+            at_low += 1;
+        }
+        let mut waypoints = [(0, open), (at_high, high), (at_low, low), (n - 1, close)];
+        waypoints.sort_unstable();
+        // A path through the waypoints with a few ticks of noise, inside the bar's range.
+        let mut ticks = Vec::with_capacity(n);
+        for pair in waypoints.windows(2) {
+            let ((from, a), (to, b)) = (pair[0], pair[1]);
+            ticks.push(a);
+            for i in from + 1..to {
+                let line = a + (b - a) * (i - from) as i64 / (to - from) as i64;
+                ticks.push((line + (draw() % 5) as i64 - 2).clamp(low, high));
+            }
+        }
+        ticks.push(close);
+        let minute = bar.time.timestamp().div_euclid(60) as u64;
+        let mut previous = open;
+        (ticks.into_iter().zip(sizes).enumerate())
+            .map(|(i, (k, size))| {
+                // The bar's own prices at its open, close and extremes keep its values exact.
+                let price = if i == 0 {
+                    bar.open
+                } else if i == n - 1 {
+                    bar.close
+                } else if k == high {
+                    bar.high
+                } else if k == low {
+                    bar.low
+                } else {
+                    k as f64 * self.tick_size
+                };
+                let side = if k >= previous {
+                    OrderSide::Buy
+                } else {
+                    OrderSide::Sell
+                };
+                previous = k;
+                let time = bar.time + TimeDelta::milliseconds(i as i64 * 60_000 / n as i64);
+                Tick::new(time, price, size, Some(side))
+                    .with_id(SYNTHETIC_IDS | (minute << 16) | i as u64)
+            })
+            .collect()
     }
 
     fn history_bars(
@@ -1621,6 +1998,63 @@ impl Datafeed for LiveFeed {
         }
     }
 
+    fn trades(&self, request: TradeRequest, reply: Reply<TradePage>) {
+        let mut sim = self.state();
+        if let Some(feed) = sim
+            .streams
+            .iter()
+            .find(|feed| feed.state().symbol == request.symbol)
+        {
+            feed.trades(request, reply);
+        } else if request.symbol != sim.symbol {
+            reply.send(Err(FeedError::NotSupported));
+        } else if sim.initializing.is_some() {
+            // Generation may still archive minutes and move the stream's first execution.
+            sim.trade_requests.push_back((request, reply));
+        } else {
+            reply.send(Ok(sim.trade_page(&request)));
+        }
+    }
+
+    fn footprints(&self, request: FootprintRequest, reply: Reply<FootprintPage>) {
+        let mut sim = self.state();
+        if let Some(feed) = sim
+            .streams
+            .iter()
+            .find(|feed| feed.state().symbol == request.symbol)
+        {
+            feed.footprints(request, reply);
+        } else if request.symbol != sim.symbol
+            || request.symbol != PREPARED_FOOTPRINT_SYMBOL
+            || request.timeframe != Timeframe::Min1
+        {
+            reply.send(Err(FeedError::NotSupported));
+        } else if sim.initializing.is_some() {
+            // Generation may still archive minutes and move the stream's first execution.
+            sim.footprint_requests.push_back((request, reply));
+        } else {
+            reply.send(sim.footprint_page(&request));
+        }
+    }
+
+    fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
+        let mut sim = self.state();
+        if let Some(feed) = sim
+            .streams
+            .iter()
+            .find(|feed| feed.state().symbol == request.symbol)
+        {
+            feed.depth_history(request, reply);
+        } else if request.symbol != sim.symbol {
+            reply.send(Err(FeedError::NotSupported));
+        } else if sim.initializing.is_some() {
+            // The book follows executions that are still being generated.
+            sim.depth_requests.push_back((request, reply));
+        } else {
+            reply.send(sim.depth_page(&request));
+        }
+    }
+
     fn subscribe(&self, subscription: Subscription) {
         let feed = {
             let sim = self.state();
@@ -1993,7 +2427,18 @@ mod tests {
         let held: Vec<_> = charts
             .iter_mut()
             .map(|chart| {
-                frame(chart, 1440.0).drop_without_applying_deltas();
+                // Older depth columns page in, a page a frame, while the view reaches past them:
+                // let them settle, so that only leaving the replay could change them.
+                let mut oldest = None;
+                for _ in 0..1_000 {
+                    frame(chart, 1440.0).drop_without_applying_deltas();
+                    let depth = chart.depth_history(SeriesId::MAIN).unwrap();
+                    let first = depth.columns().next().map(|column| column.time);
+                    if first == oldest {
+                        break;
+                    }
+                    oldest = first;
+                }
                 let last = chart.bars(SeriesId::MAIN).last().unwrap().clone();
                 let trades: Vec<_> = chart.trades(SeriesId::MAIN).cloned().collect();
                 let depth: Vec<_> = chart
@@ -2816,6 +3261,144 @@ mod tests {
             assert_eq!(sim.history[0].time.time(), chrono::NaiveTime::MIN);
         }
         assert_eq!(whole.daily_volume().1, 78_510_388.0 / 7.0);
+    }
+
+    /// Scrolled back past the stream, a footprint chart and the liquidity heatmap find executions
+    /// and depth on older bars: every whole minute's executions rebuild the bar `history` gives it,
+    /// so none repeats or is missing where the stream starts, and the depth columns run on into
+    /// the live ones.
+    #[test]
+    fn footprint_and_heatmap_scroll_back_into_executions_and_depth_before_the_stream() {
+        let start: DateTime<Utc> = "2026-10-23T19:07:05Z".parse().unwrap();
+        // A 24-hour instrument, the order-level contract and the session instrument.
+        for symbol in ["TOKENA", ORDER_LEVEL_SYMBOL, "SAMPLE"] {
+            let feed = Arc::new(ready_feed(symbol, start));
+            if symbol == "SAMPLE" {
+                feed.set_view(SessionType::RTH, false);
+            }
+            let (stream_start, tick_size) = {
+                let sim = feed.state();
+                (sim.trades.front().unwrap().ts, sim.tick_size)
+            };
+            let ctx = egui::Context::default();
+            let frame = |chart: &mut Chart| {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 800.0),
+                    )),
+                    ..Default::default()
+                };
+                ctx.run_ui(input, |ui| {
+                    chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+            };
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol(symbol)
+                .build();
+            chart.set_timeframe(Timeframe::Min1);
+            chart.set_chart_type(egui_charts::model::ChartType::VolumeFootprint);
+            chart.set_depth_history(Some(super::super::depth_history(symbol)));
+            chart.set_liquidity_heatmap(true);
+            for _ in 0..4 {
+                super::super::tests::finish_feed(&feed);
+                frame(&mut chart);
+            }
+            for step in 1..=50 {
+                feed.advance(start + TimeDelta::milliseconds(100 * step));
+                frame(&mut chart);
+            }
+            feed.set_paused(true);
+            let target = stream_start - TimeDelta::minutes(15);
+            chart.scroll_to_time(target);
+            for _ in 0..300 {
+                super::super::tests::finish_feed(&feed);
+                frame(&mut chart);
+                let depth = chart.depth_history(SeriesId::MAIN).unwrap();
+                if depth.columns().next().is_some_and(|c| c.time <= target)
+                    && chart
+                        .trades(SeriesId::MAIN)
+                        .next()
+                        .is_some_and(|t| t.ts < target)
+                {
+                    break;
+                }
+            }
+            let trades: Vec<_> = chart.trades(SeriesId::MAIN).cloned().collect();
+            let depth: Vec<_> = (chart.depth_history(SeriesId::MAIN).unwrap().columns())
+                .cloned()
+                .collect();
+            assert!(
+                trades[0].ts < target,
+                "{symbol}: executions from {}",
+                trades[0].ts
+            );
+            assert!(
+                depth[0].time <= target,
+                "{symbol}: depth from {}",
+                depth[0].time
+            );
+            let ids: std::collections::BTreeSet<_> = trades.iter().map(|t| t.id.unwrap()).collect();
+            assert_eq!(ids.len(), trades.len(), "{symbol}: repeated executions");
+            // A missing execution lowers the volume of its minute, a repeated one raises it.
+            let now = feed.now();
+            let mut checked = 0;
+            for bar in chart.bars(SeriesId::MAIN) {
+                let end = bar.time + TimeDelta::minutes(1);
+                if bar.time <= trades[0].ts || end > now {
+                    continue;
+                }
+                let minute = &trades[trades.partition_point(|t| t.ts < bar.time)
+                    ..trades.partition_point(|t| t.ts < end)];
+                assert!(
+                    !minute.is_empty(),
+                    "{symbol}: no executions at {}",
+                    bar.time
+                );
+                let prices = minute.iter().map(|t| t.price);
+                assert_eq!(
+                    [
+                        minute[0].price,
+                        prices.clone().fold(f64::NEG_INFINITY, f64::max),
+                        prices.fold(f64::INFINITY, f64::min),
+                        minute[minute.len() - 1].price,
+                        minute.iter().map(|t| t.size).sum::<f64>(),
+                    ],
+                    [bar.open, bar.high, bar.low, bar.close, bar.volume],
+                    "{symbol} {}",
+                    bar.time
+                );
+                checked += 1;
+            }
+            assert!(checked >= 60, "{symbol}: {checked} minutes checked");
+            // The session instrument's book has no columns while its market is closed.
+            let hours = us_equity_hours();
+            for pair in depth.windows(2) {
+                let end = pair[0].time + pair[0].span;
+                assert!(
+                    end == pair[1].time
+                        || (end < pair[1].time && symbol == "SAMPLE" && !hours.is_open(end, false)),
+                    "{symbol}: columns from {} to {}",
+                    pair[0].time,
+                    pair[1].time
+                );
+            }
+            // The page's newest column is quoted one tick around the last execution before the
+            // stream's book; the orders behind it are not known.
+            let join = (depth.iter())
+                .find(|c| c.time == start - TimeDelta::seconds(1))
+                .unwrap();
+            let last = trades.iter().rev().find(|t| t.ts < start).unwrap();
+            let ticks = (last.price / tick_size).round() as i64;
+            assert_eq!(
+                (join.bids[0].0, join.asks[0].0),
+                (ticks - 1, ticks + 1),
+                "{symbol}"
+            );
+            assert!(join.largest_bid_orders.is_empty() && join.largest_ask_orders.is_empty());
+        }
     }
 
     /// The controller publishes the subscribed quotes once per frame, and the first push after a

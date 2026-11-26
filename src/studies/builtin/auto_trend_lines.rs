@@ -3,7 +3,9 @@
 use super::ATR;
 use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
 use crate::model::{Bar, LineStyle};
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues, PlotStyle, PlotType, palette};
+use crate::studies::{
+    Indicator, IndicatorValue, IndicatorValues, PlotStyle, PlotType, ShapeSide, palette,
+};
 use egui::Color32;
 
 /// The most recent bars with prices used to find lines.
@@ -64,8 +66,9 @@ impl LineSize {
 ///
 /// Plot 0 styles the support lines and plot 1 the resistance lines; with Show pivots on, each
 /// marks the two pivots of its lines, at their low or high, and holds those prices as values.
-/// Generated lines belong to the study, not the editable drawing list; read them with
-/// [`Indicator::drawings`].
+/// These values only place the marks: the legend lists neither, and the price scale starts
+/// without their tags. Generated lines belong to the study, not the editable drawing list; read
+/// them with [`Indicator::drawings`].
 ///
 /// ```
 /// use egui_charts::studies::{AutoTrendLines, Indicator};
@@ -414,6 +417,15 @@ impl Indicator for AutoTrendLines {
         true
     }
 
+    // A pivot's value only places its mark; the lines are drawings with no output.
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn plot_tagged(&self, _line: usize) -> bool {
+        false
+    }
+
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
@@ -433,6 +445,15 @@ impl Indicator for AutoTrendLines {
                 PlotType::TriangleDown
             },
             visible: true,
+        }
+    }
+
+    fn plot_shape_side(&self, line: usize) -> ShapeSide {
+        // Support lines join pivot lows, resistance lines pivot highs.
+        if line == 0 {
+            ShapeSide::Below
+        } else {
+            ShapeSide::Above
         }
     }
 

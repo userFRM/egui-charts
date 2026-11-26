@@ -394,6 +394,32 @@ impl StrategyTester {
         }
     }
 
+    /// Offer the strategies of `factory` from now on, for a host that registers strategies after
+    /// the tester was built. The selected strategy and its inputs stay while `factory` builds it
+    /// and accepts them; otherwise its strategy of the same name is selected at its default
+    /// inputs, or, when it has none of that name, its first strategy. Settings are kept, the
+    /// order size included. Pending work is cancelled and the report kept as stale, as after any
+    /// edit.
+    pub fn set_factory(&mut self, factory: StrategyFactory) {
+        self.factory = Arc::new(factory);
+        if self.configured_strategy().is_err() {
+            let name = match self.factory.create(&self.name) {
+                Some(_) => self.name.clone(),
+                None => self
+                    .factory
+                    .list()
+                    .first()
+                    .map_or("", |name| *name)
+                    .to_owned(),
+            };
+            let strategy = self.factory.create(&name);
+            self.inputs = strategy.map_or_else(Vec::new, |strategy| strategy.study_inputs());
+            self.ranges = self.inputs.iter().filter_map(Range::new).collect();
+            self.name = name;
+        }
+        self.changed();
+    }
+
     /// Current strategy name in the factory.
     pub fn strategy(&self) -> &str {
         &self.name
@@ -790,7 +816,11 @@ impl StrategyTester {
                 let report = engine.run_async(strategy.as_mut(), &bars, &lower).await;
                 completed.set(ordinal + 1);
                 if report.unavailable.is_some() {
-                    skip(&mut skipped, "Exchange rates unavailable");
+                    let reason = match strategy.failure() {
+                        Some(_) => "Strategy stopped",
+                        None => "Exchange rates unavailable",
+                    };
+                    skip(&mut skipped, reason);
                     continue;
                 }
                 let performance = report.performance();

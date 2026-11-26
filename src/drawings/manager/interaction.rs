@@ -435,6 +435,7 @@ impl DrawingManager {
             copy.stored_id = None;
             copy.created_at = None;
             copy.z_order = self.top_z_order();
+            self.place_locally(copy);
             self.drawings.push(copy.clone());
         }
         let old = copies.remove(primary);
@@ -621,18 +622,21 @@ impl DrawingManager {
             let all_locked = self.locked;
             // A derived handle can be rounded, clamped or shifted away from its stored anchor,
             // so a drag that stays within the handle's bar leaves the drawing as it is.
-            if let Some(drawing) = self.drawings.iter().find(|d| d.id == id)
-                && matches!(
-                    drawing.tool_type,
-                    DrawingToolType::RegressionTrend | DrawingToolType::AnchoredVWAP
-                )
-                && self.get_handles(drawing).into_iter().any(|(h, point)| {
-                    h == handle
-                        && x_to_bar(new_pos.x).round() == x_to_bar(point.x).round()
-                        && (drawing.tool_type == DrawingToolType::RegressionTrend
-                            || drawing.points.first().is_some_and(|p| p.x != point.x))
-                })
-            {
+            let Some(drawing) = self.drawings.iter().find(|d| d.id == id) else {
+                return;
+            };
+            if self.shared_filter.hides(drawing) {
+                return;
+            }
+            if matches!(
+                drawing.tool_type,
+                DrawingToolType::RegressionTrend | DrawingToolType::AnchoredVWAP
+            ) && self.get_handles(drawing).into_iter().any(|(h, point)| {
+                h == handle
+                    && x_to_bar(new_pos.x).round() == x_to_bar(point.x).round()
+                    && (drawing.tool_type == DrawingToolType::RegressionTrend
+                        || drawing.points.first().is_some_and(|p| p.x != point.x))
+            }) {
                 return;
             }
             let table_edge = matches!(
@@ -704,11 +708,12 @@ impl DrawingManager {
             if let Some(origin) = self.drag_origin {
                 let bars = x_to_bar(snapped.x) - x_to_bar(origin.x);
                 for old in &self.drag_group {
-                    if let Some(drawing) = self
-                        .drawings
-                        .iter_mut()
-                        .find(|d| d.id == old.id && !all_locked && d.accepts_user_edits())
-                    {
+                    if let Some(drawing) = self.drawings.iter_mut().find(|d| {
+                        d.id == old.id
+                            && !all_locked
+                            && d.accepts_user_edits()
+                            && !self.shared_filter.hides(d)
+                    }) {
                         let first = old.first_moved_anchor();
                         for (point, before) in drawing
                             .chart_points
@@ -814,6 +819,14 @@ impl DrawingManager {
                         (pos.y - self.pane_rect.top()) / self.pane_rect.height(),
                     ]);
                 }
+                // A drawing moved in time from a pane it only reaches keeps its prices, and a
+                // regression trend or anchored VWAP takes them from its bars.
+                self.drag_crosshair = (self.pane_members.contains(&drawing.pane)
+                    && !matches!(
+                        drawing.tool_type,
+                        DrawingToolType::RegressionTrend | DrawingToolType::AnchoredVWAP
+                    ))
+                .then_some(snapped.y);
             }
         }
     }
@@ -1145,7 +1158,7 @@ impl DrawingManager {
     // === Drawing lifecycle ===
 
     /// `point` with the magnet applied, except for freehand samples, which follow the pointer.
-    fn snap_placement(&self, tool: Option<DrawingToolType>, point: Pos2) -> Pos2 {
+    pub(crate) fn snap_placement(&self, tool: Option<DrawingToolType>, point: Pos2) -> Pos2 {
         if tool
             .is_some_and(|tool| tool.interaction_mode() == DrawingInteractionMode::ContinuousDraw)
         {

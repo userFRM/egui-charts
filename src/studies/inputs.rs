@@ -64,6 +64,9 @@ pub struct StudyInput {
     /// The choice or toggle input this one applies with and its accepted values (0/1 for a
     /// toggle). An editor hides it under other values and keeps its value. `None` always shows it.
     pub shown_when: Option<(String, Vec<usize>)>,
+    /// Asked for by the indicator browser before it adds the study. Studies restored from a
+    /// layout, a template or the clipboard, or created through the API, keep their values.
+    pub confirm: bool,
 }
 
 impl StudyInput {
@@ -82,6 +85,7 @@ impl StudyInput {
             kind,
             style: false,
             shown_when: None,
+            confirm: false,
         }
     }
 
@@ -100,6 +104,14 @@ impl StudyInput {
     /// Show this input while `id` holds one of `choices`, with toggles counted as 0 or 1.
     pub fn shown_when(mut self, id: impl Into<String>, choices: impl Into<Vec<usize>>) -> Self {
         self.shown_when = Some((id.into(), choices.into()));
+        self
+    }
+
+    /// Ask for this input when the study is added from the indicator browser. A
+    /// [`Symbol`](InputKind::Symbol) input left empty there reads the chart symbol; the browser
+    /// adds the study once one of its confirmed symbol inputs names a symbol.
+    pub fn confirmed(mut self) -> Self {
+        self.confirm = true;
         self
     }
 
@@ -161,9 +173,10 @@ impl StudyInput {
     }
 }
 
-/// `value` in the form `kind` takes now: a minute count below 1440 as a time of day, and text as
-/// a time zone, as the built-in studies saved them before inputs had those kinds. Any other value
-/// is returned unchanged, for `accepts` to judge.
+/// `value` in the form `kind` takes now: a minute count below 1440 as a time of day and text as
+/// a time zone, as the built-in studies saved them before inputs had those kinds, and a whole
+/// number as a decimal, as studies saved inputs that now take decimals. Any other value is
+/// returned unchanged, for `accepts` to judge.
 #[cfg(feature = "studies")]
 pub(crate) fn upgrade_saved_value(kind: &InputKind, value: InputValue) -> InputValue {
     match (kind, value) {
@@ -171,8 +184,51 @@ pub(crate) fn upgrade_saved_value(kind: &InputKind, value: InputValue) -> InputV
             InputValue::TimeOfDay(clock(minutes))
         }
         (InputKind::TimeZone { .. }, InputValue::Text(name)) => InputValue::TimeZone(name),
+        (InputKind::Number(..), InputValue::Length(count)) => InputValue::Number(count as f64),
         (_, value) => value,
     }
+}
+
+/// `input` with its range widened to the value it holds, so that a study restored with a value
+/// saved before its range narrowed shows and applies that value until it is edited.
+#[cfg(feature = "studies")]
+pub(crate) fn holding(mut input: StudyInput) -> StudyInput {
+    match (&mut input.kind, &input.value) {
+        (InputKind::Length(min, max), InputValue::Length(value)) => {
+            (*min, *max) = ((*min).min(*value), (*max).max(*value));
+        }
+        (InputKind::Number(min, max), InputValue::Number(value)) if value.is_finite() => {
+            (*min, *max) = (min.min(*value), max.max(*value));
+        }
+        _ => {}
+    }
+    input
+}
+
+thread_local! {
+    /// The saved values that built-in studies take outside their inputs' ranges while they are
+    /// restored, from [`restoring`].
+    static RESTORED: std::cell::RefCell<Vec<(String, InputValue)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `restore` with the built-in studies it sets up taking each of `saved` by its input id,
+/// even outside the input's range.
+pub(crate) fn restoring<R>(saved: Vec<(String, InputValue)>, restore: impl FnOnce() -> R) -> R {
+    let outer = RESTORED.replace(saved);
+    let result = restore();
+    RESTORED.set(outer);
+    result
+}
+
+/// Whether a study being restored takes `value` for input `id` as saved, from [`restoring`].
+#[cfg(feature = "studies")]
+pub(crate) fn restores(id: &str, value: &InputValue) -> bool {
+    RESTORED.with_borrow(|saved| {
+        saved
+            .iter()
+            .any(|(saved, held)| saved == id && held == value)
+    })
 }
 
 /// The time `minutes` after midnight, for `minutes` below 1440.
@@ -321,14 +377,14 @@ macro_rules! study_inputs {
     ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*) $(if $choice:ident $([$choice_index:literal])? in $shown:expr)?),+ $(,)? ; $($changed:ident $(, $previous:ident)? =>)? $after:block) => {
         fn inputs(&$this) -> Vec<crate::studies::StudyInput> {
             let defaults = Self::default();
-            vec![$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))
+            vec![$(crate::studies::inputs::holding(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*)))
                 .with_default(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), defaults.$field $([$index])?, $kind($($args),*)).value)
                 $(.shown_when(stringify!($choice $([$choice_index])?), $shown))?),+]
         }
 
         fn set_input(&mut $this, id: &str, value: crate::studies::InputValue) -> Result<(), crate::studies::StudyError> {
             let schema = $this.inputs().into_iter().find(|input| input.id == id).ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
-            if !schema.accepts(&value) { return Err(crate::studies::StudyError::invalid_input(id)); }
+            if !schema.accepts(&value) && !crate::studies::inputs::restores(id, &value) { return Err(crate::studies::StudyError::invalid_input(id)); }
             match id {
                 $(stringify!($field $([$index])?) => { $this.$field $([$index])? = crate::studies::inputs::input_assign!(value, $kind($($args),*)); }),+
                 _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),

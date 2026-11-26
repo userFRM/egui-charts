@@ -393,8 +393,8 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("Booker Reversal", "slow_period", Length(26)),
         ("Booker Reversal", "k_period", Length(70)),
         ("Booker Reversal", "slowing", Length(10)),
-        ("Booker Reversal", "stoch_upper", Length(70)),
-        ("Booker Reversal", "stoch_lower", Length(30)),
+        ("Booker Reversal", "stoch_upper", Number(70.0)),
+        ("Booker Reversal", "stoch_lower", Number(30.0)),
         ("Ziv Ghost Pivots", "show_four_hour", Toggle(true)),
         ("Ziv Ghost Pivots", "show_day", Toggle(true)),
         ("Ziv Ghost Pivots", "show_week", Toggle(true)),
@@ -422,8 +422,141 @@ fn catalogue_studies_open_with_their_usual_lengths() {
     );
 }
 
+/// These studies label their inputs as the studies are usually labelled and accept exactly
+/// their usual range, through `set_input`, the Inputs tab and the strategies built on them.
+#[test]
+fn catalogue_inputs_take_their_usual_labels_and_ranges() {
+    use crate::studies::InputValue::{self, Length, Number};
+    type Row = (
+        &'static str,
+        &'static str,
+        &'static str,
+        Vec<(InputValue, bool)>,
+    );
+    let rows: Vec<Row> = vec![
+        (
+            "BB",
+            "std_dev",
+            "StdDev",
+            vec![
+                (Number(0.0), false),
+                (Number(0.001), true),
+                (Number(50.0), true),
+                (Number(50.5), false),
+            ],
+        ),
+        (
+            "BBTrend",
+            "multiplier",
+            "StdDev",
+            vec![
+                (Number(0.0), false),
+                (Number(0.001), true),
+                (Number(1000.0), true),
+            ],
+        ),
+        (
+            "Woodies CCI",
+            "turbo_length",
+            "CCI Turbo length",
+            vec![
+                (Length(2), false),
+                (Length(3), true),
+                (Length(14), true),
+                (Length(15), false),
+            ],
+        ),
+        (
+            "Woodies CCI",
+            "cci_length",
+            "CCI 14 length",
+            vec![
+                (Length(6), false),
+                (Length(7), true),
+                (Length(20), true),
+                (Length(21), false),
+            ],
+        ),
+        (
+            "MFI",
+            "period",
+            "Length",
+            vec![
+                (Length(0), false),
+                (Length(1), true),
+                (Length(2000), true),
+                (Length(2001), false),
+            ],
+        ),
+        (
+            "SuperTrend",
+            "multiplier",
+            "Factor",
+            vec![
+                (Number(0.0), false),
+                (Number(0.005), false),
+                (Number(0.01), true),
+                (Number(1000.0), true),
+            ],
+        ),
+        (
+            "LinReg Slope",
+            "period",
+            "Period",
+            vec![(Length(1), false), (Length(2), true)],
+        ),
+        ("BB", "period", "Length", vec![]),
+        ("SuperTrend", "atr_period", "ATR Length", vec![]),
+        ("KAMA", "period", "ER length", vec![]),
+        ("KAMA", "fast_period", "Fast length", vec![]),
+        ("KAMA", "slow_period", "Slow length", vec![]),
+        ("RCI", "period", "RCI Length", vec![]),
+        (
+            "RCI",
+            "smoothing_deviation",
+            "BB StdDev",
+            vec![
+                (Number(0.0), false),
+                (Number(0.001), true),
+                (Number(50.0), true),
+                (Number(50.5), false),
+            ],
+        ),
+    ];
+    let factory = IndicatorFactory::new();
+    for (name, id, label, values) in rows {
+        let mut study = factory.create(name).unwrap();
+        let listed = study.inputs().into_iter().find(|input| input.id == id);
+        assert_eq!(
+            listed.map(|input| input.label),
+            Some(label.to_owned()),
+            "{name} {id}"
+        );
+        for (value, accepted) in values {
+            assert_eq!(
+                study.set_input(id, value.clone()).is_ok(),
+                accepted,
+                "{name} {id} {value:?}"
+            );
+        }
+    }
+    // The strategies built on these studies take the studies' inputs.
+    #[cfg(all(test, feature = "strategies"))]
+    {
+        let strategies = crate::strategies::StrategyFactory::new();
+        for (name, id, value) in [
+            ("Bollinger Bands", "std_dev", Number(0.0)),
+            ("Bollinger Bands Directed", "std_dev", Number(50.5)),
+            ("SuperTrend", "multiplier", Number(0.005)),
+        ] {
+            let mut strategy = strategies.create(name).unwrap();
+            assert!(strategy.set_input(id, value).is_err(), "{name} {id}");
+        }
+    }
+}
+
 /// The study browser opens the channel studies with their usual inputs, and every band they
-/// fill lies between two of their drawn plots in a colour that shows.
+/// fill lies between two of their drawn plots at its usual opacity.
 #[test]
 fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
     use crate::studies::{FillBoundary, InputValue};
@@ -432,7 +565,7 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
         (
             "Envelopes",
             vec![("percent", InputValue::Number(10.0))],
-            vec![(0, 2)],
+            vec![(0, 2, 13)],
         ),
         (
             "LinReg Channel",
@@ -441,7 +574,7 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
                 ("upper_multiplier", InputValue::Number(2.0)),
                 ("lower_multiplier", InputValue::Number(2.0)),
             ],
-            vec![(0, 1), (1, 2)],
+            vec![(0, 1, 13), (1, 2, 13)],
         ),
         (
             "MA Channel",
@@ -451,7 +584,7 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
                 ("upper_offset", InputValue::Integer(0)),
                 ("lower_offset", InputValue::Integer(0)),
             ],
-            vec![(0, 1)],
+            vec![(0, 1, 26)],
         ),
     ];
     for (name, inputs, bands) in rows {
@@ -476,8 +609,7 @@ fn channel_studies_open_with_their_usual_inputs_and_fill_their_bands() {
                         "{name}: plot {line} is not drawn"
                     );
                 }
-                assert_ne!(fill.color.a(), 0, "{name}: transparent fill");
-                (first, second)
+                (first, second, fill.color.a())
             })
             .collect();
         assert_eq!(fills, bands, "{name}");

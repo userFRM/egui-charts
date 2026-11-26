@@ -26,7 +26,8 @@ use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 use crate::model::tpo::OUTSIDE_VALUE_AREA_OPACITY;
 use crate::model::{
     Bar, BarClock, ExchangeSessionProvider, SessionProvider, TPOColorMode, TPOConfig,
-    TPODisplayMode, TPOProfile, TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
+    TPODisplayMode, TPOProfile, TPOProfilePeriod, TPOStatisticsRows, derive_tick_size,
+    to_tpo_profiles,
 };
 use crate::styles::typography;
 use crate::theme::{ChartColors, ThemeExt, contrast, readable_color};
@@ -342,6 +343,7 @@ fn whole_sessions(
     visible: Range<usize>,
     sessions: &ExchangeSessionProvider,
     config: &TPOConfig,
+    interval: Option<crate::model::Timeframe>,
 ) -> Range<usize> {
     // Bars are chronological, so the bars before `i` in another session come first.
     let start_of = |i: usize| {
@@ -417,13 +419,7 @@ fn whole_sessions(
             .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC);
         let slice =
             full.partition_point(|b| b.time < first)..full.partition_point(|b| b.time <= last);
-        let parts = custom.parts(
-            full,
-            slice,
-            crate::model::Timeframe::Min1,
-            config.regular_hours.as_ref(),
-            true,
-        );
+        let parts = config.custom_parts(full, slice, interval);
         let key = |session, date| {
             let layer = if custom.overlap == crate::model::SessionOverlap::InBoth {
                 session
@@ -538,16 +534,7 @@ fn build_profiles(
         })
     };
     let mut profile_open = starts.first().copied().unwrap_or(0);
-    let custom_parts = match &config.session {
-        crate::model::ProfileSession::Custom(custom) => custom.parts(
-            bars,
-            0..bars.len(),
-            clock.timeframe().unwrap_or_default(),
-            config.regular_hours.as_ref(),
-            true,
-        ),
-        _ => Vec::new(),
-    };
+    let custom_parts = config.custom_parts(bars, 0..bars.len(), clock.timeframe());
     let breaks = starts.into_iter().skip(1);
     for end in breaks.chain([bars.len()]) {
         if end < bars.len()
@@ -752,7 +739,13 @@ pub fn render_live_tpo(
         return;
     };
     let sessions = clock.sessions();
-    let history = whole_sessions(full_data, 0..visible.start, &sessions, &config);
+    let history = whole_sessions(
+        full_data,
+        0..visible.start,
+        &sessions,
+        &config,
+        clock.timeframe(),
+    );
     let units = cached_profiles(
         &full_data[history.clone()],
         revision,
@@ -817,7 +810,7 @@ pub(crate) fn visit_profiles(
     };
 
     let sessions = clock.sessions();
-    let bars = whole_sessions(full_data, visible, &sessions, &config);
+    let bars = whole_sessions(full_data, visible, &sessions, &config, clock.timeframe());
     let start_idx = bars.start;
     let units = cached_profiles(
         &full_data[bars],
@@ -1073,7 +1066,7 @@ pub(crate) fn profile_at(
     }
     let config = row_config(base_config, instrument_tick, &mapping.price)?;
     let sessions = clock.sessions();
-    let bars = whole_sessions(full_data, visible, &sessions, &config);
+    let bars = whole_sessions(full_data, visible, &sessions, &config, clock.timeframe());
     let units = cached_profiles(
         &full_data[bars.clone()],
         revision,
@@ -1634,7 +1627,15 @@ fn draw_session_profile(
         // The next session's captions sit in the strip that ends this session's room.
         let captions = label_room > 0.0 && config.shows_captions();
         let room = if captions { room - label_room } else { room };
-        draw_statistics(painter, price_rect, coords, profile, anchor_x, room);
+        draw_statistics(
+            painter,
+            price_rect,
+            coords,
+            profile,
+            anchor_x,
+            room,
+            &config.statistics_rows,
+        );
     }
     poor_ends
 }
@@ -1648,6 +1649,7 @@ fn draw_statistics(
     profile: &TPOProfile,
     anchor_x: f32,
     room: f32,
+    shown: &TPOStatisticsRows,
 ) {
     let chart = painter.ctx().active_theme().chart;
     let decimals = crate::scales::decimals(profile.instrument_tick);
@@ -1657,30 +1659,54 @@ fn draw_statistics(
         0 => "0".to_owned(),
         rotation => format!("{rotation:+}"),
     };
-    let mut rows = vec![
-        ("POC", price(profile.poc_price)),
-        (
-            "VAL / VAH",
-            format!(
-                "{} / {}",
-                price(profile.value_area_low),
-                price(profile.value_area_high)
-            ),
-        ),
-    ];
-    rows.extend(
+    let balance = profile.initial_balance_range();
+    let values: [Option<String>; 14] = [
+        Some(price(profile.profile_high - profile.profile_low)),
+        Some(price(profile.poc_price)),
+        Some(price(profile.value_area_high)),
+        Some(price(profile.value_area_low)),
+        Some(price(profile.value_area_high - profile.value_area_low)),
+        balance.map(|_| price(profile.initial_balance_high)),
+        balance.map(|_| price(profile.initial_balance_low)),
+        balance.map(price),
+        Some(above.to_string()),
+        Some(below.to_string()),
+        Some(profile.price_tpo_count.values().sum::<usize>().to_string()),
+        // shortcut: the total prints in the default volume format; pass the instrument's volume
+        // decimals to draw_statistics if a host needs fractional totals.
+        Some(crate::scales::StudyFormat::Volume.format(profile.total_volume, None)),
+        Some(rotation),
         profile
-            .initial_balance_range()
-            .map(|range| ("IB range", price(range))),
-    );
-    rows.push(("TPO below / above", format!("{below} / {above}")));
-    rows.push(("Rotation", rotation));
-    rows.extend(profile.range_extension().map(|(below, above)| {
-        (
-            "IB ext. below / above",
-            format!("{} / {}", price(below), price(above)),
-        )
-    }));
+            .range_extension()
+            .map(|(below, above)| format!("{} / {}", price(below), price(above))),
+    ];
+    // Both halves of a pair on share one row, as the table drew before each had a switch.
+    let pairs = [
+        (shown.value_area_high && shown.value_area_low).then(|| {
+            let (low, high) = (profile.value_area_low, profile.value_area_high);
+            ("VAL / VAH", format!("{} / {}", price(low), price(high)))
+        }),
+        (shown.tpos_above && shown.tpos_below)
+            .then(|| ("TPO below / above", format!("{below} / {above}"))),
+    ];
+    let mut shown = *shown;
+    let rows =
+        shown
+            .switches()
+            .into_iter()
+            .zip(values)
+            .filter_map(|((id, label, shown), value)| {
+                let pair = match id {
+                    "value_area_high" | "value_area_low" => &pairs[0],
+                    "tpos_above" | "tpos_below" => &pairs[1],
+                    _ => &None,
+                };
+                match pair {
+                    Some(_) if matches!(id, "value_area_low" | "tpos_below") => None,
+                    Some((label, value)) => Some((*label, value.clone())),
+                    None => Some((label, value.filter(|_| *shown)?)),
+                }
+            });
 
     let font = FontId::proportional(typography::XS);
     let galleys: Vec<_> = rows
@@ -1693,6 +1719,9 @@ fn draw_statistics(
             )
         })
         .collect();
+    if galleys.is_empty() {
+        return;
+    }
     let (label_width, value_width, line) = galleys.iter().fold(
         (0.0_f32, 0.0_f32, 0.0_f32),
         |(labels, values, line), (label, value)| {
@@ -1777,7 +1806,7 @@ fn cell_letter_color(cell: Color32, chart: &ChartColors) -> Color32 {
     }
 }
 
-/// Steps in each half of the period palette.
+/// Steps in each half of the period palette, one per letter of A to Z and of a to z.
 const PERIOD_STEPS: usize = 26;
 
 /// One step of the first or second gradient, preserving the default palette's rounding.
@@ -1799,14 +1828,7 @@ fn entry_color(
 ) -> Color32 {
     match config.color_mode {
         TPOColorMode::ByPeriod => {
-            let last = profile.width().saturating_sub(1).max(1);
-            let steps = 2 * PERIOD_STEPS - 1;
-            let position = (period_idx as f32 / last as f32).min(1.0) * steps as f32;
-            let index = position as usize;
-            period_step(&config.period_colors, index).lerp_to_gamma(
-                period_step(&config.period_colors, (index + 1).min(steps)),
-                position.fract(),
-            )
+            period_step(&config.period_colors, period_idx % (2 * PERIOD_STEPS))
         }
         TPOColorMode::Solid => config.solid_color,
         TPOColorMode::ByValueArea => {
@@ -2014,20 +2036,20 @@ mod tests {
                         rgb(96, 25, 45),
                         rgb(96, 25, 45),
                         rgb(214, 56, 100),
-                        rgb(87, 191, 153),
+                        rgb(209, 62, 100),
                         rgb(214, 56, 100),
-                        rgb(87, 191, 153),
-                        rgb(93, 36, 245),
+                        rgb(209, 62, 100),
+                        rgb(204, 67, 100),
                         rgb(214, 56, 100),
                     ],
                     [
                         rgb(237, 165, 185),
                         rgb(237, 165, 185),
                         rgb(214, 56, 100),
-                        rgb(75, 164, 131),
+                        rgb(209, 62, 100),
                         rgb(214, 56, 100),
-                        rgb(75, 164, 131),
-                        rgb(93, 36, 245),
+                        rgb(209, 62, 100),
+                        rgb(204, 67, 100),
                         rgb(214, 56, 100),
                     ],
                 ],
@@ -2048,20 +2070,20 @@ mod tests {
                         rgb(115, 0, 0),
                         rgb(115, 0, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                     [
                         rgb(255, 140, 140),
                         rgb(255, 140, 140),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                 ],
@@ -2112,10 +2134,10 @@ mod tests {
                     rgb(255, 0, 0),
                     rgb(255, 0, 0),
                     rgb(255, 0, 0),
-                    rgb(0, 160, 0),
+                    rgb(245, 6, 0),
                     rgb(255, 0, 0),
-                    rgb(0, 160, 0),
-                    rgb(128, 128, 128),
+                    rgb(245, 6, 0),
+                    rgb(235, 13, 0),
                     rgb(255, 0, 0),
                 ]; 2],
             ),
@@ -2136,20 +2158,20 @@ mod tests {
                         rgb(0, 0, 0),
                         rgb(0, 0, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                     [
                         rgb(255, 255, 255),
                         rgb(255, 255, 255),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                 ],
@@ -2251,6 +2273,71 @@ mod tests {
                     })
                     .collect();
                 assert_eq!(fills, expected, "{name}, background {:?}", theme.chart.bg);
+            }
+        }
+    }
+
+    #[test]
+    fn period_colours_follow_the_letter_case() {
+        let red = Color32::from_rgb(255, 0, 0);
+        let green = Color32::from_rgb(0, 160, 0);
+        let config = TPOConfig {
+            tick_size: 1.0,
+            display_mode: TPODisplayMode::Blocks,
+            period_colors: [red, red, green, green],
+            show_poc: false,
+            show_initial_balance: false,
+            show_opening_range: false,
+            ..Default::default()
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            0.0,
+            400.0,
+            false,
+        );
+        // A to H, then A to Z and a to d: one row holding one block per period.
+        for (periods, uppercase) in [(8, 8), (30, 26)] {
+            let bars: Vec<_> = (0..periods)
+                .map(|i| {
+                    let time = chrono::DateTime::UNIX_EPOCH + Duration::minutes(i * 30);
+                    Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0)
+                })
+                .collect();
+            let profile = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into()).remove(0);
+            let mut expected = vec![red; uppercase];
+            expected.resize(periods as usize, green);
+            for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.begin_pass(egui::RawInput::default());
+                draw_session_profile(
+                    &ctx.layer_painter(egui::LayerId::background()),
+                    rect,
+                    &coords,
+                    &profile,
+                    &config,
+                    &TpoRenderConfig::default(),
+                    10.25,
+                    12.0,
+                    f32::INFINITY,
+                    0.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                );
+                let mut output = ctx.end_pass();
+                output.textures_delta.clear();
+                let fills: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Rect(r) => Some(r.fill),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(fills, expected, "{periods} periods on {:?}", theme.chart.bg);
             }
         }
     }
@@ -2736,6 +2823,10 @@ mod tests {
                         // TPODisplayMode::Both: a letter on its cell, dimmed or not.
                         let cell =
                             block_color(&config, &model, period, price, &profile, &theme.chart);
+                        assert!(
+                            contrast(cell, theme.chart.bg) >= 3.0,
+                            "{name}: {mode:?}, period {period}, price {price} block"
+                        );
                         for fill in [cell, theme.chart.bg.lerp_to_gamma(cell, 0.45)] {
                             let letter = cell_letter_color(fill, &theme.chart);
                             assert!(
@@ -3689,7 +3780,7 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(
-                whole_sessions(&bars, visible.clone(), &sessions, &config),
+                whole_sessions(&bars, visible.clone(), &sessions, &config, None),
                 expected,
                 "{visible:?}, {config:?}"
             );
@@ -3765,7 +3856,7 @@ mod tests {
                     .collect(),
                 ..Default::default()
             };
-            let span = whole_sessions(&bars, 24..25, &clock.sessions(), &config);
+            let span = whole_sessions(&bars, 24..25, &clock.sessions(), &config, clock.timeframe());
             assert_eq!(
                 span,
                 if range.is_none() && profile_period == TPOProfilePeriod::Session {
@@ -3856,7 +3947,7 @@ mod tests {
                 period_minutes: 60,
                 ..Default::default()
             };
-            let span = whole_sessions(&bars, 27..28, &clock.sessions(), &config);
+            let span = whole_sessions(&bars, 27..28, &clock.sessions(), &config, clock.timeframe());
             assert_eq!(
                 span,
                 if overlap == SessionOverlap::OwnProfile {
@@ -4469,7 +4560,8 @@ mod tests {
             let ctx = egui::Context::default();
             ctx.begin_pass(egui::RawInput::default());
             let painter = ctx.layer_painter(egui::LayerId::background());
-            draw_statistics(&painter, rect, &coords, &profile, anchor, room);
+            let rows = TPOStatisticsRows::default();
+            draw_statistics(&painter, rect, &coords, &profile, anchor, room, &rows);
             let mut output = ctx.end_pass();
             output.textures_delta.clear();
             let painted = output
@@ -4477,6 +4569,162 @@ mod tests {
                 .iter()
                 .any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Rotation"));
             assert_eq!(painted, drawn, "anchor {anchor}, room {room}");
+        }
+    }
+
+    #[test]
+    fn statistics_rows_follow_their_switches() {
+        // The hand-counted session of the model's statistics test, with volumes 400 to 800.
+        let start = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
+            .unwrap()
+            .to_utc();
+        let bars: Vec<_> = [
+            (101.0, 103.0, 100.0, 102.0, 400.0),
+            (102.0, 104.0, 101.0, 103.0, 600.0),
+            (104.0, 106.0, 103.0, 105.0, 700.0),
+            (104.0, 105.0, 99.0, 100.0, 800.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (o, h, l, c, v))| {
+            Bar::new(start + Duration::minutes(30 * i as i64), o, h, l, c, v)
+        })
+        .collect();
+        let clock = Timeframe::Min30.into();
+        let config = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let whole = to_tpo_profiles(&bars, &config, &clock).remove(0);
+        let first_two = to_tpo_profiles(&bars[..2], &config, &clock).remove(0);
+        let split = TPOConfig {
+            splits: vec![start + Duration::minutes(60)],
+            ..config.clone()
+        };
+        let second_part = to_tpo_profiles(&bars, &split, &clock).remove(1);
+        let mut all = TPOStatisticsRows::default();
+        for (_, _, shown) in all.switches() {
+            *shown = true;
+        }
+        let only = |row: &str| {
+            let mut rows = all;
+            for (id, _, shown) in rows.switches() {
+                *shown = id == row;
+            }
+            rows
+        };
+        let none = {
+            let mut rows = all;
+            for (_, _, shown) in rows.switches() {
+                *shown = false;
+            }
+            rows
+        };
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        let whole_default = [
+            ("POC", "103"),
+            ("VAL / VAH", "101 / 105"),
+            ("IB range", "4"),
+            ("TPO below / above", "9 / 6"),
+            ("Rotation", "+2"),
+            ("IB ext. below / above", "1 / 2"),
+        ];
+        // (profile, rows shown, expected (label, value) pairs)
+        type Case<'a> = (&'a TPOProfile, TPOStatisticsRows, &'a [(&'a str, &'a str)]);
+        let cases: [Case; 10] = [
+            (
+                &whole,
+                all,
+                &[
+                    ("High-low range", "7"),
+                    ("POC", "103"),
+                    ("VAL / VAH", "101 / 105"),
+                    ("VA range", "4"),
+                    ("IB high", "104"),
+                    ("IB low", "100"),
+                    ("IB range", "4"),
+                    ("TPO below / above", "9 / 6"),
+                    ("Total TPOs", "19"),
+                    ("Total volume", "2.50K"),
+                    ("Rotation", "+2"),
+                    ("IB ext. below / above", "1 / 2"),
+                ],
+            ),
+            (
+                &first_two,
+                all,
+                &[
+                    ("High-low range", "4"),
+                    ("POC", "101"),
+                    ("VAL / VAH", "101 / 103"),
+                    ("VA range", "2"),
+                    ("IB high", "104"),
+                    ("IB low", "100"),
+                    ("IB range", "4"),
+                    ("TPO below / above", "1 / 5"),
+                    ("Total TPOs", "8"),
+                    ("Total volume", "1.00K"),
+                    ("Rotation", "+2"),
+                    ("IB ext. below / above", "0 / 0"),
+                ],
+            ),
+            // After the balance window: no initial balance rows.
+            (
+                &second_part,
+                all,
+                &[
+                    ("High-low range", "7"),
+                    ("POC", "103"),
+                    ("VAL / VAH", "101 / 105"),
+                    ("VA range", "4"),
+                    ("TPO below / above", "4 / 5"),
+                    ("Total TPOs", "11"),
+                    ("Total volume", "1.50K"),
+                    ("Rotation", "-2"),
+                ],
+            ),
+            (&whole, TPOStatisticsRows::default(), &whole_default),
+            (&whole, only("total_volume"), &[("Total volume", "2.50K")]),
+            // One half of a pair draws its own row.
+            (&whole, only("value_area_high"), &[("VAH", "105")]),
+            (&whole, only("value_area_low"), &[("VAL", "101")]),
+            (&whole, only("tpos_above"), &[("TPO above", "6")]),
+            (&whole, only("tpos_below"), &[("TPO below", "9")]),
+            (&whole, none, &[]),
+        ];
+        for (profile, rows, expected) in cases {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            draw_statistics(&painter, rect, &coords, profile, 10.0, f32::INFINITY, &rows);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some(t.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            let pairs: Vec<_> = texts
+                .chunks(2)
+                .map(|pair| (pair[0].as_str(), pair[1].as_str()))
+                .collect();
+            assert_eq!(pairs, expected, "rows {rows:?}");
+            // An empty table paints no background either.
+            assert_eq!(
+                output.shapes.is_empty(),
+                expected.is_empty(),
+                "rows {rows:?}"
+            );
         }
     }
 
@@ -4638,9 +4886,15 @@ mod tests {
             rect.max.y,
             false,
         );
+        let statistics_rows = TPOStatisticsRows {
+            value_area_range: true,
+            high_low_range: true,
+            ..Default::default()
+        };
         let config = TPOConfig {
             tick_size: 0.0,
             show_statistics: true,
+            statistics_rows,
             ..Default::default()
         };
         let ctx = egui::Context::default();
@@ -4678,7 +4932,10 @@ mod tests {
             })
             .collect();
         assert!(
-            texts.iter().any(|t| t == "120.000") && texts.iter().any(|t| t == "110.100 / 145.050"),
+            texts.iter().any(|t| t == "120.000")
+                && texts.iter().any(|t| t == "110.100 / 145.050")
+                && texts.iter().any(|t| t == "34.950")
+                && texts.iter().any(|t| t == "60.000"),
             "statistics texts {texts:?}"
         );
     }

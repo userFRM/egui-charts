@@ -108,8 +108,8 @@ pub enum ProfileDisplay {
     #[default]
     Total,
     /// Up-bar and down-bar volume in adjacent segments. A bar that closes at or above its open
-    /// is an up bar, except in a fixed range or anchored volume profile drawing estimated from a
-    /// single chart bar, where it is up only when it closes above its open.
+    /// is an up bar, except in a fixed range or anchored volume profile, drawing or study,
+    /// estimated from a single chart bar, where it is up only when it closes above its open.
     UpDown,
     /// Absolute up minus down volume, coloured by its sign.
     Delta,
@@ -939,8 +939,8 @@ impl VolumeProfile {
     pub fn volume(&self) -> &[f64] {
         &self.volume
     }
-    /// Up-bar volume per row (unchanged closes count as up, except in a profile drawing over one
-    /// chart bar), or calls for options.
+    /// Up-bar volume per row (unchanged closes count as up, except in a fixed range or anchored
+    /// profile estimated from one chart bar), or calls for options.
     pub fn up(&self) -> &[f64] {
         &self.up
     }
@@ -1144,6 +1144,18 @@ impl VolumeProfile {
         } else {
             self.volume[row_of(bar.low)] += bar.volume;
             direction[row_of(bar.low)] += bar.volume;
+        }
+    }
+
+    /// Count the volume of this estimate of `bar` alone as the volume of one bar: up only when
+    /// the bar closes above its open, so the volume of a bar that closes at its open moves to the
+    /// down side. [`Self::add`] counts an unchanged close as up, the rule over several bars.
+    #[cfg(any(feature = "studies", feature = "drawings"))]
+    pub(crate) fn count_single_bar(&mut self, bar: &Bar) {
+        if bar.close == bar.open {
+            for (up, down) in self.up.iter_mut().zip(&mut self.down) {
+                *down += std::mem::take(up);
+            }
         }
     }
 

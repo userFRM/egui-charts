@@ -17,6 +17,10 @@ pub(crate) trait ConcreteStudy {
     fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
     where
         Self: 'static;
+    #[cfg(feature = "widget")]
+    fn concrete_study_mut(&mut self, cast: &dyn std::any::Any) -> Option<&mut dyn std::any::Any>
+    where
+        Self: 'static;
 }
 
 impl<T: ?Sized> ConcreteStudy for T {
@@ -26,6 +30,14 @@ impl<T: ?Sized> ConcreteStudy for T {
         Self: 'static,
     {
         cast.downcast_ref::<fn(&T) -> &dyn std::any::Any>()
+            .map(|cast| cast(self))
+    }
+    #[cfg(feature = "widget")]
+    fn concrete_study_mut(&mut self, cast: &dyn std::any::Any) -> Option<&mut dyn std::any::Any>
+    where
+        Self: 'static,
+    {
+        cast.downcast_ref::<fn(&mut T) -> &mut dyn std::any::Any>()
             .map(|cast| cast(self))
     }
 }
@@ -346,13 +358,23 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 
     /// Whether plot `line` holds per-bar values. Return false for a plot that only styles the
-    /// study's [`zones`](Self::zones): their edges are lines whatever the plot type, and a plot
-    /// without values puts no tag on the price scale and draws no latest value line, so the
-    /// settings dialog offers such a plot only its visibility, colour, width and line pattern.
+    /// study's [`zones`](Self::zones) or drawings, which the chart strokes as lines whatever the
+    /// plot type: a plot without values puts no tag on the price scale and draws no latest value
+    /// line, so the settings dialog offers such a plot only its visibility, colour, width and
+    /// line pattern.
     /// True by default.
     fn plot_holds_values(&self, line: usize) -> bool {
         let _ = line;
         true
+    }
+
+    /// Whether the settings dialog offers plot `line` only its visibility and colour: return true
+    /// for a plot the study draws in a look of its own, such as a level it marks with tags. The
+    /// dialog then offers no width, line pattern, plot type, scale tag or latest value line for
+    /// it; stored values of those settings still load and are kept. False by default.
+    fn plot_color_only(&self, line: usize) -> bool {
+        let _ = line;
+        false
     }
 
     /// Editable alternate colour and width states, separate from the output's main style.
@@ -421,19 +443,44 @@ pub trait Indicator: Send + ConcreteStudy {
         None
     }
 
-    /// Optional text beside the shape a circle, cross or triangle plot draws at a source bar:
-    /// under an upward triangle and over the other shapes, in the shape's colour.
+    /// Optional text beside the shape a circle, cross, triangle or character plot draws at a
+    /// source bar: beyond a triangle drawn beside its value, otherwise under an upward triangle
+    /// and over the other shapes, in the shape's colour.
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         let _ = (line, bar);
         None
     }
 
-    /// Optional text shown while the pointer is over the shape a circle, cross or triangle plot
-    /// draws at a source bar, or over that shape's [`plot_text`](Self::plot_text). `None`, the
-    /// default, shows nothing.
+    /// Optional text shown while the pointer is over the shape a circle, cross, triangle or
+    /// character plot draws at a source bar, or over that shape's
+    /// [`plot_text`](Self::plot_text). `None`, the default, shows nothing.
     fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
         let _ = (line, bar);
         None
+    }
+
+    /// Which side of its value each triangle of the zero-based output `line` is drawn on, while
+    /// the line is drawn as [`PlotType::TriangleUp`](super::PlotType::TriangleUp) or
+    /// [`PlotType::TriangleDown`](super::PlotType::TriangleDown). A study whose triangles mark
+    /// bars at their high or low returns [`ShapeSide::Above`](super::ShapeSide::Above) or
+    /// [`ShapeSide::Below`](super::ShapeSide::Below), and each triangle is drawn a small gap
+    /// beyond its value, whichever way it points. Other plot types stay centred.
+    /// [`ShapeSide::Centred`](super::ShapeSide::Centred), the default, centres each triangle on
+    /// its value.
+    fn plot_shape_side(&self, line: usize) -> super::ShapeSide {
+        let _ = line;
+        super::ShapeSide::Centred
+    }
+
+    /// The character a [`PlotType::Character`](super::PlotType::Character) plot of the zero-based
+    /// output `line` draws, which a style editor offers with that type. `None`, for a line drawn
+    /// as another type, offers none. The default reads the type
+    /// [`plot_style`](Self::plot_style) declares.
+    fn plot_character(&self, line: usize) -> Option<char> {
+        match self.plot_style(line).plot_type {
+            super::PlotType::Character(character) => Some(character),
+            _ => None,
+        }
     }
 
     /// Filled bands, painted beneath this study's plots. Missing endpoints break a band.
@@ -812,6 +859,15 @@ pub trait Indicator: Send + ConcreteStudy {
         self.calculate(data);
     }
 
+    /// The state of a calculation that may run away from the UI thread; `None`, the default,
+    /// for studies that finish inside [`calculate`](Indicator::calculate) and
+    /// [`update`](Indicator::update). While it is [`Running`](super::Calculation::Running) the
+    /// chart keeps drawing the study's values and updates it again on the next frame; the
+    /// legends show the progress, the last compute time or why it stopped.
+    fn calculation(&self) -> Option<super::Calculation> {
+        None
+    }
+
     /// Whether live updates avoid recomputing unaffected history. Causal studies do work
     /// independent of the series length; studies that redraw earlier legs or periods also
     /// revisit the bars whose output changes. Earlier corrections may recompute in full.
@@ -1159,11 +1215,16 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 }
 
-#[cfg(all(feature = "widget", feature = "studies"))]
+#[cfg(feature = "widget")]
 impl dyn Indicator {
+    #[cfg(feature = "studies")]
     pub(crate) fn concrete<T: 'static>(&self) -> Option<&T> {
         let cast: fn(&T) -> &dyn std::any::Any = |value| value;
         ConcreteStudy::concrete_study(self, &cast)?.downcast_ref()
+    }
+    pub(crate) fn concrete_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        let cast: fn(&mut T) -> &mut dyn std::any::Any = |value| value;
+        ConcreteStudy::concrete_study_mut(self, &cast)?.downcast_mut()
     }
 }
 

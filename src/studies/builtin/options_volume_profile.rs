@@ -182,7 +182,7 @@ pub struct OptionsVolumeProfile {
     // The widest row's share of the plot's width, in percent.
     width_percent: f64,
     exposure: Option<OptionExposureHandle>,
-    exposure_levels: [Cell<bool>; 3],
+    zero_gamma: Cell<bool>,
     max_pain: Cell<bool>,
     // Inputs the chain does not yet offer, in their saved order.
     waiting_inputs: RefCell<Vec<(String, InputValue)>>,
@@ -258,7 +258,7 @@ impl OptionsVolumeProfile {
             left: false,
             width_percent: 27.0,
             exposure: None,
-            exposure_levels: Default::default(),
+            zero_gamma: Cell::new(false),
             max_pain: Cell::new(false),
             waiting_inputs: RefCell::default(),
             expected_move: false,
@@ -290,11 +290,12 @@ impl OptionsVolumeProfile {
     /// put bars by default, or calls minus puts, calls plus puts, calls plus puts by
     /// expiration, each expiration a segment of its strike's row in a colour of its own, named
     /// with its date in a key, or puts divided by calls, which leaves a strike without calls
-    /// empty. Gamma exposure draws net bars by default, or split bars. Call
-    /// and put walls, off by default, mark the strikes with the largest call and the largest
-    /// put figure of the measure in size, summed over the selected expiries, the lower strike
-    /// on a tie; a side whose figures are all zero has none, and volume or open interest drawn in
-    /// place of a saved measure that waits for its data has none. Split, net, calls plus puts and
+    /// empty. Gamma exposure draws net bars by default, or split bars. Call and put walls,
+    /// shown while their lines are ticked in the Style tab and off on a new profile, mark the
+    /// strikes with the largest call and the largest put figure of the measure in size, summed
+    /// over the selected expiries, the lower strike on a tie; a side whose figures are all zero
+    /// has none, and volume or open interest drawn in place of a saved measure that waits for
+    /// its data has none. Split, net, calls plus puts and
     /// puts divided by calls bars take their own colour inputs in the Style tab, calls blue, puts
     /// red and puts divided by calls orange by default. Every row takes its display's colours at
     /// one opacity; the profile marks no point of control or value area. Values, off by default,
@@ -305,11 +306,14 @@ impl OptionsVolumeProfile {
     /// 30% of the plot's width, 27% by default. Layout can instead place each upcoming expiration
     /// beside its date on the time scale, on the chosen side, separately or grouped by week or
     /// month. Maximum expirations counts from the nearest, 10 by default. Each group shares the
-    /// strike window and row height, names its own walls inside its profile, past their rows' bars
-    /// and figures where there is room and otherwise over the bars near their base, leaving out a
-    /// label with no room clear of the figures, and labels its latest date on the time scale
-    /// while Expiration labels is on. Groups mapping to one bar are combined; without chart bars
-    /// no dated profiles are drawn.
+    /// strike window and row height and marks its own walls with half pennants in their colours
+    /// that point along their strikes' lines at their rows, the call wall's above the line and
+    /// the put wall's below it: from before the rows' base and from past the row's bars, figures
+    /// and key, or for gamma exposure from either side of the bar inside the profile. Groups at
+    /// least 40 points wide, a week at the default bar spacing, keep their pennants clear of each
+    /// other's rows and figures. Each group labels its latest date on the time scale while
+    /// Expiration labels is on. Groups mapping to one bar are combined; without chart bars no
+    /// dated profiles are drawn.
     /// Under Through date, Maximum expirations keeps the first N listed expiries on or after the
     /// current day; 0 keeps every listed expiry up to the date. Strikes around price draws the
     /// strikes at the underlying price the expected move uses and the N nearest below and above
@@ -384,7 +388,7 @@ impl OptionsVolumeProfile {
             left: false,
             width_percent: 27.0,
             exposure: None,
-            exposure_levels: Default::default(),
+            zero_gamma: Cell::new(false),
             max_pain: Cell::new(false),
             waiting_inputs: RefCell::default(),
             expected_move: false,
@@ -437,17 +441,16 @@ impl OptionsVolumeProfile {
             || (!cache.volume_available && !cache.interest_available && cache.exposure.is_some())
     }
 
-    /// Whether wall `side`, 0 for calls and 1 for puts, is drawn: its switch is on, and volume or
-    /// open interest drawn in place of a saved measure that waits for its data shows no walls,
-    /// as before those measures had them.
-    fn wall_drawn(&self, side: usize, cache: &CachedProfile) -> bool {
-        self.exposure_levels[side].get()
-            && (self.gamma_selected(cache)
-                || !self
-                    .waiting_inputs
-                    .borrow()
-                    .iter()
-                    .any(|(id, _)| id == "measure_label"))
+    /// Whether the profile shows walls where their lines are ticked: volume or open interest
+    /// drawn in place of a saved measure that waits for its data shows none, as before those
+    /// measures had walls.
+    fn walls_drawn(&self, cache: &CachedProfile) -> bool {
+        self.gamma_selected(cache)
+            || !self
+                .waiting_inputs
+                .borrow()
+                .iter()
+                .any(|(id, _)| id == "measure_label")
     }
 
     /// The measure drawn, as its place in [`MEASURES`].
@@ -524,9 +527,7 @@ impl OptionsVolumeProfile {
                 self.gamma.set(label == "Gamma exposure");
             }
             ("max_pain", InputValue::Toggle(enabled), _) => self.max_pain.set(*enabled),
-            ("call_wall", InputValue::Toggle(enabled), _) => self.exposure_levels[0].set(*enabled),
-            ("put_wall", InputValue::Toggle(enabled), _) => self.exposure_levels[1].set(*enabled),
-            ("zero_gamma", InputValue::Toggle(enabled), _) => self.exposure_levels[2].set(*enabled),
+            ("zero_gamma", InputValue::Toggle(enabled), _) => self.zero_gamma.set(*enabled),
             _ => return false,
         }
         true
@@ -725,7 +726,7 @@ impl OptionsVolumeProfile {
                         }
                     }
                 }
-                let walls = [0, 1].map(|side| self.wall_drawn(side, &cache));
+                let walls = self.walls_drawn(&cache);
                 let wall_colors =
                     [3, 4].map(|line| self.plot_style(line).color.to_srgba_unmultiplied());
                 cache.groups = groups
@@ -744,15 +745,13 @@ impl OptionsVolumeProfile {
                                     profile.expiry_tag =
                                         Some((latest, color.to_srgba_unmultiplied()));
                                 }
-                                if walls.contains(&true) {
-                                    let strikes = if gamma {
-                                        exposure_walls(exposure.as_deref())
-                                    } else {
-                                        option_walls(&figures)
-                                    };
+                                if walls {
                                     profile.walls = Some(OptionWalls {
-                                        strikes: [0, 1]
-                                            .map(|side| strikes[side].filter(|_| walls[side])),
+                                        strikes: if gamma {
+                                            exposure_walls(exposure.as_deref())
+                                        } else {
+                                            option_walls(&figures)
+                                        },
                                         colors: wall_colors,
                                     });
                                 }
@@ -1381,7 +1380,8 @@ impl Indicator for OptionsVolumeProfile {
     }
     fn plot_style(&self, line: usize) -> PlotStyle {
         PlotStyle {
-            visible: true,
+            // The call and put walls show once their lines are ticked in the style tab.
+            visible: !(3..=4).contains(&line),
             color: self.colors.get(line).copied().unwrap_or(self.colors[0]),
             width: 1.0,
             pattern: if line == 8 {
@@ -1399,19 +1399,36 @@ impl Indicator for OptionsVolumeProfile {
         if line == 8 {
             return self.current_price;
         }
-        self.refresh();
+        // A wall's readout follows its line in the style tab; legend_lines leaves out walls not
+        // shown.
         if (3..=4).contains(&line) {
-            // Profiles drawn at their expirations mark their own walls.
-            !self.at_expiration && self.wall_drawn(line - 3, &self.cache.borrow())
-        } else if self.gamma_selected(&self.cache.borrow()) {
-            line == 2 || line == 5 && self.exposure_levels[2].get()
+            return false;
+        }
+        self.refresh();
+        if self.gamma_selected(&self.cache.borrow()) {
+            line == 2 || line == 5 && self.zero_gamma.get()
         } else {
             (line == 0 && self.put_call) || (line == 1 && self.max_pain.get())
         }
     }
+    fn legend_lines(&self) -> Vec<usize> {
+        // line_count refreshes the cache through line_names, so it comes before the borrow.
+        let lines = self.line_count();
+        let cache = self.cache.borrow();
+        // Profiles drawn at their expirations mark their own walls.
+        (0..lines)
+            .filter(|&line| {
+                !(3..=4).contains(&line) || !self.at_expiration && self.walls_drawn(&cache)
+            })
+            .collect()
+    }
     fn readout_only(&self, line: usize) -> bool {
         // The put/call ratio and net gamma are far from the prices they would share a scale with.
         matches!(self.source, ProfileSource::Chain(..)) && (line == 0 || line == 2)
+    }
+    fn plot_color_only(&self, line: usize) -> bool {
+        // Tags beside their rows at each expiration, lines of the declared look at the edge.
+        matches!(self.source, ProfileSource::Chain(..)) && (3..=4).contains(&line)
     }
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
         if !self.matching_symbol || bar >= self.values.len() {
@@ -1431,14 +1448,14 @@ impl Indicator for OptionsVolumeProfile {
                 .filter(|price| price.is_finite());
         }
         if (3..=4).contains(&line) {
-            return (!self.at_expiration && self.wall_drawn(line - 3, &cache))
+            return (!self.at_expiration && self.walls_drawn(&cache))
                 .then_some(cache.walls[line - 3])
                 .flatten();
         }
         if self.gamma_selected(&cache) {
             return match line {
                 2 => cache.net,
-                5 if self.exposure_levels[2].get() => cache
+                5 if self.zero_gamma.get() => cache
                     .exposure
                     .as_ref()
                     .and_then(|profile| profile.snapshot.zero_gamma),
@@ -1667,22 +1684,16 @@ impl Indicator for OptionsVolumeProfile {
             )
             .with_default(InputValue::Toggle(true)),
         ]);
-        for (index, id, label) in [
-            (0, "call_wall", "Call wall"),
-            (1, "put_wall", "Put wall"),
-            (2, "zero_gamma", "Zero gamma (provider)"),
-        ] {
-            if index < 2 || gamma && cache.supplied.is_some() {
-                inputs.push(
-                    StudyInput::new(
-                        id,
-                        label,
-                        InputValue::Toggle(self.exposure_levels[index].get()),
-                        InputKind::Toggle,
-                    )
-                    .with_default(InputValue::Toggle(false)),
-                );
-            }
+        if gamma && cache.supplied.is_some() {
+            inputs.push(
+                StudyInput::new(
+                    "zero_gamma",
+                    "Zero gamma (provider)",
+                    InputValue::Toggle(self.zero_gamma.get()),
+                    InputKind::Toggle,
+                )
+                .with_default(InputValue::Toggle(false)),
+            );
         }
         if cache.pain_available && !gamma {
             inputs.push(
@@ -2299,12 +2310,6 @@ mod tests {
                 .set_input("measure", InputValue::Choice(gamma))
                 .unwrap();
             study.calculate(&[Bar::new(time, 105.0, 112.0, 98.0, 105.0, 1.0)]);
-            assert!(!study.legend_visible(3));
-            assert_eq!(study.plot_value(3, 0), None);
-            assert_eq!(study.plot_value(4, 0), None);
-            for id in ["call_wall", "put_wall"] {
-                study.set_input(id, InputValue::Toggle(true)).unwrap();
-            }
             for replace in [false, true] {
                 if replace {
                     rows.truncate(2);
@@ -2598,9 +2603,6 @@ mod tests {
                 .collect();
             sink.push(rows).unwrap();
             study.set_input("measure", InputValue::Choice(1)).unwrap();
-            for id in ["call_wall", "put_wall"] {
-                study.set_input(id, InputValue::Toggle(true)).unwrap();
-            }
             assert_eq!([study.plot_value(3, 0), study.plot_value(4, 0)], walls);
         }
     }
@@ -2967,9 +2969,7 @@ mod tests {
     fn saved_profile_restores_before_its_quotes_arrive() {
         let (chain, sink, rows, expiry, bars) = expected_move_chain();
         sink.push(rows).unwrap();
-        let mut template = saved_hidden_band(chain, expiry, &bars);
-        let wall = template.inputs.iter_mut().find(|(id, _)| id == "call_wall");
-        wall.unwrap().1 = InputValue::Toggle(true);
+        let template = saved_hidden_band(chain, expiry, &bars);
         let (later, later_sink, later_rows, _, _) = expected_move_chain();
         let mut loaded = template
             .create_with(&profile_factory(later, vec![expiry]))
@@ -2988,20 +2988,6 @@ mod tests {
             template.inputs
         );
         assert!(loaded.fills().is_empty());
-
-        // Walls are offered for every measure, so quotes with volume list the saved wall.
-        let (later, later_sink, mut later_rows, _, _) = expected_move_chain();
-        let mut loaded = template
-            .create_with(&profile_factory(later, vec![expiry]))
-            .unwrap();
-        for row in &mut later_rows {
-            row.volume = Some(1.0);
-        }
-        later_sink.push(later_rows).unwrap();
-        assert!(loaded.inputs().iter().any(|input| input.id == "call_wall"));
-        loaded
-            .set_input("call_wall", InputValue::Toggle(true))
-            .unwrap();
         // An id it can never offer fails even before quotes arrive.
         let (later, _later_sink, _, _, _) = expected_move_chain();
         let mut waiting = OptionsVolumeProfile::from_chain(later, "SAMPLE", vec![expiry]).unwrap();
@@ -3719,7 +3705,8 @@ mod tests {
 
     /// A profile saved while one Sides choice served every measure and its readouts showed with
     /// their lines unticked draws each measure as before: split or net bars as saved, in its
-    /// first two line colours, at the right of the plot, with its readout in the legend.
+    /// first two line colours, at the right of the plot, with its readout in the legend and no
+    /// wall. A profile saved with wall switches shows the walls it drew, without the switches.
     #[test]
     fn profiles_saved_with_one_sides_choice_draw_as_before() {
         use ProfileDisplay::{Delta, UpDown};
@@ -3760,6 +3747,12 @@ mod tests {
             assert_eq!((plot.right_aligned, plot.width), (true, 0.9));
             assert!(restored.legend_visible(readout), "{label}");
             assert!(!restored.plot_style(readout).visible, "{label}");
+            // Saved before walls had switches for every measure: no wall was drawn.
+            assert_eq!(
+                [3, 4].map(|line| restored.plot_style(line).visible),
+                [false; 2],
+                "{label}"
+            );
             // Saved before the strike limit, the current price line, the daily interval default
             // and the Puts / calls colour: every strike, no price line, every interval and the
             // puts colour.
@@ -3797,6 +3790,44 @@ mod tests {
         assert_eq!(ratio, Some(InputValue::Color(puts)));
         let plot = restored.volume_profiles(0..1).remove(0);
         assert_eq!(plot.color, puts.to_srgba_unmultiplied());
+        // Saved with Call wall and Put wall switches, a wall drew while its switch and its line
+        // were both on; saved without them, as profiles are now, the lines restore as saved.
+        let wall = |id: &str| id == "call_wall" || id == "put_wall";
+        for (switches, lines, shown) in [
+            (Some([false, false]), [true, true], [false, false]),
+            (Some([true, false]), [true, true], [true, false]),
+            (Some([true, true]), [false, true], [false, true]),
+            (None, [true, false], [true, false]),
+        ] {
+            let case = format!("switches {switches:?}, lines {lines:?}");
+            let mut template: crate::studies::StudyTemplate = serde_json::from_str(saved).unwrap();
+            template.inputs.retain(|(id, _)| !wall(id));
+            for (id, on) in ["call_wall", "put_wall"]
+                .into_iter()
+                .zip(switches.iter().flatten())
+            {
+                template
+                    .inputs
+                    .push((id.to_owned(), InputValue::Toggle(*on)));
+            }
+            for (line, visible) in [3, 4].into_iter().zip(lines) {
+                template.settings.plots[line].visible = visible;
+            }
+            let restored = template
+                .create_with(&factory)
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
+            assert_eq!(
+                [3, 4].map(|line| restored.plot_style(line).visible),
+                shown,
+                "{case}"
+            );
+            assert!(
+                !restored.inputs().iter().any(|input| wall(&input.id)),
+                "{case}"
+            );
+            let saved_again = crate::studies::StudyTemplate::from_study(restored.as_ref());
+            assert!(!saved_again.inputs.iter().any(|(id, _)| wall(id)), "{case}");
+        }
     }
 
     /// Each Sides choice draws its display in colours of its own, so that colours chosen for one
@@ -3934,7 +3965,8 @@ mod tests {
 
     /// The call and put walls of volume and open interest are the strikes with the largest call
     /// and put figure of the measure, the lower strike on a tie, and a side without any figure
-    /// has none.
+    /// has none. A new profile lists no wall switch and starts with both wall lines unticked; a
+    /// ticked line alone shows its wall.
     #[test]
     fn volume_and_interest_walls_follow_their_measure() {
         let feed = ChainFeed::default();
@@ -3942,8 +3974,23 @@ mod tests {
         let query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
         let chain = OptionChain::new(&feed, query, || {}).unwrap();
         let sink = feed.0.lock().unwrap().clone().unwrap();
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        let mut study: Box<dyn Indicator> = Box::new(crate::studies::ConfiguredStudy::new(
+            Box::new(OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap()),
+        ));
         study.calculate(&[Bar::new(Utc::now(), 100.0, 101.0, 99.0, 100.0, 1.0)]);
+        assert!(
+            !study
+                .inputs()
+                .iter()
+                .any(|input| input.id == "call_wall" || input.id == "put_wall")
+        );
+        assert!(!study.plot_style(3).visible && !study.plot_style(4).visible);
+        let tick = |study: &mut dyn Indicator, shown: bool| {
+            let mut settings = study.settings();
+            settings.plots[3].visible = shown;
+            settings.plots[4].visible = shown;
+            study.apply_settings(&[], settings).unwrap();
+        };
         // Volume and open interest of the calls and of the puts at 90, 100 and 110. The chain
         // lists Volume and Open interest.
         let calls = [[10.0, 30.0, 20.0], [7.0, 2.0, 9.0]];
@@ -3975,34 +4022,29 @@ mod tests {
             study
                 .set_input("measure", InputValue::Choice(measure))
                 .unwrap();
-            for id in ["call_wall", "put_wall"] {
-                study.set_input(id, InputValue::Toggle(true)).unwrap();
-            }
             let drawn = [study.plot_value(3, 0), study.plot_value(4, 0)];
             assert_eq!(drawn, walls, "measure {measure}");
+            assert!(!study.legend_visible(3), "measure {measure}");
+            tick(&mut *study, true);
+            assert!(study.plot_style(3).visible, "measure {measure}");
+            assert!(study.legend_lines().contains(&3), "measure {measure}");
             assert!(study.legend_visible(3), "measure {measure}");
+            tick(&mut *study, false);
         }
-        study
-            .set_input("call_wall", InputValue::Toggle(false))
-            .unwrap();
-        assert_eq!(study.plot_value(3, 0), None);
-        assert!(!study.legend_visible(3));
         // A saved measure the chain cannot draw yet waits, and the volume drawn in its place
         // shows no walls, as a profile saved before volume had walls drew none.
-        study
-            .set_input("call_wall", InputValue::Toggle(true))
-            .unwrap();
+        tick(&mut *study, true);
         study
             .set_input("measure_label", InputValue::Text("Gamma exposure".into()))
             .unwrap();
         assert_eq!(study.plot_value(3, 0), None);
-        assert!(!study.legend_visible(3));
+        assert!(!study.legend_lines().contains(&3));
     }
 
     /// Each Sides display paints every strike in its own colours at one opacity, with no line
     /// across the profile: an edited Puts colour paints the puts of split bars alone, and puts
-    /// divided by calls keep a colour of their own. With Values on, the walls are named clear of
-    /// every figure and of each other, at either placement.
+    /// divided by calls keep a colour of their own. With Values on, the wall pennants clear every
+    /// row, figure and each other, at either placement.
     #[cfg(feature = "widget")]
     #[test]
     fn options_rows_keep_their_colours_and_walls_clear_their_figures() {
@@ -4089,32 +4131,39 @@ mod tests {
                         "{case}: {rows:?}"
                     );
                     assert!(
-                        !shapes.iter().any(|shape| matches!(
-                            &shape.shape,
-                            Shape::LineSegment { .. } | Shape::Path(_)
-                        )),
+                        !shapes.iter().any(|shape| match &shape.shape {
+                            Shape::LineSegment { .. } => true,
+                            Shape::Path(path) => !path.closed,
+                            _ => false,
+                        }),
                         "{case}: no line across the profile"
                     );
-                    let (walls, figures): (Vec<_>, Vec<_>) = shapes
-                        .iter()
-                        .filter_map(|shape| match &shape.shape {
-                            Shape::Text(text) => Some((
-                                wall_colors.contains(&text.fallback_color),
-                                Rect::from_min_size(text.pos, text.galley.size()),
-                            )),
-                            _ => None,
-                        })
-                        .partition(|(wall, _)| *wall);
-                    assert_eq!(walls.len(), 2, "{case}");
-                    for (_, wall) in &walls {
+                    let (mut tags, mut figures, mut bars) = (Vec::new(), Vec::new(), Vec::new());
+                    for shape in &shapes {
+                        match &shape.shape {
+                            Shape::Path(path) if path.closed => {
+                                tags.push(shape.shape.visual_bounding_rect());
+                            }
+                            Shape::Text(text) => {
+                                figures.push(Rect::from_min_size(text.pos, text.galley.size()));
+                            }
+                            Shape::Rect(bar) => bars.push(bar.rect),
+                            _ => {}
+                        }
+                    }
+                    assert_eq!(tags.len(), 2, "{case}");
+                    for tag in &tags {
                         assert!(
-                            figures.iter().all(|(_, figure)| !wall.intersects(*figure)),
-                            "{case}: wall {wall:?} clears {figures:?}"
+                            figures
+                                .iter()
+                                .chain(&bars)
+                                .all(|other| !tag.intersects(*other)),
+                            "{case}: tag {tag:?} clears {figures:?} and {bars:?}"
                         );
                     }
                     assert!(
-                        !walls[0].1.intersects(walls[1].1),
-                        "{case}: walls clear each other"
+                        !tags[0].intersects(tags[1]),
+                        "{case}: tags clear each other"
                     );
                 }
             }
@@ -4466,7 +4515,6 @@ mod tests {
                 ("placement", Choice(usize::from(left))),
                 ("grouping", Choice(grouping)),
                 ("expirations", Length(maximum)),
-                ("call_wall", Toggle(true)),
             ] {
                 study.set_input(id, value).unwrap();
             }
@@ -4522,31 +4570,27 @@ mod tests {
                         });
                     let shapes = std::mem::take(&mut output.shapes);
                     output.drop_without_applying_deltas();
-                    let label = shapes
+                    // The call wall's pennant points at its row from 1 before the base; calls
+                    // without puts have no put wall.
+                    let tags: Vec<_> = shapes
                         .iter()
-                        .find_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text) if text.galley.text() == "Call wall" => {
-                                Some(text)
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::Path(path) if path.closed => {
+                                Some((path.fill, path.points.clone()))
                             }
                             _ => None,
                         })
-                        .expect("the profile's own wall is labelled");
-                    let label_end = if left {
-                        label.pos.x + label.galley.size().x
-                    } else {
-                        label.pos.x
+                        .collect();
+                    let [(fill, points)] = tags.as_slice() else {
+                        panic!("one pennant, got {tags:?}");
                     };
-                    // The widest bar reaches 90, leaving no room past it inside the span, so the
-                    // label lies over it 4 from the base; the zero ratio has no bar.
-                    let expected = if left { 196.0 } else { 104.0 };
-                    assert!((label_end - expected).abs() < 1e-3);
                     assert_eq!(
-                        label.fallback_color,
-                        study.plot_style(3).color,
-                        "labelled in the call wall colour"
+                        *fill,
+                        Color32::from_rgb(41, 98, 255),
+                        "the call wall colour"
                     );
-                    assert!(!shapes.iter().any(|shape| matches!(&shape.shape,
-                    egui::Shape::Text(text) if text.galley.text() == "Put wall")));
+                    let tip = egui::pos2(if left { 201.0 } else { 99.0 }, 100.0);
+                    assert!(points.contains(&tip), "{points:?}");
                     assert!(
                         !shapes
                             .iter()
@@ -4567,6 +4611,10 @@ mod tests {
                 );
                 let coords = crate::chart::coords::ChartMapping::new(rect, 10.0, 0, 60, 0.0, map);
                 let mut configured = crate::studies::ConfiguredStudy::new(Box::new(study.clone()));
+                assert!(
+                    !configured.plot_style(3).visible,
+                    "new profiles start without walls"
+                );
                 for shown in [false, true] {
                     let mut settings = configured.settings();
                     settings.plots[3].visible = shown;
@@ -4581,14 +4629,17 @@ mod tests {
                             &coords,
                         );
                     });
-                    let labelled = output.shapes.iter().any(|shape| {
+                    let tagged = output.shapes.iter().any(|shape| {
                         matches!(
                             &shape.shape,
-                            egui::Shape::Text(text) if text.galley.text() == "Call wall"
+                            egui::Shape::Path(path)
+                                if path.closed && path.fill == Color32::from_rgb(41, 98, 255)
                         )
                     });
                     output.drop_without_applying_deltas();
-                    assert_eq!(labelled, shown, "the wall follows its plot's visibility");
+                    assert_eq!(tagged, shown, "the wall follows its plot's visibility");
+                    // Each expiration marks its own walls, which the legend does not list.
+                    assert!(!configured.legend_lines().contains(&3));
                 }
                 let color = Color32::from_rgb(210, 80, 40);
                 let mut settings = configured.settings();
@@ -4647,14 +4698,14 @@ mod tests {
         assert_eq!(merged[1].profile.up(), [28.0]);
     }
 
-    /// Expirations a week apart draw adjacent profiles. At either placement, with both walls and
-    /// Values on, each profile writes its wall labels and figures inside its own span, clear of
-    /// the other profile's rows and figures, a label with no room past its row lying over the
-    /// row's bar near its base. An exposure wall is named above its line only where the label
-    /// fits the span.
+    /// Expirations a week apart draw adjacent profiles. At either placement, with Values on or
+    /// off, for volume and gamma exposure and down to narrow profiles, every wall of every
+    /// profile is marked at its strike by a pennant that points at its row from 1 point away, the
+    /// call wall's before the row and the put wall's past its bars and figures, and no pennant
+    /// covers the rows or figures of either profile or the other profile's pennants.
     #[cfg(feature = "widget")]
     #[test]
-    fn wall_labels_stay_inside_their_expirations_profile() {
+    fn wall_tags_point_at_their_rows_at_every_expiration() {
         use crate::model::Timeframe;
         use crate::scales::{PriceMap, PriceRange, PriceTransform};
         use InputValue::{Choice, Toggle};
@@ -4728,12 +4779,49 @@ mod tests {
             200.0,
             false,
         );
-        // A profile is 7 bars wide: 140 at spacing 20, 28 at spacing 4. At 140 the widest bar
-        // takes 126, so no wall label fits past its row and each lies over its bars, 4 from
-        // their base; an exposure label fits at 140 but not at 28.
-        for (measure, spacing, labels) in [(0, 20.0, 2), (2, 20.0, 2), (2, 4.0, 0)] {
+        // The call and put walls of each expiration, and their pennants' fills: the opaque wall
+        // colours.
+        let strikes = [[110.0, 105.0], [100.0, 110.0]];
+        let profile =
+            OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.to_vec()).unwrap();
+        let fills = [3, 4].map(|line| {
+            let [r, g, b, _] = profile.plot_style(line).color.to_srgba_unmultiplied();
+            Color32::from_rgb(r, g, b)
+        });
+        // A profile is 7 bars wide, W: 140 at spacing 20, 42 at 6, the default, and 28 at 4, its
+        // widest row 0.9 W. The tips' offsets from the base are listed by placement, right then
+        // left, profile and wall, call then put. A row starts at the base: the call wall's tip
+        // lies 1 before it and the put wall's 1 past what reaches farthest at its strike, the
+        // widest row's figure, which ends 2 short of the far edge and the 4 left for a pennant, at
+        // W - 6 = 134, or the row's bar at 0.9 W without Values. A net gamma bar runs from the zero
+        // line at 0.5 W to 0.45 W × net / largest net past it, calls to the right: November 13's
+        // call wall bar, 19,500 of 24,000, ends 0.865625 W from the start and November 20's, 14,000
+        // of 19,000, 0.831579 W; each put wall bar ends 0.05 W from the start. Exposure pennants
+        // stay inside their profile, the call wall's before its bar and the zero line and the put
+        // wall's past them, or the other way where that has no room: from the start at 0.5 W - 1
+        // and 0.5 W + 1, from the end at 0.134375 W - 1, 0.168421 W - 1 and 0.95 W + 1, while at
+        // W = 28 November 13's call wall points from past the zero line, 14 + 1, and both put
+        // walls from before it, 14 - 1.
+        for (measure, spacing, values, tips) in [
+            (0, 20.0, true, [[[-1.0, 135.0]; 2]; 2]),
+            (0, 20.0, false, [[[-1.0, 127.0]; 2]; 2]),
+            (0, 6.0, false, [[[-1.0, 38.8]; 2]; 2]),
+            (
+                2,
+                20.0,
+                true,
+                [[[69.0, 71.0]; 2], [[17.8125, 134.0], [22.579, 134.0]]],
+            ),
+            (
+                2,
+                4.0,
+                true,
+                [[[13.0, 15.0]; 2], [[15.0, 13.0], [3.7158, 13.0]]],
+            ),
+        ] {
             for left in [false, true] {
-                let case = format!("measure {measure}, spacing {spacing}, left {left}");
+                let case =
+                    format!("measure {measure}, spacing {spacing}, values {values}, left {left}");
                 let mut study =
                     OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.to_vec())
                         .unwrap();
@@ -4742,14 +4830,12 @@ mod tests {
                     ("layout", Choice(1)),
                     ("placement", Choice(usize::from(left))),
                     ("measure", Choice(measure)),
-                    ("show_values", Toggle(true)),
-                    ("call_wall", Toggle(true)),
-                    ("put_wall", Toggle(true)),
+                    ("show_values", Toggle(values)),
                 ] {
                     study.set_input(id, value).unwrap();
                 }
                 study.calculate(&bars);
-                // Base index 30 keeps indices 6 to 26 inside the plot at both spacings.
+                // Base index 30 keeps indices 6 to 26 inside the plot at every spacing.
                 let coords =
                     crate::chart::coords::ChartMapping::new(rect, spacing, 0, 30, 0.0, map);
                 let painted: Vec<_> = study
@@ -4778,23 +4864,30 @@ mod tests {
                             });
                         let shapes = std::mem::take(&mut output.shapes);
                         output.drop_without_applying_deltas();
-                        let (mut walls, mut figures, mut rows) =
-                            (Vec::new(), Vec::new(), Vec::new());
+                        let (mut tags, mut figures, mut rows) =
+                            ([Vec::new(), Vec::new()], Vec::new(), Vec::new());
                         for shape in &shapes {
                             match &shape.shape {
+                                Shape::Path(path) if path.closed => {
+                                    let side = fills.iter().position(|&fill| path.fill == fill);
+                                    // The tip is the corner with an x of its own.
+                                    let tip = path.points.iter().find(|tip| {
+                                        path.points.iter().filter(|point| point.x == tip.x).count()
+                                            == 1
+                                    });
+                                    tags[side.expect("a pennant in a wall colour")].push((
+                                        *tip.expect("a tip"),
+                                        shape.shape.visual_bounding_rect(),
+                                    ));
+                                }
                                 Shape::Text(text) => {
-                                    let at = Rect::from_min_size(text.pos, text.galley.size());
-                                    if ["Call wall", "Put wall"].contains(&text.galley.text()) {
-                                        walls.push(at);
-                                    } else {
-                                        figures.push(at);
-                                    }
+                                    figures.push(Rect::from_min_size(text.pos, text.galley.size()));
                                 }
                                 Shape::Rect(row) => rows.push(row.rect),
                                 _ => {}
                             }
                         }
-                        (span, plot.right_aligned, walls, figures, rows)
+                        (span, plot.right_aligned, tags, figures, rows)
                     })
                     .collect();
                 assert_eq!(painted.len(), 2, "{case}");
@@ -4802,37 +4895,57 @@ mod tests {
                     (painted[0].0.end - painted[1].0.start).abs() < 1e-3,
                     "{case}: adjacent"
                 );
-                for (index, (span, right_aligned, walls, figures, _)) in painted.iter().enumerate()
-                {
-                    assert_eq!(walls.len(), labels, "{case}");
-                    // Gamma exposure writes no figures.
-                    assert_eq!(figures.len(), if measure == 0 { 3 } else { 0 }, "{case}");
-                    for text in walls.iter().chain(figures) {
+                // No pennant covers the other profile's rows, figures or pennants: a call wall's
+                // lies above its strike's line and a put wall's below, so two at one strike touch.
+                for (index, (_, _, tags, _, _)) in painted.iter().enumerate() {
+                    let (_, _, pennants, figures, rows) = &painted[1 - index];
+                    for (_, tag) in tags.iter().flatten() {
                         assert!(
-                            span.start <= text.left() && text.right() <= span.end,
-                            "{case}: {text:?} inside {span:?}"
+                            rows.iter()
+                                .chain(figures)
+                                .all(|other| !tag.intersects(*other))
+                                && pennants.iter().flatten().all(|(_, other)| {
+                                    let overlap = tag.intersect(*other);
+                                    overlap.width() <= 0.0 || overlap.height() <= 0.0
+                                }),
+                            "{case}: {tag:?} clears the other profile"
                         );
                     }
-                    let (_, _, _, other_figures, other_rows) = &painted[1 - index];
-                    for wall in walls {
+                }
+                for (index, (span, right_aligned, tags, figures, rows)) in
+                    painted.iter().enumerate()
+                {
+                    assert_eq!(*right_aligned, left, "{case}");
+                    // Gamma exposure writes no figures.
+                    let written = if measure == 0 && values { 3 } else { 0 };
+                    assert_eq!(figures.len(), written, "{case}");
+                    for figure in figures {
                         assert!(
-                            other_figures
-                                .iter()
-                                .chain(other_rows)
-                                .all(|shape| !wall.intersects(*shape)),
-                            "{case}: {wall:?} clears the other profile"
+                            span.start <= figure.left() && figure.right() <= span.end,
+                            "{case}: {figure:?} inside {span:?}"
                         );
-                        if measure == 0 {
-                            let base = if *right_aligned {
-                                span.end - 4.0 - wall.width()
-                            } else {
-                                span.start + 4.0
-                            };
-                            assert!(
-                                (wall.left() - base).abs() < 1e-3,
-                                "{case}: {wall:?} near its base"
-                            );
-                        }
+                    }
+                    let (base, inward) = if left {
+                        (span.end, -1.0)
+                    } else {
+                        (span.start, 1.0)
+                    };
+                    for (side, tip) in tips[usize::from(left)][index].into_iter().enumerate() {
+                        let [(at, tag)] = tags[side].as_slice() else {
+                            panic!("{case}: one pennant on side {side}, got {:?}", tags[side]);
+                        };
+                        let expected =
+                            egui::pos2(base + inward * tip, map.price_to_y(strikes[index][side]));
+                        assert!(
+                            at.distance(expected) < 1e-3,
+                            "{case}: side {side} {tag:?} tip {at:?} at {expected:?}"
+                        );
+                        assert!(
+                            rows.iter()
+                                .chain(figures)
+                                .all(|other| !tag.intersects(*other)),
+                            "{case}: {tag:?} clears its own profile"
+                        );
                     }
                 }
             }
@@ -4875,9 +4988,6 @@ mod tests {
         };
         sink.push(rows(None)).unwrap();
         let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
-        for id in ["call_wall", "put_wall"] {
-            study.set_input(id, InputValue::Toggle(true)).unwrap();
-        }
         let every = [9.0, 0.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         // Without a supplied underlying price, the last close stands in; a new close alone moves
         // the rows.

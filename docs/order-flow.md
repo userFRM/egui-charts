@@ -3,6 +3,17 @@
 The library consumes the host's historical and streaming executions, quotes and synchronized
 book through the existing [`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html) and [`Sink`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html). It supplies no market data service.
 
+For a sealed time chart with prepared footprint history, call [`chart.set_trade_history_on_demand(true)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_trade_history_on_demand)
+before the first frame to skip the initial raw trade page. The chart still subscribes and requests
+candles and prepared rows normally. Adding an execution study such as Trade Rate or opening
+Time & Sales in Terminal requests the latest trades once for that chart. A host with its own tape
+panel can call [`chart.request_trade_history()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.request_trade_history) while the panel is open. Until the page arrives,
+missing executions are not evidence of zero trades. Leave the default eager policy in place for
+hosts that expect [`Chart::trades`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.trades) to be populated without declaring demand.
+In the demo, INDEXFH2027 answers [`Datafeed::footprints`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.footprints)
+for one-minute bars and its charts opt in, so a footprint chart of it opens without a trade
+request until Time & Sales opens or an execution study is added.
+
 ## Try execution coverage and depth loss
 
 On the published guide, select **Run example** to open an isolated chart with synthetic data.
@@ -41,6 +52,17 @@ no grouping crosses it.
 History bars newer than everything the trade page reaches draw candles too, so a host should answer
 both pages up to the same time.
 
+The demo's synthetic instruments, TOKENA, TOKENB, STOCKA, STOCKB, STOCKC, STOCKD, INDEXA,
+FOREXA, INDEXFZ2026, INDEXFH2027 and SAMPLE, answer
+[`Datafeed::trades`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.trades)
+and [`Datafeed::depth_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html#method.depth_history)
+for the time before their stream and declare both services. Their executions before the stream
+are re-created from the minute bars `history` returns, so each minute's executions rebuild its
+bar, and their depth columns hold a book quoted one tick around the price of those executions.
+Scrolling a footprint chart or the liquidity heatmap back past the streamed session loads both,
+and the feed answers as far back as its minute history reaches. The columns of INDEXFZ2026 before
+its stream carry no largest orders, since its individual orders there are not known.
+
 <!-- example -->
 
 The source beside the running example supplies candles independently, pushes chronological
@@ -73,6 +95,18 @@ constructor docs include examples of both forms.
 [`FootprintPage::bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FootprintPage.html#structfield.bars)
 is a [`FootprintBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FootprintBars.html);
 its `iter` method reads either form.
+
+To size the first prepared page independently of candle history, call
+[`chart.set_footprint_history_by_view(true)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_footprint_history_by_view)
+before showing the chart. It requests visible bars plus up to one viewport of prefetch
+(at most 150 extra bars), widened for footprint studies and profile anchors, never above
+the configured initial page size. With late candles or no layout it uses the viewport's
+bar-count estimate. The first request still asks for the **latest** rows: only the feed
+knows where live executions take over. A scrolled-back view can therefore need a second,
+time-bounded request. Once the cutoff is known, an opted-in footprint chart can request
+missing rows on the frame that pans into them. Returning to rows it already holds does not
+request them again. Candle and trade requests are unchanged. The demo's INDEXFH2027
+charts opt in as well.
 
 A bounded request names `[since, before)`. Each reply answers one contiguous suffix ending
 at `before`: its first bar starts the answered span, or an empty page uses
@@ -348,6 +382,16 @@ exceeds the upper one, the low check takes priority. The regime is a legend-only
 available to study alerts; a host formatter or an explicit precision override can format it
 numerically. A lost or overflowing window remains missing until the missing executions expire.
 
+On time bars, if a historical trade page does not reach the start of history, every study that
+reads executions (Trade Rate, Aggressor Rate, Levels Executed, Multi-Range Delta, Rolling Volume
+and Delta, Size-Filtered CVD, Execution Delta and Volatility Regime) leaves the candle containing
+the page's oldest retained execution without a value. This includes an execution stamped at the
+candle open: earlier prints can share its timestamp. Each rolling value becomes available as soon
+as its own window is covered; a rolling sum over bars that includes the candle stays blank, and a
+cumulative delta starts at the next candle. A replay cut inside the candle shows no value for it.
+A later page that reaches the start of history fills every study without a new request. The
+executions stay in Time & Sales.
+
 On history-only tick-count, range, volume and delta intervals, Trade Rate uses the recorded executions
 when the tape reaches its start without a gap and reproduces every candle's key and OHLCV.
 Range intervals use the instrument's tick size; without it the study stays blank. The
@@ -533,10 +577,13 @@ reaches its threshold. Automatic thresholds are four times the median non-zero s
 ticks on both sides; an even number uses the mean of the middle pair. A wall has traded at least
 10% of its peak, retains half its peak and sees the inside move three ticks away. Below 20% of
 peak, a level is pulled when withdrawals reach 80% of peak, or swept when executions cover half
-the drop and a later trade prints beyond it. These outcomes end its zone. Aggregate withdrawals
-are each size drop minus executions since the preceding update; individual orders use cancels
-and reductions. Fresh liquidity is size added in one update within five ticks, using its own
-threshold with the same automatic rule. Snapshots establish a baseline, not fresh arrivals.
+the drop and a later trade prints beyond it. These outcomes end its zone. A level below 20% of
+peak that can no longer be pulled or swept, even if the size it still shows all executes or is
+all withdrawn, ends its zone without an outcome, and a later large level at its price opens a
+zone of its own. Aggregate withdrawals are each size drop minus executions since the preceding
+update; individual orders use cancels and reductions. Fresh liquidity is size added in one
+update within five ticks, using its own threshold with the same automatic rule. Snapshots
+establish a baseline, not fresh arrivals.
 
 Only individual orders can show spoofing: an order added within five ticks, at least the large
 level threshold, is withdrawn below 10% within two seconds with less than 10% executed. Aggregate

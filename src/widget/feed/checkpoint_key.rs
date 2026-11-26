@@ -201,8 +201,10 @@ fn instrument_bytes(instrument: &Instrument) -> Option<usize> {
         identifiers,
         symbol_type: _,
         tick_size: _,
+        tick_tiers,
         pip_size: _,
         price_decimals: _,
+        price_fraction: _,
         volume_decimals: _,
         currency,
         unit,
@@ -246,6 +248,7 @@ fn instrument_bytes(instrument: &Instrument) -> Option<usize> {
     })?;
     [
         std::mem::size_of_val(identifiers.as_slice()),
+        std::mem::size_of_val(tick_tiers.as_slice()),
         time_zone.as_ref().map_or(0, |z| z.name().len()),
         std::mem::size_of_val(native_timeframes.as_deref().unwrap_or_default()),
         std::mem::size_of_val(supported_timeframes.as_deref().unwrap_or_default()),

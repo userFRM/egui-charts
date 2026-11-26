@@ -823,6 +823,46 @@ mod tests {
         assert_eq!(harness.state().0.time_in_force, TimeInForce::Day);
     }
 
+    /// Without the account's capability the ticket shows no trailing stop; with it, the
+    /// Trailing tab offers the distance and the activation price and sends a trailing stop.
+    #[test]
+    fn the_trailing_tab_needs_the_capability() {
+        let rules = TradingRules::new("ES");
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for accepted in [false, true] {
+                let mut harness = egui_kittest::Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_size(vec2(340.0, 1200.0))
+                    .with_accessibility_check(false)
+                    .build_ui_state(
+                        |ui, (ticket, accepted): &mut (OrderTicket, bool)| {
+                            let mut market = super::super::tests::market(&rules);
+                            market.capabilities.trailing_stop = *accepted;
+                            ticket.show(ui, &market, &mut BTreeMap::new(), &mut false, &mut false);
+                        },
+                        (
+                            OrderTicket {
+                                symbol: "ES".into(),
+                                ..OrderTicket::default()
+                            },
+                            accepted,
+                        ),
+                    );
+                crate::theme::apply_to_egui(&harness.ctx, &theme);
+                harness.run();
+                if !accepted {
+                    assert!(harness.query_by_label("Trailing").is_none());
+                    continue;
+                }
+                harness.get_by_label("Trailing").click();
+                harness.run();
+                harness.get_by_label("Trailing distance");
+                harness.get_by_role_and_label(egui::Role::Switch, "Activation price");
+                harness.get_by_label("Buy 1 ES TRAIL 10 ticks");
+            }
+        }
+    }
+
     #[test]
     fn short_tickets_keep_order_controls_reachable() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
@@ -849,9 +889,11 @@ mod tests {
                     bid: None,
                     ask: None,
                     tick: 0.25,
+                    tick_tiers: &[],
                     decimals: 2,
                     currency: "USD",
                     balance: None,
+                    available_funds: None,
                     rules: &rules,
                     rules_ready: true,
                     offline: None,
@@ -976,9 +1018,11 @@ mod tests {
             bid: Some(100.0),
             ask: Some(100.25),
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: None,
+            available_funds: None,
             capabilities,
             rules: &rules,
             rules_ready: true,
@@ -1263,9 +1307,11 @@ mod tests {
                 bid: Some(100.0),
                 ask: Some(100.25),
                 tick: 0.25,
+                tick_tiers: &[],
                 decimals: 2,
                 currency: "USD",
                 balance: None,
+                available_funds: None,
                 capabilities: Capabilities {
                     market: true,
                     limit: true,

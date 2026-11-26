@@ -4,7 +4,7 @@
 use crate::data::FeedError;
 use crate::data::inbox::Inbox;
 use crate::localization as l10n;
-use crate::services::{ShareKind, ShareLink, Sharing};
+use crate::services::{ShareAccess, ShareKind, ShareLink, Sharing};
 use egui::Ui;
 use std::sync::Arc;
 
@@ -14,13 +14,25 @@ enum Operation {
     Link(String),
     Copy(String),
     Revoke(String),
+    Share(String, ShareAccess),
+    /// The old and the new name.
+    Rename(String, String),
 }
 
 impl Operation {
-    /// The document the operation is made on.
+    /// The document the operation is made on: a rename's new name.
     fn document(&self) -> &str {
-        let (Self::Link(document) | Self::Copy(document) | Self::Revoke(document)) = self;
+        let (Self::Link(document)
+        | Self::Copy(document)
+        | Self::Revoke(document)
+        | Self::Share(document, _)
+        | Self::Rename(_, document)) = self;
         document
+    }
+
+    /// Whether the operation is made on the document `name`; a rename on both of its names.
+    fn is_on(&self, name: &str) -> bool {
+        self.document() == name || matches!(self, Self::Rename(old, _) if old == name)
     }
 }
 
@@ -30,6 +42,8 @@ enum Outcome {
     Link(ShareLink),
     Copy(String),
     Revoked,
+    Shared(ShareAccess),
+    Renamed,
     Failed(FeedError),
 }
 
@@ -57,12 +71,34 @@ impl ShareControls {
         self.sharing = Some(sharing);
     }
 
-    /// Whether the rows offer Stop sharing for the document `name`: the service offers revoking
-    /// and reports it shared.
-    pub(crate) fn can_stop_sharing(&self, kind: ShareKind, name: &str) -> bool {
+    /// Whether the service reports the document `name` shared.
+    pub(crate) fn shared(&self, kind: ShareKind, name: &str) -> bool {
         self.sharing
             .as_ref()
-            .is_some_and(|sharing| sharing.offers(kind).revoke && sharing.shared(kind, name))
+            .is_some_and(|sharing| sharing.shared(kind, name))
+    }
+
+    /// Whether the document `name` must not be deleted: the service reports it shared, or an
+    /// operation on it waits for the service's answer. Its link would outlive it.
+    pub(crate) fn blocks_delete(&self, kind: ShareKind, name: &str) -> bool {
+        self.pending
+            .as_ref()
+            .is_some_and(|operation| operation.is_on(name))
+            || self.shared(kind, name)
+    }
+
+    /// Whether an operation waits for the service's answer. The controls take one at a time.
+    pub(crate) fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Asks the service to move the sharing of `old` to `new`, its new name.
+    pub(crate) fn rename(&mut self, kind: ShareKind, old: &str, new: &str) {
+        let Some(sharing) = self.sharing.clone() else {
+            return;
+        };
+        self.pending = Some(Operation::Rename(old.to_owned(), new.to_owned()));
+        sharing.rename(kind, old, new, self.inbox.reply(0));
     }
 
     /// Takes the host's answer, copying a link to the clipboard. Returns the saved copy's name.
@@ -94,6 +130,22 @@ impl ShareControls {
                         Err(error) => Outcome::Failed(error),
                     },
                 ),
+                Operation::Rename(..) => answer.downcast::<Result<(), FeedError>>().map_or_else(
+                    |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
+                    |answer| match *answer {
+                        Ok(()) => Outcome::Renamed,
+                        Err(error) => Outcome::Failed(error),
+                    },
+                ),
+                Operation::Share(_, access) => {
+                    answer.downcast::<Result<(), FeedError>>().map_or_else(
+                        |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
+                        |answer| match *answer {
+                            Ok(()) => Outcome::Shared(*access),
+                            Err(error) => Outcome::Failed(error),
+                        },
+                    )
+                }
                 Operation::Copy(_) => answer.downcast::<Result<String, FeedError>>().map_or_else(
                     |_| Outcome::Failed(FeedError::Other("answer of another request".into())),
                     |answer| match *answer {
@@ -111,30 +163,81 @@ impl ShareControls {
     }
 
     /// Shows the rows the service offers for the document `name`, then the progress or result of
-    /// the last operation on it. Shows nothing without offers, shared state or a revoke result.
-    /// Returns true when Save a copy was chosen, so the caller can keep the document as it was.
+    /// the last operation on it. Shows nothing without offers, shared state or a revoke or rename
+    /// under way or answered. Returns true when Save a copy was chosen, so the caller can keep the
+    /// document as it was.
     pub(crate) fn show(&mut self, ui: &mut Ui, kind: ShareKind, name: &str) -> bool {
         let Some(sharing) = self.sharing.clone() else {
             return false;
         };
         let offer = sharing.offers(kind);
         let shared = sharing.shared(kind, name);
-        // Keep the host's revoke answer visible after shared state disappears.
-        let revoked = self.last.as_ref().is_some_and(
-            |(operation, _)| matches!(operation, Operation::Revoke(document) if document == name),
+        // Keep the host's revoke or rename answer, and the wait for it, visible after shared
+        // state disappears.
+        let answered = self.last.as_ref().is_some_and(|(operation, _)| {
+            matches!(
+                operation,
+                Operation::Revoke(document) | Operation::Rename(_, document) if document == name
+            )
+        });
+        let waiting = matches!(
+            &self.pending,
+            Some(Operation::Revoke(document) | Operation::Rename(_, document)) if document == name
         );
-        let revoking =
-            matches!(&self.pending, Some(Operation::Revoke(document)) if document == name);
-        if !offer.link && !offer.copy && !shared && !revoked && !revoking {
+        if !offer.link && !offer.copy && !offer.switch && !shared && !answered && !waiting {
             return false;
         }
         ui.separator();
-        if shared {
+        let idle = self.pending.is_none();
+        if offer.switch {
+            let label = match kind {
+                ShareKind::Layout => "Share layout",
+                ShareKind::Watchlist => "Share list",
+            };
+            let mut on = shared;
+            // Sharing starts view only; the access choice below widens it.
+            if ui
+                .add_enabled(
+                    idle,
+                    egui::Checkbox::new(&mut on, l10n::text(ui.ctx(), label)),
+                )
+                .changed()
+            {
+                if on {
+                    self.pending = Some(Operation::Share(name.to_owned(), ShareAccess::ViewOnly));
+                    sharing.share(kind, name, ShareAccess::ViewOnly, self.inbox.reply(0));
+                } else {
+                    self.pending = Some(Operation::Revoke(name.to_owned()));
+                    sharing.revoke(kind, name, self.inbox.reply(0));
+                }
+                ui.ctx().request_repaint();
+            }
+            if shared {
+                let current = sharing.access(kind, name);
+                for (access, text) in [
+                    (ShareAccess::ViewOnly, "View only"),
+                    (ShareAccess::ViewAndCopy, "View and copy"),
+                ] {
+                    if ui
+                        .add_enabled(
+                            idle,
+                            egui::RadioButton::new(current == access, l10n::text(ui.ctx(), text)),
+                        )
+                        .clicked()
+                        && current != access
+                    {
+                        self.pending = Some(Operation::Share(name.to_owned(), access));
+                        sharing.share(kind, name, access, self.inbox.reply(0));
+                        ui.ctx().request_repaint();
+                    }
+                }
+            }
+        } else if shared {
             ui.weak(l10n::text(ui.ctx(), "Shared by link"));
         }
         let mut copy = false;
-        let idle = self.pending.is_none();
         if offer.link
+            && (!offer.switch || shared)
             && ui
                 .add_enabled(idle, egui::Button::new(l10n::text(ui.ctx(), "Copy link")))
                 .clicked()
@@ -158,6 +261,7 @@ impl ShareControls {
         }
         if offer.revoke
             && shared
+            && !offer.switch
             && ui
                 .add_enabled(
                     self.pending.is_none(),
@@ -182,6 +286,8 @@ impl ShareControls {
                         Operation::Link(_) => "Getting the link…",
                         Operation::Copy(_) => "Saving a copy…",
                         Operation::Revoke(_) => "Stopping sharing…",
+                        Operation::Share(..) => "Sharing…",
+                        Operation::Rename(..) => "Keeping it shared…",
                     },
                 ),
             ))
@@ -204,17 +310,44 @@ impl ShareControls {
                         l10n::format_text(ui.ctx(), "Saved as {0}", &[("0", copy.clone())]),
                     ),
                     Outcome::Revoked => (false, l10n::text(ui.ctx(), "Sharing stopped")),
+                    Outcome::Shared(access) => (
+                        false,
+                        l10n::text(
+                            ui.ctx(),
+                            match access {
+                                ShareAccess::ViewOnly => "Shared. Recipients can only view it.",
+                                ShareAccess::ViewAndCopy => {
+                                    "Shared. Recipients can view it and save a copy."
+                                }
+                            },
+                        ),
+                    ),
+                    Outcome::Renamed => (
+                        false,
+                        l10n::text(ui.ctx(), "Still shared under the new name"),
+                    ),
                     Outcome::Failed(error) => (
                         true,
-                        l10n::format_text(
-                            ui.ctx(),
-                            if matches!(operation, Operation::Revoke(_)) {
-                                "Could not stop sharing: {0}"
-                            } else {
-                                "Could not share: {0}"
-                            },
-                            &[("0", error.to_string())],
-                        ),
+                        match operation {
+                            // The old document stays, shared, beside the renamed one.
+                            Operation::Rename(old, _) => l10n::format_text(
+                                ui.ctx(),
+                                "{name} is still shared, so it was kept: {error}",
+                                &[
+                                    ("name", old.as_str()),
+                                    ("error", error.to_string().as_str()),
+                                ],
+                            ),
+                            _ => l10n::format_text(
+                                ui.ctx(),
+                                if matches!(operation, Operation::Revoke(_)) {
+                                    "Could not stop sharing: {0}"
+                                } else {
+                                    "Could not share: {0}"
+                                },
+                                &[("0", error.to_string())],
+                            ),
+                        },
                     ),
                 })
             })
@@ -231,10 +364,59 @@ impl ShareControls {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::data::Reply;
     use crate::services::ShareOffer;
+
+    /// Shares documents through the switch or by link: `share` and `revoke` answer at once and
+    /// change `shared`, and a link waits in `link` for the test to answer. `rename` moves the
+    /// sharing when `moves`, holding its answer in `held` when `hold`, and otherwise answers
+    /// `FeedError::NotSupported` as the default does.
+    #[derive(Default)]
+    pub(crate) struct Shares {
+        pub(crate) offer: ShareOffer,
+        pub(crate) shared: std::sync::Mutex<std::collections::BTreeSet<String>>,
+        pub(crate) link: std::sync::Mutex<Option<Reply<ShareLink>>>,
+        pub(crate) moves: bool,
+        pub(crate) hold: bool,
+        pub(crate) held: std::sync::Mutex<Option<Reply<()>>>,
+    }
+
+    impl Sharing for Shares {
+        fn offers(&self, _: ShareKind) -> ShareOffer {
+            self.offer
+        }
+        fn shared(&self, _: ShareKind, document: &str) -> bool {
+            self.shared.lock().unwrap().contains(document)
+        }
+        fn share(&self, _: ShareKind, document: &str, _: ShareAccess, reply: Reply<()>) {
+            self.shared.lock().unwrap().insert(document.to_owned());
+            reply.send(Ok(()));
+        }
+        fn revoke(&self, _: ShareKind, document: &str, reply: Reply<()>) {
+            self.shared.lock().unwrap().remove(document);
+            reply.send(Ok(()));
+        }
+        fn link(&self, _: ShareKind, _: &str, reply: Reply<ShareLink>) {
+            *self.link.lock().unwrap() = Some(reply);
+        }
+        fn rename(&self, _: ShareKind, document: &str, renamed: &str, reply: Reply<()>) {
+            if !self.moves {
+                return reply.send(Err(FeedError::NotSupported));
+            }
+            let mut shared = self.shared.lock().unwrap();
+            if shared.remove(document) {
+                shared.insert(renamed.to_owned());
+            }
+            drop(shared);
+            if self.hold {
+                *self.held.lock().unwrap() = Some(reply);
+            } else {
+                reply.send(Ok(()));
+            }
+        }
+    }
 
     /// Shares layouts as view-only links that cannot be copied, and rejects watchlists.
     struct Host;
@@ -353,6 +535,130 @@ mod tests {
         assert!(h.query_by_label("Stop sharing").is_none());
     }
 
+    /// The switch shares view only, widens or narrows the access, gates Copy link on the shared
+    /// state the host reports and stops sharing; a host without it keeps its rows.
+    #[test]
+    fn the_sharing_switch_shares_with_the_chosen_access() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        use std::sync::Mutex;
+        type Calls = Vec<(Option<ShareAccess>, Reply<()>)>;
+        /// The access the document is shared with, if it is, and the calls waiting for answers.
+        #[derive(Default)]
+        struct Host(Mutex<(Option<ShareAccess>, Calls)>, bool);
+        impl Sharing for Host {
+            fn offers(&self, _: ShareKind) -> ShareOffer {
+                let mut offer = ShareOffer::new(true, false);
+                offer.switch = self.1;
+                offer
+            }
+            fn shared(&self, _: ShareKind, _: &str) -> bool {
+                self.0.lock().unwrap().0.is_some()
+            }
+            fn access(&self, _: ShareKind, _: &str) -> ShareAccess {
+                self.0.lock().unwrap().0.unwrap_or_default()
+            }
+            fn share(&self, _: ShareKind, _: &str, access: ShareAccess, reply: Reply<()>) {
+                self.0.lock().unwrap().1.push((Some(access), reply));
+            }
+            fn revoke(&self, _: ShareKind, _: &str, reply: Reply<()>) {
+                self.0.lock().unwrap().1.push((None, reply));
+            }
+        }
+        let harness = |host: Arc<Host>| {
+            let mut controls = ShareControls::default();
+            controls.set_service(host);
+            let mut h = Harness::builder().allow_missing_glyphs().build_ui_state(
+                |ui, controls: &mut ShareControls| {
+                    controls.poll(ui.ctx());
+                    controls.show(ui, ShareKind::Layout, "A");
+                },
+                controls,
+            );
+            h.run();
+            h
+        };
+        // Answers the one waiting call, after setting the state the host then reports.
+        let answer = |host: &Host, state: Option<ShareAccess>, result: Result<(), FeedError>| {
+            let mut guard = host.0.lock().unwrap();
+            let (access, reply) = guard.1.pop().unwrap();
+            assert!(guard.1.is_empty());
+            if result.is_ok() {
+                guard.0 = state;
+            }
+            drop(guard);
+            reply.send(result);
+            access
+        };
+        let shown = |h: &Harness<'_, ShareControls>, label: &str| {
+            h.query_by_role_and_label(egui::Role::Label, label)
+                .is_some()
+        };
+        let host = Arc::new(Host(Mutex::default(), true));
+        let mut h = harness(host.clone());
+        let switch = |h: &Harness<'_, ShareControls>| {
+            let node = h.get_by_label("Share layout");
+            let node = node.accesskit_node();
+            (
+                node.toggled() == Some(egui::accesskit::Toggled::True),
+                node.is_disabled(),
+            )
+        };
+        assert_eq!(switch(&h), (false, false));
+        assert!(h.query_by_label("Copy link").is_none());
+        assert!(h.query_by_label("View only").is_none());
+
+        h.get_by_label("Share layout").click();
+        h.run();
+        assert!(shown(&h, "Sharing…"));
+        assert_eq!(switch(&h), (false, true));
+        let sent = answer(&host, Some(ShareAccess::ViewOnly), Ok(()));
+        assert_eq!(sent, Some(ShareAccess::ViewOnly));
+        h.run();
+        assert!(shown(&h, "Shared. Recipients can only view it."));
+        assert_eq!(switch(&h), (true, false));
+        assert!(h.query_by_label("Copy link").is_some());
+        assert_eq!(
+            h.get_by_label("View only").accesskit_node().toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
+
+        h.get_by_label("View and copy").click();
+        h.run();
+        let sent = answer(&host, Some(ShareAccess::ViewAndCopy), Ok(()));
+        assert_eq!(sent, Some(ShareAccess::ViewAndCopy));
+        h.run();
+        assert!(shown(&h, "Shared. Recipients can view it and save a copy."));
+        h.get_by_label("View and copy").click();
+        h.run();
+        assert!(
+            host.0.lock().unwrap().1.is_empty(),
+            "the chosen access sends nothing"
+        );
+
+        h.get_by_label("Share layout").click();
+        h.run();
+        assert_eq!(answer(&host, None, Ok(())), None);
+        h.run();
+        assert!(shown(&h, "Sharing stopped"));
+        assert!(h.query_by_label("Copy link").is_none());
+        assert!(h.query_by_label("View only").is_none());
+
+        h.get_by_label("Share layout").click();
+        h.run();
+        answer(&host, None, Err(FeedError::Other("quota".into())));
+        h.run();
+        assert!(shown(&h, "Could not share: quota"));
+        assert_eq!(switch(&h), (false, false));
+
+        // Without the switch the host's link row stays as it was.
+        let h = harness(Arc::new(Host(Mutex::default(), false)));
+        assert!(h.query_by_label("Copy link").is_some());
+        assert!(h.query_by_label("Share layout").is_none());
+    }
+
     /// A link reaches the clipboard with the host's copy policy, a copy returns its saved name,
     /// and a rejection is kept for the menu to show.
     #[test]
@@ -367,6 +673,12 @@ mod tests {
                 Operation::Link(ref name) => host.link(kind, name, controls.inbox.reply(0)),
                 Operation::Copy(ref name) => host.copy(kind, name, controls.inbox.reply(0)),
                 Operation::Revoke(ref name) => host.revoke(kind, name, controls.inbox.reply(0)),
+                Operation::Share(ref name, access) => {
+                    host.share(kind, name, access, controls.inbox.reply(0))
+                }
+                Operation::Rename(ref old, ref new) => {
+                    host.rename(kind, old, new, controls.inbox.reply(0))
+                }
             }
             let mut copied = None;
             let output = ctx.run_ui(Default::default(), |ui| copied = controls.poll(ui.ctx()));

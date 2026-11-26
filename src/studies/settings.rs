@@ -50,18 +50,26 @@ pub enum PlotType {
     /// broken at missing bars.
     #[serde(rename = "Area")]
     AreaWithBreaks,
-    /// An upward triangle centred on each defined value.
+    /// An upward triangle on each defined value, centred on it or beside it as
+    /// [`Indicator::plot_shape_side`](super::Indicator::plot_shape_side) chooses.
     TriangleUp,
-    /// A downward triangle centred on each defined value.
+    /// A downward triangle on each defined value, centred on it or beside it as
+    /// [`Indicator::plot_shape_side`](super::Indicator::plot_shape_side) chooses.
     TriangleDown,
     /// Repaint the source price bars using this plot's per-bar colour.
     BarColor,
     /// Colour the full pane height at each defined bar.
     BackgroundColor,
+    /// A character centred at each defined value in the plot colour, drawn at twice the sum of
+    /// the stroke width and 5 logical pixels: 12 at the default width of 1. Saved as
+    /// `{"Character":"d"}`.
+    Character(char),
 }
 
 impl PlotType {
-    /// Every plot type, in the order a style editor lists them.
+    /// Every plot type any plot can take, in the order a style editor lists them. A
+    /// [`Character`](Self::Character) plot is offered for a plot whose study declares one, as
+    /// [`Indicator::plot_character`](super::Indicator::plot_character) reports.
     pub const ALL: [Self; 15] = [
         Self::Line,
         Self::LineWithBreaks,
@@ -98,6 +106,7 @@ impl PlotType {
             Self::TriangleDown => "Triangle down",
             Self::BarColor => "Bar colour",
             Self::BackgroundColor => "Background colour",
+            Self::Character(_) => "Character",
         }
     }
 
@@ -129,6 +138,24 @@ impl PlotType {
             Self::Line | Self::StepLine | Self::StepLineWithDiamonds | Self::Area
         )
     }
+}
+
+/// Which side of its value a triangle plot draws each triangle on.
+///
+/// A study that marks bars at their high or low draws its triangles beyond that price, so a
+/// mark never covers the bar it marks. Above and below are in prices: on an inverted scale a
+/// triangle above its value is drawn under it on screen. See
+/// [`Indicator::plot_shape_side`](super::Indicator::plot_shape_side).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ShapeSide {
+    /// Centred on the value.
+    #[default]
+    Centred,
+    /// Wholly above the value, toward higher prices, for a mark on a bar's high.
+    Above,
+    /// Wholly below the value, toward lower prices, for a mark on a bar's low.
+    Below,
 }
 
 /// Editable presentation of one output line.
@@ -768,6 +795,12 @@ pub struct ConfiguredStudy {
     kept: Option<Kept>,
     /// Defaults by input id that replace the declared ones, from `set_input_defaults`.
     input_defaults: Vec<(String, InputValue)>,
+    /// Whether a bar replay cursor completed the chart's newest bar, which then reads closed
+    /// bars as the chart's earlier bars do.
+    newest_closed: bool,
+    /// The time of the first bar of the calculation history that a bar replay cursor has not
+    /// completed and so left out.
+    replay_forming: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Clone for ConfiguredStudy {
@@ -806,6 +839,26 @@ impl ConfiguredStudy {
         .then_some((self.study.as_ref(), self.offset, self.wait_for_close))
     }
 
+    /// The history the study is calculated on while it runs on another symbol or interval.
+    #[cfg(feature = "widget")]
+    pub(crate) fn calculation_history(&self) -> Option<super::StudyDataRequest> {
+        (!self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some())
+            .then(|| self.calculation_request())
+    }
+
+    /// Sets where a bar replay cut the calculation history and whether its cursor completed the
+    /// chart's newest bar; returns whether either changed.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_replay(
+        &mut self,
+        newest_closed: bool,
+        forming: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> bool {
+        let changed = (self.newest_closed, self.replay_forming) != (newest_closed, forming);
+        (self.newest_closed, self.replay_forming) = (newest_closed, forming);
+        changed
+    }
+
     // Select the inner clone once, without first cloning and discarding its calculated data.
     fn clone_with(&self, study: Box<dyn Indicator>) -> Self {
         Self {
@@ -835,6 +888,8 @@ impl ConfiguredStudy {
             aligned_candle_sources: self.aligned_candle_sources.clone(),
             kept: self.kept.clone(),
             input_defaults: self.input_defaults.clone(),
+            newest_closed: self.newest_closed,
+            replay_forming: self.replay_forming,
         }
     }
 
@@ -892,6 +947,8 @@ impl ConfiguredStudy {
             aligned_candle_sources: Vec::new(),
             kept: None,
             input_defaults: Vec::new(),
+            newest_closed: false,
+            replay_forming: None,
         }
     }
     /// Attach a host-chosen help article to this study, retained in saved presentation.
@@ -1418,15 +1475,26 @@ impl Indicator for ConfiguredStudy {
         }
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
+        let longer = (self.clock.timeframe())
+            .is_some_and(|chart| source.timeframe.duration_ms() > chart.duration_ms());
+        // A replay leaves out the longer bar its cursor is inside; the chart bars it holds read
+        // the bars closed before it, as they did live, and are no gap.
+        let forming = (self.replay_forming)
+            .filter(|_| longer)
+            .map(|time| source.clock.bar_open(time));
         for (at, bar) in data.iter().enumerate() {
-            let output = source.bar_at(bar.time).and_then(|_| {
-                source.closed_on(
-                    &self.clock,
-                    self.wait_for_close,
-                    bar.time,
-                    at + 1 == data.len(),
-                )
-            });
+            let held = source.bar_on(&self.clock, bar.time).is_some()
+                || forming.is_some_and(|open| source.slot_on(&self.clock, bar.time) == open);
+            let output = held
+                .then(|| {
+                    source.closed_on(
+                        &self.clock,
+                        self.wait_for_close,
+                        bar.time,
+                        at + 1 == data.len() && !self.newest_closed,
+                    )
+                })
+                .flatten();
             self.aligned_bars.push(output);
             let values: Vec<_> = (0..self.study.line_count())
                 .map(|line| {
@@ -1508,6 +1576,9 @@ impl Indicator for ConfiguredStudy {
         self.data_requests().is_empty()
             && self.source() == self.study.source()
             && self.study.is_incremental()
+    }
+    fn calculation(&self) -> Option<super::Calculation> {
+        self.study.calculation()
     }
     fn remove_oldest_bars(&mut self, count: usize) -> bool {
         // These outputs index the evicted bars too.
@@ -1770,8 +1841,14 @@ impl Indicator for ConfiguredStudy {
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         self.study.plot_text(line, self.inner_bar(bar)?)
     }
+    fn plot_shape_side(&self, line: usize) -> ShapeSide {
+        self.study.plot_shape_side(line)
+    }
     fn plot_tooltip(&self, line: usize, bar: usize) -> Option<String> {
         self.study.plot_tooltip(line, self.inner_bar(bar)?)
+    }
+    fn plot_character(&self, line: usize) -> Option<char> {
+        self.study.plot_character(line)
     }
     fn fills(&self) -> Vec<super::StudyFill> {
         self.study
@@ -1828,30 +1905,34 @@ impl Indicator for ConfiguredStudy {
         snapshot: &StudySettingsSnapshot,
     ) -> Result<(), crate::studies::StudyError> {
         let mut inputs: Vec<_> = snapshot.inputs.iter().collect();
-        while !inputs.is_empty() {
-            let remaining = inputs.len();
-            let mut error = None;
-            // An input can change another input's accepted range.
-            inputs.retain(|(id, value)| {
-                if self
-                    .study
-                    .inputs()
-                    .iter()
-                    .any(|input| input.id == *id && input.value == *value)
-                {
-                    return false;
+        // The study held these values, a restored one outside its input's range included.
+        super::inputs::restoring(snapshot.inputs.clone(), || {
+            while !inputs.is_empty() {
+                let remaining = inputs.len();
+                let mut error = None;
+                // An input can change another input's accepted range.
+                inputs.retain(|(id, value)| {
+                    if self
+                        .study
+                        .inputs()
+                        .iter()
+                        .any(|input| input.id == *id && input.value == *value)
+                    {
+                        return false;
+                    }
+                    if let Err(message) = self.study.set_input(id, value.clone()) {
+                        error = Some(message);
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if inputs.len() == remaining {
+                    return Err(error.expect("a retained input failed to apply"));
                 }
-                if let Err(message) = self.study.set_input(id, value.clone()) {
-                    error = Some(message);
-                    true
-                } else {
-                    false
-                }
-            });
-            if inputs.len() == remaining {
-                return Err(error.expect("a retained input failed to apply"));
             }
-        }
+            Ok(())
+        })?;
         self.study.set_colors(snapshot.colors.clone());
         self.study.set_visible(snapshot.visible);
         self.study.set_label_precision(snapshot.settings.precision);
@@ -2271,6 +2352,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn plot_holds_values(&self, line: usize) -> bool {
         self.study.plot_holds_values(line)
+    }
+    fn plot_color_only(&self, line: usize) -> bool {
+        self.study.plot_color_only(line)
     }
     fn level_style(&self, value: f64) -> LineStyle {
         // Levels moved onto one value draw with the pattern of the first visible one.
@@ -2889,21 +2973,28 @@ mod tests {
     /// Automatic volume units follow the instrument, while a chosen precision wins. With
     /// three decimals, 0.375 stays fractional and 1234.5 / 1000 rounds to 1.234 in binary;
     /// without metadata the same values keep their former 0 and 1.23K text. At 0 volume
-    /// decimals the units keep two decimals: 1.23K.
+    /// decimals the units keep two decimals: 1.23K. 1,234,567,890 / 10^9 = 1.23456789 reads
+    /// 1.23B, 1.235B at three decimals and 1.2B at a chosen one. Order flow studies in volume
+    /// units follow the same rule on every line and axis mark: 1,234.5678 / 1,000 = 1.2345678
+    /// reads 1.235K at three volume decimals and 1.23K at 0 or without them, 2,500,000 reads
+    /// 2.500M and 2.50M.
     #[test]
     fn volume_units_follow_the_instrument_volume_decimals() {
-        type Row = (Option<u8>, Option<usize>, Option<usize>, [&'static str; 2]);
+        use crate::data::OrderFlowKind;
+        use crate::studies::OrderFlowStudy;
+        type Row = (Option<u8>, Option<usize>, Option<usize>, [&'static str; 3]);
         let rows: [Row; 4] = [
-            (None, None, None, ["0", "1.23K"]),
-            (Some(3), None, Some(3), ["0.375", "1.234K"]),
-            (Some(3), Some(1), Some(1), ["0.4", "1.2K"]),
-            (Some(0), None, Some(0), ["0", "1.23K"]),
+            (None, None, None, ["0", "1.23K", "1.23B"]),
+            (Some(3), None, Some(3), ["0.375", "1.234K", "1.235B"]),
+            (Some(3), Some(1), Some(1), ["0.4", "1.2K", "1.2B"]),
+            (Some(0), None, Some(0), ["0", "1.23K", "1.23B"]),
         ];
         let mut wrong = Vec::new();
         for (decimals, chosen, precision, expected) in rows {
             for study in [
                 Box::new(super::super::Volume::default()) as Box<dyn Indicator>,
                 Box::new(super::super::OnBalanceVolume::default()),
+                Box::new(super::super::CumulativeVolumeIndex::default()),
             ] {
                 let name = study.name().to_owned();
                 let mut study = ConfiguredStudy::new(study);
@@ -2913,7 +3004,7 @@ mod tests {
                 let mut instrument = Instrument::new("COIN");
                 instrument.volume_decimals = decimals;
                 study.set_instrument(Some(&instrument));
-                let values = [0.375, 1234.5];
+                let values = [0.375, 1234.5, 1_234_567_890.0];
                 let got = (
                     study.precision(),
                     values.map(|value| study.format_value(value)),
@@ -2928,6 +3019,51 @@ mod tests {
                     wrong.push(format!(
                         "{name}, {decimals:?}, {chosen:?}: got {got:?}, want {want:?}"
                     ));
+                }
+            }
+        }
+        for (decimals, expected) in [
+            (None, ["1.23K", "2.50M"]),
+            (Some(0), ["1.23K", "2.50M"]),
+            (Some(3), ["1.235K", "2.500M"]),
+        ] {
+            for study in [
+                OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+                    min: 0.0,
+                    max: f64::MAX,
+                }),
+                OrderFlowStudy::new(OrderFlowKind::SizeDelta {
+                    ranges: [[0.0, 10.0]; 3],
+                }),
+                OrderFlowStudy::new(OrderFlowKind::BookSize {
+                    levels: 10,
+                    distance: 0.0,
+                }),
+                OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: 2 }),
+                OrderFlowStudy::execution_delta(false),
+                OrderFlowStudy::execution_delta(true),
+                OrderFlowStudy::new(OrderFlowKind::TradeRate {
+                    volume: true,
+                    seconds: 60,
+                    instant: 5,
+                }),
+            ] {
+                let name = study.name().to_owned();
+                let mut study = ConfiguredStudy::new(Box::new(study));
+                let mut instrument = Instrument::new("COIN");
+                instrument.volume_decimals = decimals;
+                study.set_instrument(Some(&instrument));
+                for (value, expected) in [1234.5678, 2_500_000.0].into_iter().zip(expected) {
+                    // The axis labels its marks with `format_value`.
+                    let mut got: Vec<_> = (0..study.line_count().min(3))
+                        .map(|line| study.format_plot_value(line, value))
+                        .collect();
+                    got.push(study.format_value(value));
+                    if got.iter().any(|text| text != expected) {
+                        wrong.push(format!(
+                            "{name}, {decimals:?}: got {got:?}, want {expected}"
+                        ));
+                    }
                 }
             }
         }

@@ -822,9 +822,12 @@ impl Chart {
     ///
     /// The drawings that an added series or a study owns stay drawn in its pane, which takes
     /// them over as it takes a drawing moved into it. When the pane goes with the series or
-    /// study, they are deleted with the pane's own drawings, locked ones included, as
+    /// study, its unfiltered drawings are deleted, locked ones included, as
     /// [`remove_pane`](Self::remove_pane) deletes them, and undo of the user action brings them
-    /// back. A drawing being placed in the pane follows the same rule: the pane's next owner
+    /// back. Filtered shared drawings keep their stored study pane. Its drawings on the symbols
+    /// the chart does not show stay: when the chart shows the symbol again, the price pane draws
+    /// them and they keep their stored study pane until the series or study returns. A drawing
+    /// being placed in the pane follows the ordinary removal rule: the pane's next owner
     /// takes it, or it is cancelled with the pane, and the drawing tool stays selected. Drawings
     /// of the pane stay over and under the same remaining series and studies.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
@@ -852,9 +855,19 @@ impl Chart {
         let stack = self.pane_stack(id);
         #[cfg(feature = "drawings")]
         let pane = self.series_pane(id).filter(|_| id != SeriesId::MAIN);
+        #[cfg(feature = "drawings")]
+        if let Some(pane) = pane {
+            self.keep_filtered_pane(pane, Some(id));
+        }
+        // The pane as stored before `id` leaves it, for the drawings of the symbols not shown.
+        #[cfg(feature = "drawings")]
+        let stored = pane
+            .filter(|_| !self.symbol_drawings.is_empty())
+            .and_then(|pane| self.stored_pane(pane));
         let removed = self.remove_series_keeping_drawings(id);
         #[cfg(feature = "drawings")]
         if let Some(pane) = pane.filter(|_| removed) {
+            self.keep_unshown_symbol_panes([id.0, pane.0], stored.as_ref());
             self.release_drawings(id, pane);
         }
         #[cfg(feature = "drawings")]
@@ -895,8 +908,7 @@ impl Chart {
         } else {
             let ids: Vec<_> = self
                 .drawings
-                .drawings
-                .iter()
+                .unfiltered_drawings()
                 .filter(|drawing| held(drawing))
                 .map(|drawing| drawing.id)
                 .collect();

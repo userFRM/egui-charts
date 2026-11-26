@@ -1,0 +1,148 @@
+name: Nightly
+
+# Once a day, the demo as native release builds for Linux, Windows and macOS, from main's head once
+# its CI passes, published as the rolling `nightly` pre-release.
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer run waits for a running publish instead of cancelling it.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  select:
+    name: Select the commit
+    runs-on: ubuntu-latest
+    # Waits for CI on main's head, which can queue behind the run before it.
+    timeout-minutes: 80
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The build is main's head once its CI passes: the workflow token may create the tag at
+          # the head of the default branch, but not at an older commit whose workflow files differ.
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          built=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" --jq .object.sha 2>/dev/null) || built=
+          if [ "$sha" = "$built" ]; then
+            echo "The nightly build is already at $sha, main's head."
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for _ in $(seq 1 70); do
+            result=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$sha" --event push --json status,conclusion --jq '.[0] | "\(.status)/\(.conclusion)"')
+            case "$result" in
+              completed/success) echo "Building $sha."; echo "sha=$sha" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              completed/*) echo "CI on $sha ended $result, so there is no new nightly build."; echo "sha=" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            esac
+            sleep 60
+          done
+          echo "CI on $sha did not finish within 70 minutes, so there is no new nightly build."
+          echo "sha=" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Demo (${{ matrix.name }})
+    needs: select
+    if: needs.select.outputs.sha != ''
+    strategy:
+      matrix:
+        include:
+          # Ubuntu 24.04, so the program runs on glibc 2.39 and newer: ubuntu-latest links
+          # against a newer glibc than most distributions ship.
+          - { name: linux-x86_64, os: ubuntu-24.04 }
+          - { name: windows-x86_64, os: windows-latest }
+          - { name: macos-arm64, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.select.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: examples/demo -> target
+          key: nightly-${{ matrix.name }}
+      - name: Build
+        run: cargo build --release --locked --manifest-path examples/demo/Cargo.toml
+      - name: Archive
+        shell: bash
+        run: |
+          dir="egui-charts-demo-${{ matrix.name }}"
+          mkdir -p "$dir" dist
+          cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES.md "$dir/"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp examples/demo/target/release/egui-charts-demo.exe "$dir/"
+            7z a -tzip "dist/$dir.zip" "$dir" > /dev/null
+          else
+            cp examples/demo/target/release/egui-charts-demo "$dir/"
+            tar -czf "dist/$dir.tar.gz" "$dir"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: demo-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Publish
+    needs: [select, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.select.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: demo-*
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Publish the nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.select.outputs.sha }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          short=${SHA:0:9}
+          since=$(git describe --tags --abbrev=0 --match 'v*' "$SHA")
+          cat > notes.md <<EOF
+          The demo built from main at [\`$short\`](https://github.com/$repo/commit/$SHA) on $(date -u '+%Y-%m-%d') UTC, after its CI passed. It is rebuilt once a day when main has changed. Published versions are on the releases page.
+
+          Changes since $since: the [commits](https://github.com/$repo/compare/$since...$SHA) and the Unreleased section of the [changelog](https://github.com/$repo/blob/$SHA/CHANGELOG.md). To use the library from main in your own application, see the [installation guide](https://userfrm.github.io/egui-charts/docs/installation/).
+
+          The Linux build needs glibc 2.39 or newer, as on Ubuntu 24.04 and Debian 13. These builds are not signed. On macOS, run \`xattr -d com.apple.quarantine egui-charts-demo\` in the extracted folder once before opening it. On Windows, if SmartScreen stops the program, choose More info, then Run anyway. \`SHA256SUMS\` lists the checksum of each archive.
+          EOF
+          # The workflow token may not move a ref across a change to a workflow file, so the release and
+          # its `nightly` tag are deleted and created again at the new commit. The tag is the only ref
+          # this workflow touches; the download links keep their address. If main changed a workflow
+          # file during the build, the tag could not be created, so the current release stays.
+          changed=$(gh api "repos/$repo/compare/$SHA...main" --jq '[.files[]?.filename | select(startswith(".github/workflows/"))] | length')
+          if [ "$changed" != 0 ]; then
+            echo "::warning::main changed a workflow file after $short; the nightly release stays as it is until the next run."
+            exit 0
+          fi
+          if gh release view nightly -R "$repo" > /dev/null 2>&1; then
+            gh release delete nightly -R "$repo" --cleanup-tag --yes
+          elif gh api "repos/$repo/git/ref/tags/nightly" > /dev/null 2>&1; then
+            gh api -X DELETE "repos/$repo/git/refs/tags/nightly"
+          fi
+          gh release create nightly dist/* -R "$repo" --target "$SHA" --title Nightly --notes-file notes.md --prerelease --latest=false

@@ -1,7 +1,7 @@
 use super::{FeedCapabilities, FeedError, HistoryPage, HistoryRequest};
 use crate::model::{
-    Bar, BarClock, DataStatus, Instrument, Session, SessionWindow, SymbolType, Timeframe,
-    TimezoneId,
+    Bar, BarClock, DataStatus, Instrument, PriceFraction, Session, SessionWindow, SymbolType,
+    Timeframe, TimezoneId,
 };
 use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, Utc, Weekday};
 use serde::Deserialize;
@@ -114,6 +114,12 @@ pub(super) fn history_url(base: &str, request: &HistoryRequest) -> Result<String
         ("resolution", resolution(request.timeframe)?),
         ("countback", request.count.to_string()),
         ("extended_hours", request.extended_hours.to_string()),
+        // Overnight hours without extended hours select regular hours.
+        (
+            "overnight_hours",
+            (request.extended_hours && request.overnight_hours).to_string(),
+        ),
+        ("adjusted", request.adjusted.to_string()),
     ];
     if let Some(before) = request.before {
         params.push(("to", time_param(bound(request, before))));
@@ -180,13 +186,19 @@ pub(super) struct Symbol {
     kind: Option<String>,
     minmov: Option<f64>,
     pricescale: Option<f64>,
+    minmove2: Option<f64>,
+    fractional: Option<bool>,
+    variable_tick_size: Option<String>,
     volume_precision: Option<u8>,
     currency_code: Option<String>,
     unit: Option<String>,
     timezone: Option<TimezoneId>,
     session: Option<String>,
+    session_extended: Option<String>,
+    session_overnight: Option<String>,
     supported_resolutions: Option<Vec<String>>,
     data_status: Option<String>,
+    dividend_adjustment: Option<bool>,
 }
 
 impl Symbol {
@@ -211,12 +223,41 @@ impl Symbol {
                 return Err(invalid("minmov and pricescale must be positive and finite"));
             }
             instrument.tick_size = Some(tick);
+            if self.fractional == Some(true) {
+                instrument.price_fraction = price_fraction(scale, self.minmove2.unwrap_or(0.0));
+            }
+            // A decimal pricescale is 10 to the power of the decimals, and a whole minmov counts
+            // ticks in its units. Past the 12 decimals labels keep, the tick gives the same count.
+            if movement.fract() == 0.0 {
+                instrument.price_decimals = (0..=12u8).find(|&n| 10f64.powi(i32::from(n)) == scale);
+            }
+        }
+        // A tick table replaces the minmov tick; pricescale still sets the decimals.
+        if let Some(text) = self
+            .variable_tick_size
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+        {
+            let (tick, tiers) = tick_table(text)?;
+            instrument.tick_size = Some(tick);
+            instrument.tick_tiers = tiers;
         }
         instrument.volume_decimals = self.volume_precision;
         instrument.currency = self.currency_code;
         instrument.unit = self.unit;
         instrument.time_zone = self.timezone;
         instrument.session = self.session.as_deref().map(session).transpose()?;
+        if self.session_extended.is_some() || self.session_overnight.is_some() {
+            // Beside "24x7" or no regular windows, other windows would close regular hours.
+            let hours = instrument
+                .session
+                .as_mut()
+                .filter(|hours| !hours.windows.is_empty())
+                .ok_or_else(|| invalid("extended and overnight sessions need regular hours"))?;
+            let parse = |text: Option<String>| text.as_deref().map(windows).transpose();
+            hours.extended_windows = parse(self.session_extended)?.unwrap_or_default();
+            hours.overnight_windows = parse(self.session_overnight)?.unwrap_or_default();
+        }
         instrument.supported_timeframes = self
             .supported_resolutions
             .map(|values| values.iter().map(|text| timeframe(text)).collect())
@@ -227,6 +268,7 @@ impl Symbol {
             Some("endofday") => Some(DataStatus::EndOfDay),
             _ => None,
         };
+        instrument.dividend_adjustment = self.dividend_adjustment.unwrap_or(false);
         Ok(instrument)
     }
 }
@@ -238,10 +280,58 @@ fn symbol_type(text: &str) -> Option<SymbolType> {
     serde_json::from_value(serde_json::Value::String(text)).ok()
 }
 
+/// The fraction a fractional symbol is quoted in: `scale` fractions per unit, or thirty-seconds
+/// divided in `parts` when `parts` is not zero. `None` for a combination the chart cannot
+/// write, which keeps decimals.
+fn price_fraction(scale: f64, parts: f64) -> Option<PriceFraction> {
+    use PriceFraction::*;
+    [
+        (2.0, 0.0, Halves),
+        (4.0, 0.0, Quarters),
+        (8.0, 0.0, Eighths),
+        (16.0, 0.0, Sixteenths),
+        (32.0, 0.0, ThirtySeconds),
+        (64.0, 2.0, HalfThirtySeconds),
+        (128.0, 4.0, QuarterThirtySeconds),
+        (256.0, 8.0, EighthThirtySeconds),
+        (64.0, 0.0, SixtyFourths),
+        (128.0, 0.0, OneTwentyEighths),
+        (256.0, 0.0, TwoFiftySixths),
+    ]
+    .into_iter()
+    .find(|(steps, divided, _)| *steps == scale && *divided == parts)
+    .map(|(_, _, fraction)| fraction)
+}
+
+/// A tick followed by pairs of a price and the tick from that price upwards, such as
+/// `0.01 10 0.02 25 0.05`.
+fn tick_table(text: &str) -> Result<(f64, Vec<(f64, f64)>), FeedError> {
+    let error = || invalid("variable_tick_size must alternate positive ticks and rising prices");
+    let numbers = text
+        .split_whitespace()
+        .map(str::parse)
+        .collect::<Result<Vec<f64>, _>>()
+        .map_err(|_| error())?;
+    let (&tick, rest) = numbers.split_first().ok_or_else(error)?;
+    if rest.len() % 2 != 0 || !tick.is_finite() || tick <= 0.0 {
+        return Err(error());
+    }
+    let tiers: Vec<(f64, f64)> = rest.chunks(2).map(|pair| (pair[0], pair[1])).collect();
+    if crate::model::valid_tick_tiers(&tiers).len() != tiers.len() {
+        return Err(error());
+    }
+    Ok((tick, tiers))
+}
+
 fn session(text: &str) -> Result<Session, FeedError> {
     if text == "24x7" {
         return Ok(Session::new([]));
     }
+    windows(text).map(Session::new)
+}
+
+/// The windows of `HHMM-HHMM[,HHMM-HHMM][:days]`, each named by the day on which it closes.
+fn windows(text: &str) -> Result<Vec<SessionWindow>, FeedError> {
     let time = |value: &str| {
         if value == "2400" {
             Ok(NaiveTime::MIN)
@@ -278,7 +368,7 @@ fn session(text: &str) -> Result<Session, FeedError> {
         }
         windows.push(SessionWindow::new(days, time(open)?, time(close)?));
     }
-    Ok(Session::new(windows))
+    Ok(windows)
 }
 
 #[derive(Deserialize)]

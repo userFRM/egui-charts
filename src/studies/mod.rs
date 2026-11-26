@@ -88,7 +88,7 @@ pub use plots::{
 pub use projection::StudyProjection;
 pub use settings::{
     ConfiguredStudy, FillStyle, GradientStyle, LevelStyle, PlotStyle, PlotType, PlotVariant,
-    StudySettings, StudySettingsSnapshot,
+    ShapeSide, StudySettings, StudySettingsSnapshot,
 };
 pub use table::{StudyCell, StudyTable, TablePosition, TableTextSize};
 mod values;
@@ -103,7 +103,7 @@ pub use stepper::Stepper;
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use builtin::*;
-pub use custom::CustomIndicator;
+pub use custom::{Calculation, CustomIndicator, Resume, ResumeRun};
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use factory::IndicatorFactory;

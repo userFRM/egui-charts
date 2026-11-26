@@ -8,6 +8,32 @@ All notable changes to this project are documented in this file. The format is b
 
 - `Reply::view_id` and `Sink::view_id` return an opaque `ViewId` for one chart feed attachment, so a feed serving two charts of the same symbol and interval can tie a history reply to its live sink. The id changes with `Chart::set_feed` and is not shared across attachments, but it survives a symbol or interval change: providers still match the request's symbol and interval. ([#4291](https://github.com/userFRM/egui-charts/issues/4291))
 
+- Nightly builds of the demo for Linux x86_64, Windows x86_64 and macOS arm64. Once a day, the newest main commit whose CI passed is built and published as the `nightly` pre-release on GitHub, with a `SHA256SUMS` file for the archives.
+
+- `Chart::set_footprint_history_by_view` sizes the initial prepared footprint page to the visible bars and footprint consumers without shortening candle history. The feed still chooses the prepared/live cutoff. ([#4142](https://github.com/userFRM/egui-charts/issues/4142))
+
+- Chart data tables can have independent window IDs and display a fixed symbol without intercepting typed input. ([#4156](https://github.com/userFRM/egui-charts/issues/4156))
+
+### Changed
+
+- With viewport-sized footprint history enabled, panning into missing rows starts the same bounded request on the pan frame instead of waiting for the next feed pump. ([#4238](https://github.com/userFRM/egui-charts/issues/4238))
+
+### Fixed
+
+- Trade Rate no longer reports a partial time candle's retained executions as its total. Its rolling rates use their own windows' coverage. ([#4202](https://github.com/userFRM/egui-charts/issues/4202))
+
+- An empty Watchlist keeps its hint above symbol details when the window shrinks. Scroll the list if the hint does not fit. ([#4161](https://github.com/userFRM/egui-charts/issues/4161))
+
+## [0.3.0-alpha.1] - 2026-11-24
+
+### Added
+
+- `Chart::set_trade_history_on_demand` lets a prepared time chart wait for an execution study or tape reader before loading historical trades. Opening Time & Sales requests the active chart’s tape; hosts that do not opt in still load it on subscription. ([#4129](https://github.com/userFRM/egui-charts/issues/4129))
+
+- `DrawingManager::set_shared_drawings_hidden` hides symbol-wide drawings on one chart without hiding its local annotations or changing what peers see. Removing a study while filtered preserves its drawing’s pane on peers through undo and restore. Loading a drawing without its study on an unfiltered chart still mirrors it in the price pane. ([#4082](https://github.com/userFRM/egui-charts/issues/4082))
+
+- A host can set `DrawingManagerOptions::local_placement_folder` on a chart to keep new drawings local from placement through undo and redo. Moving a drawing to a shared folder follows the usual sharing rules. Other charts keep their existing defaults. ([#4046](https://github.com/userFRM/egui-charts/issues/4046))
+
 - Built-in volume footprints can resume a drained trade replay from an in-memory checkpoint. The checkpoint retains price levels and the forming bar's trade allocation; a different row grouping or an unbounded footprint is refused without changing the destination. ([#3911](https://github.com/userFRM/egui-charts/issues/3911))
 
 - Volume-bar charts driven by a trade replay feed can plan, capture and restore in-memory checkpoints, including a partially filled candle, the execution tape and supported study inputs. The host controls the recording cursor and cache budget. ([#3724](https://github.com/userFRM/egui-charts/issues/3724))
@@ -516,6 +542,8 @@ All notable changes to this project are documented in this file. The format is b
 - `ToolbarState::lock_all` and `ToolbarState::hide_drawings`, `hide_indicators`, `hide_positions` and `hide_orders` hold what the Lock button and the Hide menu show: the lock button is filled with a closed padlock while `lock_all` is set, and the Hide menu checks each hidden group. The bar sets them from the clicks it reports; a host that changes the chart's state elsewhere sets them too. Migration: struct literals of `ToolbarState` set the five fields or use `..ToolbarState::default()`.
 
 ### Fixed
+
+- Ctrl-drag and Command-drag now put every copied drawing in the chart-only placement folder when configured, just like Paste and Clone. Moving the originals does not change their sharing scope. ([#4123](https://github.com/userFRM/egui-charts/issues/4123))
 
 - Terminal’s Time and Sales panel now lists older trades when a history page arrives after a live trade. Backfilled rows do not trigger large-trade alerts; a live trade arriving in the same frame still can. ([#3702](https://github.com/userFRM/egui-charts/issues/3702))
 
@@ -1847,5 +1875,6 @@ All notable changes to this project are documented in this file. The format is b
 
 Thanks to @intelligentnet and @sstscrypto for the reports that became issues #2 and #1.
 
-[Unreleased]: https://github.com/userFRM/egui-charts/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/userFRM/egui-charts/compare/v0.3.0-alpha.1...HEAD
+[0.3.0-alpha.1]: https://github.com/userFRM/egui-charts/compare/v0.2.0...v0.3.0-alpha.1
 [0.2.0]: https://github.com/userFRM/egui-charts/compare/v0.1.0...v0.2.0

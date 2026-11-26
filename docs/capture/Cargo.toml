@@ -13,6 +13,7 @@ path = "main.rs"
 
 [dependencies]
 egui-charts = { path = "../..", features = ["ui", "alert-engine", "strategies", "detectors"] }
+egui-charts-scripting = { path = "../../crates/scripting" }
 # The demo's dependencies, plus the offscreen renderer.
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu", "persistence"] }
 egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }

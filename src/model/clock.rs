@@ -25,13 +25,17 @@ pub(super) fn days_per_bar(timeframe: Timeframe) -> Option<i64> {
 }
 
 /// Bar boundaries for one timeframe, around the clock in UTC by default.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BarClock {
     /// `None` for a clock that matches bars by their exact open time.
     timeframe: Option<Timeframe>,
     timezone: Option<TimezoneId>,
     /// Shared by the clock's copies, so that copying and comparing them stays cheap.
     session: Option<Arc<super::ExchangeSessionProvider>>,
+    /// The zone whose midnights end the dates of a clock of whole days without a session, see
+    /// [`with_trading_zone`](Self::with_trading_zone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trading_zone: Option<TimezoneId>,
 }
 
 impl BarClock {
@@ -41,6 +45,7 @@ impl BarClock {
             timeframe: Some(timeframe),
             timezone: Some(TimezoneId::utc()),
             session: None,
+            trading_zone: None,
         }
     }
 
@@ -108,12 +113,26 @@ impl BarClock {
         )
     }
 
+    /// This clock closing each bar of whole days at the midnight in `zone` that ends its last
+    /// date, and joining a live update to the bar of its date in `zone`, for the history of a
+    /// symbol that trades in `zone` without session hours, as `data::resample_with_session`
+    /// dates its bars. Bars keep the labels of this clock's calendar, so a bar at 00:00 UTC on
+    /// 12 March holds 12 March in `zone`. Only [`bar_close`](Self::bar_close) and
+    /// [`instant_open`](Self::instant_open) follow `zone`; a clock with a session, or whose bars
+    /// are not whole days, ignores it.
+    #[cfg(feature = "widget")]
+    pub(crate) fn with_trading_zone(mut self, zone: TimezoneId) -> Self {
+        self.trading_zone = Some(zone);
+        self
+    }
+
     /// Clock in which every instant opens a bar of its own, for bars of an unknown timeframe.
     pub(crate) fn exact() -> Self {
         Self {
             timeframe: None,
             timezone: Some(TimezoneId::utc()),
             session: None,
+            trading_zone: None,
         }
     }
 
@@ -336,7 +355,27 @@ impl BarClock {
         }
     }
 
-    #[cfg(any(feature = "studies", feature = "strategies"))]
+    /// When the bar opening at `open` closes: at its next open; for a daily, multi-day, weekly or
+    /// monthly bar of a clock with an exchange session when its last trading window closes; and
+    /// for such a bar of a clock with a [trading zone](Self::with_trading_zone) at the midnight
+    /// in that zone that ends its last date. A bar without a trading window closes at its next
+    /// open. Bar replay completes bars here, and `StudyData::closed_at` reads a longer interval's
+    /// bars by it.
+    pub(crate) fn bar_close(&self, open: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let timeframe = self.timeframe?;
+        if let Some(zone) = self.trading_zone() {
+            // The bar ends where the first date of the next one begins in the zone.
+            let next = self.next_open(open)?;
+            let date = (next.naive_utc())
+                .checked_add_signed(TimeDelta::seconds(i64::from(self.offset_at(next))))?
+                .date();
+            return super::local_instant(zone.clone(), date.and_time(NaiveTime::MIN));
+        }
+        (self.date_session())
+            .and_then(|_| self.sessions().bar_session_close(open, timeframe, true))
+            .or_else(|| self.next_open(open))
+    }
+
     pub(crate) fn for_timeframe(&self, timeframe: Timeframe) -> Self {
         Self {
             timeframe: Some(timeframe),
@@ -360,12 +399,31 @@ impl BarClock {
             .filter(|_| self.timeframe.is_some_and(|tf| tf.duration_ms() >= DAY_MS))
     }
 
+    /// The zone of [`with_trading_zone`](Self::with_trading_zone) on a clock of whole days
+    /// without a session, where it applies.
+    fn trading_zone(&self) -> Option<&TimezoneId> {
+        (self.trading_zone.as_ref()).filter(|_| {
+            self.session.is_none()
+                && self.timeframe.is_some_and(|tf| {
+                    let ms = tf.duration_ms();
+                    ms >= DAY_MS && ms % DAY_MS == 0
+                })
+        })
+    }
+
     /// Open time of the bar that a trade or another update at `t` joins: on a daily or longer
     /// clock with a session the bar of its trading date, as `data::resample_with_session` dates
     /// intraday history, so an evening session opens the next date's bar and a post-market hour
-    /// after midnight stays in its date's bar; elsewhere [`bar_open`](Self::bar_open). Bar stamps
-    /// lie inside their calendar period, so `bar_open` places them.
+    /// after midnight stays in its date's bar; on a clock with a
+    /// [trading zone](Self::with_trading_zone) the bar of its date in that zone, as the same
+    /// function dates the history of a symbol in a zone without a session; elsewhere
+    /// [`bar_open`](Self::bar_open). Bar stamps lie inside their calendar period, so `bar_open`
+    /// places them.
     pub(crate) fn instant_open(&self, t: DateTime<Utc>) -> DateTime<Utc> {
+        if let Some(zone) = self.trading_zone() {
+            return (self.open_on_date(super::local_time(zone.clone(), t).date()))
+                .unwrap_or_else(|| self.bar_open(t));
+        }
         (self.date_session())
             .and_then(|session| self.open_on_date(session.trading_date(t)))
             .unwrap_or_else(|| self.bar_open(t))
@@ -521,7 +579,7 @@ impl Placement {
     /// [`BarClock::instant_open`] of `t` on `clock`.
     pub(crate) fn open(&mut self, clock: &BarClock, t: DateTime<Utc>) -> DateTime<Utc> {
         if clock.date_session().is_none() {
-            return clock.bar_open(t);
+            return clock.instant_open(t);
         }
         if let Some((placed, span, open)) = &self.0
             && span.contains(&t)
@@ -946,6 +1004,37 @@ mod tests {
                 (t("2024-01-05T06:00:00Z"), 1.0),
                 (t("2024-01-08T06:00:00Z"), 1.0),
                 (t("2024-01-09T06:00:00Z"), 2.0),
+            ]
+        );
+    }
+
+    /// Guards #4083: on a daily clock of a symbol that trades in UTC-5 without a session, a live
+    /// trade joins the bar of its date there: the evening of 14 March, past midnight UTC, stays in
+    /// that day's bar, and 15 March opens at its local midnight.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn trades_of_a_zone_without_a_session_join_their_local_date() {
+        use crate::model::Tick;
+        let zone = TimezoneId::fixed_offset(-5 * 3600).unwrap();
+        let day = BarClock::new(Timeframe::Day1).with_trading_zone(zone);
+        let inbox = std::sync::Arc::new(crate::data::inbox::Inbox::default());
+        let sink = inbox.subscribe("SAMPLE".into(), day, 100, None);
+        for (time, size) in [
+            ("2024-03-15T02:00:00Z", 1.0),
+            ("2024-03-15T04:59:00Z", 2.0),
+            ("2024-03-15T05:00:00Z", 4.0),
+        ] {
+            sink.push_tick(Tick::new(t(time), 100.0, size, None));
+        }
+        let (_, updates) = inbox.drain().updates.pop().unwrap();
+        let bars: Vec<_> = (updates.bars.iter())
+            .map(|(open, (bar, _))| (*open, bar.volume))
+            .collect();
+        assert_eq!(
+            bars,
+            [
+                (t("2024-03-14T00:00:00Z"), 3.0),
+                (t("2024-03-15T00:00:00Z"), 4.0),
             ]
         );
     }

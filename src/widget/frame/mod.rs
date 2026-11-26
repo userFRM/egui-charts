@@ -283,6 +283,9 @@ impl Chart {
         }
         // Panes share the available height and the lowest time axis.
         let has_panes = self.has_panes();
+        let footprint_range = self
+            .footprint_history_by_view
+            .then(|| self.state.visible_range());
         let response = if has_panes {
             self.show_with_panes(ui, footprint)
         } else {
@@ -301,6 +304,10 @@ impl Chart {
         #[cfg(feature = "drawings")]
         self.cursor_modes.render(ui);
         self.menu_open = false;
+        #[cfg(feature = "ui")]
+        {
+            self.touch_order_armed = false;
+        }
         if !self.chart_type.is_time_independent() {
             let source_marks = self.mark_source.as_ref().map(|source| &source.page);
             let mut coords = self.get_chart_mapping();
@@ -412,6 +419,15 @@ impl Chart {
             self.pending_visible_range = None;
         }
         self.restore_history_view(ui.ctx());
+        // The pump saw the pre-input range. Page only if the settled view needs different bars.
+        if footprint_range.is_some_and(|before| before != self.state.visible_range())
+            && !ui.ctx().will_discard()
+            && self.can_scroll_prepared_footprints()
+            && let Some(mut link) = self.feed_link.take()
+        {
+            self.scroll_footprints(&mut link);
+            self.feed_link = Some(link);
+        }
         self.record_host_events(ui);
         let needs_info = response.clicked()
             || response.double_clicked()
@@ -538,6 +554,10 @@ impl Chart {
         // A right-click result lives for exactly one frame: clear any stale
         // capture so a target that is never drained does not reappear later.
         self.right_click = None;
+        #[cfg(feature = "ui")]
+        {
+            self.touch_order = None;
+        }
 
         let available_size = ui.available_size();
         let (mut response, mut painter) =
@@ -878,6 +898,9 @@ impl Chart {
 
         // Handle keyboard shortcuts
         self.handle_keyboard_shortcuts(ui, &time_response, chart_width, chart_rect.min.x);
+        // The market order keys press the buttons of the frame the user saw; this frame sets
+        // the flag again where it draws them.
+        self.quote_buttons = false;
 
         // Taken after the shortcuts: a key can remove a study and shift the ones after it.
         let study_indices: Vec<_> = self
@@ -1207,7 +1230,15 @@ impl Chart {
             && self.chart_type == ChartType::VolumeFootprint)
             .then(|| {
                 let colors = [egui::Color32::TRANSPARENT; 4];
-                FootprintConfig::from_chart_params(&self.chart_type_params, colors, feed_row_ticks)
+                let mut config = FootprintConfig::from_chart_params(
+                    &self.chart_type_params,
+                    colors,
+                    feed_row_ticks,
+                );
+                config.tick_tiers = self
+                    .instrument()
+                    .map_or_else(Vec::new, |instrument| instrument.tick_tiers.clone());
+                config
             });
         // The rows the renderer paints decide the fit, whatever `row_ticks` is: the edges of
         // their minimum group are fitted here, and those of the groups zoom raises above it
@@ -1227,9 +1258,10 @@ impl Chart {
         let footprint_prices = painted_rows
             .into_iter()
             .flat_map(|(flow, config)| {
-                let group = crate::chart::overlays::fixed_row_group(flow, config.row_ticks);
                 let bars = &self.state.shown()[start_idx..end_idx];
-                crate::chart::overlays::row_edges(bars, flow, config, move |_| group)
+                crate::chart::overlays::row_edges(bars, flow, config, move |bar| {
+                    crate::chart::overlays::min_row_group(bar, flow, config)
+                })
             })
             .filter(|price| price.is_finite())
             .map(|price| [price, price])
@@ -1390,23 +1422,19 @@ impl Chart {
         if !data_range.0.is_finite() {
             margins.remove(&self.main_series_scale);
         }
+        // The TPO chart type's calendar and settings, with the hours its settings choose: one
+        // pair for the fit, the paint, the scale tags and the labels of cropped profiles.
+        let tpo_chart =
+            (self.chart_type == ChartType::TimePriceOpportunity).then(|| self.tpo_chart_division());
         if self.main_series_visible
             && footprint.is_none()
             && self.chart_type == ChartType::TimePriceOpportunity
             && !self.state.price_scale().is_manual()
+            && let Some((clock, config)) = &tpo_chart
         {
-            let mut clock = self.bar_clock();
-            if let Some(zone) = self
-                .instrument()
-                .filter(|i| i.session.is_none())
-                .and_then(|i| i.time_zone.as_ref())
-            {
-                clock = clock.with_timezone(zone.clone());
-            }
             let tick = self
                 .instrument()
                 .and_then(|instrument| instrument.tick_size);
-            let config = self.chart_type_params.tpo_config(tick);
             // Automatic rows depend on the scale span. Revisit after fitting until the rows
             // actually drawn, including their outer half-tick edges, fit in the scale. Retain
             // fitted edges when the grid changes, so non-nested grids cannot alternate ranges.
@@ -1425,8 +1453,8 @@ impl Chart {
                     &self.state.data().bars,
                     start_idx..end_idx,
                     self.state.revision(),
-                    (&config, tick),
-                    &clock,
+                    (config, tick),
+                    clock,
                     (&map, price_rect, |i| mapping.idx_to_x(i)),
                     |profile, _, anchor, _, _, _| {
                         if anchor >= price_rect.right() {
@@ -1770,7 +1798,9 @@ impl Chart {
                     self.config
                         .shade_postmarket
                         .then(|| shade(postmarket, 0.08)),
-                    shade(self.config.overnight_hours_color, 0.16),
+                    self.config
+                        .shade_overnight
+                        .then(|| shade(self.config.overnight_hours_color, 0.16)),
                 ),
             )
         } else {
@@ -1799,6 +1829,9 @@ impl Chart {
             .and_then(|instrument| instrument.time_zone.as_ref())
         {
             bar_clock = bar_clock.with_timezone(zone.clone());
+        }
+        if let Some((clock, _)) = &tpo_chart {
+            bar_clock = clock.clone();
         }
         let range_phantoms = if self.chart_type == ChartType::Range
             && self.chart_type_params.styles.range.phantom_bars
@@ -1830,6 +1863,7 @@ impl Chart {
             heikin_ashi: &self.heikin_ashi,
             start_idx,
             clock: &bar_clock,
+            tpo: tpo_chart.as_ref().map(|(_, config)| config),
             tick_size: self
                 .instrument()
                 .and_then(|instrument| instrument.tick_size),
@@ -1924,6 +1958,11 @@ impl Chart {
         let feed_config = feed.map(|_| FootprintConfig {
             background: plot_background,
             volume_decimals,
+            // Session profiles keep rows of the instrument's tick.
+            tick_tiers: self
+                .instrument()
+                .filter(|_| self.chart_type == ChartType::VolumeFootprint)
+                .map_or_else(Vec::new, |instrument| instrument.tick_tiers.clone()),
             ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],
@@ -2079,11 +2118,6 @@ impl Chart {
                 volume_rect.bottom(),
                 false,
             )
-            .with_price_precision(Some(
-                self.instrument()
-                    .and_then(|instrument| instrument.volume_decimals)
-                    .unwrap_or(0),
-            ))
         });
         self.host_events.volume_map = volume_map;
         // The main pane's visual order: overlays listed before the series are drawn under it.
@@ -2871,15 +2905,15 @@ impl Chart {
             && footprint.is_none()
             && self.chart_type == ChartType::TimePriceOpportunity
             && self.chart_type_params.tpo_level_tags
+            && let Some((_, config)) = &tpo_chart
         {
             let tick = render_ctx.tick_size;
-            let config = self.chart_type_params.tpo_config(tick);
             pending_values.extend(
                 rendering::candles::tpo::latest_level_tags(
                     &self.state.data().bars,
                     start_idx..start_idx + visible_data.len(),
                     self.state.revision(),
-                    (&config, tick),
+                    (config, tick),
                     &bar_clock,
                     (&price_map, price_rect, |i| coords.idx_to_x(i)),
                     (&ui.active_theme().chart, colors.bullish, colors.bearish),
@@ -3744,6 +3778,9 @@ impl Chart {
                 });
                 #[cfg(not(feature = "ui"))]
                 let last_price = None;
+                self.quote_buttons = self.main_series_visible
+                    && self.config.show_quote_boxes
+                    && rendering::quote_prices(self.quote.as_ref(), last_price).is_some();
                 let mut legend = super::Legend::new(&self.symbol, &timeframe, &bar);
                 let statuses: Vec<_> = self
                     .legend_statuses
@@ -3957,15 +3994,13 @@ impl Chart {
             && footprint.is_none()
             && self.chart_type == ChartType::TimePriceOpportunity
             && self.state.price_scale().is_manual()
+            && let Some((_, config)) = &tpo_chart
         {
             rendering::candles::tpo::visit_profiles(
                 &self.state.data().bars,
                 start_idx..end_idx,
                 self.state.revision(),
-                (
-                    &self.chart_type_params.tpo_config(render_ctx.tick_size),
-                    render_ctx.tick_size,
-                ),
+                (config, render_ctx.tick_size),
                 &bar_clock,
                 (&price_map, price_rect, |i| coords.idx_to_x(i)),
                 |profile, config, anchor, column, _, _| {
@@ -4045,9 +4080,12 @@ impl Chart {
                     .map(|local| start_idx + local)
                     .filter(|index| Some(self.state.shown()[*index].time) == crosshair_time);
                 let snapped = if price_rect.contains(hover_pos) {
-                    index.map_or(hover_pos, |index| {
-                        self.snap_crosshair(hover_pos, &price_map, index)
-                    })
+                    match self.anchor_crosshair_y(ui.ctx(), hover_pos.y) {
+                        Some(y) => Pos2::new(hover_pos.x, y),
+                        None => index.map_or(hover_pos, |index| {
+                            self.snap_crosshair(hover_pos, &price_map, index)
+                        }),
+                    }
                 } else {
                     hover_pos
                 };
@@ -4061,8 +4099,9 @@ impl Chart {
                 if volume_rect.contains(hover_pos) {
                     main_options.horz_line_visible = false;
                     main_options.horz_label_visible = false;
+                    // No price for the dot: the time line alone, as Full draws it.
                     if main_options.style == crate::config::CrosshairStyle::Dot {
-                        main_options.style = crate::config::CrosshairStyle::Arrow;
+                        main_options.style = crate::config::CrosshairStyle::Full;
                     }
                 }
                 crosshair_tags = rendering::render_crosshair_at_time(
@@ -4153,10 +4192,12 @@ impl Chart {
                         &options,
                         price_axis_rect.x_range(),
                         None,
-                        Some(
-                            crate::scales::StudyFormat::Volume
-                                .format(map.y_to_price(pos.y), map.price_precision()),
-                        ),
+                        Some(rendering::axes::volume_text(
+                            map.y_to_price(pos.y),
+                            self.instrument()
+                                .and_then(|instrument| instrument.volume_decimals),
+                            self.volume_formatter.as_deref(),
+                        )),
                     );
                 }
 
@@ -4282,8 +4323,9 @@ impl Chart {
                         if !main_target || self.synced_crosshair_price.is_none() {
                             options.horz_line_visible = false;
                             options.horz_label_visible = false;
+                            // No price for the dot: the time line alone, as Full draws it.
                             if options.style == crate::config::CrosshairStyle::Dot {
-                                options.style = crate::config::CrosshairStyle::Arrow;
+                                options.style = crate::config::CrosshairStyle::Full;
                             }
                         }
                         let y = match self.synced_crosshair_price {
@@ -4359,7 +4401,9 @@ impl Chart {
             if let Some((pos, tag)) = self.axis_hover.filter(|(pos, _)| {
                 show_price_button && price_rect.contains(*pos) && !volume_rect.contains(*pos)
             }) {
-                let price = if self.chart_options.crosshair.mode.snaps()
+                let price = if let Some(y) = self.anchor_crosshair_y(ui.ctx(), pos.y) {
+                    price_map.y_to_price(y)
+                } else if self.chart_options.crosshair.mode.snaps()
                     && let Some(index) = coords
                         .local_idx_at_x(pos.x, visible_data.len())
                         .filter(|index| Some(visible_data[*index].time) == crosshair_time)

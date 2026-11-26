@@ -12,6 +12,8 @@ ignore = [
     # unmaintained with no successor release; moving to another time library is a separate change.
     { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45 unmaintained notice; no patched release, replacement is a separate change" },
     { id = "RUSTSEC-2026-0555", reason = "chrono-tz 0.10.4 unmaintained notice; no patched release, replacement is a separate change" },
+    # rhai, the script engine of crates/scripting, depends on smartstring whatever its features.
+    { id = "RUSTSEC-2026-0249", reason = "smartstring 1.0.1 via rhai 1.27 in crates/scripting; unmaintained notice, no rhai release without it" },
 ]
 
 [licenses]
@@ -19,6 +21,12 @@ allow = [
     "0BSD", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause",
     "BSD-3-Clause", "BSL-1.0", "CDLA-Permissive-2.0", "ISC", "MIT", "OFL-1.1", "Ubuntu-font-1.0",
     "Unicode-3.0", "Unlicense", "Zlib",
+]
+exceptions = [
+    # rhai, the script engine of crates/scripting, stores its identifiers in smartstring.
+    { crate = "smartstring", allow = ["MPL-2.0"] },
+    # rhai hashes with ahash, whose compile-time seed comes from const-random through tiny-keccak.
+    { crate = "tiny-keccak", allow = ["CC0-1.0"] },
 ]
 
 # The unpublished demo is checked for its dependencies' licences.

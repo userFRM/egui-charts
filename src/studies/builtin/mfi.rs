@@ -47,10 +47,10 @@ impl MoneyFlowIndex {
     /// Create a new MFI indicator
     ///
     /// # Arguments
-    /// * `period` - Lookback period (typically 14)
+    /// * `period` - Lookback period (typically 14), clamped into 1 to 2000
     pub fn new(period: usize) -> Self {
         Self {
-            period: period.max(1),
+            period: period.clamp(1, 2000),
             values: IndicatorValues::new(),
             color: palette::PURPLE,
             visible: true,
@@ -116,7 +116,11 @@ impl MoneyFlowIndex {
                 let pos_sum: f64 = positive_flows[start..=i].iter().sum();
                 let neg_sum: f64 = negative_flows[start..=i].iter().sum();
 
-                let mfi = super::rsi::from_averages(pos_sum, neg_sum);
+                let mfi = if pos_sum + neg_sum > 0.0 {
+                    super::rsi::from_averages(pos_sum, neg_sum)
+                } else {
+                    50.0
+                };
 
                 values.push(IndicatorValue::Single(mfi.clamp(0.0, 100.0)));
             }
@@ -128,7 +132,7 @@ impl MoneyFlowIndex {
 
 impl Indicator for MoneyFlowIndex {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Length", 1, 2000)
     ; {});
 
     fn name(&self) -> &str {

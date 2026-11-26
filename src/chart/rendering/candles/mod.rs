@@ -340,8 +340,14 @@ pub fn render_chart_type(
                 params.volume_width(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
+                crate::model::or_candle(
+                    params.type_params.styles.columns.up_color,
+                    params.bullish_color(),
+                ),
+                crate::model::or_candle(
+                    params.type_params.styles.columns.down_color,
+                    params.bearish_color(),
+                ),
                 params.type_params.columns_base,
                 params.type_params.styles.columns.price_source,
             );
@@ -464,7 +470,14 @@ pub fn render_chart_type(
 
         // === Advanced Types ===
         ChartType::TimePriceOpportunity => {
-            let tpo_config = params.type_params.tpo_config(ctx.tick_size);
+            let built;
+            let tpo_config = match ctx.tpo {
+                Some(config) => config,
+                None => {
+                    built = params.type_params.tpo_config(ctx.tick_size);
+                    &built
+                }
+            };
             tpo::render_live_tpo(
                 painter,
                 price_rect,
@@ -472,7 +485,7 @@ pub fn render_chart_type(
                 ctx.start_idx..ctx.start_idx + ctx.visible_data.len(),
                 ctx.revision,
                 ctx.price_scale,
-                &tpo_config,
+                tpo_config,
                 ctx.tick_size,
                 ctx.clock,
                 &idx_to_coord,
@@ -549,6 +562,9 @@ mod tests {
         styles.area.bottom_fill = Color32::from_rgba_unmultiplied(0, 0, 255, 40);
         styles.baseline.above_fill = Color32::from_rgba_unmultiplied(255, 255, 0, 100);
         styles.baseline.below_fill = Color32::from_rgba_unmultiplied(0, 255, 255, 80);
+        // Flat, so every fill vertex holds the colour.
+        styles.baseline.above_fill_at_base = None;
+        styles.baseline.below_fill_at_base = None;
         chart.apply_series_settings(&settings);
         assert_eq!(chart.config().bullish_color, candle_color);
         let json = serde_json::to_string(chart.chart_type_params()).unwrap();

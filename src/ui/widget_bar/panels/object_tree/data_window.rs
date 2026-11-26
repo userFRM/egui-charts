@@ -7,7 +7,6 @@ use crate::localization as l10n;
 use egui::{RichText, Ui};
 
 use crate::icons::icons;
-use crate::scales::VolumeFormatter;
 use crate::theme::ThemeExt;
 use crate::ui_kit::IconButton;
 
@@ -83,6 +82,11 @@ impl DataWindowInfo {
                 .filter(|(id, row)| !chart.is_volume_column(*id, row))
                 .map(|(_, row)| row)
                 .collect();
+        } else {
+            // A chart without bars has no values, as its status line shows none.
+            info = info
+                .with_ohlcv(f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN)
+                .with_prev_close(f64::NAN);
         }
         // Added series read the hovered time, or their own latest bar, as their status rows do.
         let time = hovered
@@ -99,11 +103,19 @@ impl DataWindowInfo {
     /// chart's host formatters, else with its price decimals and thousands separator.
     /// [`Self::price_decimals`] becomes the precision chosen for the chart's price scale, else
     /// the instrument's; without either it keeps its own, and `None` writes the status line's
-    /// decimals. Call after populating OHLCV and previous close.
+    /// decimals. Call after populating OHLCV and previous close. A readout without values, at a
+    /// whitespace bar or without bars, gets no formatted texts.
     pub fn with_chart_formatters(mut self, chart: &crate::widget::Chart) -> Self {
         let price_formatter = chart.series_price_formatter(crate::widget::SeriesId::MAIN);
         let formats = chart.value_formatters(price_formatter.as_deref());
         self.price_decimals = chart.readout_price_decimals().or(self.price_decimals);
+        // A whitespace bar has no values to write.
+        if !has_values(&self) {
+            self.formatted_prices = None;
+            self.formatted_volume = None;
+            self.formatted_change = None;
+            return self;
+        }
         let decimals = self
             .price_decimals
             .map_or_else(|| crate::scales::price_decimals(self.close), usize::from);
@@ -198,8 +210,10 @@ pub fn show_data_window(ui: &mut Ui, data: &DataWindowInfo, expanded: bool) -> b
             });
             ui.space_xs();
 
-            // OHLCV grid
-            show_ohlcv_grid(ui, data);
+            // A whitespace bar lists no values, as the status line shows none.
+            if has_values(data) {
+                show_ohlcv_grid(ui, data);
+            }
             if !data.series.is_empty() {
                 ui.space_sm();
                 egui::Grid::new("series_values")
@@ -306,14 +320,10 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
                 ui.label(l10n::text(
                     ui.ctx(),
                     data.formatted_volume.clone().unwrap_or_else(|| {
-                        data.volume_precision.map_or_else(
-                            || format_volume(data.volume),
-                            |decimals| {
-                                VolumeFormatter {
-                                    precision: usize::from(decimals),
-                                }
-                                .format_with_min_unit_decimals(data.volume, 2)
-                            },
+                        crate::chart::rendering::axes::volume_text(
+                            data.volume,
+                            data.volume_precision,
+                            None,
                         )
                     }),
                 ));
@@ -336,13 +346,12 @@ fn show_ohlcv_grid(ui: &mut Ui, data: &DataWindowInfo) {
         });
 }
 
-/// Format volume with K/M/B suffixes
-fn format_volume(volume: f64) -> String {
-    if volume == 0.0 {
-        return "\u{2014}".to_string();
-    }
-
-    crate::scales::StudyFormat::Volume.format(volume, None)
+/// Whether `data` has values to list: a whitespace bar has none, as its open, high, low, close
+/// and volume are NaN, and the status line shows none for it.
+fn has_values(data: &DataWindowInfo) -> bool {
+    ![data.open, data.high, data.low, data.close, data.volume]
+        .into_iter()
+        .all(f64::is_nan)
 }
 
 #[cfg(test)]
@@ -527,6 +536,112 @@ mod tests {
         assert!(failures.is_empty(), "{failures:#?}");
     }
 
+    /// At a whitespace bar under the crosshair, between two bars with values, the data window
+    /// lists the bar's time and interval and no price, volume or change, as the status line
+    /// does: read from the chart, from the pointer event, or by a host from the event's bar.
+    /// A chart without bars lists no values either, while a bar that traded nothing reads 0.
+    #[test]
+    fn data_window_lists_no_values_at_a_whitespace_bar() {
+        use crate::model::{Bar, BarData, Timeframe};
+        use crate::widget::test_frames::{chart, frame};
+        use crate::widget::{ChartEvent, SeriesId};
+        use egui::{Event, Pos2};
+        // The window's texts after its title, empty texts left out.
+        let paint = |info: &DataWindowInfo| -> Vec<String> {
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                show_data_window(ui, info, true);
+            });
+            let texts: Vec<String> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if !text.galley.text().is_empty() => {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let title = texts.iter().position(|text| text == "Data Window").unwrap();
+            texts[title + 1..].to_vec()
+        };
+        // 100 daily bars opening at 100 and closing at 101; bar 49 traded nothing and bar 50
+        // holds its slot without values.
+        let mut chart = chart(&[100.0], &[101.0]);
+        chart.set_timeframe(Timeframe::Day1);
+        let mut bars = chart.bars(SeriesId::MAIN).to_vec();
+        bars[49].volume = 0.0;
+        bars[50] = Bar::whitespace(bars[50].time);
+        chart.set_data(SeriesId::MAIN, bars.clone());
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let map = chart.get_chart_mapping();
+        let at = |index| Pos2::new(map.idx_to_x(index), map.rect.center().y);
+        let mut failures = Vec::new();
+        // Bar 49 has values: without an instrument, prices take the status line's two decimals.
+        frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(at(49))]);
+        let valued = paint(&DataWindowInfo::from_chart(&chart));
+        let time = chart.format_time(bars[49].time);
+        if valued
+            .get(..6)
+            .is_none_or(|head| head != ["Time", time.as_str(), "Interval", "1D", "O", "100.00"])
+        {
+            failures.push(format!("bar 49: {valued:?}"));
+        }
+        // A traded bar without volume reads 0, as the legend writes it; a dash means no value.
+        if !valued.windows(2).any(|pair| pair == ["Vol", "0"]) {
+            failures.push(format!("bar 49 volume: {valued:?}"));
+        }
+        frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(at(50))]);
+        let pointer = chart
+            .drain_events()
+            .filter_map(|event| match event {
+                ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                _ => None,
+            })
+            .last()
+            .unwrap();
+        // A host that reads the hovered bar from the pointer event, as the terminal does.
+        let bar = pointer.bar.clone().unwrap();
+        let host = DataWindowInfo::new(chart.symbol())
+            .with_timeframe("1D")
+            .with_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
+            .with_timestamp(chart.format_time(bar.time))
+            .with_prev_close(pointer.previous_close.unwrap_or(bar.open))
+            .with_chart_formatters(&chart);
+        let time = chart.format_time(bars[50].time);
+        let whitespace = vec!["Time", time.as_str(), "Interval", "1D"];
+        let empty = crate::widget::Chart::new(BarData::from_bars(Vec::new()));
+        for (case, info, expected) in [
+            (
+                "from_chart",
+                DataWindowInfo::from_chart(&chart),
+                whitespace.clone(),
+            ),
+            (
+                "from_pointer",
+                DataWindowInfo::from_pointer(&chart, &pointer),
+                whitespace.clone(),
+            ),
+            ("host", host, whitespace),
+            ("empty", DataWindowInfo::from_chart(&empty), Vec::new()),
+        ] {
+            let window = paint(&info);
+            // No change reads as zero, and no text is left for a host to show.
+            if window != expected
+                || !info.change_percent.is_nan()
+                || info.formatted_change.is_some()
+            {
+                failures.push(format!(
+                    "{case}: {window:?}, {} {:?}",
+                    info.change_percent, info.formatted_change
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
     /// The data window names the horizontal value as the chart's readout does: "Time" on a time
     /// chart and in a readout the host builds, else the horizontal scale's name through the
     /// translator, and no name for a numeric scale that names nothing, even when the host
@@ -622,33 +737,5 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
-    }
-
-    #[test]
-    fn test_format_volume() {
-        use crate::scales::StudyFormat::*;
-        for (format, value, precision, expected) in [
-            (Volume, 1_500_000_000.0, None, "1.50B"),
-            (Volume, 2_500_000.0, None, "2.50M"),
-            (Volume, 3_500.0, None, "3.50K"),
-            (Volume, 500.0, None, "500"),
-            (Volume, -12_345_678.0, None, "-12.35M"),
-            (Volume, 0.0, Some(2), "0.00"),
-            (Volume, 1_234.0, Some(3), "1.234K"),
-            (Price, 1.23456, Some(5), "1.23456"),
-            (Price, -37.625, Some(3), "-37.625"),
-            (Percent, 5.125, None, "5.12%"),
-            (Percent, -2.5, Some(1), "-2.5%"),
-            (Fixed(4), 0.0004, None, "0.0004"),
-            (Fixed(4), 1.25, Some(1), "1.2"),
-            (Fixed(usize::MAX), 1.0, None, "1.000000000000"),
-            (Volume, f64::NAN, None, "-"),
-            (Percent, f64::INFINITY, None, "-"),
-        ] {
-            assert_eq!(format.format(value, precision), expected, "{format:?}");
-            if format == Volume && value > 0.0 && precision.is_none() {
-                assert_eq!(format_volume(value), expected);
-            }
-        }
     }
 }

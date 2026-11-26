@@ -46,7 +46,9 @@ pub struct ImageExportOptions {
     pub size: [u32; 2],
     /// Include the symbol above the chart.
     pub include_title: bool,
-    /// Include the export time in the chart's time zone above the chart.
+    /// Include the export time above the chart, written as the chart writes times, with its
+    /// date format, clock and locale, with seconds on every interval unless the time scale hides
+    /// them, followed by the name of the chart's time zone.
     pub include_timestamp: bool,
     /// Draw the symbol watermark and every host watermark set with [`Chart::set_watermark`]
     /// or [`Chart::set_pane_watermark`], as they show on screen, independently of the title and
@@ -112,6 +114,92 @@ pub struct ChartImage {
     pub pixels_per_point: f32,
 }
 
+/// What [`Chart::data_table_with`] and `Chart::export_csv_with` (with `csv`) list. The default
+/// lists what [`Chart::data_table`] and `Chart::export_csv` do: every loaded bar with its time and
+/// main series values, the visible added series and every visible plot of the visible studies, as
+/// plain numbers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DataExportOptions {
+    /// The earliest row time listed, inclusive. `None`, the default, starts at the first bar. On a
+    /// [horizontal scale](Chart::set_horizontal_scale) other than time, a key.
+    pub from: Option<DateTime<Utc>>,
+    /// The latest row time listed, inclusive. `None`, the default, ends at the last row. A `to`
+    /// before `from` lists no rows.
+    pub to: Option<DateTime<Utc>>,
+    /// List the time column first. Defaults to `true`.
+    pub include_time: bool,
+    /// List the main series' open, high, low, close and volume. Defaults to `true`.
+    pub include_main_series: bool,
+    /// Also list studies and study plots hidden on the chart, including studies hidden with
+    /// [`Chart::set_indicators_hidden`]. Defaults to `false`.
+    pub include_hidden_studies: bool,
+    /// Also list the rows past the last bar on which a displaced plot draws a value, such as the
+    /// last 8 bars of Williams Alligator's jaw. Their times continue the bars' spacing as
+    /// [`Chart::index_to_time`] extrapolates it, and the main series' cells are empty. Defaults
+    /// to `false`.
+    pub include_values_past_last_bar: bool,
+    /// The studies to list, by id, in chart order. `None`, the default, lists every study. Ids
+    /// that name no study are ignored. A hidden study listed here still needs
+    /// [`include_hidden_studies`](Self::include_hidden_studies).
+    pub studies: Option<Vec<super::SeriesId>>,
+    /// How values are written. Defaults to [`DataValues::Plain`].
+    pub values: DataValues,
+}
+
+impl Default for DataExportOptions {
+    fn default() -> Self {
+        Self {
+            from: None,
+            to: None,
+            include_time: true,
+            include_main_series: true,
+            include_hidden_studies: false,
+            include_values_past_last_bar: false,
+            studies: None,
+            values: DataValues::Plain,
+        }
+    }
+}
+
+/// How [`DataExportOptions`] writes values. Times are written the same way in every mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DataValues {
+    /// Plain numbers with the decimals each column takes, as `Chart::export_csv` writes them.
+    #[default]
+    Plain,
+    /// As the data window writes them: prices of the main series, the added series and price
+    /// studies in their formatter, else with the chart's thousands separator.
+    Displayed,
+    /// Every finite value unrounded, in the shortest text that reads back as the same number.
+    Raw,
+}
+
+/// What a column of a [`DataTable`] holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DataColumn {
+    /// The time of each row, or the key of a horizontal scale other than time.
+    Time,
+    /// A value of a series. Of the main series ([`SeriesId::MAIN`](super::SeriesId::MAIN)),
+    /// `plot` 0 to 4 is the open, high, low, close and volume; of an added series, `plot` 0 is its
+    /// close.
+    Series {
+        /// The series.
+        id: super::SeriesId,
+        /// The value of the series, numbered as above.
+        plot: usize,
+    },
+    /// Output `plot` of study `id`, numbered as `Indicator::plot_value` numbers it.
+    Study {
+        /// The study.
+        id: super::SeriesId,
+        /// The study output.
+        plot: usize,
+    },
+}
+
 /// A column of a [`DataTable`]. A study column carries the original id and title of its study
 /// and its plot; the title keeps a choice off a study of another title that a restore adds under
 /// the id the choice was made for. An added series column carries its title and its place among
@@ -130,9 +218,14 @@ pub(crate) enum ColumnId {
 #[non_exhaustive]
 pub struct DataTable {
     /// Column titles: time, open, high, low, close and volume, then one per visible added series,
-    /// titled as its legend shows it, and one per visible study plot.
+    /// titled as its legend shows it, and one per visible study plot, of those the
+    /// [`DataExportOptions`] list.
     pub headers: Vec<String>,
-    /// One row per loaded bar, oldest first. A missing or non-finite value is an empty cell.
+    /// What each column holds, one per header.
+    pub columns: Vec<DataColumn>,
+    /// One row per loaded bar in the range, oldest first, then the rows past the last bar that
+    /// [`DataExportOptions::include_values_past_last_bar`] asks for. A missing or non-finite value
+    /// is an empty cell.
     pub rows: Vec<Vec<String>>,
 }
 
@@ -254,13 +347,32 @@ impl std::fmt::Display for ExportError {
 impl std::error::Error for ExportError {}
 
 impl Chart {
-    fn export_time(&self, time: DateTime<Utc>) -> String {
-        match self.display_timezone() {
+    /// `time` with the UTC offset of `zone`, the zone [`Self::bar_date_timezone`] gives.
+    fn export_time(time: DateTime<Utc>, zone: &crate::scales::TimezoneMode) -> String {
+        match zone {
             crate::scales::TimezoneMode::Local => time.with_timezone(&chrono::Local).to_rfc3339(),
             zone => time
                 .with_timezone(&zone.to_tz().unwrap_or(crate::model::TimezoneId::utc()))
                 .to_rfc3339(),
         }
+    }
+
+    /// The export time above an image: the date and clock with seconds as the chart writes
+    /// times, also on daily bars, in its display zone and followed by the zone's name, as the
+    /// bottom toolbar's clock names it.
+    fn header_time(&self, time: DateTime<Utc>) -> String {
+        let zone = self.display_timezone();
+        let name = match &zone {
+            crate::scales::TimezoneMode::Local => crate::model::TimezoneId::fixed_offset(
+                time.with_timezone(&chrono::Local)
+                    .offset()
+                    .local_minus_utc(),
+            )
+            .unwrap_or_default(),
+            zone => zone.to_tz().unwrap_or_default(),
+        };
+        let clock = self.time_formatter_in(zone).format_crosshair(time, 1);
+        format!("{clock} {name}")
     }
 
     /// Exports all loaded source bars, the close of each visible added series and visible study
@@ -269,33 +381,95 @@ impl Chart {
     /// Recalculates copies of the studies so streaming updates and pending refreshes are included
     /// without altering the live chart. Price-based charts export source-bar calculations, aligned
     /// by source index and plot displacement, rather than mixing element values with source bars.
-    /// Times include the chart's UTC offset, including DST changes and subsecond timestamps; on a
-    /// [horizontal scale](Self::set_horizontal_scale) other than time, keys read as the crosshair
-    /// label does.
+    /// Times include the UTC offset of the zone that dates the bars, including DST changes and
+    /// subsecond timestamps: the display zone, or UTC for bars of a day or longer that
+    /// [`format_time`](Self::format_time) reads in UTC, so each row keeps the date the chart gives
+    /// its bar. On a [horizontal scale](Self::set_horizontal_scale) other than time, keys read as
+    /// the crosshair label does.
     /// Prices use the instrument's decimals, and the main series the precision chosen for the
     /// price scale in their place. Without `price_decimals` or a valid `tick_size`, price studies
     /// take the main series' precision, and without a chosen one the main series and price
     /// studies write the decimals the main series' prices hold, and an added series those its
     /// closes hold, at least two and at most twelve, so a price the chart shows does not read as
-    /// another number; an added series keeps at least four significant digits. Study overrides and
-    /// non-price units retain their precision. Missing/non-finite values are empty cells.
+    /// another number; an added series keeps at least four significant digits. Volumes take the
+    /// instrument's volume decimals, at most twelve as volume studies take them, and without them
+    /// the shortest text that holds their first 15 significant digits; they are never abbreviated.
+    /// Study overrides and non-price units retain their precision. Missing/non-finite values are
+    /// empty cells. This lists the defaults of [`DataExportOptions`]; see `Self::export_csv_with`
+    /// to choose rows, columns and values.
     #[cfg(feature = "csv")]
     #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let table = self.data_table();
+        self.export_csv_with(&DataExportOptions::default())
+    }
+
+    /// [`Self::export_csv`] of the rows, columns and values `options` chooses, as
+    /// [`Self::data_table_with`] lists them.
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
+    pub fn export_csv_with(
+        &self,
+        options: &DataExportOptions,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let table = self.data_table_with(options);
         table.csv(&(0..table.headers.len()).collect::<Vec<_>>())
     }
 
     /// The cells of `Self::export_csv` (with `csv`) as a table, with the same bars, added series
     /// closes, study plots, times and precision. During replay it holds the bars the replay
     /// cutoff has completed, and on price-based chart types still the source bars. Loads
-    /// nothing: only loaded bars are listed.
+    /// nothing: only loaded bars are listed. This lists the defaults of [`DataExportOptions`];
+    /// see [`Self::data_table_with`] to choose rows, columns and values.
     pub fn data_table(&self) -> DataTable {
-        self.data_table_with_columns().0
+        self.data_table_with(&DataExportOptions::default())
     }
 
-    /// Build cells and the identity of each column from the same calculated studies.
-    pub(crate) fn data_table_with_columns(&self) -> (DataTable, Vec<ColumnId>) {
+    /// [`Self::data_table`] of the rows, columns and values `options` chooses: the rows whose
+    /// time is in `from..=to`, the time and main series columns only when asked, the studies
+    /// listed by id, hidden studies and plots when asked, the rows past the last bar on which a
+    /// displaced plot draws a value when asked, and values plain, as displayed or raw. Each
+    /// value keeps the decimals it takes in the full table, and [`DataTable::columns`] names
+    /// what each column holds, so two studies of the same title are told apart by id.
+    ///
+    /// ```
+    /// use egui_charts::model::{Bar, BarData};
+    /// use egui_charts::studies::{CustomIndicator, IndicatorValue};
+    /// use egui_charts::widget::{Chart, DataColumn, DataExportOptions, DataValues};
+    ///
+    /// let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    /// let bars = (0..3)
+    ///     .map(|i| Bar::new(start + chrono::Duration::hours(i), 10.0, 10.5, 9.5, 10.25, 1.0))
+    ///     .collect();
+    /// let mut chart = Chart::new(BarData::from_bars(bars));
+    /// let ahead = chart.add_indicator(Box::new(
+    ///     CustomIndicator::new("Ahead", |bars| {
+    ///         bars.iter().map(|bar| IndicatorValue::Single(bar.close)).collect()
+    ///     })
+    ///     .with_offsets(vec![2]),
+    /// ));
+    /// let mut options = DataExportOptions::default();
+    /// options.include_main_series = false;
+    /// options.include_values_past_last_bar = true;
+    /// options.values = DataValues::Raw;
+    /// let table = chart.data_table_with(&options);
+    /// assert_eq!(table.columns, [DataColumn::Time, DataColumn::Study { id: ahead, plot: 0 }]);
+    /// // The offset draws the closes of bars 1 and 2 on the two rows past the last bar.
+    /// assert_eq!(table.rows.len(), 5);
+    /// assert_eq!(table.rows[4][1], "10.25");
+    /// ```
+    pub fn data_table_with(&self, options: &DataExportOptions) -> DataTable {
+        self.data_table_with_columns(options).0
+    }
+
+    /// Build cells and the identity of each column from the same calculated studies. With
+    /// [`DataValues::Displayed`], the cells of the main series, the added series and the price
+    /// studies read as the data window writes them: in the series' or the study's formatter, else
+    /// with their thousands grouped; other cells, and every cell without it, stay plain numbers.
+    pub(crate) fn data_table_with_columns(
+        &self,
+        options: &DataExportOptions,
+    ) -> (DataTable, Vec<ColumnId>) {
+        let readable = options.values == DataValues::Displayed;
         let bars = &self.state.data().bars;
         let instrument_precision = self
             .instrument()
@@ -312,6 +486,12 @@ impl Chart {
                         .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close]),
                 )
             });
+        // The main series' volumes take the instrument's volume decimals, capped as volume studies
+        // cap them so both columns agree; without them each keeps the digits it holds.
+        let volume_precision = self
+            .instrument()
+            .and_then(|instrument| instrument.volume_decimals)
+            .map(|decimals| usize::from(decimals).min(12));
         let mut studies: Vec<_> = self
             .indicators()
             .map(|(_, study)| study.clone_box())
@@ -319,8 +499,15 @@ impl Chart {
         let mut columns = Vec::new();
         // Each visible added series with its legend title, which falls back to "Series" as the
         // pane menu does, its place among series of that title and the decimals of its closes.
-        let mut series: Vec<(&[crate::model::Bar], String, usize, usize)> = Vec::new();
+        let mut series: Vec<(&[crate::model::Bar], String, usize, usize, super::SeriesId)> =
+            Vec::new();
+        let mut series_formatters = Vec::new();
         for item in self.price_series.iter().filter(|item| item.visible) {
+            series_formatters.push(
+                readable
+                    .then(|| self.series_price_formatter(item.id))
+                    .flatten(),
+            );
             let title = match item.options.name.as_str() {
                 "" => "Series".to_owned(),
                 name => name.to_owned(),
@@ -338,16 +525,21 @@ impl Chart {
                         .unwrap_or_else(|| held_decimals(item.bars.iter().map(|bar| bar.close))),
                     usize::max,
                 );
-            series.push((item.bars.as_slice(), title, place, precision));
+            series.push((item.bars.as_slice(), title, place, precision, item.id));
         }
-        let mut header = vec![
-            "time".into(),
-            "open".into(),
-            "high".into(),
-            "low".into(),
-            "close".into(),
-            "volume".into(),
+        let main_columns = [
+            (options.include_time, ["time"].as_slice(), 0),
+            (
+                options.include_main_series,
+                ["open", "high", "low", "close", "volume"].as_slice(),
+                1,
+            ),
         ];
+        let mut header: Vec<String> = main_columns
+            .iter()
+            .filter(|(included, ..)| *included)
+            .flat_map(|(_, names, _)| names.iter().map(|name| (*name).to_owned()))
+            .collect();
         header.extend(series.iter().map(|item| item.1.clone()));
         let clock = self.bar_clock();
         for study in &mut studies {
@@ -358,6 +550,13 @@ impl Chart {
                 study.set_timeframe(timeframe);
             }
             study.set_bar_clock(&clock);
+            self.study_data.set_replay_cut(
+                study.as_mut(),
+                &self.symbol,
+                self.timeframe,
+                self.replay_time(),
+                self.replay_newest_closed(),
+            );
         }
         let requests = studies
             .iter()
@@ -367,13 +566,17 @@ impl Chart {
             self.study_data
                 .data(requests, &self.symbol, self.timeframe, self.replay_time());
         super::studies::calculate(&mut studies, &self.study_ids, bars, &sources);
-        for (index, study) in studies
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, study)| self.shows_study(study.as_ref()))
-        {
+        for (index, study) in studies.iter_mut().enumerate().filter(|(index, study)| {
+            options
+                .studies
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&self.study_ids[*index]))
+                && (options.include_hidden_studies || self.shows_study(study.as_ref()))
+        }) {
             let names = study.line_names();
-            for line in (0..study.line_count()).filter(|line| study.plot_style(*line).visible) {
+            for line in (0..study.line_count())
+                .filter(|line| options.include_hidden_studies || study.plot_style(*line).visible)
+            {
                 header.push(format!(
                     "{}: {}",
                     study.name(),
@@ -384,54 +587,160 @@ impl Chart {
                     StudyFormat::Fixed(decimals) => decimals.min(12),
                     _ => 2,
                 });
-                columns.push((index, line, precision));
+                // A price study reads as the data window writes it: in its formatter, else grouped.
+                let price_units = readable && study.value_format() == StudyFormat::Price;
+                let own_text = price_units
+                    && self
+                        .study_formatter(self.study_ids[index], StudyFormat::Price)
+                        .is_some();
+                columns.push((index, line, precision, price_units, own_text));
             }
         }
-        let number = |value: f64, precision: usize| {
-            if value.is_finite() {
-                format!("{value:.precision$}")
-            } else {
-                String::new()
-            }
+        let number = |value: f64, precision: usize| match options.values {
+            _ if !value.is_finite() => String::new(),
+            DataValues::Raw => value.to_string(),
+            _ => format!("{value:.precision$}"),
         };
-        let mut rows = Vec::with_capacity(bars.len());
-        for (index, bar) in bars.iter().enumerate() {
-            let mut row = vec![if self.horizontal_scale.is_some() {
-                self.format_time(bar.time)
-            } else {
-                self.export_time(bar.time)
-            }];
-            row.extend(
-                [bar.open, bar.high, bar.low, bar.close]
-                    .map(|value| number(value, price_precision)),
-            );
-            row.push(if bar.volume.is_finite() {
-                bar.volume.to_string()
-            } else {
-                String::new()
+        // Built-in labels write '.' as the decimal point, so '.' and digits group nothing.
+        let separator = self
+            .config
+            .thousands_sep
+            .filter(|separator| *separator != '.' && !separator.is_ascii_digit());
+        let price =
+            |value: f64,
+             precision: usize,
+             formatter: Option<&std::sync::Arc<dyn crate::scales::PriceFormatter>>| {
+                match formatter {
+                    _ if !readable || !value.is_finite() => number(value, precision),
+                    Some(formatter) => formatter.format(value),
+                    None => crate::scales::group_thousands(number(value, precision), separator),
+                }
+            };
+        let main_formatter = readable
+            .then(|| self.series_price_formatter(super::SeriesId::MAIN))
+            .flatten();
+        // Rows date the bars as the chart labels them: a calendar bar keeps its trading date.
+        let zone = self.bar_date_timezone();
+        // The rows past the last bar on which a listed displaced plot draws a value. Offsets reach
+        // `isize::MAX`, so a plot's candidates are bounded by the values it holds.
+        let mut past = std::collections::BTreeSet::new();
+        if options.include_values_past_last_bar {
+            for &(study, line, ..) in &columns {
+                let study = &studies[study];
+                let offset = usize::try_from(study.plot_offset(line)).unwrap_or(0);
+                let Some(end) = study
+                    .values()
+                    .len()
+                    .checked_add(offset)
+                    .filter(|_| offset > 0)
+                else {
+                    continue;
+                };
+                past.extend((bars.len().max(offset)..end).filter(|&row| {
+                    study
+                        .plot_value(line, row)
+                        .is_some_and(|value| value.is_finite())
+                }));
+            }
+        }
+        let (timeframe, timezone) = (self.calendar_timeframe(), self.calendar_timezone());
+        let past = past.into_iter().filter_map(|row| {
+            crate::model::time_at_with_timeframe(bars, row as f64, timeframe, timezone.as_ref())
+                .map(|time| (row, time, None))
+        });
+        let listed = bars
+            .iter()
+            .enumerate()
+            .map(|(index, bar)| (index, bar.time, Some(bar)))
+            .chain(past)
+            .filter(|&(_, time, _)| {
+                options.from.is_none_or(|from| time >= from)
+                    && options.to.is_none_or(|to| time <= to)
             });
-            row.extend(series.iter().map(|&(bars, _, _, precision)| {
-                bars.binary_search_by_key(&bar.time, |other| other.time)
-                    .ok()
-                    .map(|at| &bars[at])
-                    .filter(|other| !other.is_whitespace())
-                    .map_or_else(String::new, |other| number(other.close, precision))
-            }));
-            row.extend(columns.iter().map(|&(study, line, precision)| {
-                studies[study]
-                    .plot_value(line, index)
-                    .map_or_else(String::new, |value| number(value, precision))
-            }));
+        let mut rows = Vec::with_capacity(bars.len());
+        for (index, time, bar) in listed {
+            let mut row = Vec::with_capacity(header.len());
+            if options.include_time {
+                row.push(if self.horizontal_scale.is_some() {
+                    self.format_time(time)
+                } else {
+                    Self::export_time(time, &zone)
+                });
+            }
+            match bar {
+                Some(bar) if options.include_main_series => {
+                    row.extend(
+                        [bar.open, bar.high, bar.low, bar.close]
+                            .map(|value| price(value, price_precision, main_formatter.as_ref())),
+                    );
+                    row.push(number(
+                        bar.volume,
+                        volume_precision.unwrap_or_else(|| crate::scales::decimals(bar.volume)),
+                    ));
+                }
+                None if options.include_main_series => {
+                    row.extend(std::iter::repeat_n(String::new(), 5));
+                }
+                _ => {}
+            }
+            row.extend(series.iter().zip(&series_formatters).map(
+                |(&(bars, _, _, precision, _), formatter)| {
+                    bars.binary_search_by_key(&time, |other| other.time)
+                        .ok()
+                        .map(|at| &bars[at])
+                        .filter(|other| !other.is_whitespace())
+                        .map_or_else(String::new, |other| {
+                            price(other.close, precision, formatter.as_ref())
+                        })
+                },
+            ));
+            row.extend(
+                columns
+                    .iter()
+                    .map(|&(study, line, precision, price_units, own_text)| {
+                        studies[study]
+                            .plot_value(line, index)
+                            .map_or_else(String::new, |value| match (price_units, own_text) {
+                                (true, true) if value.is_finite() => {
+                                    studies[study].format_plot_value(line, value)
+                                }
+                                (true, _) => price(value, precision, None),
+                                _ => number(value, precision),
+                            })
+                    }),
+            );
             rows.push(row);
         }
-        let column_ids = (0..6)
+        let main = main_columns
+            .iter()
+            .filter(|(included, ..)| *included)
+            .flat_map(|&(_, names, first)| first..first + names.len());
+        let data_columns = main
+            .clone()
+            .map(|column| match column {
+                0 => DataColumn::Time,
+                column => DataColumn::Series {
+                    id: super::SeriesId::MAIN,
+                    plot: column - 1,
+                },
+            })
+            .chain(series.iter().map(|item| DataColumn::Series {
+                id: item.4,
+                plot: 0,
+            }))
+            .chain(columns.iter().map(|&(study, line, ..)| DataColumn::Study {
+                id: self.study_ids[study],
+                plot: line,
+            }))
+            .collect();
+        let column_ids = main
             .map(ColumnId::Main)
             .chain(
                 series
                     .iter()
                     .map(|item| ColumnId::Series(item.1.clone(), item.2)),
             )
-            .chain(columns.iter().map(|&(study, line, _)| {
+            .chain(columns.iter().map(|&(study, line, ..)| {
                 let id = self.study_ids[study].0;
                 #[cfg(feature = "drawings")]
                 let id = self.study_column_ids.get(&id).copied().unwrap_or(id);
@@ -441,6 +750,7 @@ impl Chart {
         (
             DataTable {
                 headers: header,
+                columns: data_columns,
                 rows,
             },
             column_ids,
@@ -551,7 +861,7 @@ impl Chart {
         image_ctx.set_fonts(ctx.fonts(|fonts| fonts.definitions().clone()));
         let timestamp = options
             .include_timestamp
-            .then(|| self.export_time(Utc::now()));
+            .then(|| self.header_time(Utc::now()));
         let title = options.include_title.then(|| self.symbol().to_owned());
         let mut input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -800,6 +1110,7 @@ impl Chart {
             chart.drawings.drawings = self.drawings.drawings.clone();
             chart.drawings.curr_timeframe = self.drawings.curr_timeframe.clone();
             chart.drawings.set_hidden(self.drawings.is_hidden());
+            chart.drawings.shared_filter = self.drawings.shared_filter;
         }
         chart.marks = self.marks.clone();
         chart.marker_options = self.marker_options;
@@ -1048,7 +1359,8 @@ mod tests {
             assert_eq!(&rows[1][0], expected_times[1]);
             assert_eq!(&rows[0][1], "10.000");
             assert_eq!(&rows[2][4], "22.000");
-            assert_eq!(&rows[0][5], "1234.5");
+            // The volume column writes the volume decimals, as the Volume study column (12) does.
+            assert_eq!(&rows[0][5], "1234.500");
             // Two-bar means are 12 and (14 + 22) / 2 = 18; displacement -1 moves them left.
             assert_eq!(
                 rows.iter().map(|row| &row[6]).collect::<Vec<_>>(),
@@ -1169,6 +1481,58 @@ mod tests {
         }
     }
 
+    /// The volume column writes the main series' volumes with the instrument's volume decimals,
+    /// at most twelve as a Volume study column of the row does, and without them the volume each
+    /// bar holds without binary noise; the CSV export and the copied text take the same cells.
+    #[test]
+    #[cfg(feature = "csv")]
+    fn data_table_writes_volumes_with_the_volume_decimals() {
+        let (mut written, mut expected) = (Vec::new(), Vec::new());
+        for (volume, decimals, text) in [
+            (0.1 + 0.2, Some(2), "0.30"),
+            (0.1 + 0.2, None, "0.3"),
+            (1234.0, None, "1234"),
+            (2500000.5, Some(2), "2500000.50"),
+            (0.1 + 0.2, Some(15), "0.300000000000"),
+        ] {
+            let bar = Bar::new(DateTime::UNIX_EPOCH, 10.0, 10.0, 10.0, 10.0, volume);
+            let mut chart = Chart::new(BarData::from_bars(vec![bar]));
+            if let Some(decimals) = decimals {
+                chart.set_instrument(Some(Instrument::new("TEST").with_volume_decimals(decimals)));
+            }
+            chart.add_indicator(Box::new(
+                CustomIndicator::new("Volume", |bars| {
+                    bars.iter()
+                        .map(|bar| IndicatorValue::Single(bar.volume))
+                        .collect()
+                })
+                .with_value_format(StudyFormat::Volume),
+            ));
+            let table = chart.data_table();
+            let csv = chart.export_csv().unwrap();
+            let record = csv::Reader::from_reader(csv.as_bytes())
+                .records()
+                .next()
+                .unwrap()
+                .unwrap();
+            written.push((
+                table.rows[0][5].clone(),
+                record[5].to_owned(),
+                table.tsv(&[5]).lines().nth(1).map(str::to_owned),
+                // Without volume decimals the study keeps its own two.
+                decimals.map(|_| table.rows[0][6].clone()),
+            ));
+            expected.push((
+                text.to_owned(),
+                text.to_owned(),
+                Some(text.to_owned()),
+                decimals.map(|_| text.to_owned()),
+            ));
+        }
+        // Compared once, so that a failure lists every row.
+        assert_eq!(written, expected);
+    }
+
     /// An export's studies read the events the chart holds, as on screen, not the mark source page
     /// frozen into its event badges.
     #[cfg(feature = "studies")]
@@ -1212,9 +1576,11 @@ mod tests {
         test_frames::frame(&ctx, &mut snapshot, 0.1, vec![]);
         let value = |chart: &Chart| {
             let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
-            study.values().value(0, 80)
+            (study.values().len(), study.values().value(0, 80))
         };
-        assert!(value(&chart).is_some());
+        // The chart holds no earnings event, so its VWAP has no value; a restart at the frozen
+        // page's event on bar 70 would give bar 80 one.
+        assert_eq!(value(&chart), (100, None));
         assert_eq!(value(&snapshot), value(&chart));
     }
 
@@ -1471,9 +1837,243 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "studies")]
+    fn data_table_options_choose_rows_columns_and_values() {
+        use crate::studies::{SMA, WilliamsAlligator};
+        let t0 = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let hour = chrono::Duration::hours(1);
+        let chart_with = |studies: Vec<Box<dyn crate::studies::Indicator>>| {
+            let bars = (0..100)
+                .map(|i| Bar::new(t0 + hour * i, 1234.5, 1235.5, 1233.5, 1234.5, 1.0))
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Hour1);
+            chart.chart_options.time_scale.timezone = crate::scales::TimezoneMode::Utc;
+            let ids: Vec<_> = studies
+                .into_iter()
+                .map(|study| chart.add_indicator(study))
+                .collect();
+            (chart, ids)
+        };
+        // Two identical SMA 9, a hidden SMA 20 and an Alligator whose lips are hidden: every
+        // value is 1234.5, the median of each bar.
+        let (mut chart, ids) = chart_with(vec![
+            Box::new(SMA::new(9)),
+            Box::new(SMA::new(9)),
+            Box::new(SMA::new(20)),
+            Box::new(WilliamsAlligator::default()),
+        ]);
+        let [a, b, h, w] = ids[..] else {
+            unreachable!()
+        };
+        chart.set_indicator_visible(h, false);
+        let alligator = chart.indicator_mut(w).unwrap();
+        let mut settings = alligator.settings();
+        settings.plots[2].visible = false;
+        alligator.apply_settings(&[], settings).unwrap();
+
+        let main = (0..5).map(|plot| DataColumn::Series {
+            id: SeriesId::MAIN,
+            plot,
+        });
+        let study = |id, plot| DataColumn::Study { id, plot };
+        let shown: Vec<_> = std::iter::once(DataColumn::Time)
+            .chain(main.clone())
+            .chain([study(a, 0), study(b, 0), study(w, 0), study(w, 1)])
+            .collect();
+        let all: Vec<_> = std::iter::once(DataColumn::Time)
+            .chain(main)
+            .chain([
+                study(a, 0),
+                study(b, 0),
+                study(h, 0),
+                study(w, 0),
+                study(w, 1),
+                study(w, 2),
+            ])
+            .collect();
+        let (t99, t100) = ("2024-01-05T03:00:00+00:00", "2024-01-05T04:00:00+00:00");
+        let value = "1234.50";
+        let cases = [
+            (
+                "default",
+                DataExportOptions::default(),
+                shown.clone(),
+                100,
+                vec![(
+                    99,
+                    vec![
+                        t99, "1234.50", "1235.50", "1233.50", "1234.50", "1", value, value, value,
+                        value,
+                    ],
+                )],
+                Vec::new(),
+            ),
+            (
+                "hidden",
+                DataExportOptions {
+                    include_hidden_studies: true,
+                    ..Default::default()
+                },
+                all.clone(),
+                100,
+                Vec::new(),
+                vec![(99, 8, value), (99, 11, value)],
+            ),
+            (
+                "past",
+                DataExportOptions {
+                    include_values_past_last_bar: true,
+                    ..Default::default()
+                },
+                shown.clone(),
+                108,
+                vec![(100, vec![t100, "", "", "", "", "", "", "", value, value])],
+                vec![
+                    (104, 9, value),
+                    (105, 9, ""),
+                    (105, 8, value),
+                    (107, 0, "2024-01-05T11:00:00+00:00"),
+                ],
+            ),
+            (
+                "hidden and past",
+                DataExportOptions {
+                    include_hidden_studies: true,
+                    include_values_past_last_bar: true,
+                    ..Default::default()
+                },
+                all,
+                108,
+                Vec::new(),
+                vec![(102, 11, value), (103, 11, ""), (103, 10, value)],
+            ),
+            (
+                "one study without time or main series",
+                DataExportOptions {
+                    studies: Some(vec![b]),
+                    include_time: false,
+                    include_main_series: false,
+                    ..Default::default()
+                },
+                vec![study(b, 0)],
+                100,
+                vec![(8, vec![value]), (99, vec![value])],
+                vec![(7, 0, "")],
+            ),
+            (
+                "range",
+                DataExportOptions {
+                    from: Some(t0 + hour * 10),
+                    to: Some(t0 + hour * 19),
+                    ..Default::default()
+                },
+                shown.clone(),
+                10,
+                Vec::new(),
+                vec![
+                    (0, 0, "2024-01-01T10:00:00+00:00"),
+                    (9, 0, "2024-01-01T19:00:00+00:00"),
+                ],
+            ),
+            (
+                "range past the last bar",
+                DataExportOptions {
+                    include_values_past_last_bar: true,
+                    from: Some(t0 + hour * 100),
+                    to: Some(t0 + hour * 101),
+                    ..Default::default()
+                },
+                shown.clone(),
+                2,
+                Vec::new(),
+                vec![(0, 0, t100), (1, 0, "2024-01-05T05:00:00+00:00")],
+            ),
+            (
+                "to before from",
+                DataExportOptions {
+                    from: Some(t0 + hour * 20),
+                    to: Some(t0 + hour * 10),
+                    ..Default::default()
+                },
+                shown.clone(),
+                0,
+                Vec::new(),
+                Vec::new(),
+            ),
+            (
+                "displayed",
+                DataExportOptions {
+                    values: DataValues::Displayed,
+                    ..Default::default()
+                },
+                shown.clone(),
+                100,
+                vec![(
+                    99,
+                    vec![
+                        t99, "1,234.50", "1,235.50", "1,233.50", "1,234.50", "1", "1,234.50",
+                        "1,234.50", "1,234.50", "1,234.50",
+                    ],
+                )],
+                Vec::new(),
+            ),
+            (
+                "raw",
+                DataExportOptions {
+                    values: DataValues::Raw,
+                    ..Default::default()
+                },
+                shown,
+                100,
+                vec![(
+                    99,
+                    vec![
+                        t99, "1234.5", "1235.5", "1233.5", "1234.5", "1", "1234.5", "1234.5",
+                        "1234.5", "1234.5",
+                    ],
+                )],
+                Vec::new(),
+            ),
+        ];
+        for (name, options, columns, rows, full, cells) in cases {
+            let table = chart.data_table_with(&options);
+            assert_eq!(table.columns, columns, "{name}");
+            assert_eq!(table.headers.len(), columns.len(), "{name}");
+            assert_eq!(table.rows.len(), rows, "{name}");
+            for (row, expected) in full {
+                assert_eq!(table.rows[row], expected, "{name}: row {row}");
+            }
+            for (row, column, expected) in cells {
+                assert_eq!(table.rows[row][column], expected, "{name}: {row}, {column}");
+            }
+        }
+        // The two SMA 9 share a header and are told apart by id.
+        let table = chart.data_table();
+        assert_eq!(table.headers[6], table.headers[7]);
+
+        // A jaw displaced past any representable time lists no row, and its candidates stay as
+        // few as its values.
+        let (chart, _) = chart_with(vec![Box::new(WilliamsAlligator::default().with_offsets(
+            isize::MAX as usize,
+            5,
+            3,
+        ))]);
+        let table = chart.data_table_with(&DataExportOptions {
+            include_values_past_last_bar: true,
+            ..Default::default()
+        });
+        assert_eq!(table.rows.len(), 105);
+        assert!(table.rows.iter().all(|row| row[6].is_empty()));
+    }
+
+    #[test]
     fn table_text_holds_the_chosen_columns_with_their_missing_cells() {
         let table = DataTable {
             headers: vec!["time".into(), "close".into(), "SMA: 5".into()],
+            columns: Vec::new(),
             rows: vec![
                 vec!["t0".into(), "1.50".into(), String::new()],
                 vec!["t1".into(), "2.50".into(), "2.00".into()],
@@ -1638,6 +2238,74 @@ mod tests {
             ..base.clone()
         });
         assert!(!transparent.contains(&bg), "background was retained");
+        // The header writes the export time as the chart writes times, to the second on
+        // daily bars too, in the chart's zone, which it names: #4063.
+        for (zone, offset, use_24_hour, locale, timeframe, date_format, expected) in [
+            (
+                crate::scales::TimezoneMode::Utc,
+                0,
+                true,
+                None,
+                Some(crate::model::Timeframe::Min1),
+                "%d.%m.%Y",
+                "%d.%m.%Y %H:%M:%S UTC",
+            ),
+            (
+                crate::scales::TimezoneMode::Timezone("-03:30".parse().unwrap()),
+                -210,
+                false,
+                None,
+                None,
+                "%d.%m.%Y",
+                "%d.%m.%Y %I:%M:%S %p -03:30",
+            ),
+            (
+                crate::scales::TimezoneMode::Utc,
+                0,
+                true,
+                Some("de"),
+                Some(crate::model::Timeframe::Week1),
+                "%a %d.%m.%Y",
+                "%a %d.%m.%Y %H:%M:%S UTC",
+            ),
+        ] {
+            chart.chart_options.time_scale.timezone = zone;
+            chart.chart_options.time_scale.use_24_hour = use_24_hour;
+            chart.set_locale(locale.map(str::to_owned));
+            chart.timeframe = timeframe;
+            chart.set_date_format(Some(date_format.to_owned()));
+            let before = Utc::now();
+            let header = chart
+                .export_svg(
+                    &ctx,
+                    &ImageExportOptions {
+                        include_timestamp: true,
+                        ..base.clone()
+                    },
+                )
+                .unwrap();
+            let after = Utc::now();
+            // Every second the export may have read, written by chrono in the row's zone.
+            let texts: Vec<_> = (before.timestamp()..=after.timestamp())
+                .map(|second| {
+                    let wall = DateTime::from_timestamp(second, 0).unwrap()
+                        + chrono::Duration::minutes(offset);
+                    #[cfg(feature = "locales")]
+                    if locale.is_some() {
+                        return wall
+                            .format_localized(expected, chrono::Locale::de_DE)
+                            .to_string();
+                    }
+                    wall.format(expected).to_string()
+                })
+                .collect();
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| header.contains(&format!(">{text}</text>"))),
+                "{texts:?}"
+            );
+        }
         let callback = |ui: &mut egui::Ui, _: &mut Chart| {
             ui.painter().add(egui::PaintCallback {
                 rect: ui.max_rect(),

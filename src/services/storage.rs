@@ -35,6 +35,8 @@ pub enum StoreKind {
     /// each, the view shown last and its named news alerts. One document per panel, named `news`
     /// or `highlights`.
     NewsViews,
+    /// Named scripts: the source of one script per document, named by the script.
+    Scripts,
 }
 
 /// The host's revision of a stored document, such as a version counter, an entity tag or a

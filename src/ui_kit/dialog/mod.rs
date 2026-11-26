@@ -102,6 +102,15 @@ impl DialogFrame {
 
     /// Show the dialog. The closure receives `&mut Ui` for the dialog content.
     pub fn show(self, ctx: &Context, add_contents: impl FnOnce(&mut Ui)) {
+        self.show_with_id(ctx, None, add_contents);
+    }
+
+    pub(crate) fn show_with_id(
+        self,
+        ctx: &Context,
+        window_id: Option<egui::Id>,
+        add_contents: impl FnOnce(&mut Ui),
+    ) {
         let mut frame = dialog_frame(ctx);
         if let Some(r) = self.rounding {
             frame = frame.corner_radius(r);
@@ -114,12 +123,15 @@ impl DialogFrame {
         let inner = self.size.min(max).max(Vec2::ZERO);
 
         let window = egui::Window::new(&self.id)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
             .max_width((max.x + frame.total_margin().sum().x).max(0.0))
             .frame(frame);
+        let window = match window_id {
+            Some(id) => window.id(id),
+            None => window.anchor(Align2::CENTER_CENTER, Vec2::ZERO),
+        };
         let window = if self.auto_height {
             window
                 .default_width(inner.x)
@@ -173,7 +185,7 @@ fn dialog_key(ui: &Ui, key: egui::Key) -> bool {
         .unwrap_or(false)
         || egui::Popup::is_any_open(ui.ctx())
         || ui.ctx().any_popup_open()
-        || ui.ctx().top_layer_id() != Some(ui.layer_id())
+        || !is_top_dialog(ui.ctx(), ui.layer_id())
         || ui.ctx().memory(|m| m.focused()).is_some()
     {
         return false;
@@ -186,6 +198,22 @@ fn dialog_key(ui: &Ui, key: egui::Key) -> bool {
             )
         });
         fresh && input.consume_key(egui::Modifiers::NONE, key)
+    })
+}
+
+/// Whether `layer` is the topmost window shown: the last visible top-level Middle-order layer.
+/// egui keeps closed areas in its z-order, so `Context::top_layer_id` can name a window that
+/// has closed and block the one below it.
+pub(crate) fn is_top_dialog(ctx: &Context, layer: egui::LayerId) -> bool {
+    ctx.memory(|m| {
+        m.layer_ids()
+            .filter(|id| {
+                id.order == egui::Order::Middle
+                    && m.areas().is_visible(id)
+                    && m.areas().parent_layer(*id).is_none()
+            })
+            .last()
+            == Some(layer)
     })
 }
 
@@ -475,6 +503,57 @@ mod tests {
                 expected
             );
         }
+    }
+
+    /// egui keeps a closed window in its z-order, so Escape must skip it and reach the dialog
+    /// below: #4162.
+    #[test]
+    fn escape_closes_stacked_dialogs_one_at_a_time() {
+        let ctx = Context::default();
+        let mut open = [true, true];
+        let mut frame = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    for (index, open) in open.iter_mut().enumerate() {
+                        if *open {
+                            DialogFrame::new(format!("stacked {index}"), Vec2::new(420.0, 240.0))
+                                .show(ui.ctx(), |ui| *open = !dialog_header(ui, "Stacked"));
+                        }
+                    }
+                },
+            )
+            .drop_without_applying_deltas();
+            open
+        };
+        // Pressed and released: a key still held arrives as a repeat, which dialogs ignore.
+        let escape = || {
+            [true, false]
+                .map(|pressed| egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                })
+                .to_vec()
+        };
+        frame(vec![]);
+        frame(vec![]);
+        assert_eq!(
+            frame(escape()),
+            [true, false],
+            "the top dialog closes alone"
+        );
+        frame(vec![]);
+        assert_eq!(
+            frame(escape()),
+            [false, false],
+            "the next Escape reaches the one below"
+        );
     }
 
     #[test]

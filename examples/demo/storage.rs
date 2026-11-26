@@ -152,7 +152,7 @@ impl super::DemoApp {
             }
         }
         if self.workspace_recovery.unreadable {
-            self.toasts.add(Toast::warning("Opened a default chart. The unreadable workspace was kept; save a named layout to keep new work.").permanent());
+            self.toasts.add(Toast::warning("Opened a default chart. The unreadable workspace was kept; save a named layout to keep new work. If a script it holds was saved since with other plots or inputs, saving that script back as it was opens the workspace again.").permanent());
         }
     }
 
@@ -328,34 +328,6 @@ impl DemoStorage {
                         .map_err(|error| format!("Could not open comparisons: {error}"))
                 },
             )
-    }
-
-    pub(super) fn save_sample_study(&self, title: &str, text: &str) {
-        self.documents
-            .lock()
-            .unwrap()
-            .insert(format!("sample-studies/{title}"), text.to_owned());
-        self.changed.store(true, Ordering::Relaxed);
-    }
-
-    pub(super) fn sample_study(&self, title: &str) -> Option<String> {
-        self.documents
-            .lock()
-            .unwrap()
-            .get(&format!("sample-studies/{title}"))
-            .cloned()
-    }
-
-    pub(super) fn sample_studies(&self) -> Vec<String> {
-        let mut names: Vec<_> = self
-            .documents
-            .lock()
-            .unwrap()
-            .keys()
-            .filter_map(|key| key.strip_prefix("sample-studies/").map(str::to_owned))
-            .collect();
-        names.sort();
-        names
     }
 
     /// The own-data document, when one is stored.
@@ -795,7 +767,9 @@ mod tests {
             app.top_toolbar.layout_menu.save("Unnamed 2", &layout);
             app.poll_storage(&ctx);
             app.handle_layout_action(
-                egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction::CreateNew,
+                egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction::CreateNew(
+                    "Unnamed".into(),
+                ),
             );
             assert!(
                 !app.top_toolbar

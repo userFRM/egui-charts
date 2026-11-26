@@ -190,6 +190,8 @@ pub struct ChartContextMenu {
     /// The symbol's tick size, to which alert and order prices are rounded, and by which a
     /// stop-limit row's limit lies beyond its stop; without it there is no stop-limit row.
     pub tick_size: Option<f64>,
+    /// The symbol's coarser ticks by price range, which alert and order prices also round to.
+    pub(crate) tick_tiers: Vec<(f64, f64)>,
     /// Decimals supplied by [`ChartMenus`] for alert and order prices without a tick size.
     /// `None` uses the decimals of a menu shown without its chart.
     pub(crate) price_decimals: Option<usize>,
@@ -236,6 +238,7 @@ impl ChartContextMenu {
             indicator_cnt: 0,
             market_price: None,
             tick_size: None,
+            tick_tiers: Vec::new(),
             price_decimals: None,
             watchlists: Vec::new(),
             active_watchlist: None,
@@ -399,7 +402,7 @@ impl ChartContextMenu {
                 let (price, limit) = match request.order_type {
                     OrderType::Limit(price) | OrderType::Stop(price) => (price, None),
                     OrderType::StopLimit { stop, limit } => (stop, Some(limit)),
-                    OrderType::Market => continue,
+                    OrderType::Market | OrderType::TrailingStop { .. } => continue,
                 };
                 let key = match (request.side, request.order_type) {
                     (OrderSide::Buy, OrderType::Limit(_)) => {
@@ -558,14 +561,10 @@ impl ChartContextMenu {
         };
         // The limit lies one tick beyond the stop, in the direction it triggers.
         let stop_limit = tick.map(|tick| {
-            let beyond = if stop == OrderSide::Buy {
-                price + tick
-            } else {
-                price - tick
-            };
+            let beyond = if stop == OrderSide::Buy { 1.0 } else { -1.0 };
             OrderType::StopLimit {
                 stop: price,
-                limit: crate::scales::to_step(beyond, tick, f64::round),
+                limit: crate::scales::TickGrid::new(tick, &self.tick_tiers).offset(price, beyond),
             }
         });
         [
@@ -589,12 +588,18 @@ impl ChartContextMenu {
 
     /// Round alert and order prices to the tick, else the decimals the menu uses.
     fn row_price(&self, price: f64) -> f64 {
-        crate::scales::snap_price(
-            price,
-            self.tick_size,
-            self.price_decimals
-                .unwrap_or_else(|| standalone_decimals(price)),
-        )
+        match self
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0)
+        {
+            Some(tick) => crate::scales::TickGrid::new(tick, &self.tick_tiers).snap(price),
+            None => crate::scales::snap_price(
+                price,
+                None,
+                self.price_decimals
+                    .unwrap_or_else(|| standalone_decimals(price)),
+            ),
+        }
     }
 
     /// Show the context menu
@@ -672,31 +677,37 @@ mod tests {
             stop_limit: true,
             ..Capabilities::default()
         };
-        // (click, tick, accepted types) -> entries
-        for (click, tick, types, expected) in [
+        // Below 25 prices move in 0.02, so the limit lies at 24.98.
+        let tiers = [(10.0, 0.02), (25.0, 0.05)];
+        // (click, tick, price ranges, accepted types) -> entries
+        for (click, tick, tick_tiers, types, expected) in [
             (
                 101.1,
                 Some(0.25),
+                &[][..],
                 menu.order_types,
                 vec![(Sell, Limit(101.0)), (Buy, Stop(101.0))],
             ),
             (
                 100.0,
                 Some(0.25),
+                &[],
                 menu.order_types,
                 vec![(Sell, Limit(100.0)), (Buy, Stop(100.0))],
             ),
             (
                 98.9,
                 Some(0.25),
+                &[],
                 menu.order_types,
                 vec![(Buy, Limit(99.0)), (Sell, Stop(99.0))],
             ),
-            (98.9, Some(0.25), stop_only, vec![(Sell, Stop(99.0))]),
-            (f64::NAN, Some(0.25), menu.order_types, vec![]),
+            (98.9, Some(0.25), &[], stop_only, vec![(Sell, Stop(99.0))]),
+            (f64::NAN, Some(0.25), &[], menu.order_types, vec![]),
             (
                 101.1,
                 Some(0.25),
+                &[],
                 all,
                 vec![
                     (Sell, Limit(101.0)),
@@ -713,6 +724,7 @@ mod tests {
             (
                 100.0,
                 Some(0.25),
+                &[],
                 all,
                 vec![
                     (Sell, Limit(100.0)),
@@ -729,6 +741,7 @@ mod tests {
             (
                 98.9,
                 Some(0.25),
+                &[],
                 all,
                 vec![
                     (Buy, Limit(99.0)),
@@ -745,6 +758,7 @@ mod tests {
             (
                 98.9,
                 Some(0.25),
+                &[],
                 stop_limit_only,
                 vec![(
                     Sell,
@@ -757,12 +771,31 @@ mod tests {
             (
                 98.9137,
                 None,
+                &[],
                 all,
                 vec![(Buy, Limit(98.91)), (Sell, Stop(98.91))],
+            ),
+            (
+                25.0,
+                Some(0.01),
+                &tiers,
+                all,
+                vec![
+                    (Buy, Limit(25.0)),
+                    (Sell, Stop(25.0)),
+                    (
+                        Sell,
+                        StopLimit {
+                            stop: 25.0,
+                            limit: 24.98,
+                        },
+                    ),
+                ],
             ),
         ] {
             menu.click_price = click;
             menu.tick_size = tick;
+            menu.tick_tiers = tick_tiers.to_vec();
             menu.order_types = types;
             let rows = menu.build_menu_items(
                 &Context::default(),

@@ -57,7 +57,10 @@ use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
 #[cfg(feature = "ui")]
 pub(crate) use export::ColumnId;
-pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions, PixelDensity};
+pub use export::{
+    ChartImage, DataColumn, DataExportOptions, DataTable, DataValues, ExportError,
+    ImageExportOptions, PixelDensity,
+};
 pub use feed::checkpoint::{
     TradeReplayCheckpoint, TradeReplayCheckpointError, TradeReplayCheckpointPlan,
 };
@@ -421,6 +424,8 @@ pub struct Chart {
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
     quote_action: Option<QuoteSide>,
+    /// Whether the last frame drew the Buy and Sell buttons, which the market order keys press.
+    quote_buttons: bool,
     /// The quote panel's place as shares of its available horizontal and vertical room.
     quote_panel_at: Option<[f32; 2]>,
     server_time_offset: Option<chrono::TimeDelta>,
@@ -476,6 +481,10 @@ pub struct Chart {
     pub(crate) timeframe: Option<Timeframe>,
     /// The feed the chart loads from, if it was built with one.
     pub(crate) feed_link: Option<FeedLink>,
+    /// Host policy for the initial historical trade page, independent of the current binding.
+    trade_history_on_demand: bool,
+    /// Size the first prepared footprint page to its readers rather than candle history.
+    footprint_history_by_view: bool,
     /// Cursor mode state (Demonstration, Magic, Eraser effects)
     #[cfg(feature = "drawings")]
     pub(crate) cursor_modes: CursorModeState,
@@ -591,6 +600,15 @@ pub struct Chart {
     /// Set by the context menus while one is open, so the next frame draws no crosshair or
     /// tooltip under it. Cleared by every frame.
     pub(crate) menu_open: bool,
+    /// Set by the context menus while they would answer a touch held on the price pane with
+    /// a limit order, so the next frame's hold asks for one in place of its values. Cleared by
+    /// every frame.
+    #[cfg(feature = "ui")]
+    pub(crate) touch_order_armed: bool,
+    /// Where a touch held on the price pane asked for an order during the last frame, for the
+    /// context menus to answer. It lives for one frame, as a right-click does.
+    #[cfg(feature = "ui")]
+    pub(crate) touch_order: Option<egui::Pos2>,
     /// Size to allocate instead of the available space; see [`Chart::set_size`].
     size: Option<Vec2>,
     /// The main bars in groups that fall within one pixel, while zoomed out that far.
@@ -650,9 +668,9 @@ pub enum RightClickTarget {
 }
 
 impl Chart {
-    /// Supplies instrument metadata for a chart without a feed, including price precision
-    /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence,
-    /// and so does a precision chosen in the chart settings or with
+    /// Supplies instrument metadata for a chart without a feed, including the price precision or
+    /// fraction and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes
+    /// precedence, and so does a precision chosen in the chart settings or with
     /// [`PriceScale::set_price_precision`]. Pass `None` to clear the metadata. Feed metadata
     /// takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
@@ -663,12 +681,14 @@ impl Chart {
         let precision = self
             .instrument()
             .and_then(crate::scales::instrument_price_precision);
-        let tick_size = self
-            .instrument()
-            .and_then(|instrument| instrument.tick_size);
+        let instrument = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.instrument.as_ref())
+            .or(self.legend_instrument.as_ref());
         let scale = self.state.price_scale_mut();
         scale.set_instrument_precision(precision);
-        scale.set_tick_size(tick_size);
+        scale.set_instrument_ticks(instrument);
     }
 
     /// The decimals of the main series' prices in the status line, the tooltip, the data window
@@ -801,7 +821,9 @@ impl Chart {
         std::mem::take(&mut self.scale_settings_requested)
     }
 
-    /// Takes the last legend quote click. No order is submitted by the chart.
+    /// Takes the last press of a quote button: a click, or the key of
+    /// [`KeyboardAction::BuyMarket`](crate::config::KeyboardAction::BuyMarket) or `SellMarket`
+    /// while the buttons are drawn. No order is submitted by the chart.
     pub fn take_quote_action(&mut self) -> Option<QuoteSide> {
         self.quote_action.take()
     }
@@ -935,10 +957,13 @@ impl Chart {
     /// body color, and these colors win over the same colors in `chart_type_params`. A new
     /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
     /// are in the old mode's units. An ATR or percentage size whose method is unchanged keeps
-    /// its resolved value. Call this when the user changes series appearance in a settings
-    /// dialog.
+    /// its resolved value. A changed TPO period length, row size or profile period drops the TPO
+    /// merges and splits carried over from the chart, which were made for the old values;
+    /// [`Chart::set_chart_type_params`] sets them as given. Call this when the user changes
+    /// series appearance in a settings dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
         let mut params = settings.chart_type_params.clone();
+        params.drop_stale_tpo_edits(&self.chart_type_params);
         if let Some(
             [
                 body_up,

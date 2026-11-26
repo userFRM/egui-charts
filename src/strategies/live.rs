@@ -291,6 +291,7 @@ impl Backtest {
             rates: self.rates(),
             rate: live.rate,
             unconverted: Cell::new(live.unconverted),
+            bar_clock: self.bar_clock.as_ref(),
         };
         let mut finer: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         finer.sort_by_key(|bar| bar.time);
@@ -395,6 +396,10 @@ impl Backtest {
         live.unconverted = run.unconverted.get();
         if live.unconverted {
             self.withhold(&mut live.report);
+        }
+        if let Some(failure) = run.strategy.failure() {
+            self.withhold(&mut live.report);
+            live.report.unavailable = Some(failure);
         }
         for fill in &mut fills {
             live.sequence += 1;

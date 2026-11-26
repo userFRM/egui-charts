@@ -1,6 +1,6 @@
 use super::*;
 use crate::data::inbox::Inbox;
-use crate::model::{Bar, BarClock, SymbolType, Timeframe};
+use crate::model::{Bar, BarClock, SessionWindow, SymbolType, Timeframe};
 #[cfg(test)]
 use crate::services::{SymbolQuery, SymbolSearch};
 use chrono::{DateTime, Utc};
@@ -365,10 +365,30 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
     request.since = DateTime::from_timestamp(-1, 500_000_000);
     request.extended_hours = true;
     request.conversion = Some("USD & EUR".into());
+    request.overnight_hours = true;
+    request.adjusted = true;
     assert_eq!(
         history_url("https://example.test/data", &request).unwrap(),
-        "https://example.test/data/history?symbol=A%26B%2F%C3%A9&resolution=15&countback=2&extended_hours=true&to=90.500000000&from=-0.500000000&conversion=USD%20%26%20EUR"
+        "https://example.test/data/history?symbol=A%26B%2F%C3%A9&resolution=15&countback=2&extended_hours=true&overnight_hours=true&adjusted=true&to=90.500000000&from=-0.500000000&conversion=USD%20%26%20EUR"
     );
+    // Overnight hours alone select regular hours.
+    for (hours, adjusted, expected) in [
+        (
+            (true, false),
+            false,
+            "&extended_hours=true&overnight_hours=false&adjusted=false&",
+        ),
+        (
+            (false, true),
+            true,
+            "&extended_hours=false&overnight_hours=false&adjusted=true&",
+        ),
+    ] {
+        (request.extended_hours, request.overnight_hours) = hours;
+        request.adjusted = adjusted;
+        let target = history_url("https://example.test", &request).unwrap();
+        assert!(target.contains(expected), "{target}");
+    }
     for (timeframe, expected) in [
         (Timeframe::Sec1, "1S"),
         (Timeframe::Min1, "1"),
@@ -411,18 +431,115 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
             assert_eq!(window.days, expected_days, "{hours}");
         }
     }
+    use crate::model::PriceFraction;
+    for (symbol, expected) in [
+        (
+            json!({"name":"ABC", "pricescale":32, "fractional":true}),
+            Some(PriceFraction::ThirtySeconds),
+        ),
+        (
+            json!({"name":"ABC", "minmov":2, "pricescale":8, "fractional":true}),
+            Some(PriceFraction::Eighths),
+        ),
+        (
+            json!({"name":"ABC", "pricescale":128, "minmove2":4, "fractional":true}),
+            Some(PriceFraction::QuarterThirtySeconds),
+        ),
+        (
+            json!({"name":"ABC", "pricescale":128, "fractional":true}),
+            Some(PriceFraction::OneTwentyEighths),
+        ),
+        (json!({"name":"ABC", "pricescale":32}), None),
+        (
+            json!({"name":"ABC", "pricescale":100, "fractional":true}),
+            None,
+        ),
+    ] {
+        let info = serde_json::from_value::<Symbol>(symbol.clone())
+            .unwrap()
+            .into_instrument()
+            .unwrap();
+        assert_eq!(info.price_fraction, expected, "{symbol}");
+    }
+    // A decimal pricescale sets the decimals; minmov only sets the tick.
+    for (symbol, expected) in [
+        (json!({"name":"ABC", "minmov":50, "pricescale":100}), 2),
+        (json!({"name":"ABC", "minmov":20, "pricescale":100}), 2),
+        (json!({"name":"ABC", "minmov":250, "pricescale":1000}), 3),
+        (json!({"name":"ABC", "minmov":0.5, "pricescale":100}), 3),
+        (json!({"name":"ABC", "pricescale":32}), 5),
+    ] {
+        let info = serde_json::from_value::<Symbol>(symbol.clone())
+            .unwrap()
+            .into_instrument()
+            .unwrap();
+        let decimals = crate::scales::instrument_price_precision(&info);
+        assert_eq!(decimals, Some(expected), "{symbol}");
+    }
+    // A tick table sets the tick of each price range; boundaries belong to the upper range.
+    let example = [
+        (5.0, 0.01),
+        (10.0, 0.02),
+        (20.0, 0.02),
+        (25.0, 0.05),
+        (30.0, 0.05),
+    ];
+    for (symbol, ticks, tick_size, decimals) in [
+        (
+            json!({"name":"ABC", "variable_tick_size":"0.01 10 0.02 25 0.05"}),
+            &example[..],
+            Some(0.01),
+            Some(2),
+        ),
+        (
+            json!({"name":"ABC", "minmov":50, "pricescale":100,
+                "variable_tick_size":"0.01 10 0.02 25 0.05"}),
+            &example[..],
+            Some(0.01),
+            Some(2),
+        ),
+        (
+            json!({"name":"ABC", "variable_tick_size":""}),
+            &[][..],
+            None,
+            None,
+        ),
+    ] {
+        let info = serde_json::from_value::<Symbol>(symbol.clone())
+            .unwrap()
+            .into_instrument()
+            .unwrap();
+        assert_eq!(info.tick_size, tick_size, "{symbol}");
+        assert_eq!(info.tick_tiers.is_empty(), ticks.is_empty(), "{symbol}");
+        for &(price, tick) in ticks {
+            assert_eq!(info.tick_at(price), Some(tick), "{symbol} at {price}");
+        }
+        let precision = crate::scales::instrument_price_precision(&info);
+        assert_eq!(precision, decimals, "{symbol}");
+    }
     for invalid in [
+        json!({"name":"ABC", "variable_tick_size":"0.01 10"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 10 0"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 25 0.02 10 0.05"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 10 0.02 10 0.05"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 x 0.02"}),
+        json!({"name":"ABC", "variable_tick_size":"0.01 10 inf"}),
         json!({"name":"ABC", "pricescale":0}),
         json!({"name":"ABC", "minmov":-1, "pricescale":100}),
         json!({"name":"ABC", "session":"0930-1600:8"}),
         json!({"name":"ABC", "session":"0930-1600F"}),
+        json!({"name":"ABC", "session_overnight":"2000-0400"}),
+        json!({"name":"ABC", "session":"24x7", "session_extended":"0400-0930"}),
     ] {
-        assert!(matches!(
-            serde_json::from_value::<Symbol>(invalid)
-                .unwrap()
-                .into_instrument(),
-            Err(FeedError::InvalidData(_))
-        ));
+        assert!(
+            matches!(
+                serde_json::from_value::<Symbol>(invalid.clone())
+                    .unwrap()
+                    .into_instrument(),
+                Err(FeedError::InvalidData(_))
+            ),
+            "{invalid}"
+        );
     }
 
     // Exercises real asynchronous HTTP and Reply delivery, including a root path prefix.
@@ -434,10 +551,11 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         let mut targets = Vec::new();
         for body in [
             r#"{"supported_resolutions":["1","15","60","240","1D"],"exchanges":[{"value":"X"}],"symbols_types":[{"value":"stock"}]}"#,
-            r#"{"name":"ABC","ticker":"X:ABC","description":"ABC Inc","exchange":"X","type":"stock","minmov":5,"pricescale":100,"currency_code":"USD","unit":"barrel","volume_precision":2,"timezone":"UTC","session":"0930-1600:23456","supported_resolutions":["15"],"data_status":"streaming"}"#,
+            r#"{"name":"ABC","ticker":"X:ABC","description":"ABC Inc","exchange":"X","type":"stock","minmov":5,"pricescale":100,"currency_code":"USD","unit":"barrel","volume_precision":2,"timezone":"UTC","session":"0930-1600:23456","supported_resolutions":["15"],"data_status":"streaming","session_extended":"0400-0930,1600-2000:23456","session_overnight":"2000-0400:23456","dividend_adjustment":true}"#,
             r#"{"name":"ABC","ticker":"X:ABC","currency_code":"EUR","unit":"tonne"}"#,
             r#"[{"symbol":"X:BAD","timezone":"Mars/Olympus_Mons"},{"symbol":"X:ABC","description":"ABC Inc","type":"stock","exchange":"X","country":"GB","sector":"Energy","source":"Provider/A","root":"ABC","logo":"bytes://company","exchange_logo":"bytes://venue"}]"#,
             r#"{"s":"no_data","nextTime":-60}"#,
+            r#"{"s":"no_data"}"#,
         ] {
             let (mut connection, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(&connection);
@@ -499,26 +617,36 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         instrument.supported_timeframes,
         Some(vec![Timeframe::Min15])
     );
+    assert!(instrument.dividend_adjustment);
     let session = instrument.session.unwrap();
+    let weekdays = [
+        chrono::Weekday::Mon,
+        chrono::Weekday::Tue,
+        chrono::Weekday::Wed,
+        chrono::Weekday::Thu,
+        chrono::Weekday::Fri,
+    ];
+    let at = |hour, minute| chrono::NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+    assert_eq!(session.windows[0].days, weekdays);
+    assert_eq!(session.windows[0].open, at(9, 30));
     assert_eq!(
-        session.windows[0].days,
+        session.extended_windows,
         [
-            chrono::Weekday::Mon,
-            chrono::Weekday::Tue,
-            chrono::Weekday::Wed,
-            chrono::Weekday::Thu,
-            chrono::Weekday::Fri
+            SessionWindow::new(weekdays, at(4, 0), at(9, 30)),
+            SessionWindow::new(weekdays, at(16, 0), at(20, 0))
         ]
     );
+    // Named by its closing day: Monday's window opens on Sunday at 20:00.
     assert_eq!(
-        session.windows[0].open,
-        chrono::NaiveTime::from_hms_opt(9, 30, 0).unwrap()
+        session.overnight_windows,
+        [SessionWindow::new(weekdays, at(20, 0), at(4, 0))]
     );
     feed.resolve_converted("X:ABC", "EUR/tonne", inbox.reply(2));
     let converted = (*take().downcast::<Result<Instrument, FeedError>>().unwrap()).unwrap();
     assert_eq!(converted.symbol, "X:ABC");
     assert_eq!(converted.currency.as_deref(), Some("EUR"));
     assert_eq!(converted.unit.as_deref(), Some("tonne"));
+    assert!(!converted.dividend_adjustment);
     let mut query = SymbolQuery::new("X:A & B");
     query.symbol_type = Some(SymbolType::Stock);
     query.exchange = Some("X/Y".into());
@@ -544,6 +672,11 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
     feed.history(request, inbox.reply(4));
     let page = (*take().downcast::<Result<HistoryPage, FeedError>>().unwrap()).unwrap();
     assert_eq!(page.continue_before, DateTime::from_timestamp(-59, 0));
+    let clock = BarClock::new(Timeframe::Min15);
+    let sink = inbox.subscribe("X:ABC".into(), clock, 10, None);
+    let mut live = Subscription::new("X:ABC", Timeframe::Min15, sink);
+    (live.extended_hours, live.overnight_hours, live.adjusted) = (true, true, true);
+    feed.subscribe(live);
     let targets = server.join().unwrap();
     assert_eq!(
         &targets[..4],
@@ -555,6 +688,10 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         ]
     );
     assert!(targets[4].contains("&resolution=3M&countback=2&"));
+    assert_eq!(
+        targets[5],
+        "/data/history?symbol=X%3AABC&resolution=15&countback=500&extended_hours=true&overnight_hours=true&adjusted=true"
+    );
 }
 
 #[test]
@@ -578,6 +715,7 @@ fn old_subscription_cannot_publish_or_schedule_after_cancellation() {
                 clock,
                 extended_hours: false,
                 overnight_hours: false,
+                adjusted: false,
                 conversion: None,
                 sink,
             },
@@ -687,6 +825,7 @@ fn stalled_requests_answer_a_network_error() {
         clock,
         extended_hours: false,
         overnight_hours: false,
+        adjusted: false,
         conversion: None,
         sink,
     });
@@ -730,6 +869,7 @@ fn only_connection_attempts_report_connecting() {
                 clock,
                 extended_hours: false,
                 overnight_hours: false,
+                adjusted: false,
                 conversion: None,
                 sink,
             },

@@ -1,7 +1,7 @@
 //! Instrument metadata reported by a feed or a search service.
 
-use super::{Timeframe, TimezoneId};
-use chrono::{NaiveDate, NaiveTime, TimeDelta, Weekday};
+use super::{PriceFraction, Timeframe, TimezoneId};
+use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
 /// Symbol type categories for instrument classification.
@@ -180,10 +180,27 @@ pub struct Instrument {
     pub symbol_type: Option<SymbolType>,
     /// Smallest price increment: positive and finite. Consumers ignore any other value.
     pub tick_size: Option<f64>,
+    /// Coarser tick sizes from a price upwards, as `(price, tick)` pairs in rising price order.
+    /// Beside a `tick_size` of 0.01, `[(10.0, 0.02), (25.0, 0.05)]` moves prices in 0.01 below
+    /// 10, in 0.02 from 10 and in 0.05 from 25; each range's prices run from its price in steps
+    /// of its tick. The price axis, the Volume Footprint chart's rows, the order ticket, the
+    /// depth ladder, the chart's order lines and the chart menu's order rows use the tick of the
+    /// range a price lies in; other readers, such as studies, range intervals and the strategy
+    /// tester, keep `tick_size`. Empty, the default, keeps `tick_size` at every price. Ignored
+    /// without a valid `tick_size`, and as a whole when a price is not finite, a tick is not
+    /// positive and finite, or the prices do not rise.
+    pub tick_tiers: Vec<(f64, f64)>,
     /// Price represented by one pip: positive and finite. Unknown for instruments without pips.
     pub pip_size: Option<f64>,
     /// Decimals of price labels.
     pub price_decimals: Option<u8>,
+    /// The fraction prices are quoted in, such as thirty-seconds for `117'16`. A chart then
+    /// labels its price scale, price tags, crosshair, legend, data window and chart data table
+    /// in it, unless decimals or another fraction are chosen in the chart settings or on the
+    /// [`PriceScale`](crate::scales::PriceScale), and the symbol header writes its prices in it.
+    /// Other readouts and the data exports keep [`price_decimals`](Self::price_decimals). `None`,
+    /// the default, writes decimals.
+    pub price_fraction: Option<PriceFraction>,
     /// Decimals of volume readouts, of studies in volume units without a precision chosen in
     /// their settings, of measured volume, of footprint volumes and of volume profile row values.
     /// They describe the whole number: an abbreviated K, M or B value keeps the decimals its
@@ -220,9 +237,9 @@ pub struct Instrument {
     /// [`HistoryRequest::adjusted`](crate::data::HistoryRequest::adjusted) is set.
     pub dividend_adjustment: bool,
     /// Bar intervals the feed suggests for volume profile studies and drawings, by profile
-    /// length. A study whose source follows the chart, or a fixed range or anchored drawing
-    /// without executions, reads the shortest suggested interval shorter than the chart's that
-    /// serves its length. Empty, the default, suggests none; profiles then spread each chart
+    /// length and dates. A study whose source follows the chart, or a fixed range or anchored
+    /// drawing without executions, reads the shortest suggested interval shorter than the
+    /// chart's that serves its length and holds its dates. Empty, the default, suggests none; profiles then spread each chart
     /// bar's volume over its range.
     pub profile_resolutions: Vec<ProfileResolution>,
 }
@@ -243,8 +260,10 @@ impl Instrument {
             identifiers: Vec::new(),
             symbol_type: None,
             tick_size: None,
+            tick_tiers: Vec::new(),
             pip_size: None,
             price_decimals: None,
+            price_fraction: None,
             volume_decimals: None,
             currency: None,
             unit: None,
@@ -355,6 +374,38 @@ impl Instrument {
         self
     }
 
+    /// Adds a range to [`tick_tiers`](Self::tick_tiers): from `price` upwards prices move in
+    /// `tick`, after the ranges already set.
+    ///
+    /// ```
+    /// use egui_charts::model::Instrument;
+    ///
+    /// let stock = Instrument::new("ABC")
+    ///     .with_tick_size(0.01)
+    ///     .with_tick_tier(10.0, 0.02)
+    ///     .with_tick_tier(25.0, 0.05);
+    /// assert_eq!(stock.tick_at(5.0), Some(0.01));
+    /// assert_eq!(stock.tick_at(20.0), Some(0.02));
+    /// assert_eq!(stock.tick_at(30.0), Some(0.05));
+    /// ```
+    pub fn with_tick_tier(mut self, price: f64, tick: f64) -> Self {
+        self.tick_tiers.push((price, tick));
+        self
+    }
+
+    /// The tick of the range `price` lies in: [`tick_size`](Self::tick_size), or a coarser one of
+    /// [`tick_tiers`](Self::tick_tiers). `None` without a valid tick size.
+    pub fn tick_at(&self, price: f64) -> Option<f64> {
+        let tick = self
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0)?;
+        Some(tick_in_tiers(
+            tick,
+            valid_tick_tiers(&self.tick_tiers),
+            price,
+        ))
+    }
+
     /// Sets [`pip_size`](Self::pip_size).
     pub fn with_pip_size(mut self, pip_size: f64) -> Self {
         self.pip_size = Some(pip_size);
@@ -364,6 +415,22 @@ impl Instrument {
     /// Sets [`price_decimals`](Self::price_decimals).
     pub fn with_price_decimals(mut self, decimals: u8) -> Self {
         self.price_decimals = Some(decimals);
+        self
+    }
+
+    /// Sets [`price_fraction`](Self::price_fraction).
+    ///
+    /// ```
+    /// use egui_charts::model::{Instrument, PriceFraction};
+    ///
+    /// // A bond future that trades in thirty-seconds of a point.
+    /// let bond = Instrument::new("ZB")
+    ///     .with_tick_size(1.0 / 32.0)
+    ///     .with_price_fraction(PriceFraction::ThirtySeconds);
+    /// # let _ = bond;
+    /// ```
+    pub fn with_price_fraction(mut self, fraction: PriceFraction) -> Self {
+        self.price_fraction = Some(fraction);
         self
     }
 
@@ -437,6 +504,25 @@ impl Instrument {
     }
 }
 
+/// `tiers` when their prices are finite and rising and their ticks positive and finite, else
+/// none: see [`Instrument::tick_tiers`].
+pub(crate) fn valid_tick_tiers(tiers: &[(f64, f64)]) -> &[(f64, f64)] {
+    let valid = tiers
+        .iter()
+        .all(|&(from, tick)| from.is_finite() && tick.is_finite() && tick > 0.0)
+        && tiers.windows(2).all(|pair| pair[0].0 < pair[1].0);
+    if valid { tiers } else { &[] }
+}
+
+/// The tick of the range of valid `tiers` that `price` lies in, else `tick`.
+pub(crate) fn tick_in_tiers(tick: f64, tiers: &[(f64, f64)], price: f64) -> f64 {
+    tiers
+        .iter()
+        .rev()
+        .find(|(from, _)| price >= *from)
+        .map_or(tick, |&(_, tier)| tier)
+}
+
 /// Whether two currency codes name the same currency. A code that mixes upper and lower case
 /// names a minor unit, such as `GBp` for pence, and matches only itself; other codes match
 /// regardless of ASCII case, so `gbp` is `GBP`.
@@ -462,24 +548,64 @@ pub struct ProfileResolution {
     /// The longest profile this interval serves, from the open of the profile's first chart
     /// bar to the close of its last. `None` serves profiles of any length.
     pub max_span: Option<TimeDelta>,
+    /// The start of the feed's history at this interval, for a feed that holds it for part of
+    /// the symbol's dates only. A profile that opens earlier reads the next suggested interval.
+    /// `None`, the default, serves profiles from any date.
+    pub since: Option<DateTime<Utc>>,
+    /// The end of that history. A profile that closes later reads the next suggested interval.
+    /// `None`, the default, serves profiles up to the latest bar.
+    pub before: Option<DateTime<Utc>>,
 }
 
 impl ProfileResolution {
-    /// Suggests `timeframe` for profiles up to `max_span` long, or of any length for `None`.
+    /// Suggests `timeframe` for profiles up to `max_span` long, or of any length for `None`,
+    /// for every date; see [`with_history`](Self::with_history).
     pub fn new(timeframe: Timeframe, max_span: Option<TimeDelta>) -> Self {
         Self {
             timeframe,
             max_span,
+            since: None,
+            before: None,
         }
     }
 
-    /// The shortest time interval shorter than `interval` that serves `span`, from the open of
-    /// the profile's first bar to the close of its last.
+    /// Limits the suggestion to profiles inside the history the feed holds at this interval:
+    /// those that open at or after `since` and close at or before `before`. `None` leaves that
+    /// end open.
+    ///
+    /// ```
+    /// use chrono::{DateTime, TimeDelta, Utc};
+    /// use egui_charts::model::{Instrument, ProfileResolution, Timeframe};
+    ///
+    /// // One-minute bars are kept from 1 March 2026 on, hourly bars for every date: a one-day
+    /// // profile of February reads hourly bars, one of March one-minute bars.
+    /// let kept: DateTime<Utc> = "2026-03-01T00:00:00Z".parse()?;
+    /// let instrument = Instrument::new("ABC").with_profile_resolutions([
+    ///     ProfileResolution::new(Timeframe::Min1, Some(TimeDelta::days(1)))
+    ///         .with_history(Some(kept), None),
+    ///     ProfileResolution::new(Timeframe::Hour1, None),
+    /// ]);
+    /// # let _ = instrument;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_history(
+        mut self,
+        since: Option<DateTime<Utc>>,
+        before: Option<DateTime<Utc>>,
+    ) -> Self {
+        self.since = since;
+        self.before = before;
+        self
+    }
+
+    /// The shortest time interval shorter than `interval` that serves `span` and holds a
+    /// profile from `start`, the open of its first bar, to `end`, the close of its last.
     #[cfg(any(feature = "studies", feature = "drawings"))]
     pub(crate) fn suggested(
         resolutions: &[Self],
         interval: Timeframe,
         span: TimeDelta,
+        (start, end): (DateTime<Utc>, DateTime<Utc>),
     ) -> Option<Timeframe> {
         resolutions
             .iter()
@@ -487,6 +613,8 @@ impl ProfileResolution {
                 !hint.timeframe.is_trade_based()
                     && hint.timeframe.duration_ms() < interval.duration_ms()
                     && hint.max_span.is_none_or(|max| span <= max)
+                    && hint.since.is_none_or(|since| since <= start)
+                    && hint.before.is_none_or(|before| end <= before)
             })
             .min_by_key(|hint| hint.timeframe.duration_ms())
             .map(|hint| hint.timeframe)
@@ -761,5 +889,37 @@ mod tests {
         assert_eq!(SymbolType::Crypto.to_string(), "crypto");
         assert_eq!(SymbolType::Futures.to_string(), "futures");
         assert_eq!(SymbolType::Forex.to_string(), "forex");
+    }
+
+    /// A dated suggestion serves the profiles inside its history, bounds included; one without
+    /// dates serves every date.
+    #[test]
+    #[cfg(any(feature = "studies", feature = "drawings"))]
+    fn dated_suggestions_serve_the_profiles_they_hold() {
+        let since: DateTime<Utc> = "2026-03-02T00:00:00Z".parse().unwrap();
+        let before: DateTime<Utc> = "2026-03-03T00:00:00Z".parse().unwrap();
+        let second = TimeDelta::seconds(1);
+        let year = TimeDelta::days(365);
+        let dated =
+            ProfileResolution::new(Timeframe::Min1, None).with_history(Some(since), Some(before));
+        let undated = ProfileResolution::new(Timeframe::Min1, None);
+        for (hint, (start, end), expected) in [
+            (dated, (since, before), Timeframe::Min1),
+            (dated, (since - second, before - second), Timeframe::Hour1),
+            (dated, (since + second, before + second), Timeframe::Hour1),
+            (undated, (since - year, before - year), Timeframe::Min1),
+        ] {
+            let hints = [hint, ProfileResolution::new(Timeframe::Hour1, None)];
+            assert_eq!(
+                ProfileResolution::suggested(
+                    &hints,
+                    Timeframe::Day1,
+                    TimeDelta::days(1),
+                    (start, end)
+                ),
+                Some(expected),
+                "{start} {end}"
+            );
+        }
     }
 }

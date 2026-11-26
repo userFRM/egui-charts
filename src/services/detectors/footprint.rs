@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use super::DetectionKind;
 use crate::data::Footprint;
 use crate::model::{ChartTypeParams, Direction, Signal, SignalId, SignalShape};
+use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
 /// Footprint conditions that mark a bar of the latest subscribed time interval, each at most
@@ -277,13 +278,15 @@ pub(super) fn closed(
 }
 
 /// Pushes the volume and delta levels of `rule` that one execution at `price` takes the forming
-/// bar opened at `at` past, from `before` to `after`, each its buy volume, sell volume and delta.
+/// bar opened at `at` past, from `before` to `after`, each its buy volume, sell volume and delta,
+/// writing values and levels with `sizes_label`.
 pub(super) fn forming(
     before: [f64; 3],
     after: [f64; 3],
     at: DateTime<Utc>,
     price: f64,
     rule: &FootprintRule,
+    sizes_label: &VolumeFormatter,
     out: &mut Vec<SignalEvent>,
 ) {
     for (level, index, above, key, label) in [
@@ -315,7 +318,11 @@ pub(super) fn forming(
         if !past(before[index]) && past(after[index]) {
             let name = ["Buy volume", "Sell volume", "Delta"][index];
             let side = if above { "above" } else { "below" };
-            let tooltip = format!("{name} {} {side} {level}", after[index]);
+            let tooltip = format!(
+                "{name} {} {side} {}",
+                sizes_label.format_with_min_unit_decimals(after[index], 2),
+                sizes_label.format_with_min_unit_decimals(level, 2)
+            );
             out.push(signal(key, at, price, above && index != 1, label, tooltip));
         }
     }

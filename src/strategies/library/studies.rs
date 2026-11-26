@@ -75,11 +75,12 @@ impl StudyStrategy {
             studies.push(Box::new(SMA::new(26)));
         }
         let inputs = match rule {
+            // Indices 0 and 1 keep their meaning for strategies saved with Long or Short.
             Rule::DirectedBollinger => vec![StudyInput::new(
                 "direction",
                 "Direction",
-                InputValue::Choice(0),
-                InputKind::Choice(vec!["Long".into(), "Short".into()]),
+                InputValue::Choice(2),
+                InputKind::Choice(vec!["Long only".into(), "Short only".into(), "Both".into()]),
             )],
             Rule::Rating => vec![StudyInput::new(
                 "timeframe",
@@ -123,7 +124,8 @@ impl StudyStrategy {
             return [false; 2];
         }
         match self.rule {
-            // A band crossing holds for one bar: its stop works through the next bar only.
+            // A band crossing holds for one bar: its entry works through the next bar only,
+            // which matters only while a fill delay holds it.
             Rule::Bollinger | Rule::DirectedBollinger => signals.map(|signal| signal.is_none()),
             // A Keltner stop works until the source falls back through the basis.
             Rule::Keltner => {
@@ -330,9 +332,10 @@ impl Strategy for StudyStrategy {
                 let stop = |column| value(column).map(OrderType::Stop);
                 let market = |condition: bool| condition.then_some(OrderType::Market);
                 match self.rule {
+                    // The crossed band is already passed, so the entry fills at the next price.
                     Rule::Bollinger | Rule::DirectedBollinger => [
-                        stop(2).filter(|_| crosses(&close, line(2), i)),
-                        stop(0).filter(|_| crosses(line(0), &close, i)),
+                        market(crosses(&close, line(2), i)),
+                        market(crosses(line(0), &close, i)),
                     ],
                     // The stops wait beyond the signal bar; `on_bar` adds the run's tick.
                     Rule::Keltner => [
@@ -424,10 +427,10 @@ impl Strategy for StudyStrategy {
             return;
         };
         let expired = self.expired(signals, context, at);
-        if matches!(self.rule, Rule::DirectedBollinger) {
-            let InputValue::Choice(direction) = self.inputs[0].value else {
-                unreachable!()
-            };
+        // Both (index 2) trades as Bollinger Bands does, in the loop below.
+        if matches!(self.rule, Rule::DirectedBollinger)
+            && let InputValue::Choice(direction @ 0..=1) = self.inputs[0].value
+        {
             if signals[1 - direction].is_some() {
                 context.cancel(if direction == 0 { "Long" } else { "Short" });
                 if context.position() != 0. {

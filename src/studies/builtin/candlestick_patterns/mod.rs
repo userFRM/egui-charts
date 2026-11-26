@@ -71,13 +71,14 @@
 //!
 //! Three lines: Bullish at the low of a bar with a bullish pattern (an upward triangle),
 //! Bearish at the high of a bar with a bearish one (a downward triangle) and Neutral at the
-//! high of a bar with a doji or spinning top (a circle). Each mark is labelled with the
-//! abbreviations of the patterns found on the bar, one per line; on a bar with a bearish
-//! pattern the neutral ones join the bearish label, so the two never overlap. Hovering a mark
-//! shows the full name of each pattern it labels, such as "Three White Soldiers - Bullish",
-//! each followed by its rule in words, in the label's order. Every pattern has a toggle,
-//! all on by default, and the pattern type marks both sides (the default, neutral patterns
-//! included) or only the bullish or only the bearish patterns.
+//! high of a bar with a doji or spinning top (a circle). These values only place the marks: the
+//! legend lists none of them, and the price scale starts without their tags. Each mark is
+//! labelled with the abbreviations of the patterns found on the bar, one per line; on a bar with a
+//! bearish pattern the neutral ones join the bearish label, so the two never overlap. Hovering a
+//! mark shows the full name of each pattern it labels, such as "Three White Soldiers - Bullish",
+//! each followed by its rule in words, in the label's order. Every pattern has a toggle, all on by
+//! default, and the pattern type marks both sides (the default, neutral patterns included) or only
+//! the bullish or only the bearish patterns.
 //!
 //! Each pattern also has its own study, registered under its label, such as "Doji" or
 //! "Engulfing - Bearish". It draws one line, named and styled as its side's line above, and
@@ -407,6 +408,15 @@ impl Indicator for CandlestickPatterns {
         }
     }
 
+    fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
+        // Bullish marks hold the bar's low, bearish and neutral ones its high.
+        if self.combined_line(line) == 0 {
+            crate::studies::ShapeSide::Below
+        } else {
+            crate::studies::ShapeSide::Above
+        }
+    }
+
     fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
         self.colors
             .get(self.combined_line(line))
@@ -581,6 +591,15 @@ impl Indicator for CandlestickPatterns {
         };
         PATTERNS.get(pattern)?;
         Some(self.found.get(bar)? >> pattern & 1 == 1)
+    }
+
+    // A mark's value only places its shape at the bar's high or low, so it is no reading.
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn plot_tagged(&self, _line: usize) -> bool {
+        false
     }
 
     fn values(&self) -> &IndicatorValues {

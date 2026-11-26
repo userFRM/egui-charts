@@ -182,7 +182,7 @@ fn equity_curve_fills_the_width_with_distinct_time_labels() {
         let color = egui::Color32::GREEN;
         let mut h = Harness::builder()
             .with_size(Vec2::new(width, 200.0))
-            .build_ui(|ui| plot::show(ui, &values, &[], color, 175.0, 1.0));
+            .build_ui(|ui| plot::show(ui, &values, &[], color, 175.0, 1.0, &[], |_, _| {}));
         h.run();
         let texts: Vec<_> = h
             .output()
@@ -302,6 +302,9 @@ fn summary_lists_open_profit_and_charts_switch_to_percent() {
     h.run();
     h.get_by_label("Open profit");
     h.get_by_label("-1000.00");
+    // Beside each chart: its largest and latest value and the summary's average phase.
+    h.get_by_label("Maximum 3000.00, average 1000.00, current 1000.00");
+    h.get_by_label("Maximum 3000.00, average N/A, current 3000.00");
     let texts = |h: &Harness<'_, StrategyReportPanel>| -> Vec<String> {
         h.output()
             .shapes
@@ -325,6 +328,8 @@ fn summary_lists_open_profit_and_charts_switch_to_percent() {
     h.get_by_role_and_label(Role::CheckBox, "Percent of initial capital")
         .click();
     h.run();
+    h.get_by_label("Maximum 30.00, average 10.00, current 10.00");
+    h.get_by_label("Maximum 30.00, average N/A, current 30.00");
     let shown = texts(&h);
     assert!(
         percent.iter().all(|l| has(&shown, l)) && !money.iter().any(|l| has(&shown, l)),
@@ -417,6 +422,11 @@ fn range_limits_summary_charts_and_trades() {
             row(&h, "Maximum drawdown % (close-to-close)", 1),
             ["25.00%"]
         );
+        // The open drawdown from 1 February lasts to the curve's end on 1 April.
+        assert_eq!(
+            row(&h, "Average drawdown duration in days (close-to-close)", 1),
+            ["60.00"]
+        );
         assert_eq!(
             h.get_by_role_and_label(Role::TextInput, "From (UTC)")
                 .value()
@@ -459,6 +469,8 @@ fn range_limits_summary_charts_and_trades() {
             .type_text("2024-02-15");
         h.run();
         assert_eq!(row(&h, "Net return", 3), ["-33.33%", "-33.33%", "0.00%"]);
+        assert_eq!(row(&h, "Average run-up (close-to-close)", 1), ["100.00"]);
+        h.get_by_label("Maximum 400.00, average N/A, current 350.00");
         let data = h.state().0.data.as_ref().unwrap();
         assert_eq!(data.margin, report.margin[2..]);
         assert_eq!(data.shown.average_margin, Some(100.0));
@@ -824,6 +836,188 @@ fn summary_shows_trade_figures_for_all_long_and_short() {
     };
     assert!(content.contains("summary,Net profit,50.25,money,,long\n"));
     assert!(content.contains("summary,Net profit,-30.5,money,,short\n"));
+}
+
+/// Daily equity 1000, 1010, 1010, 990, 990; a long of 1 at 100 from day 1 to day 2 (profit 10)
+/// and a short of 2 at 110 from day 3 to day 4 (profit -20), with the bars that give them
+/// MAE 5, MFE 15 and MAE 30, MFE 20.
+fn two_trade_report() -> (StrategyReport, Vec<Bar>) {
+    let day = |d| DateTime::UNIX_EPOCH + chrono::TimeDelta::days(d);
+    let mut report = StrategyReport::new("Two trades", "PAIR", Timeframe::Day1, 1000.0);
+    report.equity = [1000.0, 1010.0, 1010.0, 990.0, 990.0]
+        .into_iter()
+        .zip(0..)
+        .map(|(value, d)| (day(d), value))
+        .collect();
+    for (side, quantity, entry, price, exit_price, profit) in [
+        (OrderSide::Buy, 1.0, 1, 100.0, 110.0, 10.0),
+        (OrderSide::Sell, 2.0, 3, 110.0, 120.0, -20.0),
+    ] {
+        let mut trade = StrategyTrade::new(side, quantity, day(entry), price);
+        trade.exit = Some(StrategyExit::new(day(entry + 1), exit_price, profit));
+        report.trades.push(trade);
+    }
+    let bars = [
+        [100.0, 100.0, 100.0, 100.0],
+        [100.0, 115.0, 95.0, 110.0],
+        [110.0, 110.0, 110.0, 110.0],
+        [110.0, 125.0, 100.0, 120.0],
+        [120.0, 120.0, 120.0, 120.0],
+    ]
+    .into_iter()
+    .zip(0..)
+    .map(|([open, high, low, close], d)| Bar::new(day(d), open, high, low, close, 1.0))
+    .collect();
+    (report, bars)
+}
+
+/// A report panel harness in `theme`, tall enough to show the whole summary.
+fn summary_harness(
+    report: StrategyReport,
+    bars: &[Bar],
+    theme: crate::theme::Theme,
+) -> Harness<'static, StrategyReportPanel> {
+    let mut panel = StrategyReportPanel::default();
+    panel.set_report(Some(report), bars);
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1440.0, 1800.0))
+        .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
+        .build_ui_state(
+            |ui, panel: &mut StrategyReportPanel| {
+                panel.show(ui);
+            },
+            panel,
+        );
+    h.run();
+    h
+}
+
+fn type_from<State>(h: &mut Harness<'_, State>, date: &str) {
+    h.get_by_role_and_label(Role::TextInput, "From (UTC)")
+        .click();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_role_and_label(Role::TextInput, "From (UTC)")
+        .type_text(date);
+    h.run();
+}
+
+#[test]
+fn equity_tooltip_names_the_last_closed_trade() {
+    let (report, bars) = two_trade_report();
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let accent = theme.ui.accent;
+        let mut h = summary_harness(report.clone(), &bars, theme);
+        let hover = |h: &mut Harness<'_, StrategyReportPanel>, i: usize| {
+            let points = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Path(path)
+                        if path.stroke.color == egui::epaint::ColorMode::Solid(accent) =>
+                    {
+                        Some(path.points.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let y = points.iter().map(|p| p.y).sum::<f32>() / points.len() as f32;
+            h.hover_at(egui::pos2(points[i].x, y));
+            h.run_steps(90);
+        };
+        hover(&mut h, 4);
+        h.get_by_label("Value: 990.00 · 1970-01-05 00:00:00 UTC");
+        h.get_by_label("Trade 2: Short");
+        // 10 from the long, then -20 from the short.
+        h.get_by_label("Cumulative profit: -10.00");
+        // Between the trades the long is the last closed.
+        hover(&mut h, 3);
+        h.get_by_label("Trade 1: Long");
+        h.get_by_label("Cumulative profit: 10.00");
+        // Before the first close no trade is named.
+        hover(&mut h, 1);
+        h.get_by_label("Value: 1010.00 · 1970-01-02 00:00:00 UTC");
+        assert!(h.query_by_label_contains("Trade 1").is_none());
+        // From day 3 the range lists only the short, as its first trade.
+        type_from(&mut h, "1970-01-04");
+        hover(&mut h, 1);
+        h.get_by_label("Trade 1: Short");
+        h.get_by_label("Cumulative profit: -20.00");
+    }
+}
+
+#[test]
+fn trade_marks_follow_excursions_range_and_percent() {
+    let (report, bars) = two_trade_report();
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let label = "Trade run-up and drawdown";
+        let h = summary_harness(report.clone(), &[], theme.clone());
+        assert!(h.query_by_role_and_label(Role::CheckBox, label).is_none());
+        let [rise, fall] = [theme.ui.success, theme.ui.error].map(|c| c.gamma_multiply(0.35));
+        let mut h = summary_harness(report.clone(), &bars, theme);
+        // Run-up and drawdown rectangles, each sorted by left edge.
+        let marks = |h: &Harness<'_, StrategyReportPanel>| {
+            [rise, fall].map(|fill| {
+                let mut rects: Vec<_> = h
+                    .output()
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.fill == fill => Some(rect.rect),
+                        _ => None,
+                    })
+                    .collect();
+                rects.sort_by(|a, b| a.left().total_cmp(&b.left()));
+                rects
+            })
+        };
+        let heights = |rects: &[egui::Rect]| rects.iter().map(|r| r.height()).collect::<Vec<_>>();
+        let near = |actual: Vec<f32>, expected: &[f32]| {
+            assert_eq!(actual.len(), expected.len(), "{actual:?}");
+            for (a, e) in actual.iter().zip(expected) {
+                assert!((a - e).abs() < 0.01, "{actual:?} != {expected:?}");
+            }
+        };
+        assert_eq!(marks(&h), [vec![], vec![]]);
+        h.get_by_role_and_label(Role::CheckBox, label)
+            .scroll_to_me();
+        h.run();
+        h.get_by_role_and_label(Role::CheckBox, label).click();
+        h.run();
+        // The axis spans 980 (1010 - 30) to 1030 (1010 + 20) over 143 px: 2.86 px per unit.
+        let check = |h: &Harness<'_, StrategyReportPanel>| {
+            let [ups, downs] = marks(h);
+            near(heights(&ups), &[42.9, 57.2]);
+            near(heights(&downs), &[14.3, 85.8]);
+            // The long rests on 1000 before its entry and the short on 1010, 10 units higher.
+            near(vec![ups[0].bottom() - ups[1].bottom()], &[28.6]);
+            near(
+                vec![
+                    ups[0].bottom() - downs[0].top(),
+                    ups[1].bottom() - downs[1].top(),
+                ],
+                &[0.0, 0.0],
+            );
+            // Each trade holds one day of four; the short enters two days after the long.
+            near(
+                vec![ups[1].width(), ups[1].left() - ups[0].left()],
+                &[ups[0].width(), 2.0 * ups[0].width()],
+            );
+        };
+        check(&h);
+        h.get_by_role_and_label(Role::CheckBox, "Percent of initial capital")
+            .click();
+        h.run();
+        check(&h);
+        h.get_by_role_and_label(Role::CheckBox, "Percent of initial capital")
+            .click();
+        h.run();
+        // From day 3 only the short shows, resting on the range's first equity of 990: 960 to 1010.
+        type_from(&mut h, "1970-01-04");
+        let [ups, downs] = marks(&h);
+        near(heights(&ups), &[57.2]);
+        near(heights(&downs), &[85.8]);
+    }
 }
 
 #[test]

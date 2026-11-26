@@ -13,9 +13,9 @@ use crate::chart::TradingLineAction;
 use crate::localization as l10n;
 use crate::model::{
     Capabilities, Order, OrderBook, OrderId, OrderPreview, OrderRequest, OrderSide, OrderType,
-    Position, TakeProfitLevel, Tick, TimeInForce, TradingRules,
+    Position, TakeProfitLevel, Tick, TimeInForce, TradingRules, TrailDistance,
 };
-use crate::scales::{decimals, to_step};
+use crate::scales::{TickGrid, decimals, to_step};
 
 /// How a take-profit or stop-loss distance is entered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,7 +98,7 @@ impl Bracket {
         &self,
         side: OrderSide,
         entry: f64,
-        tick: f64,
+        grid: TickGrid<'_>,
         per_point: f64,
         balance: Option<f64>,
         profit: bool,
@@ -106,7 +106,7 @@ impl Bracket {
         let sign = Self::sign(side, profit);
         match self.mode {
             BracketMode::Price => self.value,
-            BracketMode::Ticks => entry + sign * self.value * tick,
+            BracketMode::Ticks => grid.offset(entry, sign * self.value),
             BracketMode::Percent => entry * (1.0 + sign * self.value / 100.0),
             BracketMode::Money => entry + sign * self.value / per_point,
             BracketMode::BalancePercent => balance.map_or(f64::NAN, |balance| {
@@ -121,7 +121,7 @@ impl Bracket {
         price: f64,
         side: OrderSide,
         entry: f64,
-        tick: f64,
+        grid: TickGrid<'_>,
         per_point: f64,
         balance: Option<f64>,
         profit: bool,
@@ -129,7 +129,7 @@ impl Bracket {
         let distance = Self::sign(side, profit) * (price - entry);
         let value = match mode {
             BracketMode::Price => price,
-            BracketMode::Ticks => (distance / tick).round(),
+            BracketMode::Ticks => Self::sign(side, profit) * grid.steps_between(entry, price),
             BracketMode::Percent => distance / entry * 100.0,
             BracketMode::Money => distance * per_point,
             BracketMode::BalancePercent => {
@@ -172,6 +172,15 @@ pub struct OrderPreset {
     /// The order type to select, or `None` to keep the ticket's.
     #[serde(default)]
     pub order_type: Option<Kind>,
+    /// The trailing stop's distance with its unit, saved with the
+    /// [`TrailingStop`](Kind::TrailingStop) order type, or `None` to keep the ticket's. A distance
+    /// in ticks restores its number of ticks, priced by the symbol's own tick size.
+    #[serde(default)]
+    pub trail: Option<TrailDistance>,
+    /// The price at which the trailing stop of [`trail`](Self::trail) starts to trail, or `None`
+    /// for one that trails at once. Read only with `trail`.
+    #[serde(default)]
+    pub trail_activation: Option<f64>,
     /// The time in force to select, or `None` to keep the ticket's.
     #[serde(default)]
     pub time_in_force: Option<TimeInForce>,
@@ -216,6 +225,8 @@ impl OrderPreset {
             sizing: Some(PresetSizing::Units),
             exits: true,
             order_type: None,
+            trail: None,
+            trail_activation: None,
             time_in_force: None,
         }
     }
@@ -270,14 +281,17 @@ pub enum Kind {
     Stop,
     /// As a limit order at the limit price once the market trades at the stop price.
     StopLimit,
+    /// As a stop order that follows the best price at the entered distance.
+    TrailingStop,
 }
 
 impl Kind {
-    const ALL: [(Self, &'static str); 4] = [
+    const ALL: [(Self, &'static str); 5] = [
         (Self::Market, "Market"),
         (Self::Limit, "Limit"),
         (Self::Stop, "Stop"),
         (Self::StopLimit, "Stop limit"),
+        (Self::TrailingStop, "Trailing"),
     ];
 
     fn accepted(self, capabilities: &Capabilities) -> bool {
@@ -286,8 +300,20 @@ impl Kind {
             Self::Limit => capabilities.limit,
             Self::Stop => capabilities.stop,
             Self::StopLimit => capabilities.stop_limit,
+            Self::TrailingStop => capabilities.trailing_stop,
         }
     }
+}
+
+/// How the ticket's trailing distance is entered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrailUnit {
+    /// In price units.
+    Price,
+    /// In ticks of the symbol's tick size.
+    Ticks,
+    /// In percent of the best price.
+    Percent,
 }
 
 /// How the quantity is entered.
@@ -345,13 +371,19 @@ pub(crate) struct Market<'a> {
     pub ask: Option<f64>,
     /// The symbol's tick size.
     pub tick: f64,
+    /// The symbol's coarser ticks by price range, as
+    /// [`Instrument::tick_tiers`](crate::model::Instrument::tick_tiers).
+    pub tick_tiers: &'a [(f64, f64)],
     /// Decimals of prices.
     pub decimals: usize,
     /// The account's currency.
     pub currency: &'a str,
-    /// The account's balance: sizing and exits can take a percentage of it,
-    /// and an order's margin is set against it.
+    /// The account's balance: sizing and exits can take a percentage of it, and an order's
+    /// margin is set against it when the broker reports no available funds.
     pub balance: Option<f64>,
+    /// The account's available funds, when the broker reports them: an order's margin is set
+    /// against them.
+    pub available_funds: Option<f64>,
     pub capabilities: Capabilities,
     pub rules: &'a TradingRules,
     pub rules_ready: bool,
@@ -401,6 +433,11 @@ impl<'a> Market<'a> {
         self.balance
             .filter(|balance| balance.is_finite() && *balance > 0.0)
     }
+
+    /// The symbol's valid prices.
+    pub(crate) fn grid(&self) -> TickGrid<'a> {
+        TickGrid::new(self.tick, self.tick_tiers)
+    }
 }
 
 /// What the user asked the ticket for.
@@ -439,6 +476,10 @@ pub(crate) struct OrderTicket {
     /// The risk field takes money instead of a percentage of the balance.
     risk_in_money: bool,
     take_profit: (bool, Bracket),
+    /// The trailing distance and how it is entered: 10 ticks by default.
+    trail: (TrailUnit, f64),
+    /// Whether the trailing stop waits for an activation price, and that price.
+    activation: (bool, f64),
     /// The take-profit levels after the first. The first level, `take_profit`, takes the rest
     /// of the quantity.
     levels: Vec<PresetLevel>,
@@ -481,6 +522,8 @@ impl Default for OrderTicket {
             quantity: 1.0,
             amount: 1_000.0,
             risk_in_money: false,
+            trail: (TrailUnit::Ticks, 10.0),
+            activation: (false, 0.0),
             take_profit: (false, bracket),
             levels: Vec::new(),
             first_level_stop_loss: None,
@@ -529,6 +572,13 @@ impl OrderTicket {
             OrderType::Limit(price) => (Kind::Limit, price, price),
             OrderType::Stop(price) => (Kind::Stop, price, price),
             OrderType::StopLimit { stop, limit } => (Kind::StopLimit, stop, limit),
+            OrderType::TrailingStop {
+                distance,
+                activation,
+            } => {
+                self.set_trail(distance, activation);
+                (Kind::TrailingStop, 0.0, 0.0)
+            }
             _ => (Kind::Market, 0.0, 0.0),
         };
         self.time_in_force = request.time_in_force;
@@ -566,6 +616,16 @@ impl OrderTicket {
         }
     }
 
+    /// Enters a trailing stop's distance with its unit, and its activation price if it has one.
+    fn set_trail(&mut self, distance: TrailDistance, activation: Option<f64>) {
+        self.trail = match distance {
+            TrailDistance::Price(price) => (TrailUnit::Price, price),
+            TrailDistance::Ticks { ticks, .. } => (TrailUnit::Ticks, f64::from(ticks)),
+            TrailDistance::Percent(percent) => (TrailUnit::Percent, percent),
+        };
+        self.activation = (activation.is_some(), activation.unwrap_or_default());
+    }
+
     /// Discards price and confirmation state when the chart changes symbols.
     pub(super) fn change_symbol(&mut self, symbol: &str) {
         let request = OrderRequest::new(symbol, self.side, self.quantity, OrderType::Market);
@@ -588,14 +648,66 @@ impl OrderTicket {
     }
 
     /// The price the order enters at: its limit price, its stop price, or for a market order the
-    /// ask of a buy or the bid of a sell, or the last price without them.
+    /// ask of a buy or the bid of a sell, or the last price without them. A trailing stop enters
+    /// at its stop where it starts trailing: from the activation price, else the last price.
     fn entry(&self, market: &Market<'_>) -> Option<f64> {
         match self.kind {
             Kind::Market => self.touch(market).or(market.last),
             Kind::Limit | Kind::Stop => Some(self.price),
             Kind::StopLimit => Some(self.limit),
+            Kind::TrailingStop => {
+                let order_type = self.trailing(market).ok()?;
+                // The activation as sent, on the tick, so that it starts the trail at once.
+                let OrderType::TrailingStop { activation, .. } = order_type else {
+                    return None;
+                };
+                order_type
+                    .trail(self.side, None, activation.or(market.last)?)
+                    .map(|(_, stop)| stop)
+            }
         }
         .filter(|price| price.is_finite() && *price > 0.0)
+    }
+
+    /// The trailing stop the ticket describes, or what is wrong with it.
+    fn trailing(&self, market: &Market<'_>) -> Result<OrderType, &'static str> {
+        let value = self.trail.1;
+        let distance = match self.trail.0 {
+            TrailUnit::Price => TrailDistance::Price(to_step(value, market.tick, f64::round)),
+            TrailUnit::Ticks => TrailDistance::Ticks {
+                ticks: if value.is_finite() && value.round() >= 1.0 {
+                    value.round().min(f64::from(u32::MAX)) as u32
+                } else {
+                    0
+                },
+                tick_size: market
+                    .grid()
+                    .tick_at(self.touch(market).or(market.last).unwrap_or(f64::NAN)),
+            },
+            TrailUnit::Percent => TrailDistance::Percent(value),
+        };
+        if !distance.is_valid() {
+            return Err("Enter a trailing distance above 0, and below 100%");
+        }
+        let activation = if self.activation.0 {
+            let price = market.grid().snap(self.activation.1);
+            if !(price.is_finite() && price > 0.0) {
+                return Err("Enter a positive activation price");
+            }
+            Some(price)
+        } else {
+            None
+        };
+        Ok(OrderType::TrailingStop {
+            distance,
+            activation,
+        })
+    }
+
+    /// Whether the order may carry a take profit and a stop loss: the account takes brackets
+    /// and the order is not a trailing stop.
+    fn brackets(&self, market: &Market<'_>) -> bool {
+        market.capabilities.brackets && self.kind != Kind::TrailingStop
     }
 
     /// The enabled take profit or stop loss of an order entering at `entry`, snapped to the tick,
@@ -614,7 +726,7 @@ impl OrderTicket {
         } else {
             self.stop_loss
         };
-        if !(market.capabilities.brackets && enabled) {
+        if !(self.brackets(market) && enabled) {
             return Ok(None);
         }
         let per_point = match (bracket.mode, quantity) {
@@ -639,7 +751,9 @@ impl OrderTicket {
         quantity: f64,
     ) -> Result<(Option<f64>, Vec<TakeProfitLevel>), String> {
         let capabilities = &market.capabilities;
-        if !(self.take_profit.0 && levels_accepted(capabilities)) || self.levels.is_empty() {
+        if !(self.take_profit.0 && self.brackets(market) && levels_accepted(capabilities))
+            || self.levels.is_empty()
+        {
             let take_profit = self.exit(market, side, entry, Some(quantity), true)?;
             return Ok((take_profit, Vec::new()));
         }
@@ -714,8 +828,9 @@ impl OrderTicket {
                 OrderSide::Sell => market.bid,
             }
             .or(market.last),
+            OrderType::TrailingStop { .. } => None,
         }
-        .map(|price| to_step(price, market.tick, f64::round))
+        .map(|price| market.grid().snap(price))
         .filter(|price| price.is_finite() && *price > 0.0)
         .ok_or("Enter a positive price")?;
         order.stop_loss = self.exit(market, order.side, entry, Some(order.quantity), false)?;
@@ -745,7 +860,13 @@ impl OrderTicket {
         if !self.kind.accepted(&market.capabilities) {
             return Err("The account does not accept this order type".into());
         }
-        let snap = |value| to_step(value, market.tick, f64::round);
+        let snap = |value| market.grid().snap(value);
+        // Built first so that its own message wins over the entry's.
+        let trailing = if self.kind == Kind::TrailingStop {
+            Some(self.trailing(market)?)
+        } else {
+            None
+        };
         let entry = self
             .entry(market)
             .map(snap)
@@ -762,6 +883,7 @@ impl OrderTicket {
                 }
             }
             Kind::StopLimit => return Err("Enter a positive stop price".into()),
+            Kind::TrailingStop => trailing.ok_or("Enter a trailing distance")?,
         };
         let rules = market.rules;
         let balance = market.positive_balance();
@@ -830,9 +952,7 @@ impl OrderTicket {
             .as_ref()
             .map_or(self.quantity, |request| request.quantity);
         let per_point = quantity * market.rules.point_value;
-        let entry = self
-            .entry(market)
-            .map(|price| to_step(price, market.tick, f64::round));
+        let entry = self.entry(market).map(|price| market.grid().snap(price));
         let value = entry.map(|entry| entry * per_point);
         let risk = request
             .as_ref()
@@ -867,6 +987,10 @@ impl OrderTicket {
         if self.kind == Kind::Market && kind != Kind::Market && self.price == 0.0 {
             self.price = self.touch(market).or(market.last).unwrap_or_default();
             self.limit = self.price;
+        }
+        if kind == Kind::TrailingStop && self.sizing == Sizing::Risk {
+            // A trailing stop takes no stop loss to size the risk by.
+            self.sizing = Sizing::Units;
         }
         self.kind = kind;
     }
@@ -907,6 +1031,11 @@ impl OrderTicket {
             .filter(|kind| kind.accepted(&market.capabilities))
         {
             self.select_kind(kind, market);
+            if self.kind == Kind::TrailingStop
+                && let Some(distance) = preset.trail
+            {
+                self.set_trail(distance, preset.trail_activation);
+            }
         }
         if let Some(value) = preset
             .time_in_force
@@ -920,6 +1049,16 @@ impl OrderTicket {
         let quantity = self
             .request(ctx, market)
             .map_or(self.quantity, |request| request.quantity);
+        // Kept as the order would send it: snapped to the tick, or nothing while it is invalid.
+        let (trail, trail_activation) = match self.trailing(market) {
+            Ok(OrderType::TrailingStop {
+                distance,
+                activation,
+            }) if self.preset_fields.order_type && self.kind == Kind::TrailingStop => {
+                (Some(distance), activation)
+            }
+            _ => (None, None),
+        };
         OrderPreset {
             name,
             quantity,
@@ -943,6 +1082,8 @@ impl OrderTicket {
             }),
             exits: self.preset_fields.exits,
             order_type: self.preset_fields.order_type.then_some(self.kind),
+            trail,
+            trail_activation,
             time_in_force: self
                 .preset_fields
                 .time_in_force
@@ -975,11 +1116,8 @@ fn exit_price(
     if bracket.mode == BracketMode::BalancePercent && balance.is_none() {
         return Err("An exit in % of the balance needs the account's balance".into());
     }
-    let price = to_step(
-        bracket.price(side, entry, market.tick, per_point, balance, profit),
-        market.tick,
-        f64::round,
-    );
+    let grid = market.grid();
+    let price = grid.snap(bracket.price(side, entry, grid, per_point, balance, profit));
     // A buy exits above its entry for a profit and below it for a loss; a sell the other way.
     let above = (price > entry) == (side == OrderSide::Buy);
     if !price.is_finite() || price <= 0.0 || price == entry || above != profit {
@@ -1093,10 +1231,22 @@ fn summary(
         OrderType::StopLimit { stop, .. } => {
             ("{quantity} {symbol} @ {price} STOP LIMIT", Some(stop))
         }
+        OrderType::TrailingStop {
+            activation: Some(activation),
+            ..
+        } => (
+            "{quantity} {symbol} TRAIL {distance} FROM {price}",
+            Some(activation),
+        ),
+        OrderType::TrailingStop { .. } => ("{quantity} {symbol} TRAIL {distance}", None),
         _ => ("{quantity} {symbol} MKT", None),
     };
     let quantity = numbers.quantity(request.quantity, quantity_decimals);
     let price = price.map(|price| numbers.price(price)).unwrap_or_default();
+    let distance = match request.order_type {
+        OrderType::TrailingStop { distance, .. } => numbers.trail(ctx, distance),
+        _ => String::new(),
+    };
     l10n::format_text(
         ctx,
         key,
@@ -1104,6 +1254,7 @@ fn summary(
             ("quantity", quantity.as_str()),
             ("symbol", request.symbol.as_str()),
             ("price", price.as_str()),
+            ("distance", distance.as_str()),
         ],
     )
 }
@@ -1216,9 +1367,11 @@ mod tests {
             bid: None,
             ask: None,
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(10_000.0),
+            available_funds: None,
             capabilities: Capabilities {
                 market: true,
                 limit: true,
@@ -1442,6 +1595,62 @@ mod tests {
         );
     }
 
+    /// A preset that keeps the order type restores a trailing stop's distance with its unit and
+    /// its activation price. Without that field, and from presets saved before it, the ticket
+    /// keeps its own trailing distance.
+    #[test]
+    fn presets_keep_a_trailing_stop_distance_and_activation() {
+        let ctx = egui::Context::default();
+        let rules = TradingRules::new("ES");
+        let mut market = market(&rules);
+        market.capabilities.trailing_stop = true;
+        let trailing = |distance, activation| OrderType::TrailingStop {
+            distance,
+            activation,
+        };
+        let own = trailing(TrailDistance::Price(1.25), None);
+        let no_kind = PresetFields {
+            order_type: false,
+            ..PresetFields::default()
+        };
+        // Literal produced by serializing OrderPreset on origin/main.
+        let old = r#"{"name":"Trail","quantity":1.0,"take_profit":null,"take_profit_levels":[],"first_level_stop_loss":null,"stop_loss":null,"sizing":"Units","exits":true,"order_type":"TrailingStop","time_in_force":"Day"}"#;
+        for (fields, legacy, expected) in [
+            // 104 is on the tick; the buy's stop starts 2.5% above it, at 106.6.
+            (
+                PresetFields::default(),
+                false,
+                trailing(TrailDistance::Percent(2.5), Some(104.0)),
+            ),
+            (no_kind, false, own),
+            (PresetFields::default(), true, own),
+        ] {
+            let saving = OrderTicket {
+                symbol: "ES".into(),
+                kind: Kind::TrailingStop,
+                trail: (TrailUnit::Percent, 2.5),
+                activation: (true, 104.0),
+                preset_fields: fields,
+                ..OrderTicket::default()
+            };
+            let saved = if legacy {
+                old.to_owned()
+            } else {
+                serde_json::to_string(&saving.preset(&ctx, "Trail".into(), &market)).unwrap()
+            };
+            let preset: OrderPreset = serde_json::from_str(&saved).unwrap();
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(),
+                kind: Kind::TrailingStop,
+                trail: (TrailUnit::Price, 1.25),
+                ..OrderTicket::default()
+            };
+            ticket.apply(&preset, &market);
+            let request = ticket.request(&ctx, &market).unwrap();
+            assert_eq!(request.order_type, expected, "{saved}");
+        }
+    }
+
     /// GTD needs an offered validity and an expiry; other validities never carry a stale expiry.
     /// Reopening a request and orders from the ladder keep the same UTC instant.
     #[test]
@@ -1557,6 +1766,103 @@ mod tests {
         }
     }
 
+    /// A trailing stop needs the account's capability and a valid distance and activation; it
+    /// carries ticks with their tick size, a price distance on the tick, no exits, and sizes its
+    /// value at the stop where it starts. Opening the order it sends describes it again.
+    #[test]
+    fn trailing_stops_need_the_capability_and_a_valid_distance() {
+        use TrailDistance::{Percent, Price, Ticks};
+        let ctx = egui::Context::default();
+        let rules = TradingRules::new("ES");
+        let invalid = "Enter a trailing distance above 0, and below 100%";
+        let trailing = |distance, activation| OrderType::TrailingStop {
+            distance,
+            activation,
+        };
+        let eight = Ticks {
+            ticks: 8,
+            tick_size: 0.25,
+        };
+        for (trail, activation, exits, accepted, expected) in [
+            // The entry is 100 + 8 ticks of 0.25 = 102, so 1,020 buys 10.
+            (
+                (TrailUnit::Ticks, 8.0),
+                None,
+                false,
+                true,
+                Ok((trailing(eight, None), 10.0)),
+            ),
+            // 1.3 is 5.2 ticks, which round to 5.
+            (
+                (TrailUnit::Price, 1.3),
+                None,
+                false,
+                true,
+                Ok((trailing(Price(1.25), None), 10.0)),
+            ),
+            // The activation snaps to 98, where the buy's stop starts: 98 + 1.47 rounds to 99.5.
+            (
+                (TrailUnit::Percent, 1.5),
+                Some(98.1),
+                false,
+                true,
+                Ok((trailing(Percent(1.5), Some(98.0)), 10.0)),
+            ),
+            (
+                (TrailUnit::Ticks, 8.0),
+                None,
+                true,
+                true,
+                Ok((trailing(eight, None), 10.0)),
+            ),
+            ((TrailUnit::Percent, 100.0), None, false, true, Err(invalid)),
+            ((TrailUnit::Ticks, 0.4), None, false, true, Err(invalid)),
+            ((TrailUnit::Price, 0.1), None, false, true, Err(invalid)),
+            (
+                (TrailUnit::Ticks, 8.0),
+                Some(-1.0),
+                false,
+                true,
+                Err("Enter a positive activation price"),
+            ),
+            (
+                (TrailUnit::Ticks, 8.0),
+                None,
+                false,
+                false,
+                Err("The account does not accept this order type"),
+            ),
+        ] {
+            let mut market = market(&rules);
+            market.capabilities.trailing_stop = accepted;
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(),
+                kind: Kind::TrailingStop,
+                sizing: Sizing::Value,
+                amount: 1_020.0,
+                trail,
+                activation: (activation.is_some(), activation.unwrap_or_default()),
+                ..OrderTicket::default()
+            };
+            ticket.take_profit.0 = exits;
+            ticket.stop_loss.0 = exits;
+            let request = ticket.request(&ctx, &market);
+            let label = format!("{trail:?} from {activation:?}, exits {exits}");
+            match expected {
+                Ok((order_type, quantity)) => {
+                    let request = request.expect(&label);
+                    assert_eq!(request.order_type, order_type, "{label}");
+                    assert_eq!(request.quantity, quantity, "{label}");
+                    assert_eq!((request.take_profit, request.stop_loss), (None, None));
+                    ticket.open(&request);
+                    let reopened = ticket.request(&ctx, &market).expect(&label);
+                    assert_eq!(reopened.order_type, order_type, "{label}");
+                }
+                Err(message) => assert_eq!(request, Err(message.to_owned()), "{label}"),
+            }
+        }
+    }
+
     /// A money exit needs a quantity above 0 before it can show a price, and an exit keeps its
     /// value when switched to or from money without one.
     #[test]
@@ -1572,9 +1878,11 @@ mod tests {
             bid: None,
             ask: None,
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(10_000.0),
+            available_funds: None,
             capabilities,
             rules: &rules,
             rules_ready: true,
@@ -1715,9 +2023,11 @@ mod tests {
             bid: Some(99.75),
             ask: Some(100.25),
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(10_000.0),
+            available_funds: None,
             capabilities,
             rules: &rules,
             rules_ready: true,
@@ -1860,9 +2170,11 @@ mod tests {
             bid: None,
             ask: None,
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(100_000.0),
+            available_funds: None,
             capabilities,
             rules: &rules,
             rules_ready: true,
@@ -2063,7 +2375,7 @@ mod tests {
                         price,
                         side,
                         4_000.0,
-                        0.25,
+                        TickGrid::new(0.25, &[]),
                         per_point,
                         market.balance,
                         profit,
@@ -2449,6 +2761,50 @@ mod tests {
             let request = ticket.request(&egui::Context::default(), &market).unwrap();
             assert_eq!(request.quantity, expected, "amount from {quantity}");
         }
+        // Ticks walk the price ranges: 24.98 to 25.00 is one 0.02 tick, then 0.05 ticks.
+        let tiers = [(10.0, 0.02), (25.0, 0.05)];
+        let market = Market {
+            tick: 0.01,
+            tick_tiers: &tiers,
+            last: Some(24.98),
+            ..market
+        };
+        let ticket = OrderTicket {
+            symbol: "BTC".into(),
+            sizing: Sizing::Units,
+            quantity: 1.0,
+            amount: 1.0,
+            take_profit: (true, ticks(3.0)),
+            stop_loss: (true, ticks(3.0)),
+            ..OrderTicket::default()
+        };
+        let request = ticket.request(&egui::Context::default(), &market).unwrap();
+        assert_eq!(
+            (request.quantity, request.take_profit, request.stop_loss),
+            (1.0, Some(25.1), Some(24.92))
+        );
+        let at = Bracket::at(
+            BracketMode::Ticks,
+            25.1,
+            OrderSide::Buy,
+            24.98,
+            market.grid(),
+            1.0,
+            None,
+            true,
+        );
+        assert_eq!(at.value, 3.0);
+        let limit = OrderTicket {
+            symbol: "BTC".into(),
+            kind: Kind::Limit,
+            price: 30.03,
+            sizing: Sizing::Units,
+            quantity: 1.0,
+            amount: 1.0,
+            ..OrderTicket::default()
+        };
+        let request = limit.request(&egui::Context::default(), &market).unwrap();
+        assert_eq!(request.order_type, OrderType::Limit(30.05));
     }
     /// The symbol fixture uses half-unit steps and a point value of 50.
     fn level_market(rules: &TradingRules) -> Market<'_> {
@@ -2460,9 +2816,11 @@ mod tests {
             bid: None,
             ask: None,
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(100_000.0),
+            available_funds: None,
             capabilities: Capabilities {
                 market: true,
                 limit: true,
@@ -2848,9 +3206,11 @@ mod tests {
                 bid: None,
                 ask: None,
                 tick: 0.00001,
+                tick_tiers: &[],
                 decimals: 5,
                 currency: "USD",
                 balance: None,
+                available_funds: None,
                 capabilities,
                 rules: &rules,
                 rules_ready: true,

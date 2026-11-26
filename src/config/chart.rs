@@ -82,7 +82,7 @@ fn session_break_width() -> f32 {
     1.0
 }
 
-/// Older saved configurations shade the pre-market and the post-market.
+/// Older saved configurations shade the pre-market, the post-market and overnight windows.
 fn shaded() -> bool {
     true
 }
@@ -371,9 +371,10 @@ pub struct ChartConfig {
     #[serde(default)]
     pub axis_font_family: egui::FontFamily,
     /// Character that groups the thousands of the built-in price labels: the ticks and tags of
-    /// price scales, the crosshair label, the prices of the legend, the data window and the hover
-    /// tooltip, the tooltip's change, their rows of studies in price units, and drawing prices
-    /// and price changes in panes with a price series write `42,541.77` with the default `','`.
+    /// price scales, the crosshair label, the prices of the legend, the data window, the chart
+    /// data table and the hover tooltip, the tooltip's change, their rows of studies in price
+    /// units, and drawing prices and price changes in panes with a price series write
+    /// `42,541.77` with the default `','`.
     /// `None` writes plain digits (`42541.77`), and so do `'.'` and the ASCII digits, since
     /// built-in labels always write `'.'` as the decimal point. Labels written by a host formatter
     /// ([`Chart::set_price_formatter`](crate::Chart::set_price_formatter)) are never grouped;
@@ -615,10 +616,16 @@ pub struct ChartConfig {
     /// Default: true
     #[serde(default = "shaded")]
     pub shade_postmarket: bool,
-    /// Fill for overnight windows. `PLACEHOLDER` follows the active theme accent at twice
-    /// the extended-hours opacity. Older saved charts use that theme default.
+    /// Fill for overnight windows. New charts use purple (#D500F9) at 8% opacity. `PLACEHOLDER`,
+    /// which configurations saved before that default or without this field hold, follows the
+    /// active theme accent at twice the extended-hours opacity.
     #[serde(default = "theme_color")]
     pub overnight_hours_color: Color32,
+    /// Shade overnight windows while [`show_extended_hours`](Self::show_extended_hours) is on.
+    /// Configurations saved without this field shade them.
+    /// Default: true
+    #[serde(default = "shaded")]
+    pub shade_overnight: bool,
     /// Whether to show the symbol watermark.
     pub show_watermark: bool,
     /// Text of the symbol watermark; `\n` starts another line. `None` shows the symbol and the
@@ -791,7 +798,9 @@ impl Default for ChartConfig {
             postmarket_color: Some(Color32::from_rgba_unmultiplied(41, 98, 255, 20)),
             shade_premarket: true,
             shade_postmarket: true,
-            overnight_hours_color: Color32::PLACEHOLDER,
+            // #D500F9 at 8% opacity: round(0.08 * 255) = 20.
+            overnight_hours_color: Color32::from_rgba_unmultiplied(213, 0, 249, 20),
+            shade_overnight: true,
             // Watermark disabled by default
             show_watermark: false,
             watermark_text: None,
@@ -931,7 +940,7 @@ mod tests {
                 line.style,
                 restored.show_bid_ask_lines,
                 restored.session_break_width,
-                restored.shade_premarket && restored.shade_postmarket,
+                restored.shade_premarket && restored.shade_postmarket && restored.shade_overnight,
             ),
             (None, 1.0, LineStyle::Dotted, None, 1.0, true)
         );

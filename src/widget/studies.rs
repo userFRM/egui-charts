@@ -111,6 +111,13 @@ impl Chart {
             self.frozen_source_events,
         ));
         indicator.set_bar_clock(&self.bar_clock());
+        self.study_data.set_replay_cut(
+            indicator.as_mut(),
+            &self.symbol,
+            self.timeframe,
+            self.replay_time(),
+            self.replay_newest_closed(),
+        );
         indicator
     }
 
@@ -500,11 +507,22 @@ impl Chart {
         let clock = self.bar_clock();
         let bars = &self.state.data().bars;
         let events = held_events(&self.time_scale_events, self.frozen_source_events);
+        let (replay, newest_closed) = (self.replay_time(), self.replay_newest_closed());
         for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
             let instrument_changed = study.set_instrument(instrument.as_ref());
             let symbol_changed = study.set_chart_symbol(&self.symbol);
             let clock_changed = study.set_bar_clock(&clock);
             let events_changed = study.set_time_scale_events(events);
+            let replay_changed = self.study_data.set_replay_cut(
+                study.as_mut(),
+                &self.symbol,
+                self.timeframe,
+                replay,
+                newest_closed,
+            );
+            if replay_changed {
+                self.pending_from[at] = Some(0);
+            }
             if instrument_changed || symbol_changed || clock_changed || events_changed {
                 // The inputs a study offers can follow the chart's symbol and interval.
                 self.study_captions[at].take();
@@ -568,6 +586,16 @@ impl Chart {
 
     pub(super) fn recalculate_studies(&mut self) {
         self.readout_revision = crate::model::next_revision();
+        let (replay, newest_closed) = (self.replay_time(), self.replay_newest_closed());
+        for study in self.studies.indicators_mut() {
+            self.study_data.set_replay_cut(
+                study.as_mut(),
+                &self.symbol,
+                self.timeframe,
+                replay,
+                newest_closed,
+            );
+        }
         let requests = self
             .studies
             .indicators()
@@ -830,6 +858,12 @@ pub(super) fn refresh_values(
             stale[at] = false;
         }
     }
+    // A calculation running elsewhere is asked for its result on every frame until it ends.
+    for (at, study) in studies.iter().enumerate() {
+        if running(study.as_ref()) && pending(pending_from, stale, at).is_none() {
+            pending_from[at] = Some(bars.len());
+        }
+    }
     let mut recomputed = false;
     for &at in &order {
         let parent = match studies[at].source() {
@@ -848,8 +882,8 @@ pub(super) fn refresh_values(
             continue;
         };
         let len = studies[at].values().len();
-        let incremental =
-            studies[at].is_incremental() && len > 0 && from + 1 >= len && bars.len() >= len;
+        let incremental = running(studies[at].as_ref())
+            || studies[at].is_incremental() && len > 0 && from + 1 >= len && bars.len() >= len;
         if !incremental {
             if recomputed {
                 continue;
@@ -868,6 +902,7 @@ pub(super) fn refresh_values(
                     // Only a start at the first bar whose values belong to other bars is due at
                     // once; kept values wait like a tail update.
                     parent_ready
+                        && !running(studies[at].as_ref())
                         && pending(pending_from, stale, at).is_some_and(|from| {
                             let len = studies[at].values().len();
                             !(studies[at].is_incremental()
@@ -896,7 +931,7 @@ pub(super) fn refresh_values(
         // The consumers of values kept for a full recompute keep theirs until their own turn.
         let kept = stale[at] && pending_from[at] != Some(0);
         super::studies::update(studies, ids, at, bars, from, sources);
-        pending_from[at] = None;
+        pending_from[at] = running(studies[at].as_ref()).then_some(bars.len());
         stale[at] = false;
         if !incremental {
             recomputed = true;
@@ -931,9 +966,12 @@ pub(super) fn refresh_values(
         if pending(pending_from, stale, at).is_none() {
             continue;
         }
-        // Values kept for a full recompute stay drawn until it runs.
-        let left = if pending_from[at] == Some(0) {
-            if !study.values().is_empty() {
+        // Values kept for a full recompute stay drawn until it runs, and so do the values of a
+        // study whose calculation reports its progress, until its next one ends.
+        let left = if running(study.as_ref()) {
+            RUNNING_REPAINT
+        } else if pending_from[at] == Some(0) {
+            if !study.values().is_empty() && study.calculation().is_none() {
                 study.update(&[], 0);
             }
             0.0
@@ -950,6 +988,17 @@ pub(super) fn refresh_values(
 fn pending(pending_from: &[Option<usize>], stale: &[bool], at: usize) -> Option<usize> {
     if stale[at] { Some(0) } else { pending_from[at] }
 }
+
+/// Whether `study` calculates away from the UI thread and has not finished.
+fn running(study: &dyn Indicator) -> bool {
+    matches!(
+        study.calculation(),
+        Some(crate::studies::Calculation::Running(_))
+    )
+}
+
+/// Seconds until a study whose calculation is running is asked again: one frame.
+const RUNNING_REPAINT: f64 = 0.016;
 
 /// Least time in seconds between two full recomputes of a study while bars stream; a study
 /// whose recompute took longer than a quarter of it waits four times that instead.
@@ -1741,6 +1790,57 @@ mod tests {
             fresh(&chart, Box::new(RSI::new(14))),
             "RSI"
         );
+    }
+
+    /// A study whose calculation runs elsewhere is asked again on every frame until it ends, so
+    /// its values appear without a new bar (#3631). A chart that asks a study only when its bars
+    /// change shows nothing until the next tick.
+    #[test]
+    fn running_studies_stay_drawn_and_update_again() {
+        use crate::studies::{Calculation, CustomIndicator, IndicatorValues, Resume, ResumeRun};
+
+        /// A running sum of closes, reported as running on its first two calls.
+        #[derive(Clone)]
+        struct Sums(Arc<AtomicUsize>);
+
+        impl Resume for Sums {
+            fn resume(&mut self, run: ResumeRun<'_>, values: &mut IndicatorValues) -> Calculation {
+                if self.0.fetch_add(1, Ordering::Relaxed) < 2 {
+                    return Calculation::Running(0.5);
+                }
+                values.clear();
+                let mut sum = 0.0;
+                for bar in run.data {
+                    sum += bar.close;
+                    values.push_lines(&[sum]);
+                }
+                Calculation::Done(std::time::Duration::ZERO)
+            }
+        }
+
+        let mut chart = Chart::new(BarData::from_bars(
+            [1.0, 2.0, 3.0, 4.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, close)| bar(i as i64 * 60, close))
+                .collect(),
+        ));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let id = chart.add_indicator(Box::new(
+            CustomIndicator::new("Sums", |_| Vec::new()).with_resume(Sums(Arc::clone(&calls))),
+        ));
+        let values = |chart: &Chart| {
+            let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
+            study.values().line(0).to_vec()
+        };
+        for frame in 1..=3 {
+            chart.refresh_studies(frame as f64 / 60.0);
+            if calls.load(Ordering::Relaxed) < 3 {
+                assert!(values(&chart).is_empty(), "frame {frame}");
+            }
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        assert_eq!(values(&chart), [1.0, 3.0, 6.0, 10.0]);
     }
 
     /// A chart capped at two studies refuses a third from the interface and pastes, and stays

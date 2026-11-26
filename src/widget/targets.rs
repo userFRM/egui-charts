@@ -412,8 +412,7 @@ impl Chart {
                 coords.rect,
             ));
             let decimals = self
-                .instrument()
-                .and_then(|instrument| instrument.price_decimals)
+                .readout_price_decimals()
                 .map(usize::from)
                 .or_else(|| coords.price.price_precision())
                 .unwrap_or(2);
@@ -1239,6 +1238,20 @@ mod tests {
         }
         chart.set_price_formatter(None);
         chart.price_scale_mut().options_mut().mode = crate::scales::PriceScaleMode::Normal;
+        // A precision chosen in the chart settings takes precedence over the instrument's.
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("B").with_price_decimals(3),
+        ));
+        chart.price_scale_mut().set_price_precision(Some(1));
+        let shapes = test_frames::shapes(&ctx, &mut chart, 0.1105, vec![]);
+        assert!(
+            shapes.iter().any(
+                |s| matches!(s, egui::Shape::Text(t) if t.galley.text() == "High 120.0 (+20.00%)")
+            ),
+            "target labels follow the chosen precision"
+        );
+        chart.price_scale_mut().set_price_precision(None);
+        chart.set_instrument(None);
         chart.state.time_scale_mut().set_min_bar_spacing(0.01);
         chart.set_size(Some(Vec2::new(260.0, 600.0)));
         chart.set_quote(Some(crate::model::Level1Quote {

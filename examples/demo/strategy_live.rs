@@ -5,9 +5,7 @@ use egui_charts::model::{
     Alert, AlertCondition, AlertFrequency, AlertId, AlertStatus, CustomAlertEvent, OrderSide,
     OrderType,
 };
-use egui_charts::strategies::{
-    Backtest, BacktestSettings, Strategy, StrategyContext, StrategyFactory,
-};
+use egui_charts::strategies::{Backtest, BacktestSettings, Strategy, StrategyContext};
 use egui_charts::studies::InputValue;
 
 /// Ends the id of a run in the name of its custom event source, which raises an alert call each
@@ -139,8 +137,8 @@ impl DemoApp {
             self.notify("Stop replay to add a strategy alert");
             return;
         }
-        // The demo's tester uses the default factory, so its names resolve here.
-        let Some(mut script) = StrategyFactory::new().create(strategy) else {
+        // The demo's tester uses this factory, so its names resolve here.
+        let Some(mut script) = self.sample_study.strategy_factory().create(strategy) else {
             return;
         };
         for (input, value) in inputs {
@@ -288,7 +286,7 @@ mod tests {
     use super::super::tests::{AppStorage, ui_click, ui_frame};
     use super::*;
     use egui_charts::model::{Bar, BarClock, Timeframe};
-    use egui_charts::strategies::Commission;
+    use egui_charts::strategies::{Commission, StrategyFactory};
 
     /// Clicks the one text `label` that a frame of the strategy panel and the dialogs shows.
     fn click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
@@ -518,11 +516,11 @@ mod tests {
         }
         assert!(expected > 0, "the live feed must exercise executions");
         let report = reference.report().unwrap();
-        // A reversal splits one order's fee between its closed and newly opened trades.
-        assert_eq!(
-            report.trades.iter().map(|trade| trade.fees).sum::<f64>(),
-            2.5 * report.trades.len() as f64
-        );
+        // A reversal splits one order's fee between its closed and newly opened trades, in
+        // proportion to fractional quantities under the tester's default equity-fraction size.
+        let fees = report.trades.iter().map(|trade| trade.fees).sum::<f64>();
+        let orders_fees = 2.5 * report.trades.len() as f64;
+        assert!((fees - orders_fees).abs() < 1e-9, "{fees} != {orders_fees}");
         // The momentum run takes the side of each bar's move, so its fills turn the position
         // and every turn is an alert call of its own after the fill it follows.
         let turns: Vec<_> = app

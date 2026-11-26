@@ -18,8 +18,8 @@
 //!
 //! The formula is evaluated as `100 * Gain / (Gain + Loss)`, which is identical but needs no
 //! price-unit floor, so scaling the prices does not change the result. A window with gains and
-//! no losses is 100, one with losses and no gains is 0, and a fully flat window is the neutral
-//! 50.
+//! no losses is 100, one with losses and no gains is 0, and a window of equal closes, which has
+//! no loss, is 100 too.
 //!
 //! # Interpretation
 //!
@@ -123,13 +123,13 @@ impl Default for State {
     }
 }
 
-/// RSI from Wilder's average gain and loss: 100 with no loss, 0 with no gain, 50 when both are 0.
+/// RSI from Wilder's average gain and loss: 100 with no loss, so also over equal closes, and 0
+/// with no gain.
 pub(super) fn from_averages(gain: f64, loss: f64) -> f64 {
-    let total = gain + loss;
-    if total > 0.0 {
-        100.0 * gain / total
+    if loss == 0.0 {
+        100.0
     } else {
-        50.0
+        100.0 * gain / (gain + loss)
     }
 }
 
@@ -514,7 +514,7 @@ mod tests {
 
     /// Endpoints and scale: hand values for period 2 are RSI[2] = 100 * 1 / (1 + 0.5) from the
     /// mean gain 1 and loss 0.5, then 100 * 1.5 / (1.5 + 0.25) after Wilder smoothing. Scaling
-    /// the prices must not move them; no loss is 100, no gain 0 and a flat window the neutral 50.
+    /// the prices must not move them; no loss is 100, also over equal closes, and no gain 0.
     #[test]
     fn endpoints_and_scale_invariance() {
         let ordinary = [10.0, 12.0, 11.0, 13.0];
@@ -527,7 +527,7 @@ mod tests {
         }
         assert_eq!(rsi_of(&[1e-12, 2e-12, 3e-12, 4e-12], 2)[2], Some(100.0));
         assert_eq!(rsi_of(&[4e-12, 3e-12, 2e-12, 1e-12], 2)[2], Some(0.0));
-        assert_eq!(rsi_of(&[5.0, 5.0, 5.0, 5.0], 2)[2..], [Some(50.0); 2]);
+        assert_eq!(rsi_of(&[5.0; 20], 14)[14..], [Some(100.0); 6]);
     }
 
     /// RSI(1) of 1, 2, 1, 2, 3 is missing, 100, 0, 100, 100. The two-bar SMA is their mean: 50, 50,

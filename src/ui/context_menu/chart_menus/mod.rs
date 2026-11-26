@@ -8,7 +8,7 @@ use super::{
 use crate::chart::selection::{ChartElementId, SeriesId};
 use crate::config::KeyboardAction;
 use crate::icons::Icon;
-use crate::model::{Capabilities, OrderSide, OrderType};
+use crate::model::{Capabilities, OrderRequest, OrderSide, OrderType};
 use crate::theme::ThemeExt;
 use crate::ui::Control;
 use crate::ui::app_state::set_control_visible;
@@ -396,16 +396,27 @@ impl ChartMenus {
             return None;
         }
         let pos = ctx.input(|input| input.pointer.hover_pos())?;
+        if !pointer_on_chart(ctx, chart, pos) {
+            return None;
+        }
+        self.limit_order_at(chart, pos)
+            .filter(|order| order.side == side)
+            .map(|order| ChartContextAction::Chart(ContextMenuAction::Order(order)))
+    }
+
+    /// The order of the chart menu's limit row at `pos`, a sell at or above the market and a
+    /// buy below it, or `None` where the menu would show no such row: outside the pane of the
+    /// main series, and where the menu offers no limit order.
+    fn limit_order_at(&mut self, chart: &Chart, pos: egui::Pos2) -> Option<OrderRequest> {
         let (pane, price) = chart.pointer_price(pos)?;
-        if chart.series_pane(SeriesId::MAIN) != Some(pane) || !pointer_on_chart(ctx, chart, pos) {
+        if chart.series_pane(SeriesId::MAIN) != Some(pane) {
             return None;
         }
         self.load_order_context(chart, pos, price);
         self.chart
             .order_requests(price)
             .into_iter()
-            .find(|order| order.side == side && matches!(order.order_type, OrderType::Limit(_)))
-            .map(|order| ChartContextAction::Chart(ContextMenuAction::Order(order)))
+            .find(|order| matches!(order.order_type, OrderType::Limit(_)))
     }
 
     /// Reads the symbol, its last price and tick size, the decimals used for `price`, and whether
@@ -419,6 +430,12 @@ impl ChartMenus {
             .instrument()
             .and_then(|instrument| instrument.tick_size)
             .filter(|tick| tick.is_finite() && *tick > 0.0);
+        let tiers = chart
+            .instrument()
+            .filter(|_| self.chart.tick_size.is_some())
+            .map_or(&[][..], |instrument| &instrument.tick_tiers);
+        self.chart.tick_tiers.clear();
+        self.chart.tick_tiers.extend_from_slice(tiers);
         self.chart.symbol_price = chart
             .pane_at_position(pos)
             .is_none_or(|pane| Some(pane) == chart.series_pane(SeriesId::MAIN));
@@ -432,13 +449,18 @@ impl ChartMenus {
     /// [`KeyboardAction::SellLimitAtPointer`], Alt+Shift+B and Alt+Shift+S unless the chart's
     /// [`ShortcutMap`](crate::widget::ShortcutMap) binds them otherwise, return the order of the
     /// chart menu's buy or sell limit row at the pointer, and nothing where the menu would show
-    /// no such row. Editors and drawing drags retain their input.
+    /// no such row. With
+    /// [`TooltipOptions::long_press_order`](crate::config::TooltipOptions::long_press_order), a
+    /// touch held on the price pane returns the order of that menu's limit row at the touched
+    /// price in place of showing values, and nothing where the menu would show no such row.
+    /// Editors and drawing drags retain their input.
     /// While a menu is open the chart draws no crosshair or tooltip under it.
     ///
     /// [`KeyboardAction::BuyLimitAtPointer`]: crate::config::KeyboardAction::BuyLimitAtPointer
     /// [`KeyboardAction::SellLimitAtPointer`]: crate::config::KeyboardAction::SellLimitAtPointer
     pub fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ChartContextAction> {
         let order_key = chart.keyboard.order_key.take();
+        let touch_order = chart.touch_order.take();
         if self.chart.hidden.contains(&Control::ContextMenus) {
             self.chart.close();
             self.series.close();
@@ -460,6 +482,10 @@ impl ChartMenus {
             self.context_pane = None;
         }
         let key_order = order_key.and_then(|key| self.limit_order_at_pointer(ctx, chart, key));
+        let touch_order = touch_order
+            .filter(|pos| pointer_on_chart(ctx, chart, *pos))
+            .and_then(|pos| self.limit_order_at(chart, pos))
+            .map(|order| ChartContextAction::Chart(ContextMenuAction::Order(order)));
         let quick_price = self.show_price_button(ctx, chart);
         if let Some(target) = quick_price.or_else(|| chart.take_right_click()) {
             self.price_menu = quick_price.is_some();
@@ -629,10 +655,17 @@ impl ChartMenus {
             || self.study.is_open()
             || self.drawing.is_open()
             || self.axes.is_open();
+        // A touch held on the price pane asks for the limit row's order while the menu offers
+        // that row. No menu is open here, so the menu's price context is free to load.
+        chart.touch_order_armed = !chart.menu_open
+            && chart.chart_options().tooltip.long_press_order
+            && self
+                .limit_order_at(chart, chart.get_rendered_price_rect().center())
+                .is_some();
 
-        // At most one menu is open at a time, and keys wait while one is, so at most one action
-        // resolves.
-        axis_action.or(menu_action).or(key_order)
+        // At most one menu is open at a time, and keys and holds wait while one is, so at most
+        // one action resolves.
+        axis_action.or(menu_action).or(key_order).or(touch_order)
     }
 
     fn build_menu_items(

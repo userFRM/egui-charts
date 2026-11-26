@@ -210,7 +210,7 @@ impl DemoApp {
     pub(super) fn show_strategy_report(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         self.update_live_strategy();
         self.follow_instrument_tick();
-        if self.strategy_report.report().is_none() {
+        if self.strategy_report.report().is_none() && !self.strategy_open {
             return;
         }
         self.strategy_report.set_instrument_currency(
@@ -272,6 +272,7 @@ impl DemoApp {
         }
         if clear {
             self.stop_live_strategy();
+            self.strategy_open = false;
             self.strategy_report.set_report(None, &[]);
             self.strategy_trade = None;
             self.refresh_strategy_signals();
@@ -865,6 +866,48 @@ mod tests {
                 app.execute_search_command(&ctx, "backtest");
                 for _ in 0..3 {
                     frame(&mut app, vec![]).drop_without_applying_deltas();
+                }
+                if width == 1440.0 {
+                    // The sample run has the chart's bars, so its trades carry excursions.
+                    ctx.enable_accesskit();
+                    let marks = |output: &FullOutput| {
+                        output.shapes.iter().any(|shape| {
+                            matches!(&shape.shape, Shape::Rect(rect)
+                            if rect.fill == theme.ui.success.gamma_multiply(0.35))
+                        })
+                    };
+                    for shown in [true, false] {
+                        let output = frame(&mut app, vec![]);
+                        let target_node = output
+                            .platform_output
+                            .accesskit_update
+                            .as_ref()
+                            .unwrap()
+                            .nodes
+                            .iter()
+                            .find(|(_, node)| {
+                                node.role() == egui::accesskit::Role::CheckBox
+                                    && node.label() == Some("Trade run-up and drawdown")
+                            })
+                            .expect("trade marks option")
+                            .0;
+                        output.drop_without_applying_deltas();
+                        frame(
+                            &mut app,
+                            vec![Event::AccessKitActionRequest(
+                                egui::accesskit::ActionRequest {
+                                    action: egui::accesskit::Action::Click,
+                                    target_tree: egui::accesskit::TreeId::ROOT,
+                                    target_node,
+                                    data: None,
+                                },
+                            )],
+                        )
+                        .drop_without_applying_deltas();
+                        let output = frame(&mut app, vec![]);
+                        assert_eq!(marks(&output), shown);
+                        output.drop_without_applying_deltas();
+                    }
                 }
                 let output = frame(&mut app, vec![]);
                 let forward = text_at(&output, "Forward test");

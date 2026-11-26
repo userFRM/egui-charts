@@ -5,7 +5,9 @@ use crate::model::Bar;
 use crate::model::LineStyle;
 use crate::painting::dashed_line::{draw_dashed_polyline, draw_dotted_polyline};
 use crate::scales::PriceMap;
-use crate::studies::{CrossDirection, Indicator, IndicatorLineStyle, PlotStyle, PlotType};
+use crate::studies::{
+    CrossDirection, Indicator, IndicatorLineStyle, PlotStyle, PlotType, ShapeSide,
+};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Stroke};
 
@@ -90,6 +92,19 @@ pub(crate) fn paint_study_plot(
                     painter
                         .line_segment([point - delta, point + delta], Stroke::new(1.0, plot.color));
                 }
+            }
+        }
+        PlotType::Character(character) => {
+            let galley = painter.layout_no_wrap(
+                character.to_string(),
+                egui::FontId::proportional(character_size(plot.width)),
+                plot.color,
+            );
+            for &point in points {
+                let at = egui::Align2::CENTER_CENTER
+                    .anchor_size(point, galley.size())
+                    .min;
+                painter.galley(at, galley.clone(), plot.color);
             }
         }
         PlotType::TriangleUp | PlotType::TriangleDown => {
@@ -186,6 +201,44 @@ fn paint_diamond(painter: &egui::Painter, at: Pos2, half: f32, color: Color32) {
         color,
         Stroke::NONE,
     ));
+}
+
+/// Points between a triangle drawn beside its value and that value.
+const TRIANGLE_GAP: f32 = 2.0;
+
+/// The centre of the triangle a plot of stroke `width` draws for `value` at `at`, the value's
+/// point: `at` itself when centred, else moved along the pane until the triangle's near edge
+/// lies `TRIANGLE_GAP` beyond the value, toward higher prices for `Above` and lower ones for
+/// `Below`, whichever way `to_y` runs.
+pub(crate) fn triangle_centre(
+    at: Pos2,
+    value: f64,
+    width: f32,
+    side: ShapeSide,
+    to_y: impl Fn(f64) -> f32,
+) -> Pos2 {
+    // A price beyond the value on its side, far enough to leave its point on every scale.
+    let beyond = match side {
+        ShapeSide::Centred => return at,
+        ShapeSide::Above => value + value.abs().max(1.0),
+        ShapeSide::Below => value - value.abs().max(1.0),
+    };
+    let step = to_y(beyond) - at.y;
+    // A flat range maps every price to one y: then lower prices lie down the pane.
+    let down = if step == 0.0 || step.is_nan() {
+        side == ShapeSide::Below
+    } else {
+        step > 0.0
+    };
+    // Half the painted triangle's height (paint_study_plot), then the gap.
+    let shift = width + 2.0 + TRIANGLE_GAP;
+    at + egui::vec2(0.0, if down { shift } else { -shift })
+}
+
+/// The font size of a character plot of stroke `width`: its half, the width plus the hit
+/// tolerance, is the radius within which a click selects a marker plot.
+pub(crate) fn character_size(width: f32) -> f32 {
+    2.0 * (width + crate::chart::hit_test::HIT_TOLERANCE)
 }
 
 /// Split crossing boundaries at their intersection, so neither triangle crosses the band.
@@ -458,6 +511,15 @@ impl IndicatorRenderer {
                 plot.plot_type = PlotType::StepLine;
             }
             let joins = plot.plot_type.joins_gaps();
+            // Triangles that mark a bar's high or low are drawn beside their value.
+            let side = if matches!(
+                plot.plot_type,
+                PlotType::TriangleUp | PlotType::TriangleDown
+            ) {
+                indicator.plot_shape_side(line_idx)
+            } else {
+                ShapeSide::Centred
+            };
             let mut color = plot.color;
             let offset = indicator.plot_offset(line_idx);
             let source_start = display_start
@@ -609,7 +671,10 @@ impl IndicatorRenderer {
 
                     // Keep off-scale endpoints: clipping must retain segments crossing the plot.
                     if y.is_finite() {
-                        points.push((Pos2::new(x, y), price));
+                        let at = triangle_centre(Pos2::new(x, y), price, plot.width, side, |p| {
+                            price_scale.price_to_y(p)
+                        });
+                        points.push((at, price));
                     }
                 } else {
                     // Break the line if we have a None value
@@ -720,6 +785,7 @@ impl IndicatorRenderer {
                     | PlotType::Crosses
                     | PlotType::TriangleUp
                     | PlotType::TriangleDown
+                    | PlotType::Character(_)
             ) {
                 for i in source_start..source_end {
                     let (Some(display_bar), Some(value)) =
@@ -731,17 +797,31 @@ impl IndicatorRenderer {
                     if !at.is_finite() {
                         continue;
                     }
-                    // Covers the shape, whose half-size is the stroke width plus 2.
-                    let mut target = egui::Rect::from_center_size(
-                        at,
-                        egui::Vec2::splat(2.0 * (plot.width + 2.0)),
-                    );
+                    let width = indicator.plot_width(line_idx, i);
+                    let centre =
+                        triangle_centre(at, value, width, side, |p| price_scale.price_to_y(p));
+                    // Covers the shape, a character's box or a half-size of the stroke width plus
+                    // 2, and the gap back to the value of a shape drawn beside it.
+                    let size = match plot.plot_type {
+                        PlotType::Character(_) => character_size(width),
+                        _ => 2.0 * (width + 2.0),
+                    };
+                    let mut target = egui::Rect::from_center_size(centre, egui::Vec2::splat(size))
+                        .union(egui::Rect::from_pos(at));
                     if let Some(text) = indicator.plot_text(line_idx, i) {
-                        // Clear of the shape.
-                        let (gap, anchor) = if plot.plot_type == PlotType::TriangleUp {
-                            (plot.width + 4.0, egui::Align2::CENTER_TOP)
+                        // Clear of the shape: beyond a triangle drawn beside its value, else
+                        // under an upward triangle and over the other shapes.
+                        let below = if side == ShapeSide::Centred {
+                            plot.plot_type == PlotType::TriangleUp
                         } else {
-                            (-(plot.width + 4.0), egui::Align2::CENTER_BOTTOM)
+                            centre.y > at.y
+                        };
+                        let (gap, anchor) = match plot.plot_type {
+                            PlotType::Character(_) => {
+                                (-(size / 2.0 + 2.0), egui::Align2::CENTER_BOTTOM)
+                            }
+                            _ if below => (width + 4.0, egui::Align2::CENTER_TOP),
+                            _ => (-(width + 4.0), egui::Align2::CENTER_BOTTOM),
                         };
                         let color = indicator.plot_color(line_idx, i).unwrap_or(plot.color);
                         let (background, foreground) = indicator
@@ -754,7 +834,8 @@ impl IndicatorRenderer {
                             egui::FontId::proportional(11.0),
                             foreground,
                         );
-                        let bounds = anchor.anchor_size(at + egui::vec2(0.0, gap), galley.size());
+                        let bounds =
+                            anchor.anchor_size(centre + egui::vec2(0.0, gap), galley.size());
                         if let Some(background) = background {
                             painter.rect_filled(bounds.expand(2.0), 0.0, background);
                         }
@@ -1154,6 +1235,7 @@ mod tests {
             (PlotType::StepLineWithDiamonds, LineStyle::Solid, 4.0),
             (PlotType::BackgroundColor, LineStyle::Solid, 4.0),
             (PlotType::Circles, LineStyle::Solid, 4.0),
+            (PlotType::Character('d'), LineStyle::Solid, 4.0),
             (PlotType::Line, LineStyle::Dashed, 4.0),
             (PlotType::Line, LineStyle::Dotted, 4.0),
         ] {
@@ -1274,6 +1356,24 @@ mod tests {
                 }
                 PlotType::BackgroundColor => {
                     assert_eq!(painted.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == color && rect.rect.height() == 100.0)).count(), 2);
+                }
+                // A "d" centred on each point, 2 x (4 + 5) = 18 px, in the plot colour.
+                PlotType::Character(_) => {
+                    let texts: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Text(text) => Some(text),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(texts.len(), 2);
+                    for (text, point) in texts.into_iter().zip(points) {
+                        assert_eq!(text.galley.text(), "d");
+                        let format = &text.galley.job.sections[0].format;
+                        assert_eq!((format.font_id.size, format.color), (18.0, color));
+                        let centre = text.pos + text.galley.size() / 2.0;
+                        assert!((centre - point).length() < 1e-3, "{centre:?}");
+                    }
                 }
                 _ => {
                     assert!(painted.iter().any(|s| {
@@ -2017,6 +2117,173 @@ mod tests {
         );
         let on_neckline = Pos2::new(coords.idx_to_x(8), price.price_to_y(105.0));
         assert!(hit_test_indicator(on_neckline, &study, 0, 0..21, &coords, to_y).is_some());
+    }
+
+    /// Triangles that mark a bar at its high or low lie wholly outside the bar, beyond the price
+    /// they mark, on either scale direction and whichever way they point, and a click on the far
+    /// corner of one still selects its study. Prices map at 15 points a unit over 0 to 20: a
+    /// width-1 mark on a low of 6 (y 210) spans y 212 to 218 and one on a high of 12 (y 120)
+    /// spans 112 to 118.
+    #[test]
+    fn bar_marks_lie_outside_the_bars_they_mark() {
+        use crate::chart::indicators::hit_test_indicator;
+        use crate::studies::{BookerReversal, ConfiguredStudy, Reversal, WilliamsFractals};
+        type Row = (
+            &'static str,
+            Box<dyn Indicator>,
+            &'static [(f64, f64, f64)],
+            bool,
+            &'static [(usize, &'static str)],
+        );
+        // (high, low, close), labelled in reversal.rs: marks on the low of bar 4 and the high of
+        // bar 7 with a lookback of 3.
+        const REVERSAL: &[(f64, f64, f64)] = &[
+            (10.0, 8.0, 9.0),
+            (9.5, 7.5, 8.0),
+            (8.5, 7.0, 7.5),
+            (8.0, 6.5, 7.0),
+            (8.5, 6.0, 8.2),
+            (9.0, 7.8, 8.8),
+            (11.0, 8.5, 10.5),
+            (12.0, 8.0, 7.5),
+        ];
+        // Bar 2 is an up fractal on its high and a down fractal on its low.
+        const FRACTAL: &[(f64, f64, f64)] = &[
+            (10.0, 7.0, 8.0),
+            (11.0, 6.0, 8.0),
+            (12.0, 5.0, 8.0),
+            (11.0, 6.0, 8.0),
+            (10.0, 7.0, 8.0),
+        ];
+        let rows: [Row; 5] = [
+            (
+                "Reversal",
+                Box::new(Reversal::new(3)),
+                REVERSAL,
+                false,
+                &[(4, "below"), (7, "above")],
+            ),
+            (
+                "Reversal, inverted",
+                Box::new(Reversal::new(3)),
+                REVERSAL,
+                true,
+                &[(4, "below"), (7, "above")],
+            ),
+            // Labelled in booker_reversal.rs: a sell on the high of bar 2, then a buy on its low.
+            (
+                "Booker Reversal sell",
+                Box::new(BookerReversal::new(1, 2, 3, 0)),
+                &[(10.0, 3.0, 10.0), (13.0, 12.0, 13.0), (12.0, 10.5, 11.0)],
+                false,
+                &[(2, "above")],
+            ),
+            (
+                "Booker Reversal buy",
+                Box::new(BookerReversal::new(1, 2, 3, 0)),
+                &[(17.0, 9.0, 10.0), (8.0, 7.0, 7.0), (9.5, 8.5, 9.0)],
+                false,
+                &[(2, "below")],
+            ),
+            (
+                "Williams Fractals",
+                Box::new(WilliamsFractals::new(2)),
+                FRACTAL,
+                false,
+                &[(2, "above"), (2, "below")],
+            ),
+        ];
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
+        let mut wrong = Vec::new();
+        for (label, study, hlc, inverted, want) in rows {
+            let bars: Vec<Bar> = hlc
+                .iter()
+                .enumerate()
+                .map(|(i, &(high, low, close))| {
+                    let time = Utc.timestamp_opt(i as i64 * 86_400, 0).unwrap();
+                    Bar::new(time, close, high, low, close, 1.0)
+                })
+                .collect();
+            // Wrapped as `Chart::add_indicator` wraps every study.
+            let mut study = ConfiguredStudy::new(study);
+            study.calculate(&bars);
+            let price = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(0.0, 20.0),
+                0.0,
+                300.0,
+                inverted,
+            );
+            let coords = ChartMapping::new(rect, 15.0, 0, 20, 0.0, price);
+            let output = Context::default().run_ui(RawInput::default(), |ui| {
+                IndicatorRenderer::render_study(
+                    &RenderContext::new(ui.painter(), rect),
+                    &study,
+                    &bars,
+                    0,
+                    &price,
+                    &coords,
+                );
+            });
+            let triangles: Vec<[Pos2; 3]> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Path(path) if path.closed && path.points.len() == 3 => {
+                        Some([path.points[0], path.points[1], path.points[2]])
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let mut got = Vec::new();
+            for triangle in triangles {
+                let x = triangle.iter().map(|p| p.x).sum::<f32>() / 3.0;
+                let Some(bar) = (0..bars.len()).find(|&i| (coords.idx_to_x(i) - x).abs() < 0.5)
+                else {
+                    wrong.push(format!("{label}: a triangle at x {x} marks no bar"));
+                    continue;
+                };
+                let (low, high) = (
+                    price.price_to_y(bars[bar].low),
+                    price.price_to_y(bars[bar].high),
+                );
+                // Every vertex past `edge`, on the side away from `other`.
+                let beyond = |edge: f32, other: f32| {
+                    triangle.iter().all(|p| (p.y - edge) * (edge - other) > 0.0)
+                };
+                got.push((
+                    bar,
+                    if beyond(low, high) {
+                        "below"
+                    } else if beyond(high, low) {
+                        "above"
+                    } else {
+                        "inside"
+                    },
+                ));
+                // The vertex farthest from the bar's middle.
+                let middle = (low + high) / 2.0;
+                let far = triangle
+                    .into_iter()
+                    .max_by(|a, b| (a.y - middle).abs().total_cmp(&(b.y - middle).abs()))
+                    .unwrap();
+                let hit = hit_test_indicator(far, &study, 0, 0..bars.len(), &coords, |p| {
+                    price.price_to_y(p)
+                })
+                .map(|hit| hit.bar_idx);
+                if hit != Some(bar) {
+                    wrong.push(format!(
+                        "{label}: a click at {far:?} selects {hit:?}, not bar {bar}"
+                    ));
+                }
+            }
+            got.sort();
+            if got != want {
+                wrong.push(format!("{label}: {got:?}, want {want:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// Boundaries follow their direction or developing plot in paint, selection and autoscale.

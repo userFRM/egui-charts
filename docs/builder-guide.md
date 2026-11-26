@@ -73,22 +73,40 @@ with CORS. The adapter uses GET with percent-encoded query values.
 | `/config` | No parameters | `{"supported_resolutions":["1","15","1D"],"exchanges":[{"value":"X"}],"symbols_types":[{"value":"stock"}]}` |
 | `/symbols` | `symbol`; optional `conversion` | One symbol object as below |
 | `/search` | `query`, `type`, `exchange`, `offset`, [`limit`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.SymbolQuery.html#structfield.limit); `country`, `sector`, `source` when set | Array of symbol objects, best first, after the requested offset, at most the limit; empty filters mean all |
-| `/history` | `symbol`, `resolution`, `countback`, `extended_hours`; optional `from`, `to`, `conversion` | Column history as below |
+| `/history` | `symbol`, `resolution`, `countback`, `extended_hours`, `overnight_hours`, `adjusted`; optional `from`, `to`, `conversion` | Column history as below |
 
 A symbol object requires `name` (`symbol` is also accepted). Optional `ticker`
 is the identifier used for subsequent requests. Metadata fields are `description`,
 `exchange`, `country`, `sector`, `source`, `root`, `logo`, `exchange_logo`,
-`type` (lowercase model symbol type), `minmov`, `pricescale`,
-`volume_precision`, `currency_code`, `unit` (the price unit shown beside the
+`type` (lowercase model symbol type), `minmov`, `pricescale`, `minmove2`, `fractional`,
+`variable_tick_size`, `volume_precision`, `currency_code`, `unit` (the price unit shown beside the
 currency above the price scale, such as `barrel`), `timezone`, `session`,
-`supported_resolutions` and `data_status` (`streaming`, `delayed_streaming` or
-`endofday`). Price tick size
-is `minmov / pricescale`, with `minmov` defaulting to one. Time zones use the
+`session_extended` and `session_overnight` (pre-market and post-market, and
+overnight windows, as below), `supported_resolutions`, `data_status`
+(`streaming`, `delayed_streaming` or `endofday`) and `dividend_adjustment`
+(`true` when `/history` serves dividend-adjusted bars for `adjusted=true`). Price tick size
+is `minmov / pricescale`, with `minmov` defaulting to one. A `pricescale` that is
+a power of ten, such as 100, also sets the price decimals (two), so `minmov` 50 with
+`pricescale` 100 writes `101.50` on a 0.50 tick; another `pricescale`, or a `minmov`
+that is not a whole number, takes the decimals from the tick. `variable_tick_size` lists
+tick sizes by price range, as a tick followed by pairs of a price and the tick from that
+price upwards: `"0.01 10 0.02 25 0.05"` moves prices in 0.01 below 10, in 0.02 from 10 and
+in 0.05 from 25. It replaces the `minmov / pricescale` tick, while `pricescale` still sets
+the decimals. The price axis, Volume Footprint rows and the trading panels use the tick of
+each price. A list whose prices do not rise, or whose ticks are not positive, reports invalid
+data; an empty string is ignored. A precision chosen in
+the chart settings takes precedence. Time zones use the
 library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.TimezoneId.html) parser. Sessions accept `24x7` or
 `HHMM-HHMM[,HHMM-HHMM]:days` windows (one day suffix for all windows), where 1 is Sunday and 7 is Saturday; an overnight
-window belongs to its closing day. Omitted days mean Monday through Friday. Unsupported
+window belongs to its closing day. Omitted days mean Monday through Friday.
+`session_extended` lists the pre-market and post-market windows and
+`session_overnight` the overnight windows in the same syntax; both need a
+regular `session` other than `24x7`. With `session_overnight`, the time axis
+offers overnight hours. Unsupported
 session syntax or unavailable time zones report invalid data rather than guessing;
 search leaves out a result it cannot read and lists the others.
+
+`fractional: true` writes prices as whole units and a count of fractions, such as `117'16` for 117 16/32, in place of decimals. `pricescale` is then the number of fractions in one unit: 2, 4, 8, 16, 32, 64, 128 or 256. A `minmove2` other than zero divides thirty-seconds instead: 2 with `pricescale` 64 for halves (`117'165`), 4 with 128 for quarters and 8 with 256 for eighths. Any other combination keeps decimals. The tick size stays `minmov / pricescale`, and a precision chosen in the chart settings takes precedence.
 
 Configuration lists may be omitted (unknown, unrestricted) or empty (none).
 Exchange and type entries use their `value` field. Optional feed services are
@@ -106,9 +124,13 @@ date of its timestamp, such as 00:00 UTC on its trading date or a session open
 that falls on that date in UTC. The adapter
 places it in the day, week or month holding that date in the time zone the
 chart displays, and bounds such requests at 00:00 UTC on a date. Return the
-newest `countback` bars within those bounds. Keep interval, extended-hours and
-conversion semantics on the server; return an HTTP error for
-an unsupported request rather than serving different prices under those labels.
+newest `countback` bars within those bounds. `extended_hours=true` adds the
+pre-market and post-market windows to regular hours; `overnight_hours=true`
+comes only with it and adds the overnight windows as well. `adjusted=true` asks
+for dividend-adjusted bars; a symbol without them answers its unadjusted bars.
+Keep interval, hours and conversion semantics on the server; return an HTTP
+error for an unsupported interval or conversion rather than serving different
+prices under those labels.
 For example:
 
 ```json
@@ -136,7 +158,8 @@ has not arrived within 10 seconds also reports a recoverable network error, and
 a later response is discarded. Historical request retries follow the chart's
 normal retry policy.
 
-Live subscriptions poll the same history endpoint every five seconds, starting
+Live subscriptions poll the same history endpoint every five seconds, with the
+subscription's hours and adjustment, starting
 with the latest 500 bars and then including the newest received timestamp so the
 forming bar can change. Each response replaces full bars, including volume;
 no trades are synthesized. The server must return the complete requested window
@@ -251,6 +274,7 @@ return their per-bar results through [`CustomIndicator`](https://userfrm.github.
 unavailable observations. Recalculate when the source bars or script inputs change;
 report compilation and execution errors in the host UI. A closure may capture an
 `Arc` holding the host evaluator; its calculation must be `Send + Sync`.
+The repository's [`egui-charts-scripting`](https://github.com/userFRM/egui-charts/blob/main/crates/scripting/README.md) package is such a host runtime: it compiles scripts with history, state and plots into studies that calculate away from the UI thread.
 
 ## Runnable examples
 

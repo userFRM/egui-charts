@@ -84,8 +84,8 @@ pub(crate) use footprint::{FootprintState, PackedFootprintState};
 pub use footprint_view::{FootprintBarView, FootprintBars, FootprintRows, FootprintSource};
 pub use market::{
     CalendarEvent, CalendarKind, CalendarQuery, HotlistEntry, HotlistQuery, Importance, NewsQuery,
-    NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
-    ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
+    NewsStory, ScreenerColumn, ScreenerColumnKind, ScreenerColumnSet, ScreenerCondition,
+    ScreenerFilter, ScreenerQuery, ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
 };
 pub use option_chain::{
     OptionChain, OptionChainQuery, OptionChainSink, OptionExposure, OptionExposureHandle,
@@ -1139,6 +1139,8 @@ pub struct Subscription {
     /// Include overnight windows too, as in
     /// [`HistoryRequest::overnight_hours`]. Requires `extended_hours`.
     pub overnight_hours: bool,
+    /// Use the same adjustment as [`HistoryRequest::adjusted`].
+    pub adjusted: bool,
     /// The currency or unit the host chose, in which the updates are wanted; see
     /// [`HistoryRequest::conversion`].
     pub conversion: Option<String>,
@@ -1147,10 +1149,11 @@ pub struct Subscription {
 }
 
 impl Subscription {
-    /// Live updates of `symbol` at `timeframe` into `sink`: regular hours in the instrument's own
-    /// currency, on the UTC calendar of [`BarClock::new`], as [`HistoryRequest::new`] sets them.
-    /// Its [`id`](Self::id) is the sink's, which every clone of `sink` shares, so a feed can
-    /// forward a subscription it received by building another one on `subscription.sink.clone()`.
+    /// Live updates of `symbol` at `timeframe` into `sink`: regular hours, unadjusted and in the
+    /// instrument's own currency, on the UTC calendar of [`BarClock::new`], as
+    /// [`HistoryRequest::new`] sets them. Its [`id`](Self::id) is the sink's, which every clone of
+    /// `sink` shares, so a feed can forward a subscription it received by building another one on
+    /// `subscription.sink.clone()`.
     /// Assign [`clock`](Self::clock) and the other fields to match a chart. A [`SinkReader`]
     /// builds a sink outside a chart, to test [`Datafeed::subscribe`]; give it the same clock.
     ///
@@ -1203,6 +1206,7 @@ impl Subscription {
             clock: BarClock::new(timeframe),
             extended_hours: false,
             overnight_hours: false,
+            adjusted: false,
             conversion: None,
             sink,
         }

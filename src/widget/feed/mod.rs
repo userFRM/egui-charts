@@ -79,7 +79,7 @@ pub(crate) struct FeedLink {
     pending: Vec<(u64, Request, u32)>,
     retries: Vec<(f64, Request, u32)>,
     subscription: Option<SubscriptionId>,
-    instrument: Option<Instrument>,
+    pub(crate) instrument: Option<Instrument>,
     /// What the feed offers as a whole, once it has answered.
     capabilities: Option<FeedCapabilities>,
     pub(super) trades: Trades,
@@ -114,12 +114,10 @@ pub(crate) struct FeedLink {
         Option<chrono::DateTime<chrono::Utc>>,
     )>,
     trade_cursor: Option<chrono::DateTime<chrono::Utc>>,
+    initial_trades: InitialTrades,
     depth_cursor: Option<chrono::DateTime<chrono::Utc>>,
     /// No older trades remain to be loaded.
     trades_complete: bool,
-    /// A trade page reported that nothing exists before its oldest trade, or came back empty
-    /// without `continue_before`: no trade before the oldest held one was missed.
-    trades_from_start: bool,
     pub(super) heatmap: Option<std::cell::RefCell<crate::chart::overlays::LiquidityHeatmap>>,
     heatmap_config: crate::chart::overlays::LiquidityHeatmapConfig,
     /// How the live book is shown by the heatmap's profile and the depth ladder.
@@ -130,6 +128,15 @@ pub(crate) struct FeedLink {
     time: Option<chrono::DateTime<chrono::Utc>>,
     /// A permanent history or resolve failure stops paging until the next reload.
     pub(super) paging_stopped: bool,
+}
+
+/// Demand may arrive before instrument resolution. Once sent, the normal request lifecycle
+/// owns the page (including retries) until the chart subscribes again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InitialTrades {
+    Waiting,
+    Wanted,
+    Requested,
 }
 
 #[derive(Clone)]
@@ -176,7 +183,7 @@ impl FeedLink {
 
     fn rebuild_paged_trade_rate(&self, input: &crate::data::OrderFlowInput, history: &[Bar]) {
         if let Some(tf) = self.clock.timeframe().filter(|tf| tf.is_trade_based())
-            && self.trades_from_start
+            && self.trades.from_start
             && self.pushed_from.is_none()
             && self.trades.live().next().is_none()
             && self.trades.unheld_live().is_none()
@@ -255,9 +262,9 @@ impl FeedLink {
             footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
+            initial_trades: InitialTrades::Waiting,
             depth_cursor: None,
             trades_complete: false,
-            trades_from_start: false,
             heatmap: self.heatmap.is_some().then(Default::default),
             heatmap_config: self.heatmap_config,
             book_view: self.book_view.clone(),
@@ -409,7 +416,7 @@ impl FeedLink {
         let first = self.unconfirmed_start().or_else(|| {
             // Without bars to match, paged trades group from the oldest held one. Matched ones
             // start after any loss, and live bars carry their own marks.
-            let unsure = !self.trades_from_start || lost.is_some();
+            let unsure = !self.trades.from_start || lost.is_some();
             if trade_based && history.is_empty() && unsure {
                 self.trades.iter().next().map(|trade| trade.ts)
             } else {
@@ -457,7 +464,7 @@ impl FeedLink {
     /// store lost none. A loss is marked exactly by `drop_through` instead. Paged trades on a
     /// trade-based interval need no mark: they fill only bars they were proven to rebuild.
     fn unconfirmed_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        if self.trades_from_start || self.trades.lost_until().is_some() {
+        if self.trades.from_start || self.trades.lost_until().is_some() {
             return None;
         }
         let oldest = self.trades.iter().next()?;
@@ -554,7 +561,7 @@ impl Chart {
         self.quote_action = None;
         self.session_quote = None;
         self.state.price_scale_mut().set_instrument_precision(None);
-        self.state.price_scale_mut().set_tick_size(None);
+        self.state.price_scale_mut().set_instrument_ticks(None);
         let initial_bars = previous.as_ref().map_or(1000, |link| link.initial_bars);
         self.attach_feed(feed, initial_bars);
         if let (Some(old), Some(new)) = (&mut previous, &mut self.feed_link) {
@@ -653,9 +660,9 @@ impl Chart {
             footprint_unavailable: Vec::new(),
             bar_cursor: None,
             trade_cursor: None,
+            initial_trades: InitialTrades::Waiting,
             depth_cursor: None,
             trades_complete: false,
-            trades_from_start: false,
             heatmap: None,
             heatmap_config: Default::default(),
             book_view: Default::default(),
@@ -779,6 +786,7 @@ impl Chart {
                 next.0.stay_in_drawing_mode = self.drawings.stay_in_drawing_mode;
                 next.0.eraser_mode = self.drawings.eraser_mode;
                 next.0.set_hidden(self.drawings.is_hidden());
+                next.0.shared_filter = self.drawings.shared_filter;
                 next.0.set_locked(self.drawings.is_locked());
                 next.0.curr_timeframe = self.drawings.curr_timeframe.clone();
                 self.flush_change_events();
@@ -787,7 +795,10 @@ impl Chart {
                 std::mem::swap(&mut self.drawings, &mut next.0);
                 std::mem::swap(&mut self.marks, &mut next.1);
                 self.attach_pending_drawings();
+                // A pane remembered for a study removed while shared drawings were hidden
+                // places those drawings on charts that mirror this one when they return.
                 if !next.0.drawings.is_empty()
+                    || !next.0.removed_panes.is_empty()
                     || !next.1.is_empty()
                     || !next
                         .0
@@ -830,7 +841,7 @@ impl Chart {
             self.event_click = None;
             self.axis_hover = None;
             self.state.price_scale_mut().set_instrument_precision(None);
-            self.state.price_scale_mut().set_tick_size(None);
+            self.state.price_scale_mut().set_instrument_ticks(None);
         }
         self.symbol = symbol;
     }
@@ -1017,6 +1028,35 @@ impl Chart {
             .as_ref()
             .and_then(|link| link.instrument.as_ref())
             .or(self.legend_instrument.as_ref())
+    }
+
+    /// Defers the first historical trade page on a time chart until something reads executions.
+    /// Set this before showing a sealed recording whose candles and prepared footprint pages
+    /// cover the selected history. By default the chart asks on subscription so callers of
+    /// [`Self::trades`] need not declare interest. Changing the policy does not discard trades
+    /// or cancel an outstanding page. It survives [`Self::set_feed`].
+    ///
+    /// Before drawing the order ticket's DOM tab, call [`Self::request_trade_history`]:
+    /// `TradingPanel::show_ticket` borrows the chart immutably and cannot request the trades
+    /// for its ladder profile.
+    ///
+    /// Live subscriptions, trade-based intervals and market replay still work as before.
+    /// Candle replay uses the trades already held when the host pauses the feed: if its partial
+    /// bars need executions, request the tape and let it arrive before entering replay.
+    pub fn set_trade_history_on_demand(&mut self, on_demand: bool) {
+        self.trade_history_on_demand = on_demand;
+    }
+
+    /// Signals that a host reader (for example Time & Sales) needs this binding's historical
+    /// trades. May be called each frame, including before the instrument resolves. The next
+    /// feed pump with an active subscription sends the usual latest page once, also when a
+    /// study needs it in the same frame. Does nothing without a feed.
+    pub fn request_trade_history(&mut self) {
+        if let Some(link) = &mut self.feed_link
+            && link.initial_trades == InitialTrades::Waiting
+        {
+            link.initial_trades = InitialTrades::Wanted;
+        }
     }
 
     /// The trades of `series` the feed sent, oldest first, at most 100,000. Empty for any id but

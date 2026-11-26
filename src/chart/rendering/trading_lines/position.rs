@@ -41,6 +41,10 @@ pub(super) fn show_position(
     let color = look
         .and_then(|look| look.color)
         .unwrap_or_else(|| crate::theme::trading_side_color(&theme, side));
+    let label_color = look.and_then(|look| look.label_color).unwrap_or(color);
+    let quantity_color = look.and_then(|look| look.quantity_color).unwrap_or(color);
+    let button_color = look.and_then(|look| look.button_color).unwrap_or(color);
+    let close = look.and_then(|look| look.close).unwrap_or(options.close);
     let size = position.quantity.abs();
     let entry = position.average_price;
     let y = mapping.price_to_y(entry);
@@ -70,6 +74,7 @@ pub(super) fn show_position(
             gain * size * options.point_value,
             gain,
             entry,
+            direction(side),
             options,
         )
     };
@@ -80,13 +85,13 @@ pub(super) fn show_position(
     );
     let text = look
         .and_then(|look| look.text.as_ref())
-        .map(|text| layout(text.clone(), color));
-    let close = if options.close { HEIGHT } else { 0.0 };
+        .map(|text| layout(text.clone(), label_color));
+    let close_width = if close { HEIGHT } else { 0.0 };
     let fixed_width = exit_buttons_width(ui, exits)
         + width(&quantity)
         + coverage.map_or(0.0, |_| COVERAGE_CELL)
         + text.as_deref().map_or(0.0, width)
-        + close;
+        + close_width;
     let pnl = options.pnl.and_then(|unit| {
         let gain = options
             .last_price
@@ -98,7 +103,9 @@ pub(super) fn show_position(
             })?;
         let (text, value) = match (unit, position.unrealized_pnl) {
             // The broker's own figure, when it reports one.
-            (PnlUnit::Money, Some(pnl)) => pnl_text(ui.ctx(), unit, pnl, gain, entry, options),
+            (PnlUnit::Money, Some(pnl)) => {
+                pnl_text(ui.ctx(), unit, pnl, gain, entry, direction(side), options)
+            }
             _ => result(unit, gain),
         };
         let text_color = if value > 0.0 {
@@ -121,7 +128,7 @@ pub(super) fn show_position(
         Some((galley, text_color))
     });
     let total = fixed_width + pnl.as_ref().map_or(0.0, |(galley, _)| width(galley));
-    let reverse = options.close && options.reverse;
+    let reverse = close && options.reverse;
     let label_width = total + if reverse { HEIGHT * 1.6 } else { 0.0 };
     let inset = LABEL_INSET.min((mapping.rect.width() - total - HEIGHT * 1.6).max(8.0));
     let (left, right) = if options.label_alignment == TradingLabelAlignment::Right
@@ -174,7 +181,7 @@ pub(super) fn show_position(
         label
     };
     let hovered = ui.rect_contains_pointer(hover_rect.intersect(mapping.rect));
-    let stroke = Stroke::new(1.0, color);
+    let stroke = Stroke::new(1.0, label_color);
     let mut action = None;
     if options.menu.is_some() || look.and_then(|look| look.hover_text.as_ref()).is_some() {
         let response = ui.interact(
@@ -192,7 +199,10 @@ pub(super) fn show_position(
             response
         };
         if let Some(capabilities) = options.menu {
-            response.context_menu(|ui| action = position_menu(ui, position, capabilities, held));
+            let closable = look.and_then(|look| look.close) != Some(false);
+            response.context_menu(|ui| {
+                action = position_menu(ui, position, capabilities, held, closable);
+            });
         }
     }
 
@@ -211,14 +221,14 @@ pub(super) fn show_position(
         painter.rect(
             rect,
             4.0,
-            label_fill(&theme, color),
-            stroke,
+            label_fill(&theme, button_color),
+            Stroke::new(1.0, button_color),
             egui::StrokeKind::Inside,
         );
         if response.hovered() {
-            painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
+            painter.rect_filled(rect.shrink(1.0), 1.0, button_color.gamma_multiply(0.2));
         }
-        paint_glyph(&painter, Button::Reverse, rect.center(), color);
+        paint_glyph(&painter, Button::Reverse, rect.center(), button_color);
         if response.clicked() {
             action = Some(TradingLineAction::Reverse(position.clone()));
         }
@@ -233,6 +243,8 @@ pub(super) fn show_position(
         line_left,
         preview_right: right,
         pnl: &|unit, price| result(unit, (price - entry) * direction(side)).0,
+        take_profit_hover_text: look.and_then(|look| look.take_profit_hover_text.as_deref()),
+        stop_loss_hover_text: look.and_then(|look| look.stop_loss_hover_text.as_deref()),
     }
     .show(ui, mapping, options, tags);
     if let Some((exit, price)) = released {
@@ -255,7 +267,7 @@ pub(super) fn show_position(
     painter.rect(
         group_rect,
         4.0,
-        label_fill(&theme, color),
+        label_fill(&theme, label_color),
         stroke,
         egui::StrokeKind::Inside,
     );
@@ -270,7 +282,7 @@ pub(super) fn show_position(
             ne: 0,
             se: 0,
         },
-        color,
+        quantity_color,
     );
     painter.galley(
         pos2(rect.left() + PADDING, y - quantity.size().y / 2.0),
@@ -296,7 +308,7 @@ pub(super) fn show_position(
         painter.galley(
             pos2(rect.left() + PADDING, y - text.size().y / 2.0),
             text,
-            color,
+            label_color,
         );
     }
     if let Some((pnl, text_color)) = pnl {
@@ -317,7 +329,7 @@ pub(super) fn show_position(
             text_color,
         );
     }
-    if options.close {
+    if close {
         let rect = cell(x, HEIGHT);
         let response = ui
             .interact(
@@ -331,9 +343,9 @@ pub(super) fn show_position(
             );
         painter.vline(rect.left(), rect.y_range(), stroke);
         if response.hovered() {
-            painter.rect_filled(rect.shrink(1.0), 1.0, color.gamma_multiply(0.2));
+            painter.rect_filled(rect.shrink(1.0), 1.0, button_color.gamma_multiply(0.2));
         }
-        paint_glyph(&painter, Button::Cancel, rect.center(), color);
+        paint_glyph(&painter, Button::Cancel, rect.center(), button_color);
         if response.clicked() {
             action = action.or(Some(TradingLineAction::Close(position.clone())));
         }
@@ -369,20 +381,30 @@ fn position_menu(
     position: &Position,
     capabilities: Capabilities,
     held: (bool, bool),
+    closable: bool,
 ) -> Option<TradingLineAction> {
+    const FIXED: &str = "The position cannot be closed or reversed on the chart";
     if menu_entry(
         ui,
         "Close position",
-        capabilities.close,
-        "The account does not support closing positions",
+        capabilities.close && closable,
+        if capabilities.close {
+            FIXED
+        } else {
+            "The account does not support closing positions"
+        },
     ) {
         return Some(TradingLineAction::Close(position.clone()));
     }
     if menu_entry(
         ui,
         "Reverse position",
-        capabilities.reverse,
-        "The account does not support reversing positions",
+        capabilities.reverse && closable,
+        if capabilities.reverse {
+            FIXED
+        } else {
+            "The account does not support reversing positions"
+        },
     ) {
         return Some(TradingLineAction::Reverse(position.clone()));
     }

@@ -9,6 +9,7 @@ use egui_charts::drawings::DrawingToolType;
 use egui_charts::icons::{Icon, icons};
 use egui_charts::studies::IndicatorFactory;
 use egui_charts::theme::ThemeExt;
+use egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorDialogAction;
 use egui_charts::ui_kit::command_palette::{Command, CommandPaletteHandler};
 use egui_charts::ui_kit::list_item::ListItem;
 use egui_charts::widget::ShortcutMap;
@@ -62,8 +63,8 @@ const SAMPLES: &[(&str, &str, &str)] = &[
     ),
     (
         "sample-study",
-        "Sample study editor",
-        "Apply a close-difference study and save named source documents locally.",
+        "Script editor",
+        "Write scripted studies with completion, apply them to the chart and save them locally.",
     ),
     (
         "tape",
@@ -133,13 +134,14 @@ const ROW_KEYS: &[(&str, KeyboardAction)] = &[
 
 /// The quick search rows. A row whose action has a key shows the first one bound in `shortcuts`,
 /// and each saved indicator template of `templates` (id and name) has a row of its own,
-/// as does each study `factory` lists. Each drawing tool row has a star, filled for the tools
-/// in `favorites`.
+/// as does each study `factory` lists and each tool `registry` lists that is not hidden. Each
+/// built-in drawing tool row has a star, filled for the tools in `favorites`.
 pub(super) fn quick_search_commands(
     shortcuts: &ShortcutMap,
     templates: &[(String, String)],
     factory: &IndicatorFactory,
     favorites: &[DrawingToolType],
+    registry: &egui_charts::drawings::DrawingToolRegistry,
 ) -> Vec<Command> {
     let keyed = |command: Command, action: Option<KeyboardAction>| match action
         .and_then(|action| shortcuts.shortcut(action))
@@ -229,6 +231,16 @@ pub(super) fn quick_search_commands(
             }
         }
     }
+    commands.extend(
+        registry
+            .custom_tools()
+            .filter(|(id, _)| registry.custom_availability(id).visible)
+            .map(|(id, tool)| {
+                Command::new(format!("custom-tool:{id}"), tool.name.as_str())
+                    .category("Drawing tools")
+                    .keywords(tool.category.clone())
+            }),
+    );
     let mut names = factory.list();
     names.sort();
     commands.extend(names.into_iter().map(|name| {
@@ -299,6 +311,7 @@ impl DemoApp {
             &self.top_toolbar.indicator_templates,
             self.indicator_dialog.factory(),
             &self.drawing_toolbar.state.favorites,
+            &self.chart.drawings().registry,
         ));
         self.quick_search.set_recent(recent);
         self.quick_search.open();
@@ -346,6 +359,12 @@ impl DemoApp {
             }
             return;
         }
+        if let Some(tool) = id.strip_prefix("custom-tool:") {
+            if let Err(error) = self.chart.drawings_mut().set_custom_tool(tool) {
+                self.notify(error);
+            }
+            return;
+        }
         if let Some(template) = id.strip_prefix("template:") {
             self.handle_top_toolbar(
                 ctx,
@@ -354,7 +373,10 @@ impl DemoApp {
             return;
         }
         if let Some(name) = id.strip_prefix("study:") {
-            if let Some(study) = self.indicator_dialog.factory().create(name) {
+            // A study with symbols to choose opens the dialog's prompt and arrives from `show`.
+            if let Some(IndicatorDialogAction::AddIndicator(study)) =
+                self.indicator_dialog.add(name)
+            {
                 self.chart.add_indicator(study);
             }
             return;
@@ -1676,7 +1698,13 @@ mod tests {
         shortcuts
             .bindings
             .retain(|(_, action)| *action != KeyboardAction::Snapshot);
-        let commands = quick_search_commands(&shortcuts, &[], &IndicatorFactory::new(), &[]);
+        let commands = quick_search_commands(
+            &shortcuts,
+            &[],
+            &IndicatorFactory::new(),
+            &[],
+            &Default::default(),
+        );
         let shortcut = |id: &str| commands.iter().find(|row| row.id == id).unwrap().shortcut;
         assert_eq!(shortcut("undo"), Some(edited));
         assert_eq!(shortcut("snapshot"), None);
@@ -1790,8 +1818,212 @@ mod tests {
         );
     }
 
-    /// The sample overlays reach the public fill renderer with their own size and font, and
-    /// switching them off removes the imported fill too.
+    #[test]
+    fn layout_menu_names_new_layouts_confirms_deletes_and_shares() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        // Create new layout takes its name from the menu's field.
+        click(&mut app, &ctx, "Named layouts");
+        click(&mut app, &ctx, "Create new layout");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![egui::Event::Text("Morning".into())])
+            .drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![enter.clone()]).drop_without_applying_deltas();
+        let tabs: Vec<_> = app
+            .layout_tabs
+            .iter()
+            .map(|tab| tab.name.as_str())
+            .collect();
+        assert_eq!(tabs, ["Unnamed", "Morning"]);
+        assert_eq!(app.layout_tabs[app.layout_tab].name, "Morning");
+        assert_eq!(
+            app.top_toolbar.layout_menu.curr_layout.as_deref(),
+            Some("Morning")
+        );
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        app.poll_storage(&ctx);
+        assert!(
+            app.top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&"Morning".to_owned())
+        );
+
+        // Its delete asks first, naming the layout and the symbol of its chart.
+        click(&mut app, &ctx, "Named layouts");
+        click_lowest(&mut app, &ctx, "×");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let output = frame(&mut app, &ctx, vec![]);
+        let texts: Vec<String> = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .filter_map(|(_, node)| node.value().map(str::to_owned))
+            .collect();
+        output.drop_without_applying_deltas();
+        assert!(
+            app.top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&"Morning".to_owned())
+        );
+        assert!(
+            texts.iter().any(|text| text == "Delete Morning?"),
+            "{texts:?}"
+        );
+        let charts = format!("Charts: {}", app.chart.symbol());
+        assert!(texts.contains(&charts), "{texts:?}");
+        click_lowest(&mut app, &ctx, "Delete");
+        app.poll_storage(&ctx);
+        assert!(
+            !app.top_toolbar
+                .layout_menu
+                .layouts
+                .contains(&"Morning".to_owned())
+        );
+
+        // Saved again, it is shared through the switch with the chosen access.
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        app.poll_storage(&ctx);
+        click(&mut app, &ctx, "Named layouts");
+        let labels = |app: &mut DemoApp| {
+            let output = frame(app, &ctx, vec![]);
+            let labels: Vec<String> = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| node.label().or(node.value()).map(str::to_owned))
+                .collect();
+            output.drop_without_applying_deltas();
+            labels
+        };
+        assert!(
+            !labels(&mut app).iter().any(|label| label == "Copy link"),
+            "Copy link waits for the layout to be shared"
+        );
+        click_lowest(&mut app, &ctx, "Share layout");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click_lowest(&mut app, &ctx, "View and copy");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click_lowest(&mut app, &ctx, "Copy link");
+        let copied = (0..2).find_map(|_| {
+            let output = frame(&mut app, &ctx, vec![]);
+            let copied = output
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                    _ => None,
+                });
+            output.drop_without_applying_deltas();
+            copied
+        });
+        assert!(
+            copied
+                .as_deref()
+                .is_some_and(|text| text.starts_with("https://demo.invalid/layout/")),
+            "{copied:?}"
+        );
+        let texts = labels(&mut app);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "Link copied. Recipients can view it and save a copy."),
+            "{texts:?}"
+        );
+
+        // Renamed, it stays shared under its new name with the access chosen above.
+        click_lowest(&mut app, &ctx, "Rename…");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![egui::Event::Text(" plan".into())])
+            .drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![enter]).drop_without_applying_deltas();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        }
+        assert_eq!(app.layout_tabs[app.layout_tab].name, "Morning plan");
+        assert!(app.layout_is_saved("Morning plan") && !app.layout_is_saved("Morning"));
+        click(&mut app, &ctx, "Named layouts");
+        let output = frame(&mut app, &ctx, vec![]);
+        let nodes = &output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes;
+        let on = |label: &str| {
+            nodes.iter().any(|(_, node)| {
+                node.label() == Some(label)
+                    && node.toggled() == Some(egui::accesskit::Toggled::True)
+            })
+        };
+        assert!(on("Share layout") && on("View and copy"));
+        output.drop_without_applying_deltas();
+    }
+
+    /// Clicks the lowest control labelled `label`: menu rows sit below the toolbar and tab strip.
+    fn click_lowest(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        let output = frame(app, ctx, vec![]);
+        let pos = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .and_then(|update| {
+                update
+                    .nodes
+                    .iter()
+                    .filter(|(_, node)| {
+                        node.label() == Some(label) && node.role() != egui::accesskit::Role::Label
+                    })
+                    .filter_map(|(_, node)| node.bounds())
+                    .max_by(|a, b| a.y0.total_cmp(&b.y0))
+            })
+            .map(|rect| {
+                egui::pos2(
+                    (rect.x0 + rect.x1) as f32 * 0.5,
+                    (rect.y0 + rect.y1) as f32 * 0.5,
+                )
+            });
+        output.drop_without_applying_deltas();
+        let pos = pos.unwrap_or_else(|| panic!("missing control: {label}"));
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
+    }
+
+    /// The sample overlays reach the public fill renderer with their own size, font, label and
+    /// label colour, and switching them off removes the imported fill too.
     #[test]
     fn samples_mark_their_fill_in_its_own_style() {
         let ctx = egui::Context::default();
@@ -1799,7 +2031,7 @@ mod tests {
         app.live.set_paused(true);
         super::super::tests::settle(&mut app, &ctx);
         let draw = |app: &mut DemoApp| {
-            let (mut triangles, mut font) = (Vec::new(), None);
+            let (mut triangles, mut label, mut default_label) = (Vec::new(), None, false);
             for _ in 0..3 {
                 let output = frame(app, &ctx, vec![]);
                 triangles = output
@@ -1816,15 +2048,22 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                font = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Buy 3" => {
-                        Some(text.galley.job.sections[0].format.font_id.clone())
-                    }
-                    _ => None,
-                });
+                let texts = || {
+                    output.shapes.iter().filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text),
+                        _ => None,
+                    })
+                };
+                label = texts()
+                    .find(|text| text.galley.text() == "Imported")
+                    .map(|text| {
+                        let format = &text.galley.job.sections[0].format;
+                        (format.font_id.clone(), format.color)
+                    });
+                default_label = texts().any(|text| text.galley.text() == "Buy 3");
                 output.drop_without_applying_deltas();
             }
-            (triangles, font)
+            (triangles, label, default_label)
         };
         assert!(draw(&mut app).0.is_empty());
         app.execute_search_command(&ctx, "samples");
@@ -1835,12 +2074,19 @@ mod tests {
                 .any(|marker| marker.text.as_deref() == Some("Fill")),
             "the samples must supply their fill before it can be rendered"
         );
-        let (triangles, font) = draw(&mut app);
+        let (triangles, label, default_label) = draw(&mut app);
         assert_eq!(triangles.len(), 1, "one imported sample fill");
         let [tip, right, left] = triangles[0];
         assert!((right.x - left.x - 10.0).abs() < 0.01);
         assert!(((right.y - tip.y).abs() - 12.0).abs() < 0.01);
-        assert_eq!(font, Some(egui::FontId::monospace(11.0)));
+        assert_eq!(
+            label,
+            Some((egui::FontId::monospace(11.0), super::super::marks::IMPORT))
+        );
+        assert!(
+            !default_label,
+            "the host label replaces the side and quantity"
+        );
         app.execute_search_command(&ctx, "samples");
         assert!(draw(&mut app).0.is_empty());
     }

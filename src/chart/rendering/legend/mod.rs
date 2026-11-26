@@ -9,7 +9,7 @@ use quotes::paint_quotes;
 pub(crate) use quotes::quote_prices;
 
 use crate::chart::rendering::StyleColors;
-use crate::chart::rendering::axes::semibold;
+use crate::chart::rendering::axes::{semibold, volume_text};
 use crate::localization as l10n;
 use crate::model::session::MarketSession;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
@@ -51,7 +51,8 @@ impl<'a> LegendStatus<'a> {
     }
 }
 
-/// The quote control clicked by the user. The host decides how to handle the intent.
+/// The quote control the user clicked, or pressed with its key. The host decides how to handle
+/// the intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum QuoteSide {
@@ -732,25 +733,12 @@ impl<'a> Legend<'a> {
             {
                 layout.field(
                     &format!("{} ", l10n::text(ui.ctx(), "Vol")),
-                    self.formatters
-                        .volume
-                        .map(|formatter| formatter.format(self.bar.volume))
-                        .unwrap_or_else(|| {
-                            self.instrument
-                                .and_then(|instrument| instrument.volume_decimals)
-                                .map_or_else(
-                                    || {
-                                        crate::scales::StudyFormat::Volume
-                                            .format(self.bar.volume, None)
-                                    },
-                                    |decimals| {
-                                        crate::scales::VolumeFormatter {
-                                            precision: usize::from(decimals),
-                                        }
-                                        .format_with_min_unit_decimals(self.bar.volume, 2)
-                                    },
-                                )
-                        }),
+                    volume_text(
+                        self.bar.volume,
+                        self.instrument
+                            .and_then(|instrument| instrument.volume_decimals),
+                        self.formatters.volume,
+                    ),
                     layout.bar_color(self.bar),
                 );
                 layout.new_row();
@@ -798,6 +786,11 @@ impl<'a> Legend<'a> {
                         colors.text,
                         bounds.width(),
                     );
+                }
+                if let Some((text, color)) =
+                    calculation_text(ui.ctx(), study.as_ref(), theme.ui.text_muted)
+                {
+                    layout.text(text, theme.text.ohlc, color, bounds.width());
                 }
                 if study.is_volume() {
                     if self.show_indicator_inputs && study.plot_style(2).visible {
@@ -1040,6 +1033,40 @@ pub(crate) fn price_change_text(
         .percentage
         .map_or_else(|| format!("{pct:+.2}%"), |formatter| formatter.format(pct));
     (change, absolute, percent)
+}
+
+/// What a study's legend row shows after its title about a calculation that reports itself
+/// ([`Indicator::calculation`]), and in which colour: its progress, or its last compute time in
+/// `muted` with a slow notice in the warning colour from a second on, or why it stopped in the
+/// error colour. `None` for a study that reports none.
+pub(crate) fn calculation_text(
+    ctx: &egui::Context,
+    study: &dyn Indicator,
+    muted: Color32,
+) -> Option<(String, Color32)> {
+    use crate::studies::Calculation;
+    let duration = |time: std::time::Duration| match time.as_millis() {
+        0 => "<1 ms".to_owned(),
+        millis @ 1..1000 => format!("{millis} ms"),
+        _ => format!("{:.1} s", time.as_secs_f64()),
+    };
+    let theme = ctx.active_theme();
+    Some(match study.calculation()? {
+        Calculation::Running(done) => (
+            l10n::format_text(
+                ctx,
+                "{percent}%",
+                &[("percent", format!("{:.0}", done * 100.0))],
+            ),
+            muted,
+        ),
+        Calculation::Done(time) if time.as_secs() >= 1 => (
+            l10n::format_text(ctx, "{time}, slow", &[("time", duration(time))]),
+            theme.ui.warning,
+        ),
+        Calculation::Done(time) => (duration(time), muted),
+        Calculation::Stopped(why) => (l10n::text(ctx, why), theme.ui.error),
+    })
 }
 
 /// A glyph of the market status pill.
@@ -1617,6 +1644,148 @@ mod tests {
         }
         assert_eq!(chart.indicator_inputs(sma), Some("7 close"));
         assert_eq!(chart.indicator_inputs(rsi), Some("9 close"));
+    }
+
+    /// A study that reports its calculation shows its progress, compute time or stop after its
+    /// title in both legends, in the muted, warning or error colour (#3631), and a study that
+    /// reports none shows nothing more.
+    #[test]
+    fn study_legend_shows_the_calculation() {
+        use crate::model::{Bar, BarData};
+        use crate::studies::{Calculation, Indicator, IndicatorValues, RSI, SMA};
+        use crate::theme::ThemeExt;
+        use crate::widget::{Chart, test_frames::shapes};
+        use chrono::{TimeZone, Utc};
+        use egui::Color32;
+        use std::time::Duration;
+
+        /// A study reporting a fixed calculation.
+        struct Reports(Box<dyn Indicator>, Option<Calculation>);
+
+        impl Indicator for Reports {
+            fn name(&self) -> &str {
+                self.0.name()
+            }
+            fn calculate(&mut self, data: &[Bar]) {
+                self.0.calculate(data);
+            }
+            fn values(&self) -> &IndicatorValues {
+                self.0.values()
+            }
+            fn colors(&self) -> Vec<Color32> {
+                self.0.colors()
+            }
+            fn set_colors(&mut self, colors: Vec<Color32>) {
+                self.0.set_colors(colors);
+            }
+            fn is_overlay(&self) -> bool {
+                self.0.is_overlay()
+            }
+            fn set_visible(&mut self, visible: bool) {
+                self.0.set_visible(visible);
+            }
+            fn calculation(&self) -> Option<Calculation> {
+                self.1.clone()
+            }
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(Reports(self.0.clone_box(), self.1.clone()))
+            }
+        }
+
+        let bars: Vec<_> = (0..60)
+            .map(|i| {
+                let close = 10.0 + (i % 5) as f64;
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        let stop = "time limit of 500 ms for one bar reached at line 2";
+        let ctx = egui::Context::default();
+        let shown = ["42%", "12 ms", "1.5 s, slow", stop];
+        for (calculation, expected) in [
+            (None, None),
+            (Some(Calculation::Running(0.42)), Some(("42%", "muted"))),
+            (
+                Some(Calculation::Done(Duration::from_millis(12))),
+                Some(("12 ms", "muted")),
+            ),
+            (
+                Some(Calculation::Done(Duration::from_millis(1500))),
+                Some(("1.5 s, slow", "warning")),
+            ),
+            (
+                Some(Calculation::Stopped(stop.into())),
+                Some((stop, "error")),
+            ),
+        ] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.add_indicator(Box::new(Reports(
+                Box::new(SMA::new(7)),
+                calculation.clone(),
+            )));
+            chart.add_indicator(Box::new(Reports(
+                Box::new(RSI::new(9)),
+                calculation.clone(),
+            )));
+            shapes(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let price_rect = chart.get_rendered_price_rect();
+            let pane_rect = chart.get_rendered_indicator_panes()[0].chart_rect;
+            // Each painted text with its position and the colour of every section.
+            let texts: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some(text),
+                    _ => None,
+                })
+                .flat_map(|text| {
+                    let job = &text.galley.job;
+                    job.sections.iter().map(move |section| {
+                        let color = match section.format.color {
+                            Color32::PLACEHOLDER => text.fallback_color,
+                            color => color,
+                        };
+                        let range = section.byte_range.start.0..section.byte_range.end.0;
+                        (&job.text[range], text.pos, color)
+                    })
+                })
+                .collect();
+            let found = |rect: egui::Rect, wanted: &str| {
+                texts
+                    .iter()
+                    .find(|(text, pos, _)| text.trim() == wanted && rect.contains(*pos))
+                    .map(|(_, _, color)| *color)
+            };
+            let theme = ctx.active_theme();
+            let colour = |name| match name {
+                "muted" => theme.ui.text_muted,
+                "warning" => theme.ui.warning,
+                _ => theme.ui.error,
+            };
+            match expected {
+                Some((text, color)) => {
+                    let color = colour(color);
+                    assert_eq!(
+                        found(price_rect, text),
+                        Some(color),
+                        "{calculation:?} overlay"
+                    );
+                    assert_eq!(found(pane_rect, text), Some(color), "{calculation:?} pane");
+                }
+                None => assert!(
+                    !texts.iter().any(|(text, ..)| {
+                        shown.iter().any(|shown| text.contains(shown)) || text.contains(" ms")
+                    }),
+                    "{texts:?}"
+                ),
+            }
+        }
     }
 
     #[cfg(feature = "icons")]

@@ -744,6 +744,7 @@ fn selecting_a_strategy_applies_its_declared_order_size() {
         ("SuperTrend", OrderSize::EquityFraction(0.15)),
         ("Technical Ratings", OrderSize::EquityFraction(0.05)),
         ("Consecutive Up/Down", OrderSize::Fixed(1.0)),
+        ("Bar Up/Down", OrderSize::EquityFraction(0.1)),
     ] {
         let mut settings = tester.settings().clone();
         settings.order_size = OrderSize::Cash(500.0);
@@ -804,6 +805,54 @@ fn selecting_a_strategy_applies_its_declared_order_size() {
         assert_eq!(tester.strategy(), "A host strategy");
         assert_eq!(tester.settings().order_size, size);
     }
+}
+
+/// A factory set later keeps the selection, its inputs and the settings while it builds the
+/// strategy and accepts the inputs; otherwise it selects the strategy of that name, or its first,
+/// at its defaults.
+#[test]
+fn a_new_factory_keeps_the_selection_it_still_offers() {
+    struct Host;
+    impl Strategy for Host {
+        fn on_bar(&mut self, _: &mut StrategyContext<'_>) {}
+    }
+    let mut tester = StrategyTester::new(StrategyFactory::new());
+    tester.select_strategy("Consecutive Up/Down").unwrap();
+    tester.set_input("length", InputValue::Length(5)).unwrap();
+    let mut settings = tester.settings().clone();
+    settings.initial_capital = 20_000.0;
+    tester.set_settings(settings.clone()).unwrap();
+    let mut hosted = StrategyFactory::new();
+    hosted.register("Host", || Box::new(Host));
+    tester.set_factory(hosted);
+    assert_eq!(tester.strategy(), "Consecutive Up/Down");
+    assert_eq!(tester.inputs[0].value, InputValue::Length(5));
+    assert_eq!(tester.settings(), &settings);
+    tester.select_strategy("Host").unwrap();
+
+    tester.set_factory(StrategyFactory::new());
+    let values = |inputs: &[StudyInput]| -> Vec<_> {
+        (inputs.iter())
+            .map(|input| (input.id.clone(), input.value.clone()))
+            .collect()
+    };
+    let first = StrategyFactory::new().list()[0].to_owned();
+    let defaults = StrategyFactory::new()
+        .create(&first)
+        .unwrap()
+        .study_inputs();
+    assert_eq!(tester.strategy(), first);
+    assert_eq!(values(&tester.inputs), values(&defaults));
+    assert_eq!(tester.settings(), &settings);
+
+    // A strategy of the same name that refuses the inputs is selected at its own.
+    tester.select_strategy("Consecutive Up/Down").unwrap();
+    tester.set_input("length", InputValue::Length(5)).unwrap();
+    let mut renamed = StrategyFactory::new();
+    renamed.register("Consecutive Up/Down", || Box::new(Host));
+    tester.set_factory(renamed);
+    assert_eq!(tester.strategy(), "Consecutive Up/Down");
+    assert!(tester.inputs.is_empty());
 }
 
 #[test]

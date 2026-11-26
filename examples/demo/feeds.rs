@@ -2,19 +2,19 @@
 //! stable, distinct content. A host answers these from its own data vendors.
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use egui_charts::data::{
     CalendarEvent, CalendarKind, CalendarQuery, FeedError, HistoryPage, HotlistEntry, HotlistQuery,
-    Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp,
+    Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerCondition,
     ScreenerQuery, ScreenerRow,
 };
 use egui_charts::model::{Bar, PostContent, Quote};
 use egui_charts::services::{
     ChatCapabilities, ChatEvent, ChatMessage, ChatUser, Chats, Events, NewChatRoom,
     NewChatRoomKind, Notification, NotificationTarget, Notifications, Posts, Profile, ProfileEvent,
-    ProfileId, Profiles, Quotes, ShareKind, ShareLink, ShareOffer, Sharing,
+    ProfileId, Profiles, Quotes, ShareAccess, ShareKind, ShareLink, ShareOffer, Sharing,
 };
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
@@ -321,6 +321,17 @@ pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
     stories
 }
 
+/// The story or highlight `id` names among those published on the hours before `now`, and
+/// whether it is a highlight.
+pub(super) fn story(id: &str, now: DateTime<Utc>) -> Option<(bool, NewsStory)> {
+    [false, true].into_iter().find_map(|highlights| {
+        stories(&[], highlights, now)
+            .into_iter()
+            .find(|story| story.id == id)
+            .map(|story| (highlights, story))
+    })
+}
+
 /// The synthetic headlines, or highlights, of `symbols`, or of every catalog symbol when it is
 /// empty, published on the hour before `now`.
 fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<NewsStory> {
@@ -350,8 +361,13 @@ fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<News
                             .replace("{symbol}", spec.symbol)
                     };
                     let age = TimeDelta::hours(i as i64 * 7);
-                    let mut story =
-                        NewsStory::new(format!("{}-{i}", spec.symbol), hour - age, fill(headline));
+                    // Highlights keep their own ids, so one id names one story.
+                    let id = if highlights {
+                        format!("{}-highlight-{i}", spec.symbol)
+                    } else {
+                        format!("{}-{i}", spec.symbol)
+                    };
+                    let mut story = NewsStory::new(id, hour - age, fill(headline));
                     story.source = "Demo Wire".into();
                     story.body = fill(body);
                     story.symbols = vec![spec.symbol.into()];
@@ -547,6 +563,14 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
     events
 }
 
+/// The distinct exchanges of the catalog, which the hotlists and the screener offer.
+pub(super) fn exchanges() -> BTreeSet<String> {
+    DemoSymbol::catalog()
+        .iter()
+        .map(|spec| spec.exchange.to_owned())
+        .collect()
+}
+
 /// The demo screener's column sets.
 pub(super) fn screener_sets() -> Vec<ScreenerColumnSet> {
     let column = ScreenerColumn::new;
@@ -561,7 +585,11 @@ pub(super) fn screener_sets() -> Vec<ScreenerColumnSet> {
         ),
         ScreenerColumnSet::new(
             "Valuation",
-            vec![column("price", "Price"), column("market_cap", "Mkt cap")],
+            vec![
+                column("price", "Price"),
+                column("market_cap", "Mkt cap"),
+                ScreenerColumn::text("exchange", "Exchange", exchanges()),
+            ],
         ),
     ]
 }
@@ -581,23 +609,39 @@ pub(super) fn screen(
             _ => return None,
         })
     };
-    let known = |column: &String| value(&DemoSymbol::catalog()[0], column).is_some();
+    // Text needs no quote, so it filters before the quotes load.
+    let text = |spec: &DemoSymbol, column: &str| (column == "exchange").then_some(spec.exchange);
+    let known = |column: &String| {
+        let spec = &DemoSymbol::catalog()[0];
+        value(spec, column).is_some() || text(spec, column).is_some()
+    };
     if let Some(filter) = query.filters.iter().find(|filter| !known(&filter.column)) {
         return Err(FeedError::InvalidData(format!(
             "no column {} to filter",
             filter.column
         )));
     }
-    let mut rows: Vec<(f64, ScreenerRow)> = DemoSymbol::catalog()
+    let mut rows: Vec<((f64, &str), ScreenerRow)> = DemoSymbol::catalog()
         .iter()
         .filter(|spec| {
             query.filters.iter().all(|filter| {
-                value(spec, &filter.column).is_some_and(|v| match filter.op {
-                    ScreenerOp::Above => v > filter.value,
-                    ScreenerOp::Below => v < filter.value,
-                    // A comparison added later matches no row.
+                let number = value(spec, &filter.column);
+                let text = text(spec, &filter.column);
+                match &filter.condition {
+                    ScreenerCondition::Above(x) => number.is_some_and(|v| v > *x),
+                    ScreenerCondition::Below(x) => number.is_some_and(|v| v < *x),
+                    ScreenerCondition::Between(from, to) => {
+                        number.is_some_and(|v| (*from..=*to).contains(&v))
+                    }
+                    ScreenerCondition::Is(values) => {
+                        text.is_some_and(|t| values.iter().any(|v| v == t))
+                    }
+                    ScreenerCondition::IsNot(values) => {
+                        text.is_some_and(|t| values.iter().all(|v| v != t))
+                    }
+                    // A condition added later matches no row.
                     _ => false,
-                })
+                }
             })
         })
         .map(|spec| {
@@ -609,19 +653,21 @@ pub(super) fn screen(
                     ("price", Some(v)) => format!("{v:.decimals$}"),
                     ("change_percent", Some(v)) => format!("{v:+.2}%"),
                     ("volume" | "market_cap", Some(v)) => compact(v),
+                    ("exchange", _) => spec.exchange.to_owned(),
                     _ => String::new(),
                 })
                 .collect();
-            let key = query
-                .sort_by
-                .as_deref()
-                .and_then(|column| value(spec, column))
-                .unwrap_or(0.0);
+            let key = query.sort_by.as_deref().map_or((0.0, ""), |column| {
+                (
+                    value(spec, column).unwrap_or(0.0),
+                    text(spec, column).unwrap_or(""),
+                )
+            });
             (key, ScreenerRow::new(spec.symbol, values))
         })
         .collect();
     if query.sort_by.is_some() {
-        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        rows.sort_by(|(a, _), (b, _)| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(b.1)));
         if query.descending {
             rows.reverse();
         }
@@ -1242,31 +1288,70 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
     Seasonality::new(years as u32, summaries)
 }
 
-/// Demo watchlist sharing, with placeholder links kept in memory until revoked.
+/// The demo's sharing of watchlists and layouts: a placeholder link per document, and layouts
+/// shared through the switch with a chosen access until it is turned off. A renamed layout stays
+/// shared under its new name.
 #[derive(Default)]
-pub(super) struct ListSharing(Mutex<(usize, HashSet<String>)>);
+pub(super) struct DemoSharing(Mutex<(usize, HashMap<(ShareKind, String), ShareAccess>)>);
 
-impl Sharing for ListSharing {
+impl Sharing for DemoSharing {
     fn offers(&self, kind: ShareKind) -> ShareOffer {
-        let mut offer = ShareOffer::new(kind == ShareKind::Watchlist, false);
-        offer.revoke = offer.link;
+        let mut offer = ShareOffer::new(true, false);
+        // Layouts share through the switch; a watchlist is shared by taking its link.
+        offer.switch = kind == ShareKind::Layout;
+        offer.revoke = !offer.switch;
         offer
     }
     fn shared(&self, kind: ShareKind, name: &str) -> bool {
-        kind == ShareKind::Watchlist && self.0.lock().unwrap().1.contains(name)
+        self.0
+            .lock()
+            .unwrap()
+            .1
+            .contains_key(&(kind, name.to_owned()))
     }
-    fn link(&self, _: ShareKind, name: &str, reply: Reply<ShareLink>) {
+    fn access(&self, kind: ShareKind, name: &str) -> ShareAccess {
+        let state = self.0.lock().unwrap();
+        state
+            .1
+            .get(&(kind, name.to_owned()))
+            .copied()
+            .unwrap_or_default()
+    }
+    fn share(&self, kind: ShareKind, name: &str, access: ShareAccess, reply: Reply<()>) {
+        self.0
+            .lock()
+            .unwrap()
+            .1
+            .insert((kind, name.to_owned()), access);
+        reply.send(Ok(()));
+    }
+    fn rename(&self, kind: ShareKind, name: &str, renamed: &str, reply: Reply<()>) {
+        let mut state = self.0.lock().unwrap();
+        if let Some(access) = state.1.remove(&(kind, name.to_owned())) {
+            state.1.insert((kind, renamed.to_owned()), access);
+        }
+        drop(state);
+        reply.send(Ok(()));
+    }
+    fn link(&self, kind: ShareKind, name: &str, reply: Reply<ShareLink>) {
         let mut state = self.0.lock().unwrap();
         state.0 += 1;
-        state.1.insert(name.to_owned());
+        let n = state.0;
+        let key = (kind, name.to_owned());
+        let (path, access) = if kind == ShareKind::Layout {
+            ("layout", state.1.get(&key).copied().unwrap_or_default())
+        } else {
+            // Taking a watchlist's link shares it view only.
+            ("watchlist", *state.1.entry(key).or_default())
+        };
         // There is no demo server; this reserved domain does not resolve.
         reply.send(Ok(ShareLink::new(
-            format!("https://demo.invalid/watchlist/{}", state.0),
-            false,
+            format!("https://demo.invalid/{path}/{n}"),
+            access == ShareAccess::ViewAndCopy,
         )));
     }
-    fn revoke(&self, _: ShareKind, name: &str, reply: Reply<()>) {
-        self.0.lock().unwrap().1.remove(name);
+    fn revoke(&self, kind: ShareKind, name: &str, reply: Reply<()>) {
+        self.0.lock().unwrap().1.remove(&(kind, name.to_owned()));
         reply.send(Ok(()));
     }
 }
@@ -1707,7 +1792,7 @@ mod tests {
         app.activate_chart_slot(0);
         app.live.set_paused(true);
         let now = app.live.now();
-        app.handle_layout_action(LayoutAction::CreateNew);
+        app.handle_layout_action(LayoutAction::CreateNew("Second".into()));
         app.switch_symbol("FOREXA");
         app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "STOCKA")]);
         app.watchlist.set_service(app.quotes.clone());
@@ -1816,6 +1901,90 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The demo's paper account offers trailing stops: one placed from the ticket's Trailing
+    /// tab starts 10 ticks behind the price and follows the price when it moves its way.
+    #[test]
+    fn a_trailing_stop_is_placed_from_the_ticket_and_follows_the_price() {
+        use egui_charts::model::{OrderRequest, OrderSide, OrderType};
+        let ctx = egui::Context::default();
+        let now = "2026-10-23T15:00:00Z".parse().unwrap();
+        let mut app = super::super::DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.switch_symbol("TOKENA");
+        app.trading.set_service(app.paper.clone());
+        app.trading.display.instant_orders = true;
+        demo_frame(&mut app, &ctx, vec![]);
+        let price = app.live.quote(now).unwrap().last;
+        app.paper.set_price("TOKENA", price);
+        let reference = LiveFeed::new("TOKENA", now);
+        super::super::tests::finish_feed(&reference);
+        reference.set_paused(false);
+        let (at, trigger) = (1..=40)
+            .find_map(|step| {
+                let at = now + TimeDelta::milliseconds(step * 100);
+                reference.advance(at);
+                let next = reference.quote(at)?.last;
+                (next != price).then_some((at, next))
+            })
+            .expect("the price moves");
+        // The side whose stop the move carries along: a sell trails a rise, a buy a fall.
+        let (side, s) = if trigger > price {
+            (OrderSide::Sell, 1.0)
+        } else {
+            (OrderSide::Buy, -1.0)
+        };
+        app.trading
+            .open_ticket(OrderRequest::new("TOKENA", side, 1.0, OrderType::Market));
+        let click = |app: &mut super::super::DemoApp, found: &dyn Fn(&str) -> bool| {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = demo_frame(app, &ctx, vec![]);
+            }
+            let point = texts
+                .iter()
+                .find(|(text, _)| found(text))
+                .expect("the control")
+                .1
+                .center();
+            let press = [true, false].map(|pressed| egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            demo_frame(app, &ctx, vec![egui::Event::PointerMoved(point)]);
+            demo_frame(app, &ctx, press.to_vec());
+        };
+        click(&mut app, &|text| text == "Trailing");
+        click(&mut app, &|text| text.contains("TOKENA TRAIL 10 ticks"));
+        // The working order's tick size and stop, as the account saves them.
+        let working = |app: &super::super::DemoApp| {
+            let saved = serde_json::to_value(app.paper.save()).unwrap();
+            let order = &saved["working"][0];
+            let ticks = &order["request"]["order_type"]["TrailingStop"]["distance"]["Ticks"];
+            assert_eq!(ticks["ticks"], 10, "{saved}");
+            let tick = ticks["tick_size"].as_f64().unwrap();
+            (tick, order["trailing_stop"].as_f64().expect("the stop"))
+        };
+        let near = |actual: f64, expected: f64, tick: f64| {
+            assert!(
+                (actual - expected).abs() < tick * 1e-6,
+                "{actual} != {expected}"
+            );
+        };
+        let (tick, stop) = working(&app);
+        near(stop, price - s * 10.0 * tick, tick);
+        super::super::tests::finish_feed(&app.live);
+        app.live.set_paused(false);
+        app.live.advance(at);
+        demo_frame(&mut app, &ctx, vec![]);
+        let (_, moved) = working(&app);
+        near(moved, trigger - s * 10.0 * tick, tick);
     }
 
     #[test]

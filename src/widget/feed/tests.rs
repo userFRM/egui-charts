@@ -15,6 +15,9 @@ mod rebinding;
 #[path = "partial_tests.rs"]
 mod partial;
 
+#[path = "footprint_demand_tests.rs"]
+mod footprint_demand;
+
 #[path = "checkpoint_tests.rs"]
 mod checkpoint;
 
@@ -661,6 +664,113 @@ fn chosen_precision_survives_interval_symbol_and_reload() {
     assert_eq!(shown(&chart), (Some(3), PrecisionMode::Default), "default");
 }
 
+/// An instrument quoted in thirty-seconds labels the price scale, the price tag and the legend
+/// in them, from a feed and from `set_instrument` alike, while decimals chosen in the chart
+/// settings win and "Default" follows the instrument again.
+#[test]
+fn instrument_price_fraction_labels_the_scale_and_legend() {
+    use crate::chart::rendering::axes::price_marks;
+    use crate::model::PriceFraction;
+    use crate::scales::PriceScaleMode;
+    use crate::widget::settings::{ChartSettingsState, PrecisionMode};
+    let start = "2024-03-15T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let minute = |index: i64| start + TimeDelta::minutes(index);
+    let bars = vec![
+        Bar::new(minute(0), 117.0, 117.0, 117.0, 117.0, 1.0),
+        Bar::new(minute(1), 117.0, 117.0, 117.0, 117.0, 1.0),
+        Bar::new(minute(2), 117.25, 117.75, 117.0, 117.5, 1.0),
+    ];
+    let instrument = Instrument::new("ZB")
+        .with_tick_size(1.0 / 32.0)
+        .with_price_fraction(PriceFraction::ThirtySeconds);
+    let texts = |chart: &mut Chart, frames: &mut Frames| -> Vec<String> {
+        frames.time += 1.0 / 60.0;
+        shapes(&frames.ctx, chart, frames.time, Vec::new())
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    let precision = |chart: &mut Chart, mode: PrecisionMode| {
+        let mut settings = ChartSettingsState::from_chart(chart);
+        settings.precision = mode;
+        settings.apply_to_chart(chart).unwrap();
+    };
+
+    let feed = Arc::new(Script::default());
+    let mut from_feed = fed(&feed, Some("ZB"));
+    let mut frames = Frames::new();
+    frames.run(&mut from_feed);
+    feed.resolve().send(Ok(instrument.clone()));
+    feed.page().send(page(bars.clone(), true));
+    frames.run(&mut from_feed);
+    frames.run(&mut from_feed);
+    let mut supplied = Chart::new(BarData::from_bars(bars));
+    supplied.set_instrument(Some(instrument));
+    let mut supplied_frames = Frames::new();
+    supplied_frames.run(&mut supplied);
+    supplied_frames.run(&mut supplied);
+
+    for (name, chart, frames) in [
+        ("feed", &mut from_feed, &mut frames),
+        ("set_instrument", &mut supplied, &mut supplied_frames),
+    ] {
+        let painted = texts(chart, frames);
+        assert!(
+            painted.iter().any(|text| text == "O 117'08"),
+            "{name}: {painted:?}"
+        );
+        assert!(
+            painted.iter().any(|text| text == "117'16"),
+            "{name}: {painted:?}"
+        );
+        let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+        let formatter = chart
+            .series_label_formatter(SeriesId::MAIN, PriceScaleMode::Normal)
+            .unwrap();
+        let marks = price_marks(&map, Some(formatter.as_ref()));
+        assert!(!marks.is_empty(), "{name}");
+        assert!(
+            marks
+                .iter()
+                .all(|mark| (mark.price * 32.0).fract() == 0.0 && mark.label.contains('\'')),
+            "{name}: {marks:?}"
+        );
+        assert!(
+            marks.iter().any(|mark| painted.contains(&mark.label)),
+            "{name}: {marks:?} {painted:?}"
+        );
+
+        precision(chart, PrecisionMode::Decimals3);
+        let painted = texts(chart, frames);
+        assert!(
+            painted.iter().any(|text| text == "O 117.250"),
+            "{name}: {painted:?}"
+        );
+        assert!(
+            painted.iter().any(|text| text == "117.500"),
+            "{name}: {painted:?}"
+        );
+        assert!(!painted.iter().any(|text| text == "O 117'08"), "{name}");
+
+        precision(chart, PrecisionMode::Default);
+        let painted = texts(chart, frames);
+        assert!(
+            painted.iter().any(|text| text == "O 117'08"),
+            "{name}: {painted:?}"
+        );
+    }
+
+    supplied.set_instrument(None);
+    let painted = texts(&mut supplied, &mut supplied_frames);
+    assert!(
+        !painted.iter().any(|text| text == "O 117'08"),
+        "{painted:?}"
+    );
+}
+
 /// `count` one-minute bars from 00:00 on 15 March 2024, closing at 100 plus their index.
 fn bars(count: usize) -> Vec<Bar> {
     let start = "2024-03-15T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -720,9 +830,14 @@ fn fed(feed: &Arc<Script>, symbol: Option<&str>) -> Chart {
 }
 
 fn prepared_chart() -> (Arc<Script>, Chart, Frames) {
+    prepared_chart_with_trade_policy(false)
+}
+
+fn prepared_chart_with_trade_policy(on_demand: bool) -> (Arc<Script>, Chart, Frames) {
     let feed = Arc::new(Script::default());
     feed.prepared_footprints.store(true, Ordering::Relaxed);
     let mut chart = fed(&feed, Some("A"));
+    chart.set_trade_history_on_demand(on_demand);
     chart.set_chart_type(ChartType::VolumeFootprint);
     let mut frames = Frames::new();
     frames.run(&mut chart);
@@ -761,6 +876,278 @@ fn prepared_view(chart: &Chart) -> FootprintView<'_> {
         .as_ref()
         .unwrap()
         .view()
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn prepared_rows_wait_for_real_executions_to_fill_trade_rate() {
+    let (feed, mut chart, mut frames) = prepared_chart_with_trade_policy(true);
+    let start = bars(1)[0].time;
+    let tape = vec![
+        Tick::new(start + TimeDelta::seconds(2), 100.0, 3.0, None),
+        Tick::new(start + TimeDelta::seconds(8), 100.0, 5.0, None),
+    ];
+    feed.footprints
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(prepared_page(
+            &tape,
+            start + TimeDelta::minutes(5),
+            true,
+        )));
+    frames.run(&mut chart);
+    assert_eq!(prepared_view(&chart).bar_at(start).unwrap().volume(), 8.0);
+    assert!(feed.trades.lock().unwrap().is_empty());
+
+    let factory = crate::studies::IndicatorFactory::new();
+    let rate = chart.add_indicator(factory.create("Trade Rate").unwrap());
+    let count = |chart: &Chart| {
+        let (_, study) = chart.indicators().find(|(id, _)| *id == rate).unwrap();
+        study.values().value(0, 0)
+    };
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(count(&chart), None);
+    assert_eq!(feed.trades.lock().unwrap().len(), 1);
+    chart.request_trade_history();
+    frames.run(&mut chart);
+    assert_eq!(feed.trades.lock().unwrap().len(), 1);
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(tape, true)));
+    for _ in 0..3 {
+        chart.request_trade_history();
+        frames.run(&mut chart);
+    }
+    assert_eq!(count(&chart), Some(2.0));
+    assert!(feed.trades.lock().unwrap().is_empty());
+}
+
+#[cfg(feature = "studies")]
+#[test]
+fn time_bar_trade_rate_requires_coverage_for_each_output() {
+    use crate::data::OrderFlowKind;
+    use crate::studies::OrderFlowStudy;
+
+    let start = "2025-01-01T00:01:00Z".parse::<DateTime<Utc>>().unwrap();
+    let fill = |ts, id| Tick::new(ts, 100.0, 1.0, None).with_id(id);
+    let candle = |open, volume| Bar::new(open, 100.0, 100.0, 100.0, 100.0, volume);
+    let ordinary = &[(5, 1), (15, 2)][..];
+    let tied_open = &[(0, 10), (0, 11), (30, 12)][..];
+    for (fills, held, complete) in [
+        (ordinary, 2, true),
+        (ordinary, TRADE_CAPACITY, false),
+        (ordinary, 2, false),
+        (tied_open, 2, false),
+        (tied_open, 3, true),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(Timeframe::Min1);
+        let rate = chart.add_indicator(Box::new(OrderFlowStudy::new(OrderFlowKind::TradeRate {
+            volume: false,
+            seconds: 60,
+            instant: 10,
+        })));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+
+        let capped = held == TRADE_CAPACITY;
+        let mut candles = vec![candle(start, fills.len() as f64)];
+        let mut tape = Vec::with_capacity(held);
+        let in_first = if capped { 1 } else { held };
+        tape.extend(
+            fills[fills.len() - in_first..]
+                .iter()
+                .map(|&(secs, id)| fill(start + TimeDelta::seconds(secs), id)),
+        );
+        let later = TRADE_CAPACITY - 1;
+        if capped {
+            let next = start + TimeDelta::minutes(1);
+            candles.push(candle(next, later as f64));
+            tape.extend(
+                (0..later).map(|i| fill(next + TimeDelta::microseconds(i as i64), i as u64 + 3)),
+            );
+        }
+        feed.page().send(page(candles, true));
+        let send = |tape, end| {
+            let reply = feed.trades.lock().unwrap().pop().unwrap();
+            reply.send(Ok(TradePage::new(tape, end)));
+        };
+        send(tape, complete);
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        let row = |chart: &Chart, i| {
+            let study = chart.indicators().find(|(id, _)| *id == rate).unwrap().1;
+            [0, 1, 2].map(|line| study.values().value(line, i))
+        };
+        let total = fills.len() as f64;
+        let full = [Some(total), Some(total / 60.0), Some(0.1)];
+        if complete {
+            assert_eq!(row(&chart, 0), full);
+        } else if capped {
+            assert_eq!(row(&chart, 0), [None; 3]);
+            assert_eq!(
+                row(&chart, 1),
+                [Some(later as f64), None, Some(later as f64 / 10.0)]
+            );
+            assert_eq!(chart.trades(SeriesId::MAIN).count(), TRADE_CAPACITY);
+        } else {
+            // The 10-second window is covered even if an opening fill is missing.
+            assert_eq!(row(&chart, 0), [None, None, Some(0.1)]);
+            if held == fills.len() {
+                // An empty terminal page proves these were the whole history.
+                send(Vec::new(), true);
+                for _ in 0..3 {
+                    frames.run(&mut chart);
+                }
+                assert_eq!(row(&chart, 0), full);
+            }
+        }
+    }
+}
+
+/// Hand counts on a 1-minute chart with candles at 00:01 and 00:02: buys of one lot at
+/// 00:01:05 (price 100), 00:01:15 (101) and 00:02:30 (102), each its own aggressor order. A
+/// page that does not reach the start of history leaves the 00:01 candle blank, and every
+/// window or sum that reaches it, until an empty terminal page proves it whole.
+#[cfg(feature = "studies")]
+#[test]
+fn time_bar_trade_studies_require_coverage_for_each_output() {
+    use crate::data::OrderFlowKind;
+    use crate::model::OrderSide::Buy;
+    use crate::studies::{Indicator, OrderFlowStudy};
+
+    let start = "2025-01-01T00:01:00Z".parse::<DateTime<Utc>>().unwrap();
+    let tape = || {
+        [(5, 100.0), (15, 101.0), (90, 102.0)]
+            .into_iter()
+            .zip(1..)
+            .map(|((secs, price), id)| {
+                Tick::new(start + TimeDelta::seconds(secs), price, 1.0, Some(Buy))
+                    .with_id(id)
+                    .with_aggressor_order_id(id)
+            })
+            .collect::<Vec<_>>()
+    };
+    type Rows = [[Option<f64>; 3]; 2];
+    let n = None;
+    let s = Some;
+    // Price Range over 90 seconds, read from its source: at 00:02:30 the window opens at 00:01:00.
+    let range_kind = OrderFlowKind::PriceRange { seconds: 90 };
+    let range_complete: Rows = [[s(1.0), s(101.0), s(100.0)], [s(2.0), s(102.0), s(100.0)]];
+    let range_partial: Rows = [[n; 3], [n; 3]];
+    for complete in [true, false] {
+        // Each study, its two candles complete, and the same before a terminal page.
+        let studies: [(OrderFlowStudy, Rows, Rows); 6] = [
+            (
+                OrderFlowStudy::new(OrderFlowKind::AggressorRate {
+                    seconds: 60,
+                    instant: 10,
+                }),
+                [
+                    [s(2.0), s(2.0 / 60.0), s(0.1)],
+                    [s(1.0), s(1.0 / 60.0), s(0.1)],
+                ],
+                // The 10-second window from 00:01:05 holds every execution after the page start.
+                [[n, n, s(0.1)], [s(1.0), s(1.0 / 60.0), s(0.1)]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::LevelsExecuted {
+                    seconds: 0,
+                    reversal: false,
+                }),
+                [[s(2.0), s(0.0), s(2.0)], [s(1.0), s(0.0), s(1.0)]],
+                [[n, n, n], [s(1.0), s(0.0), s(1.0)]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::SizeDelta {
+                    ranges: [[0.0, 10.0], [10.0, 100.0], [100.0, f64::MAX]],
+                }),
+                [[s(2.0), s(0.0), s(0.0)], [s(1.0), s(0.0), s(0.0)]],
+                [[n, n, n], [s(1.0), s(0.0), s(0.0)]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: 2 }),
+                [[n, n, n], [s(3.0), s(3.0), n]],
+                [[n, n, n], [n, n, n]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+                    min: 0.0,
+                    max: f64::MAX,
+                }),
+                [[s(2.0), n, n], [s(3.0), n, n]],
+                // The sum starts at the oldest candle with a value.
+                [[n, n, n], [s(1.0), n, n]],
+            ),
+            (
+                OrderFlowStudy::execution_delta(false),
+                [[s(2.0), s(2.0), n], [s(1.0), s(1.0), n]],
+                [[n, n, n], [s(1.0), s(1.0), n]],
+            ),
+        ];
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(Timeframe::Min1);
+        let ids: Vec<_> = (studies.iter())
+            .map(|(study, ..)| chart.add_indicator(Box::new(study.clone())))
+            .collect();
+        let range = chart.add_indicator(Box::new(OrderFlowStudy::new(range_kind)));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        let candle = |open, volume| Bar::new(open, 100.0, 100.0, 100.0, 100.0, volume);
+        feed.page().send(page(
+            vec![
+                candle(start, 2.0),
+                candle(start + TimeDelta::minutes(1), 1.0),
+            ],
+            true,
+        ));
+        let send = |tape, end| {
+            let reply = feed.trades.lock().unwrap().pop().unwrap();
+            reply.send(Ok(TradePage::new(tape, end)));
+        };
+        send(tape(), complete);
+        // A replaced series gets one full recompute per frame.
+        for _ in 0..10 {
+            frames.run(&mut chart);
+        }
+        let check = |chart: &Chart, done: bool, when: &str| {
+            for ((study, whole, partial), id) in studies.iter().zip(&ids) {
+                let shown = chart.indicators().find(|(i, _)| i == id).unwrap().1;
+                let rows = [0, 1].map(|i| [0, 1, 2].map(|line| shown.values().value(line, i)));
+                let want = if done { whole } else { partial };
+                assert_eq!(&rows, want, "{} {when}", study.name());
+            }
+            let shown = chart.indicators().find(|(i, _)| *i == range).unwrap().1;
+            let values = shown.order_flow_inputs()[0].values();
+            let rows = [0, 1].map(|i| {
+                values[&(start + TimeDelta::minutes(i))].map(|v| v.is_finite().then_some(v))
+            });
+            let want = if done { range_complete } else { range_partial };
+            assert_eq!(rows, want, "Price Range {when}");
+        };
+        check(&chart, complete, "after the first page");
+        if !complete {
+            send(Vec::new(), true);
+            for _ in 0..10 {
+                frames.run(&mut chart);
+            }
+            check(&chart, true, "after the terminal page");
+        }
+    }
 }
 
 fn missing_history_page(
@@ -3314,6 +3701,7 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
             let instrument =
                 || Instrument::new(if canonical { "EX:A" } else { "A" }).with_tick_size(1.0);
             let mut chart = fed(&feed, Some("A"));
+            chart.set_trade_history_on_demand(true);
             let timeframe = interval.parse().unwrap();
             chart.set_timeframe(timeframe);
             chart.set_chart_type(chart_type);
@@ -6003,6 +6391,47 @@ fn footprint_draws_candles_from_the_first_execution_at_the_minimum_spacing() {
     }
 }
 
+#[test]
+fn switching_from_candles_to_range_requests_deferred_executions() {
+    use crate::model::RangeBarSource::{Executions, OhlcApproximation};
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_trade_history_on_demand(true);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve().send(Ok(Instrument::new("A")));
+    let mut history = bars(1);
+    let start = history[0].time;
+    (history[0].high, history[0].low) = (104.0, 96.0);
+    feed.page().send(page(history, true));
+    frames.run(&mut chart);
+    assert!(feed.trades.lock().unwrap().is_empty());
+
+    chart.set_chart_type(crate::model::ChartType::Range);
+    chart.set_chart_type_params(crate::model::ChartTypeParams {
+        range_size: 4.0,
+        ..Default::default()
+    });
+    frames.run(&mut chart);
+    assert_eq!(chart.range_bar_source(), Some(OhlcApproximation));
+    let tape = [100.0, 96.0, 104.0, 100.0]
+        .into_iter()
+        .enumerate()
+        .map(|(i, price)| Tick::new(start + TimeDelta::seconds(i as i64), price, 1.0, None))
+        .collect();
+    let reply = feed
+        .trades
+        .lock()
+        .unwrap()
+        .pop()
+        .expect("Range needs trades");
+    reply.send(Ok(TradePage::new(tape, true)));
+    frames.run(&mut chart);
+    assert_eq!(chart.range_bar_source(), Some(Executions));
+    let closes: Vec<_> = chart.state.shown().iter().map(|bar| bar.close).collect();
+    assert_eq!(closes, [96.0, 100.0, 104.0, 100.0]);
+}
+
 /// Range bars follow the order of the supplied executions, not only the OHLC of the bars they
 /// fall in, and the OHLC approximation stands in while the chart holds none.
 #[test]
@@ -6828,17 +7257,20 @@ fn trading_hours_reload_history_paging_and_subscription_together() {
             );
         }
         let older = serde_json::from_value(older).unwrap();
-        for (snapshot, hours) in [(saved, (true, true)), (older, (true, false))] {
+        // A new chart shades overnight bars #D500F9 at 8% opacity, alpha 20, premultiplied; a
+        // config saved without the colour follows the theme.
+        let purple = egui::Color32::from_rgba_premultiplied(17, 0, 20, 20);
+        for (snapshot, hours, color) in [
+            (saved, (true, true), purple),
+            (older, (true, false), egui::Color32::PLACEHOLDER),
+        ] {
             let mut restored = fed(&Arc::new(Script::default()), Some("A"));
             restored.restore(&snapshot).unwrap();
             assert_eq!(
                 (restored.extended_hours(), restored.overnight_hours()),
                 hours
             );
-            assert_eq!(
-                restored.config().overnight_hours_color,
-                egui::Color32::PLACEHOLDER
-            );
+            assert_eq!(restored.config().overnight_hours_color, color);
         }
     }
 }
@@ -9054,6 +9486,7 @@ fn market_replay_order_flow_studies_follow_the_cursor() {
     let mut chart = Chart::new(BarData::new());
     chart.set_symbol("A");
     chart.set_timeframe(Timeframe::Min1);
+    chart.set_trade_history_on_demand(true);
     chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
     chart.set_market_replay(Some(driver.clone()));
     let mut frames = Frames::new();
@@ -9171,11 +9604,11 @@ fn leaving_a_market_replay_restores_the_live_executions() {
 }
 
 /// Answers every request at once with bars closing at the symbol's base plus their index:
-/// AAPL from 100, MSFT from 40. It records the history requests.
+/// AAPL from 100, MSFT from 40. It records the history requests and subscriptions.
 #[derive(Default)]
 struct Instant {
     requests: Mutex<Vec<HistoryRequest>>,
-    subscriptions: Mutex<Vec<(String, crate::data::Sink)>>,
+    subscriptions: Mutex<Vec<Subscription>>,
     stopped: Mutex<Vec<SubscriptionId>>,
 }
 
@@ -9200,10 +9633,7 @@ impl Datafeed for Instant {
         reply.send(page(bars, true));
     }
     fn subscribe(&self, subscription: Subscription) {
-        self.subscriptions
-            .lock()
-            .unwrap()
-            .push((subscription.symbol, subscription.sink));
+        self.subscriptions.lock().unwrap().push(subscription);
     }
     fn unsubscribe(&self, id: SubscriptionId) {
         self.stopped.lock().unwrap().push(id);
@@ -9293,9 +9723,9 @@ fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
         .unwrap()
         .iter()
         .rev()
-        .find(|(symbol, sink)| symbol == "MSFT" && sink.is_active())
+        .find(|subscription| subscription.symbol == "MSFT" && subscription.sink.is_active())
         .unwrap()
-        .1
+        .sink
         .clone();
     let time = chart.bars(msft).last().unwrap().time;
     sink.push_bar(Bar::new(time, 50.0, 50.0, 50.0, 50.0, 1.0));
@@ -9515,8 +9945,8 @@ fn undo_of_a_removed_fed_series_keeps_its_bars() {
     }
 }
 
-/// Dividend adjustment is asked of the feed for the main series and the comparisons, and
-/// changing it loads them again.
+/// Dividend adjustment is asked of the feed in the history and live subscriptions of the main
+/// series and the comparisons, and changing it loads and subscribes them again.
 #[test]
 fn dividend_adjustment_is_requested_for_the_chart_and_its_comparisons() {
     let feed = Arc::new(Instant::default());
@@ -9543,6 +9973,17 @@ fn dividend_adjustment_is_requested_for_the_chart_and_its_comparisons() {
         asked.sort();
         assert_eq!(
             asked,
+            [("AAPL".into(), adjusted), ("MSFT".into(), adjusted)],
+            "adjusted {adjusted}"
+        );
+        let mut subscribed: Vec<_> = std::mem::take(&mut *feed.subscriptions.lock().unwrap())
+            .into_iter()
+            .map(|subscription| (subscription.symbol, subscription.adjusted))
+            .collect();
+        subscribed.sort();
+        subscribed.dedup();
+        assert_eq!(
+            subscribed,
             [("AAPL".into(), adjusted), ("MSFT".into(), adjusted)],
             "adjusted {adjusted}"
         );

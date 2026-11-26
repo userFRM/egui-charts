@@ -183,6 +183,7 @@ impl ChartSettingsState {
                 postmarket_color: config.postmarket_color,
                 shade_premarket: config.shade_premarket,
                 shade_postmarket: config.shade_postmarket,
+                shade_overnight: config.shade_overnight,
                 overnight_hours_color: config.overnight_hours_color,
             }),
             order_flow: super::OrderFlowSettings {
@@ -518,7 +519,9 @@ impl ChartSettingsState {
     /// choices that hold `None`, as in settings saved before they existed, keep the chart's,
     /// while the optional colours apply as they are: `None` gives the last price its candle
     /// direction colour, study values their plot colours and pane separators the theme's grid
-    /// line colour.
+    /// line colour. A changed TPO period length, row size or profile period drops the TPO merges
+    /// and splits carried over from the chart, which were made for the old values;
+    /// [`Chart::set_chart_type_params`] sets them as given.
     pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), ChartSettingsError> {
         let timezone = self.validate()?;
         if let Some(params) = &self.chart_type_params {
@@ -528,7 +531,9 @@ impl ChartSettingsState {
                     reason: error,
                 });
             }
-            chart.apply_chart_type_params(params.clone());
+            let mut params = params.clone();
+            params.drop_stale_tpo_edits(chart.chart_type_params());
+            chart.apply_chart_type_params(params);
         }
         if let Some(source) = self.price_source {
             chart.config_mut().price_source = source;
@@ -564,6 +569,7 @@ impl ChartSettingsState {
             config.postmarket_color = background.postmarket_color;
             config.shade_premarket = background.shade_premarket;
             config.shade_postmarket = background.shade_postmarket;
+            config.shade_overnight = background.shade_overnight;
             config.overnight_hours_color = background.overnight_hours_color;
         }
         chart.chart_options.time_scale.timezone = timezone;

@@ -277,10 +277,13 @@ impl TopToolbar {
     }
 
     /// Shows or hides the named top-toolbar control, including its popup.
+    /// ExportData and Snapshot also show or hide their rows in `layout_menu`; see
+    /// [`LayoutMenu::set_control_visible`].
     /// Controls for other components are ignored. This controls UI visibility; configure chart
     /// behavior and shortcut bindings separately through `ChartOptions` and `ShortcutMap`.
     pub fn set_control_visible(&mut self, control: Control, visible: bool) {
         crate::ui::app_state::set_control_visible(&mut self.host_hidden, control, visible);
+        self.layout_menu.set_control_visible(control, visible);
     }
 
     /// Whether the host left `slot` visible. Trade also needs a broker.
@@ -1623,7 +1626,7 @@ mod tests {
                 (
                     S::Save,
                     "Create new layout",
-                    TopToolbarAction::Layout(LayoutAction::CreateNew),
+                    TopToolbarAction::Layout(LayoutAction::CreateNew("Desk".into())),
                 ),
                 (
                     S::Save,
@@ -1865,7 +1868,11 @@ mod tests {
                 let (mut action, _, _) = frame(vec![click(pos, false)]);
                 if matches!(
                     expected,
-                    TopToolbarAction::Layout(LayoutAction::Rename(_, _) | LayoutAction::SaveAs(_))
+                    TopToolbarAction::Layout(
+                        LayoutAction::Rename(_, _)
+                            | LayoutAction::SaveAs(_)
+                            | LayoutAction::CreateNew(_)
+                    )
                 ) {
                     let (_, _, labels) = frame(vec![]);
                     assert!(
@@ -2043,6 +2050,57 @@ mod tests {
                     assert!(labels.iter().any(|label| label == hidden));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn hidden_export_controls_leave_the_layout_menu() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (control, hidden, kept) in [
+            (
+                Control::ExportData,
+                "Download chart data",
+                "Download chart image",
+            ),
+            (
+                Control::Snapshot,
+                "Download chart image",
+                "Download chart data",
+            ),
+        ] {
+            let mut toolbar = TopToolbar::new();
+            toolbar.set_control_visible(control, false);
+            let mut harness = Harness::builder()
+                .with_size(vec2(400.0, 600.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, toolbar: &mut TopToolbar| {
+                        toolbar.show_control(
+                            ui,
+                            S::LayoutName,
+                            "SAMPLE",
+                            &mut TopToolbarAction::None,
+                        );
+                    },
+                    toolbar,
+                );
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::Button, "Named layouts")
+                .click();
+            harness.run();
+            // The menu is open: the other export row is there.
+            harness.get_by_role_and_label(Role::MenuItem, kept);
+            assert!(
+                harness
+                    .query_by_role_and_label(Role::MenuItem, hidden)
+                    .is_none(),
+                "{control:?} hidden, {hidden} still listed"
+            );
+            harness.state_mut().set_control_visible(control, true);
+            harness.run();
+            harness.get_by_role_and_label(Role::MenuItem, hidden);
         }
     }
 }

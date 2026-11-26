@@ -111,8 +111,11 @@ impl Chart {
     /// series' scale wins when displayed, otherwise the nearest named scale at that edge,
     /// then the first named scale. Its options and manual range are retained. Series keep
     /// their data and numeric formats; undo restores the previous assignments and ranges.
-    /// Overlay assignments stay unlabelled. Returns `false` without changes for an unknown
-    /// pane or a study that refuses the new assignment.
+    /// Overlay assignments stay unlabelled. A study that does not permit
+    /// [user edits](Self::set_indicator_user_edit_enabled) keeps its scale;
+    /// [`set_indicator_scale`](Self::set_indicator_scale) still moves it. Returns `false`
+    /// without changes for an unknown pane or an editable study that refuses the new
+    /// assignment.
     pub fn merge_pane_scales(&mut self, pane: PaneId, side: crate::model::AxisSide) -> bool {
         use crate::studies::StudyScale;
         use crate::widget::PaneScale;
@@ -151,7 +154,8 @@ impl Chart {
             .iter()
             .filter_map(|id| self.indicators().find(|(member, _)| member == id))
             .filter(|(_, study)| {
-                study.scale() != StudyScale::Shared(target)
+                study.user_edit_enabled()
+                    && study.scale() != StudyScale::Shared(target)
                     && !(study.scale() == StudyScale::Main
                         && target == self.main_series_scale
                         && pane == self.main_series_pane())
@@ -626,13 +630,36 @@ impl Chart {
     /// The main series' last-value colour for the bar at `index` of `bars`: the price line
     /// colour, the bar's own colour, or its direction. Columns, hollow candles, and candles,
     /// volume candles and OHLC bars coloured by the previous close, take the direction their
-    /// painters give the bar.
+    /// painters give the bar; Columns take their column colour at full opacity.
     pub(in crate::widget) fn main_value_color(&self, bars: &[Bar], index: usize) -> Color32 {
         let styles = &self.chart_type_params.styles;
         let (up, down) = match self.chart_type {
             ChartType::HighLow => {
                 let color = styles.high_low.bar_color;
                 (color, color)
+            }
+            // Columns default to half opacity, which would leave their tag see-through and its
+            // text contrast computed against a dark premultiplied colour; tag and line take the
+            // column colour at full opacity. A fully transparent colour has no opaque form.
+            ChartType::Columns => {
+                let style = &styles.columns;
+                let opaque = |color: Color32| {
+                    if color.a() == 0 {
+                        color
+                    } else {
+                        color.to_opaque()
+                    }
+                };
+                (
+                    opaque(crate::model::or_candle(
+                        style.up_color,
+                        self.config.bullish_color,
+                    )),
+                    opaque(crate::model::or_candle(
+                        style.down_color,
+                        self.config.bearish_color,
+                    )),
+                )
             }
             _ => self.main_body_colors(),
         };

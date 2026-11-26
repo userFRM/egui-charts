@@ -129,10 +129,22 @@ impl SymbolTab {
                     ui.end_row();
                     Self::line_style(ui, &mut styles.baseline.above, "above_style");
                     Self::fill_row(ui, "Above fill", &mut styles.baseline.above_fill);
+                    Self::fill_at_base_row(
+                        ui,
+                        "Above fill at base",
+                        &mut styles.baseline.above_fill_at_base,
+                        styles.baseline.above_fill,
+                    );
                     ui.label(l10n::text(ui.ctx(), "Below base"));
                     ui.end_row();
                     Self::line_style(ui, &mut styles.baseline.below, "below_style");
                     Self::fill_row(ui, "Below fill", &mut styles.baseline.below_fill);
+                    Self::fill_at_base_row(
+                        ui,
+                        "Below fill at base",
+                        &mut styles.baseline.below_fill_at_base,
+                        styles.baseline.below_fill,
+                    );
                     Self::marker_radius_row(ui, &mut styles.baseline.marker_radius);
                 }
                 ChartType::HighLow => Self::high_low(ui, &mut styles.high_low),
@@ -164,6 +176,18 @@ impl SymbolTab {
                 ChartType::PointAndFigure => {
                     let candles = [settings.bullish_color, settings.bearish_color];
                     let style = &mut styles.point_figure;
+                    Self::own_color_rows(
+                        ui,
+                        [
+                            ("Rising column colour", &mut style.up_color),
+                            ("Falling column colour", &mut style.down_color),
+                        ],
+                        candles,
+                    );
+                }
+                ChartType::Columns => {
+                    let candles = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut styles.columns;
                     Self::own_color_rows(
                         ui,
                         [
@@ -725,7 +749,7 @@ impl SymbolTab {
                 profile.width = percent / 100.0;
             }
             ui.end_row();
-            Self::profile_session(ui, &mut profile.session);
+            Self::profile_session(ui, "Session", &mut profile.session);
             Self::profile_rows(ui, &mut profile.rows);
             Self::value_area(ui, &mut profile.value_area);
             let colors = SessionColors::new(&TradeProfileSettings::default(), &ui.active_theme());
@@ -825,8 +849,8 @@ impl SymbolTab {
 
     /// Session hours: the chart's calendar, the instrument's regular or extended windows, its
     /// pre-market or post-market alone or each segment apart, or up to five custom windows.
-    fn profile_session(ui: &mut Ui, session: &mut ProfileSession) {
-        let label = ui.label(l10n::text(ui.ctx(), "Session"));
+    fn profile_session(ui: &mut Ui, name: &str, session: &mut ProfileSession) {
+        let label = ui.label(l10n::text(ui.ctx(), name));
         let custom = || ProfileSession::Custom(crate::model::CustomProfileSessions::default());
         let choice = |session: &ProfileSession| match session {
             ProfileSession::Chart => 0,
@@ -1200,13 +1224,15 @@ impl SymbolTab {
                 )
                 .labelled_by(label.id);
                 ui.end_row();
-                let label = ui.label(l10n::text(ui.ctx(), "Split extended hours"));
-                ui.add_enabled(
-                    params.tpo_profile_period == TPOProfilePeriod::Session,
-                    egui::Checkbox::without_text(&mut params.tpo_split_sessions),
-                )
-                .labelled_by(label.id);
-                ui.end_row();
+                // One-day profiles choose their hours as session volume profiles do.
+                if params.tpo_profile_period == TPOProfilePeriod::Session {
+                    let mut hours = params.tpo_hours();
+                    Self::profile_session(ui, "Hours", &mut hours);
+                    if hours != params.tpo_hours() {
+                        params.tpo_session = hours;
+                        params.tpo_split_sessions = false;
+                    }
+                }
                 let label = ui.label(l10n::text(ui.ctx(), "Single prints"));
                 ui.checkbox(&mut params.tpo_single_prints, "")
                     .labelled_by(label.id);
@@ -1252,6 +1278,25 @@ impl SymbolTab {
                 let label = ui.label(l10n::text(ui.ctx(), "Statistics"));
                 ui.checkbox(&mut params.tpo_statistics, "")
                     .labelled_by(label.id);
+                ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Statistics rows"));
+                ui.label_inputs_by(label.id, |ui| {
+                    // One switch a line: the longer names would wrap into each other.
+                    ui.vertical(|ui| {
+                        let enabled = params.tpo_statistics;
+                        for (_, name, shown) in params.tpo_statistics_rows.switches() {
+                            let name = l10n::text(ui.ctx(), name);
+                            // A name of its own: the Labels row has a `POC` switch too.
+                            let row = l10n::format_text(
+                                ui.ctx(),
+                                "Statistics: {row}",
+                                &[("row", name.clone())],
+                            );
+                            ui.add_enabled(enabled, egui::Checkbox::new(shown, name))
+                                .accessible_name(row);
+                        }
+                    })
+                });
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Labels"));
                 ui.label_inputs_by(label.id, |ui| {
@@ -1504,16 +1549,19 @@ impl SymbolTab {
         ui.end_row();
     }
 
+    /// A fill at the base that, while `None`, shows `edge`, the colour of a flat fill, and becomes
+    /// a gradient endpoint once picked.
+    fn fill_at_base_row(ui: &mut Ui, label: &str, color: &mut Option<Color32>, edge: Color32) {
+        ui.label(l10n::text(ui.ctx(), label));
+        let mut shown = color.unwrap_or(edge);
+        if Self::color_picker(ui, &mut shown) {
+            *color = Some(shown);
+        }
+        ui.end_row();
+    }
+
     fn candle_colors_section(ui: &mut Ui, settings: &mut SeriesSettings) {
-        let columns = settings.chart_type == ChartType::Columns;
-        ui.label(l10n::text(
-            ui.ctx(),
-            if columns {
-                "Up and down colors"
-            } else {
-                "Body"
-            },
-        ));
+        ui.label(l10n::text(ui.ctx(), "Body"));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             Self::color_picker(ui, &mut settings.bullish_color);
@@ -1521,8 +1569,7 @@ impl SymbolTab {
         });
         ui.end_row();
 
-        // A column is one filled rectangle, so it has no border or wick.
-        if settings.chart_type.is_time_independent() || columns {
+        if settings.chart_type.is_time_independent() {
             return;
         }
 

@@ -303,6 +303,19 @@ impl Drawing {
         }
     }
 
+    /// Shown bars whose executed rows this drawing reads.
+    pub(crate) fn execution_span<'b>(&self, bars: &'b [Bar]) -> Option<&'b [Bar]> {
+        if !self.reads_executions() {
+            return None;
+        }
+        let (_, span) = if self.tool_type == DrawingToolType::AnchoredVWAP {
+            bars_between(bars, self.chart_points.first()?.bar_idx, f32::INFINITY)?
+        } else {
+            self.profile_span(bars)?
+        };
+        Some(span)
+    }
+
     /// The suggested history this visible profile reads, with the first open of its span.
     pub(crate) fn profile_history(
         &self,
@@ -495,9 +508,7 @@ impl Drawing {
             && let Some(estimate) = &*profile
         {
             let mut estimate = estimate.clone();
-            for (up, down) in estimate.up.iter_mut().zip(&mut estimate.down) {
-                *down += std::mem::take(up);
-            }
+            estimate.count_single_bar(bar);
             return Rc::new(Some(estimate));
         }
         profile
@@ -854,18 +865,15 @@ fn close(open: DateTime<Utc>, timeframe: Timeframe) -> DateTime<Utc> {
         .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
-/// Suggested interval for a span measured from its first open through its last close.
+/// Suggested interval for a span from its first open through its last close, by length and dates.
 fn finer_interval(
     span: &[Bar],
     timeframe: Timeframe,
     resolutions: &[ProfileResolution],
 ) -> Option<Timeframe> {
     let (first, last) = (span.first()?, span.last()?);
-    ProfileResolution::suggested(
-        resolutions,
-        timeframe,
-        close(last.time, timeframe) - first.time,
-    )
+    let end = close(last.time, timeframe);
+    ProfileResolution::suggested(resolutions, timeframe, end - first.time, (first.time, end))
 }
 
 /// Replaces chart bars by the suggested finer bars inside them, when any are held in the span.
@@ -2956,16 +2964,29 @@ mod tests {
                 profile.poc_and_value_area(0.7),
             )
         };
+        let days =
+            |days| ProfileResolution::new(Timeframe::Min1, Some(chrono::TimeDelta::days(days)));
+        // One-minute bars held from the second day on only.
+        let later = days(10).with_history(Some(daily[1].time), None);
         // Whole daily bars have volume 100 each. The first day has 60 + 40 finer volume,
         // the second 100, and the new bar of day 3 contributes 50 in place of its daily 100.
-        for (name, anchored, last, count, max_days, executed, inputs, total) in [
-            ("fixed", false, 1.0, 3, 10, false, fine[..3].to_vec(), 200.0),
+        for (name, anchored, last, count, hint, executed, inputs, total) in [
+            (
+                "fixed",
+                false,
+                1.0,
+                3,
+                days(10),
+                false,
+                fine[..3].to_vec(),
+                200.0,
+            ),
             (
                 "partial",
                 false,
                 2.0,
                 3,
-                10,
+                days(10),
                 false,
                 vec![
                     fine[0].clone(),
@@ -2980,7 +3001,7 @@ mod tests {
                 true,
                 2.0,
                 3,
-                10,
+                days(10),
                 false,
                 vec![fine[2].clone(), daily[2].clone()],
                 200.0,
@@ -2990,7 +3011,17 @@ mod tests {
                 true,
                 2.0,
                 4,
-                10,
+                days(10),
+                false,
+                fine[2..].to_vec(),
+                150.0,
+            ),
+            (
+                "anchored in history",
+                true,
+                2.0,
+                4,
+                later,
                 false,
                 fine[2..].to_vec(),
                 150.0,
@@ -3000,18 +3031,24 @@ mod tests {
                 false,
                 1.0,
                 3,
-                1,
+                days(1),
                 false,
                 daily[..2].to_vec(),
                 200.0,
             ),
-            ("executions", false, 1.0, 3, 10, true, Vec::new(), 5.0),
+            (
+                "history starts later",
+                false,
+                1.0,
+                3,
+                later,
+                false,
+                daily[..2].to_vec(),
+                200.0,
+            ),
+            ("executions", false, 1.0, 3, days(10), true, Vec::new(), 5.0),
         ] {
-            let instrument =
-                Instrument::new("A").with_profile_resolutions([ProfileResolution::new(
-                    Timeframe::Min1,
-                    Some(chrono::TimeDelta::days(max_days)),
-                )]);
+            let instrument = Instrument::new("A").with_profile_resolutions([hint]);
             let history = [StudyData {
                 request: StudyDataRequest {
                     symbol: "A".into(),

@@ -87,6 +87,9 @@ pub use color::ColorType;
 pub use date_range::DateRange;
 #[cfg(any(feature = "studies", feature = "drawings", feature = "strategies"))]
 pub(crate) use instrument::same_currency;
+#[cfg(feature = "ui")]
+pub(crate) use instrument::tick_in_tiers;
+pub(crate) use instrument::valid_tick_tiers;
 pub use instrument::{
     DataStatus, FeedService, IdentifierKind, Instrument, OverrideWindow, ProfileResolution,
     Session, SessionOverride, SessionWindow, SymbolType,
@@ -143,14 +146,18 @@ pub use timezone::{TimezoneId, TimezoneOffset};
 pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLabels, TPOLetter,
-    TPOProfile, TPOProfilePeriod, derive_tick_size, to_tpo_profiles,
+    TPOProfile, TPOProfilePeriod, TPOStatisticsRows, derive_tick_size, to_tpo_profiles,
 };
 pub(crate) use trading::rounding_tolerance;
+#[cfg(feature = "widget")]
+pub(crate) use trading::settled;
 pub use trading::{
     Account, BalanceChange, Capabilities, ClosedPosition, Execution, JournalEntry, Order, OrderId,
     OrderPreview, OrderRequest, OrderSide, OrderStatus, OrderType, Position, PositionBracket,
-    TakeProfitLevel, TimeInForce, TradingRules,
+    TakeProfitLevel, TimeInForce, TradingRules, TrailDistance,
 };
+#[cfg(feature = "strategies")]
+pub(crate) use trading::{trailed, trailing_stop};
 
 #[cfg(feature = "ui")]
 pub(crate) use watchlist::valid_symbol;

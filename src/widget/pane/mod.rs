@@ -557,9 +557,10 @@ impl Chart {
     }
 
     /// Removes a pane, its series and studies, with the studies that read their output as
-    /// [`remove_series`](Self::remove_series) removes them, its markers, price lines and drawings,
-    /// including locked drawings, and cancels a drawing being placed in it. Attached primitives
-    /// detach on the next frame. The original price pane can be removed; its retained data still
+    /// [`remove_series`](Self::remove_series) removes them, its markers, price lines and unfiltered
+    /// drawings, including locked ones, and cancels a drawing being placed in it. Filtered shared
+    /// drawings keep their stored study pane. Attached primitives detach on the next frame.
+    /// The original price pane can be removed; its retained data still
     /// supplies the shared horizontal mapping and study inputs.
     /// A main series removed with it stays out of the layout and is not drawn, while its bars
     /// keep taking [`set_data`](Self::set_data), [`update`](Self::update) and the feed.
@@ -580,10 +581,10 @@ impl Chart {
         let members = self.pane_series(pane);
         #[cfg(feature = "drawings")]
         {
+            self.keep_filtered_pane(pane, None);
             let drawings: Vec<_> = self
                 .drawings
-                .drawings
-                .iter()
+                .unfiltered_drawings()
                 .filter(|drawing| {
                     let owner = match drawing.pane {
                         None => Some(self.main_series_pane()),
@@ -1164,8 +1165,7 @@ impl Chart {
             .collect();
         let drawings: Vec<_> = self
             .drawings
-            .drawings
-            .iter()
+            .unfiltered_drawings()
             .filter_map(|d| {
                 let pane = self.layer_pane(d);
                 let (_, items) = panes.iter().find(|(id, _)| *id == pane)?;
@@ -1220,10 +1220,11 @@ impl Chart {
     /// Moves drawing `id` in the draw order of its pane, which holds the pane's series and studies
     /// as well as its drawings: one step over the drawing, series or study drawn just over or
     /// under it, or all the way to the front or the back. Records one undo step and queues the
-    /// changed drawings for saving. Returns `false` for an unknown drawing.
+    /// changed drawings for saving. Filtered drawings do not participate in the move.
+    /// Returns `false` for an unknown or filtered drawing.
     #[cfg(feature = "drawings")]
     pub fn reorder_drawing(&mut self, id: usize, order: VisualOrder) -> bool {
-        if !self.drawings.drawings.iter().any(|d| d.id == id) {
+        if !self.drawings.unfiltered_drawings().any(|d| d.id == id) {
             return false;
         }
         match order {
@@ -1240,9 +1241,12 @@ impl Chart {
         self.sync_panes();
         let pane = self.layer_pane(self.drawings.drawings.iter().find(|d| d.id == id).unwrap());
         let n = self.layer_items(pane).len();
-        let mut mates = crate::drawings::services::in_z_order(&self.drawings.drawings)
+        let mates = self
+            .drawings
+            .unfiltered_drawings()
+            .filter(|d| self.layer_pane(d) == pane);
+        let mut mates = crate::drawings::services::in_z_order(mates)
             .into_iter()
-            .filter(|d| self.layer_pane(d) == pane)
             .peekable();
         let mut sequence = Vec::new();
         for k in 0..n {

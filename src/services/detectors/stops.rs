@@ -339,6 +339,7 @@ impl StopSweeps {
                 open,
                 fill.price,
                 &settings.footprint.rule,
+                &self.sizes_label,
                 out,
             );
         }

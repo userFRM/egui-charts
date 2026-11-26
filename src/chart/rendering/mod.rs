@@ -43,11 +43,11 @@ pub use candles::{
 pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 pub use grid::{render_grid, render_vertical_grid};
 pub use indicator::IndicatorRenderer;
-pub(crate) use indicator::paint_study_plot;
+pub(crate) use indicator::{paint_study_plot, triangle_centre};
 pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
 pub(crate) use legend::{
-    SeriesAction, controls_width, held_study_controls, price_change_text, quote_prices,
-    study_controls,
+    SeriesAction, calculation_text, controls_width, held_study_controls, price_change_text,
+    quote_prices, study_controls,
 };
 pub(crate) use markers::{
     marker_bounds, render_change_mark, render_event_badges, render_event_breaks,

@@ -72,11 +72,15 @@ fn assert_prefixes(name: &str, inputs: &[(&str, InputValue)], bars: &[Bar], back
 
 #[test]
 fn price_action_entries_match_hand_worked_bars_without_lookahead() {
+    use crate::model::{BarClock, Session, SessionWindow, TimezoneId};
     use InputValue::{Length, Number};
     use OrderSide::{Buy, Sell};
+    use chrono::{NaiveTime, Weekday::*};
     struct Case {
         name: &'static str,
         slippage: f64,
+        clock: Option<BarClock>,
+        first_minute: i64,
         prices: Vec<[f64; 4]>,
         inputs: Vec<(&'static str, InputValue)>,
         expected: Vec<Entry>,
@@ -85,6 +89,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
     let cases = [
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Bar Up/Down",
             inputs: vec![],
             prices: vec![
@@ -97,8 +103,61 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
             expected: vec![(2, Buy, 12.), (4, Sell, 10.)],
             exits: vec![(0, 4, 10.)],
         },
+        // From 23:56: the long bought at 102 is marked at 90, a loss of 12 against the day's
+        // limit 0.1% of 10,000 = 10, so it closes at the next open, 91, and the up bar at 23:59
+        // adds nothing. The up bar at midnight starts a new day and buys at the next open.
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 1436,
+            name: "Bar Up/Down",
+            inputs: vec![("max_intraday_loss", Number(0.1))],
+            prices: vec![
+                [100.; 4],
+                [101., 102., 101., 102.],
+                [102., 102., 90., 90.],
+                [91., 95., 91., 94.],
+                [95., 97., 95., 96.],
+                [96.; 4],
+            ],
+            expected: vec![(1438, Buy, 102.), (1441, Buy, 96.)],
+            exits: vec![(0, 1439, 91.)],
+        },
+        // On a weekday session of a calendar 3 minutes behind UTC, Thursday's trading day runs to
+        // 00:03 UTC on Friday. The loss at 23:58 UTC keeps the up bars at 23:59 and 00:00 UTC
+        // flat; Friday's session opens at 00:03 UTC and its first up bar buys at the next open.
+        Case {
+            slippage: 0.0,
+            clock: Some(BarClock::new(Timeframe::Min1).with_session(
+                TimezoneId::fixed_offset(-180).unwrap(),
+                Session::new([SessionWindow::new(
+                    [Mon, Tue, Wed, Thu, Fri],
+                    NaiveTime::MIN,
+                    NaiveTime::from_hms_opt(23, 59, 0).unwrap(),
+                )]),
+                false,
+            )),
+            first_minute: 1436,
+            name: "Bar Up/Down",
+            inputs: vec![("max_intraday_loss", Number(0.1))],
+            prices: vec![
+                [100.; 4],
+                [101., 102., 101., 102.],
+                [102., 102., 90., 90.],
+                [91., 95., 91., 94.],
+                [95., 97., 95., 96.],
+                [96.; 4],
+                [97.; 4],
+                [98., 99., 98., 99.],
+                [99.; 4],
+            ],
+            expected: vec![(1438, Buy, 102.), (1444, Buy, 99.)],
+            exits: vec![(0, 1439, 91.)],
+        },
+        Case {
+            slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Consecutive Up/Down",
             inputs: vec![("length", Length(2))],
             prices: points(&[10., 11., 12., 11., 10., 10.]),
@@ -108,6 +167,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         // Repeated qualifying closes honour the engine's two-entry pyramiding setting.
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Consecutive Up/Down",
             inputs: vec![("length", Length(2))],
             prices: points(&[10., 11., 12., 13., 13.]),
@@ -116,6 +177,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         },
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Gap Continuation",
             inputs: vec![
                 ("profit_ticks", Length(100)),
@@ -130,6 +193,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         // at 10 must then protect it later in the same execution bar.
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Gap Continuation",
             inputs: vec![
                 ("profit_ticks", Length(100)),
@@ -144,6 +209,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         // bracket must survive the flat position, then stop that short at 12.
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Gap Continuation",
             inputs: vec![
                 ("profit_ticks", Length(100)),
@@ -163,6 +230,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         // Each queued entry still gets its own side's bracket, including the reversal.
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Gap Continuation",
             inputs: vec![
                 ("profit_ticks", Length(100)),
@@ -183,6 +252,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         // Pyramided fills at 12 and 13 average 12.5; four half-unit ticks target 14.5.
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Gap Continuation",
             inputs: vec![
                 ("profit_ticks", Length(4)),
@@ -196,6 +267,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         // Half a unit of entry slippage moves the target by the same amount.
         Case {
             slippage: 0.5,
+            clock: None,
+            first_minute: 0,
             name: "Inside Bar",
             inputs: vec![
                 ("profit_ticks", Length(2)),
@@ -213,6 +286,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         // The entry gaps to 20. Two half-unit ticks take profit at 21, on the fill bar.
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Inside Bar",
             inputs: vec![
                 ("profit_ticks", Length(2)),
@@ -229,6 +304,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         },
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Inside Bar",
             inputs: vec![
                 ("profit_ticks", Length(2)),
@@ -245,6 +322,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         },
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Outside Bar",
             inputs: vec![
                 ("profit_ticks", Length(2)),
@@ -261,6 +340,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         },
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Channel Breakout",
             inputs: vec![("length", Length(2))],
             prices: points(&[10., 11., 12., 9.]),
@@ -269,6 +350,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         },
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Price Channel Break",
             inputs: vec![("length", Length(2))],
             prices: points(&[10., 11., 12., 9., 8.]),
@@ -277,6 +360,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         },
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Pivot Reversal",
             inputs: vec![("left", Length(1)), ("right", Length(1))],
             prices: points(&[10., 12., 11., 13., 9., 8.]),
@@ -286,6 +371,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         },
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Pivot Extension",
             inputs: vec![("left", Length(1)), ("right", Length(1))],
             prices: points(&[10., 12., 11., 13., 9., 8.]),
@@ -296,6 +383,8 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         // Stops at 12 +/- 1 gap to 15; the next short stop is 15 - 2 = 13.
         Case {
             slippage: 0.0,
+            clock: None,
+            first_minute: 0,
             name: "Volatility Expansion Close",
             inputs: vec![("length", Length(2)), ("multiplier", Number(1.))],
             prices: points(&[10., 12., 15., 11.]),
@@ -304,8 +393,12 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
         },
     ];
     for case in cases {
-        let bars = bars(&case.prices);
+        let mut bars = bars(&case.prices);
+        for bar in &mut bars {
+            bar.time += TimeDelta::minutes(case.first_minute);
+        }
         let mut backtest = Backtest::new(case.name, "TEST", Timeframe::Min1, 10_000.);
+        backtest.bar_clock = case.clock;
         backtest.settings.pyramiding = 2;
         backtest.settings.slippage = crate::strategies::Slippage::Ticks {
             ticks: 1,
@@ -411,6 +504,13 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             [8., 10., 8., 10.],
         ]
     };
+    let gap = || {
+        [
+            points(&[13., 12., 11., 10., 11., 10.]),
+            vec![[10., 11., 10., 11.]],
+        ]
+        .concat()
+    };
     let keltner = || {
         vec![
             [10.; 4],
@@ -433,18 +533,30 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
     };
     let cases = [
         // SMA(2) +/- 0.5 population deviations gives bands 8.5/9.5 at bars 1,2;
-        // 10.5/11.5 at bars 3,4; 8.5/9.5 at bars 5,6.
+        // 10.5/11.5 at bars 3,4; 8.5/9.5 at bars 5,6. Each entry fills at the next open, beyond
+        // the band at bars 3, 5 and 7.
         Case {
             name: "Bollinger Bands",
             prices: bb(),
             inputs: vec![("period", Length(2)), ("std_dev", Number(0.5))],
-            expected: vec![(3, Buy, 8.5), (5, Sell, 11.5), (7, Buy, 8.5)],
+            expected: vec![(3, Buy, 8.), (5, Sell, 12.), (7, Buy, 8.)],
         },
         Case {
             name: "Bollinger Bands Directed",
             prices: bb(),
+            inputs: vec![
+                ("period", Length(2)),
+                ("std_dev", Number(0.5)),
+                ("direction", Choice(0)),
+            ],
+            expected: vec![(3, Buy, 8.), (7, Buy, 8.)],
+        },
+        // Both, the default, takes the undirected strategy's entries on the same bars.
+        Case {
+            name: "Bollinger Bands Directed",
+            prices: bb(),
             inputs: vec![("period", Length(2)), ("std_dev", Number(0.5))],
-            expected: vec![(3, Buy, 8.5), (7, Buy, 8.5)],
+            expected: vec![(3, Buy, 8.), (5, Sell, 12.), (7, Buy, 8.)],
         },
         Case {
             name: "Bollinger Bands Directed",
@@ -454,23 +566,35 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 ("std_dev", Number(0.5)),
                 ("direction", Choice(1)),
             ],
-            expected: vec![(5, Sell, 11.5)],
+            expected: vec![(5, Sell, 12.)],
         },
         // SMA(3) +/- 1 population deviation: at bar 4 the close 11 crosses back above the
-        // lower band (32 - sqrt 2) / 3 = 10.195 and stays under the upper band 11.138. Bar 5
-        // stays at 10, under the stop, and inside its bands 9.862/10.805 without a crossing;
-        // bar 6 would reach the stop.
+        // lower band (32 - sqrt 2) / 3 = 10.195. Bar 5 opens at 10, beyond the band, and never
+        // reaches it; the entry fills at that open. No later bar crosses.
         Case {
             name: "Bollinger Bands",
-            prices: [
-                points(&[13., 12., 11., 10., 11., 10.]),
-                vec![[10., 11., 10., 11.]],
-            ]
-            .concat(),
+            prices: gap(),
             inputs: vec![("period", Length(3)), ("std_dev", Number(1.))],
-            expected: vec![],
+            expected: vec![(5, Buy, 10.)],
         },
-        // The same bars mirrored around 10: bar 5 misses the short stop (28 + sqrt 2) / 3 = 9.805.
+        Case {
+            name: "Bollinger Bands Directed",
+            prices: gap(),
+            inputs: vec![("period", Length(3)), ("std_dev", Number(1.))],
+            expected: vec![(5, Buy, 10.)],
+        },
+        Case {
+            name: "Bollinger Bands Directed",
+            prices: gap(),
+            inputs: vec![
+                ("period", Length(3)),
+                ("std_dev", Number(1.)),
+                ("direction", Choice(0)),
+            ],
+            expected: vec![(5, Buy, 10.)],
+        },
+        // The same bars mirrored around 10: bar 5 opens at 10 above the short band
+        // (28 + sqrt 2) / 3 = 9.805 and fills there.
         Case {
             name: "Bollinger Bands Directed",
             prices: [
@@ -483,7 +607,7 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 ("std_dev", Number(1.)),
                 ("direction", Choice(1)),
             ],
-            expected: vec![],
+            expected: vec![(5, Sell, 10.)],
         },
         // Simple basis(2), ATR(1), multiplier 1/4: the close crosses upper[2]=9.5, lower[4]=10.5
         // and upper[6]=9.5. The stops wait one quarter increment beyond those bars, at 10.25,

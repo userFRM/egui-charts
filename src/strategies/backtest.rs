@@ -13,12 +13,12 @@ pub(crate) use live::same_bars;
 
 use crate::data::StudyDataRequest;
 use crate::model::range_bar::price_path;
-use crate::model::rounding_tolerance;
 use crate::model::same_currency;
 use crate::model::{
     Bar, BarClock, BarData, ChartType, EquityRange, OrderSide, OrderType, StrategyExit,
     StrategyReport, StrategyTrade, Timeframe,
 };
+use crate::model::{rounding_tolerance, trailed, trailing_stop};
 
 /// The default entry size, converted to units at the execution price.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -77,7 +77,7 @@ pub struct BacktestSettings {
     /// empty code uses [`Backtest::instrument_currency`]; another currency converts the run's
     /// amounts at [`Backtest::exchange_rates`].
     pub currency: Option<String>,
-    /// Annual risk-free fraction passed to the report's performance metrics.
+    /// Annual risk-free fraction passed to the report's performance metrics, 0.02 by default.
     pub risk_free_rate: f64,
     /// Size used by entries that do not supply their own quantity.
     pub order_size: OrderSize,
@@ -147,7 +147,7 @@ impl Default for BacktestSettings {
         Self {
             initial_capital: 10_000.0,
             currency: None,
-            risk_free_rate: 0.0,
+            risk_free_rate: 0.02,
             order_size: OrderSize::Fixed(1.0),
             pyramiding: 1,
             commission: Commission::Fraction(0.0),
@@ -408,6 +408,30 @@ pub trait Strategy {
     /// Historical tick decisions use this callback with a developing candle too. Calls before
     /// the start time warm the strategy's state, but cannot place orders.
     fn on_bar(&mut self, context: &mut StrategyContext<'_>);
+
+    /// Whether a cooperative run should hand control back to its caller before the next bar, for
+    /// a strategy whose decisions took long since it last answered `true`.
+    /// [`Backtest::run_async`] and [`Backtest::update_closed_async`], and through them the
+    /// strategy tester, yield every 256 chart or finer bars and also before a bar for which this
+    /// returns `true`; [`Backtest::run`] and [`Backtest::update`] never ask. Returns `false` by
+    /// default.
+    fn should_yield(&mut self) -> bool {
+        false
+    }
+
+    /// Why the strategy stopped deciding before the run ended, such as a limit it reached, or
+    /// `None` while it decides. Once a decision ends with this set, the run cancels the
+    /// strategy's working orders and keeps none it places later, so none of them fills on
+    /// later bars or live updates. [`Backtest::run`], [`Backtest::run_async`], [`Backtest::update`]
+    /// and [`Backtest::update_closed_async`] read it once a run or update ends and then withhold
+    /// the report's trades, equity and margin data with this reason in
+    /// [`StrategyReport::unavailable`](crate::model::StrategyReport::unavailable), as for
+    /// missing exchange rates, so that a report never reads as complete when its strategy
+    /// stopped. [`prepare`](Self::prepare) starts a fresh run, which clears it. Returns `None`
+    /// by default.
+    fn failure(&self) -> Option<String> {
+        None
+    }
 }
 
 /// What a [`Strategy`] sees at a decision: the bars up to it and the open position. It places
@@ -429,6 +453,7 @@ pub struct StrategyContext<'a> {
     tick: u64,
     order_delay: u32,
     price_increment: f64,
+    bar_clock: Option<&'a BarClock>,
 }
 
 impl std::fmt::Debug for StrategyContext<'_> {
@@ -449,6 +474,18 @@ impl StrategyContext<'_> {
     /// See [`Self::is_forming_bar`].
     pub fn bars(&self) -> &[Bar] {
         self.bars
+    }
+
+    /// Open time of the daily bar of [`Backtest::bar_clock`] that holds the latest bar: on a
+    /// clock with a session the bar of its trading date, so a session that crosses midnight UTC
+    /// stays one day; the bar's UTC date without a clock. `None` before the first bar.
+    pub(crate) fn trading_day(&self) -> Option<DateTime<Utc>> {
+        let time = self.bars.last()?.time;
+        let day = (self.bar_clock).map_or_else(
+            || BarClock::new(Timeframe::Day1),
+            |clock| clock.for_timeframe(Timeframe::Day1),
+        );
+        Some(day.instant_open(time))
     }
 
     /// The open position: positive when long, negative when short, 0 when flat.
@@ -488,7 +525,8 @@ impl StrategyContext<'_> {
 
     /// Places an entry of `quantity` on `side`. Against an open position on the other side it
     /// closes that position first, then opens `quantity` on `side`; on the same side it adds.
-    /// Pass `None` to use the settings' order size, calculated when the order fills.
+    /// Pass `None` to use the settings' order size, calculated when the order fills. Trailing stop
+    /// entries are ignored; [`exit_trailing`](Self::exit_trailing) trails exits.
     pub fn entry(
         &mut self,
         id: impl Into<String>,
@@ -500,6 +538,7 @@ impl StrategyContext<'_> {
             OrderType::Market => true,
             OrderType::Limit(price) | OrderType::Stop(price) => price.is_finite(),
             OrderType::StopLimit { stop, limit } => stop.is_finite() && limit.is_finite(),
+            OrderType::TrailingStop { .. } => false,
         };
         if finite {
             self.place(id.into(), quantity.into(), Kind::Entry(side, order_type));
@@ -901,6 +940,7 @@ impl Backtest {
             rate: if rates.is_some() { f64::NAN } else { 1.0 },
             rates,
             unconverted: Cell::new(false),
+            bar_clock: self.bar_clock.as_ref(),
         };
         run.start_equity(self.timeframe, &bars[..last], &mut report);
         let mut processed = cooperative.then_some(0);
@@ -911,6 +951,10 @@ impl Backtest {
         run.report_trades(&mut report);
         if run.unconverted.get() {
             self.withhold(&mut report);
+        }
+        if let Some(failure) = run.strategy.failure() {
+            self.withhold(&mut report);
+            report.unavailable = Some(failure);
         }
         report
     }
@@ -1144,9 +1188,9 @@ fn finish_now<T>(future: impl std::future::Future<Output = T>) -> T {
     }
 }
 
-async fn execution_step(processed: &mut Option<usize>) {
+async fn execution_step(processed: &mut Option<usize>, strategy: &mut dyn Strategy) {
     if let Some(processed) = processed {
-        if processed.is_multiple_of(256) {
+        if strategy.should_yield() || processed.is_multiple_of(256) {
             yield_now().await;
         }
         *processed += 1;
@@ -1185,23 +1229,6 @@ pub(super) fn valid_bar(bar: &Bar) -> bool {
         .all(|price| price.is_finite())
         && bar.low <= bar.open.min(bar.close)
         && bar.high >= bar.open.max(bar.close)
-}
-
-/// Best price since reaching `level`, in direction `s` (1 long, -1 short).
-fn trailed(
-    best: Option<f64>,
-    level: f64,
-    s: f64,
-    points: impl IntoIterator<Item = f64>,
-) -> Option<f64> {
-    points.into_iter().fold(best, |best, point| match best {
-        Some(best) => Some(if s * (point - best) > 0.0 {
-            point
-        } else {
-            best
-        }),
-        None => (s * (point - level) >= 0.0).then_some(point),
-    })
 }
 
 /// The side of an exit from `position`, `None` while flat.
@@ -1260,6 +1287,7 @@ struct Run<'a> {
     rate: f64,
     /// Whether an amount needed a rate where none applied.
     unconverted: Cell<bool>,
+    bar_clock: Option<&'a BarClock>,
 }
 
 impl<'a> Run<'a> {
@@ -1309,7 +1337,7 @@ impl<'a> Run<'a> {
         walk: bool,
         processed: &mut Option<usize>,
     ) {
-        execution_step(processed).await;
+        execution_step(processed, &mut *self.strategy).await;
         self.forming = false;
         if walk {
             self.range = None;
@@ -1365,7 +1393,7 @@ impl<'a> Run<'a> {
         if valid && walk {
             if from < to {
                 for (offset, lower) in lower[from..to].iter().enumerate() {
-                    execution_step(processed).await;
+                    execution_step(processed, &mut *self.strategy).await;
                     if historical {
                         self.history_ticks(lower, (offset + 1 == to - from).then_some(bar));
                     } else {
@@ -1565,7 +1593,12 @@ impl<'a> Run<'a> {
             tick: self.tick,
             order_delay: self.settings.order_delay,
             price_increment: self.settings.price_increment,
+            bar_clock: self.bar_clock,
         });
+        // A strategy that stopped deciding leaves no order working, so nothing of it fills later.
+        if self.strategy.failure().is_some() {
+            self.orders.clear();
+        }
     }
 
     fn fill_bar(&mut self, bar: &Bar) {
@@ -1726,7 +1759,7 @@ impl<'a> Run<'a> {
                 }
                 let (average, s) = (self.average_price(), sign(side));
                 let trail = trailed(order.best, average + s * activation, s, [start])
-                    .map(|best| best - s * offset)
+                    .map(|best| trailing_stop(best, s, offset))
                     .filter(|level| level.is_finite());
                 let fixed = stop_loss.map(|loss| average - s * loss);
                 // Both are stops on the exit side; the nearer one is reached first.
@@ -2798,6 +2831,32 @@ mod tests {
         }
     }
 
+    /// A [`Script`] that asks a cooperative run to yield before every bar.
+    struct Yielding(Script);
+
+    impl Strategy for Yielding {
+        fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+            self.0.on_bar(context);
+        }
+
+        fn should_yield(&mut self) -> bool {
+            true
+        }
+    }
+
+    /// A [`Script`] that reports it stopped deciding.
+    struct Stopped(Script);
+
+    impl Strategy for Stopped {
+        fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+            self.0.on_bar(context);
+        }
+
+        fn failure(&self) -> Option<String> {
+            Some("Stopped at its limit".into())
+        }
+    }
+
     fn hour(hour: i64) -> DateTime<Utc> {
         DateTime::UNIX_EPOCH + TimeDelta::hours(hour)
     }
@@ -3579,7 +3638,7 @@ mod tests {
         let terms = BacktestSettings {
             initial_capital: 1000.0,
             currency: Some("USD".into()),
-            risk_free_rate: 0.02,
+            risk_free_rate: 0.03,
             order_size: OrderSize::Fixed(2.0),
             ..Default::default()
         };
@@ -4937,6 +4996,10 @@ mod tests {
                 .collect();
             let mut engine =
                 Backtest::new("Terms", "TEST", Timeframe::Hour1, settings.initial_capital);
+            assert_eq!(
+                engine.settings.risk_free_rate, 0.02,
+                "the default a host can override"
+            );
             engine.settings = settings;
             engine.instrument_currency = Some("USD".into());
             engine.exchange_rates = vec![rate(0, 0.9), rate(2, 0.8)];
@@ -4958,9 +5021,42 @@ mod tests {
                 serde_json::to_value(&asynchronous).unwrap(),
                 serde_json::to_value(&report).unwrap()
             );
+            // A strategy that asks before every bar hands control back once a bar, with the same
+            // fills.
+            let mut yielding = Yielding(Script(script));
+            let mut future = std::pin::pin!(engine.run_async(&mut yielding, &source, &[]));
+            let mut batches = 0;
+            let yielded = loop {
+                match std::future::Future::poll(future.as_mut(), &mut context) {
+                    std::task::Poll::Ready(report) => break report,
+                    std::task::Poll::Pending => batches += 1,
+                }
+            };
+            assert_eq!(batches, source.len(), "{name}");
+            assert_eq!(
+                serde_json::to_value(&yielded).unwrap(),
+                serde_json::to_value(&report).unwrap()
+            );
+            // A strategy that stopped withholds the report of a run and of a live run, and its
+            // orders never fill.
+            let mut live = engine.clone();
+            let fills = live.update(&mut Stopped(Script(script)), &source, &[]);
+            assert!(fills.is_empty(), "{name}: {fills:?}");
+            let ran = engine.run(&mut Stopped(Script(script)), &source, &[]);
+            for withheld in [&ran, live.report().unwrap()] {
+                assert_eq!(
+                    withheld.unavailable.as_deref(),
+                    Some("Stopped at its limit"),
+                    "{name}"
+                );
+                assert!(
+                    withheld.trades.is_empty() && withheld.equity.is_empty(),
+                    "{name}"
+                );
+            }
 
             assert_eq!(report.currency, engine.settings.currency, "{name}");
-            assert_eq!(report.risk_free_rate, 0.02, "{name}");
+            assert_eq!(report.risk_free_rate, 0.03, "{name}");
             assert!(
                 report
                     .properties

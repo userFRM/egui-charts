@@ -32,11 +32,11 @@
 //! A score without a vote has no value. Categories use these thresholds:
 //!
 //! ```text
-//! Strong Buy   score >= 0.5
-//! Buy          0.1 <= score < 0.5
-//! Neutral      -0.1 < score < 0.1
-//! Sell         -0.5 < score <= -0.1
-//! Strong Sell  score <= -0.5
+//! Strong Buy   score > 0.5
+//! Buy          0.1 < score <= 0.5
+//! Neutral      -0.1 <= score <= 0.1
+//! Sell         -0.5 <= score < -0.1
+//! Strong Sell  score < -0.5
 //! ```
 //!
 //! The six outputs are the moving-average, oscillator and summary scores followed by their
@@ -492,15 +492,18 @@ impl TechnicalRatings {
                 votes as f64 / enabled as f64
             }
         };
-        let rated: Vec<f64> = basis
-            .groups()
-            .map(score)
-            .filter(|score| !score.is_nan())
-            .collect();
+        let rated: Vec<usize> = basis.groups().filter(|&group| votes[group] > 0).collect();
+        // Vote sums are whole numbers: over a common denominator the summary is rounded once,
+        // so an exact boundary such as the mean of 0.8 and -0.6 stays 0.1.
         let summary = if rated.is_empty() {
             f64::NAN
         } else {
-            rated.iter().sum::<f64>() / rated.len() as f64
+            let product: usize = rated.iter().map(|&group| votes[group]).product();
+            let numerator: f64 = rated
+                .iter()
+                .map(|&group| sum[group] * (product / votes[group]) as f64)
+                .sum();
+            numerator / (rated.len() * product) as f64
         };
         let chosen = basis.groups();
         [
@@ -615,18 +618,19 @@ impl Default for TechnicalRatings {
     }
 }
 
-/// The displayed rating of a score between -1 and 1.
+/// The displayed rating of a score between -1 and 1. A score on a boundary takes the inner
+/// rating: 0.5 is Buy, 0.1 and -0.1 are Neutral and -0.5 is Sell.
 pub(crate) fn rating(score: f64) -> &'static str {
-    if score >= 0.5 {
+    if score > 0.5 {
         "Strong Buy"
-    } else if score >= 0.1 {
+    } else if score > 0.1 {
         "Buy"
-    } else if score > -0.1 {
-        "Neutral"
-    } else if score > -0.5 {
+    } else if score < -0.5 {
+        "Strong Sell"
+    } else if score < -0.1 {
         "Sell"
     } else {
-        "Strong Sell"
+        "Neutral"
     }
 }
 
@@ -1198,7 +1202,8 @@ mod tests {
     /// HMA is 300.6 below close 302, the drawn cloud is 297 > 288.5 > 266.75 > 249.5,
     /// Momentum rises 10 to 12, MACD is 7.1595 > 7.0319 and UO is 82.87. ADX rises
     /// above 20 on both trends, so it buys the rise but does not sell the fall.
-    /// A flat stretch has no CCI, so its vote is missing.
+    /// A flat stretch has no CCI, and an RSI without a loss stays at 100, so the flat stretch and
+    /// the rise have no Stochastic RSI: their votes are missing.
     #[test]
     fn scores_coverage_and_ratings_follow_the_votes() {
         let fixture = |direction: f64| {
@@ -1230,7 +1235,7 @@ mod tests {
         for (direction, oscillator, last_votes) in [
             (
                 1.0,
-                4.0 / 11.0,
+                4.0 / 10.0,
                 [0., 0., 0., 1., 0., 1., 1., 0., 0., 0., 1.],
             ),
             (
@@ -1241,12 +1246,14 @@ mod tests {
             (0.0, 0.0, [0.; 11]),
         ] {
             let mut last_votes = last_votes.map(Some);
-            let oscillator_coverage = if direction == 0.0 {
+            if direction == 0.0 {
                 last_votes[2] = None;
-                10. / 11.
-            } else {
-                1.
-            };
+            }
+            if direction >= 0.0 {
+                last_votes[7] = None;
+            }
+            let voted = last_votes.iter().flatten().count() as f64;
+            let oscillator_coverage = voted / 11.;
             let bars = fixture(direction);
             for basis in [
                 RatingBasis::All,
@@ -1271,7 +1278,7 @@ mod tests {
                     RatingBasis::Oscillators => oscillator,
                 };
                 let coverage = match basis {
-                    RatingBasis::All if direction == 0.0 => 25. / 26.,
+                    RatingBasis::All => (15. + voted) / 26.,
                     RatingBasis::Oscillators => oscillator_coverage,
                     _ => 1.,
                 };
@@ -1300,7 +1307,13 @@ mod tests {
                     assert_eq!(
                         table(&study),
                         vec![(
-                            ["Chart", label, "100%"].map(String::from).to_vec(),
+                            [
+                                "Chart",
+                                label,
+                                &format!("{:.0}%", oscillator_coverage * 100.0)
+                            ]
+                            .map(String::from)
+                            .to_vec(),
                             vec![Color32::from_rgb(41, 91, 121), fill]
                         )]
                     );
@@ -1315,14 +1328,15 @@ mod tests {
         let bars = fixture(1.0);
         let mut full = TechnicalRatings::new();
         full.calculate(&bars);
+        // Stochastic RSI waits for an RSI window with a range, which this rise never has.
         for (at, expected) in [
             (0, [6. / 15., 0., 6. / 26.]),
-            (34, [11. / 15., 9. / 11., 20. / 26.]),
-            (35, [11. / 15., 10. / 11., 21. / 26.]),
-            (75, [12. / 15., 1., 23. / 26.]),
-            (76, [13. / 15., 1., 24. / 26.]),
-            (198, [14. / 15., 1., 25. / 26.]),
-            (199, [1.; 3]),
+            (34, [11. / 15., 8. / 11., 19. / 26.]),
+            (35, [11. / 15., 9. / 11., 20. / 26.]),
+            (75, [12. / 15., 10. / 11., 22. / 26.]),
+            (76, [13. / 15., 10. / 11., 23. / 26.]),
+            (198, [14. / 15., 10. / 11., 24. / 26.]),
+            (199, [1., 10. / 11., 25. / 26.]),
         ] {
             for (i, value) in expected.into_iter().enumerate() {
                 assert_eq!(
@@ -1359,10 +1373,17 @@ mod tests {
                 full.values.value(line, 259)
             );
         }
-        // Only VWMA reads volume: a missing volume removes its vote, while the other 25
-        // components retain their price history. With no volume at all VWMA is the SMA.
-        for volume in [f64::NAN, f64::INFINITY] {
-            let mut missing_volume = bars.clone();
+        // Only VWMA reads volume: a missing volume, or none in its window, removes its vote,
+        // while the other 25 components retain their price history.
+        let mut no_volume = bars.clone();
+        for bar in &mut no_volume {
+            bar.volume = 0.0;
+        }
+        for (volume, mut missing_volume) in [
+            (f64::NAN, bars.clone()),
+            (f64::INFINITY, bars.clone()),
+            (0.0, no_volume),
+        ] {
             missing_volume[259].volume = volume;
             let mut study = TechnicalRatings::new();
             study.calculate(&missing_volume);
@@ -1378,24 +1399,13 @@ mod tests {
             assert_eq!(votes, expected);
             for (line, value) in [
                 (0, 1.0),
-                (1, 4.0 / 11.0),
-                (2, 15.0 / 22.0),
+                (1, 4.0 / 10.0),
+                (2, 7.0 / 10.0),
                 (3, 14.0 / 15.0),
-                (4, 1.0),
-                (5, 25.0 / 26.0),
+                (4, 10.0 / 11.0),
+                (5, 24.0 / 26.0),
             ] {
                 assert!((study.values.value(line, 259).unwrap() - value).abs() < 1e-12);
-            }
-        }
-        let mut no_volume = bars.clone();
-        for bar in &mut no_volume {
-            bar.volume = 0.0;
-        }
-        let mut study = TechnicalRatings::new();
-        study.calculate(&no_volume);
-        for line in 0..6 {
-            for at in 0..bars.len() {
-                assert_eq!(study.values.value(line, at), full.values.value(line, at));
             }
         }
         let n = f64::NAN;
@@ -1405,6 +1415,13 @@ mod tests {
                 [3, 1],
                 RatingBasis::All,
                 [0., 1., 0.5, 0.2, 1. / 11., 4. / 26.],
+            ),
+            // 0.8 and -0.6 average to exactly 0.1, rated Neutral.
+            (
+                [4., -3.],
+                [5, 5],
+                RatingBasis::All,
+                [0.8, -0.6, 0.1, 5. / 15., 5. / 11., 10. / 26.],
             ),
             (
                 [0., 1.],
@@ -1437,13 +1454,15 @@ mod tests {
             }
         }
         for (score, label) in [
-            (0.5, "Strong Buy"),
-            (0.1, "Buy"),
-            (-0.1, "Sell"),
-            (-0.5, "Strong Sell"),
+            (0.75, "Strong Buy"),
+            (0.5, "Buy"),
+            (0.1, "Neutral"),
             (0., "Neutral"),
+            (-0.1, "Neutral"),
+            (-0.5, "Sell"),
+            (-0.75, "Strong Sell"),
         ] {
-            assert_eq!(rating(score), label);
+            assert_eq!(rating(score), label, "{score}");
         }
     }
 

@@ -177,7 +177,7 @@ fn alert_display_enabled() -> bool {
 pub struct AlertDelivery {
     /// Show a popup. Enabled by default.
     pub popup: bool,
-    /// Play the sound chosen in the alert settings, if they turn sound on. Enabled by default.
+    /// Play the sound chosen in the alert settings. Enabled by default.
     pub sound: bool,
     /// Ask the host to send an email to the account's address.
     pub email: bool,
@@ -272,6 +272,10 @@ pub struct AlertInputs {
     /// Whether overnight hours are requested together with extended hours. False in older saves.
     #[serde(default)]
     pub overnight_hours: bool,
+    /// Whether bars are requested adjusted for dividends, as the source chart requested them.
+    /// False in older saves, which are evaluated on prices as traded.
+    #[serde(default)]
+    pub dividend_adjusted: bool,
     /// Host currency or unit conversion.
     pub conversion: Option<String>,
     /// Initial main-series history size when no start time was available.
@@ -295,6 +299,7 @@ impl Default for AlertInputs {
             sources: Vec::new(),
             extended_hours: false,
             overnight_hours: false,
+            dividend_adjusted: false,
             conversion: None,
             count: 1000,
             start: None,
@@ -670,6 +675,12 @@ fn fill_placeholders(message: &str, mut field: impl FnMut(&str) -> Option<String
 /// When an alert fires, judged on its source for each subject symbol.
 /// Each variant states its rule so that a host and a server evaluate it alike. Levels are finite
 /// and in the symbol's price units.
+///
+/// On the price, the crossing, above and below rules, also against a drawing in
+/// [`Compare`](Self::Compare), read every price known to have traded since the alert's previous
+/// evaluation: the close, and the high and low of the bars received where they moved past what
+/// that evaluation saw. A level reached and left between two evaluations therefore counts. The
+/// first evaluation, and an alert at bar close, read the close alone.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertCondition {
@@ -687,16 +698,16 @@ pub enum AlertCondition {
     /// with the same source name; `AlertEngine` saves the alert only once the host connects that
     /// source. Same source, rules and frequencies as `StrategyFills`.
     CustomEvents(String),
-    /// The previous value was strictly below or above the level and the current value reaches
-    /// or passes it, in either direction.
+    /// The previous value was strictly below or above the level and a value since reaches or
+    /// passes it, in either direction.
     Crossing(f64),
-    /// The previous price was below the level and the current price is at or above it.
+    /// The previous price was below the level and a price since is at or above it.
     CrossingUp(f64),
-    /// The previous price was above the level and the current price is at or below it.
+    /// The previous price was above the level and a price since is at or below it.
     CrossingDown(f64),
-    /// The price is above the level.
+    /// A price since the previous evaluation is above the level.
     Above(f64),
-    /// The price is below the level.
+    /// A price since the previous evaluation is below the level.
     Below(f64),
     /// Previous value was outside the inclusive channel, current value is inside it.
     EnteringChannel {
@@ -746,6 +757,8 @@ pub enum AlertCondition {
         bars: u32,
     },
     /// Compare against another output on the same bar, using its previous value for crossings.
+    /// Against a drawing, the price reads every price traded since the previous evaluation, as
+    /// the crossing rules do.
     Compare {
         /// The second output on the same symbol and bar.
         other: AlertSource,

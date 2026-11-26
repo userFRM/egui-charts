@@ -2,8 +2,8 @@
 //! feed for, how the answers are applied and how failed requests are retried.
 
 use super::{
-    FeedLink, MIN_SCROLL_BACK_PAGE, Request, SCROLL_BACK_MARGIN, TRADE_CAPACITY, lock, resolve,
-    retry_delay,
+    FeedLink, InitialTrades, MIN_SCROLL_BACK_PAGE, Request, SCROLL_BACK_MARGIN, TRADE_CAPACITY,
+    lock, resolve, retry_delay,
 };
 use crate::data::inbox::Answer;
 use crate::data::merge::{Origin, same_values};
@@ -38,10 +38,14 @@ impl Chart {
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
         self.follow_market_replay();
         // A restored scale still takes its default grid from the current instrument.
-        let tick_size = self
-            .instrument()
-            .and_then(|instrument| instrument.tick_size);
-        self.state.price_scale_mut().set_tick_size(tick_size);
+        let instrument = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.instrument.as_ref())
+            .or(self.legend_instrument.as_ref());
+        self.state
+            .price_scale_mut()
+            .set_instrument_ticks(instrument);
         // Footprint chart types and drawings that read executions read trades on every interval;
         // time-based drawings read them on every chart type.
         let chart_executions = self.chart_type == ChartType::VolumeFootprint
@@ -296,7 +300,6 @@ impl Chart {
                 self.quote = None;
                 self.session_quote = None;
                 link.trades = Trades::new(TRADE_CAPACITY);
-                link.trades_from_start = false;
                 link.footprints_complete = false;
                 link.footprints_stopped = false;
                 link.footprint_unavailable.clear();
@@ -603,7 +606,6 @@ impl Chart {
                     if reset {
                         retain_prepared = false;
                         link.trades = Trades::new(TRADE_CAPACITY);
-                        link.trades_from_start = false;
                     }
                     link.trades.append(pending, &mut |_, _| ());
                 }
@@ -618,11 +620,14 @@ impl Chart {
         let feed_wide = |request: &Request| matches!(request, Request::Capabilities);
         link.pending.retain(|(_, request, _)| feed_wide(request));
         link.retries.retain(|(_, request, _)| feed_wide(request));
+        if link.initial_trades == InitialTrades::Requested {
+            link.initial_trades = InitialTrades::Waiting;
+        }
         // A changed symbol or conversion drops the instrument of the earlier request: this one
         // describes the chart's symbol, whatever its own `symbol` holds.
         self.legend_instrument = link.instrument.take();
         self.state.price_scale_mut().set_instrument_precision(None);
-        self.state.price_scale_mut().set_tick_size(None);
+        self.state.price_scale_mut().set_instrument_ticks(None);
         if retain_trades {
             link.trades.reanchor();
         } else {
@@ -659,7 +664,7 @@ impl Chart {
         }
         (link.bar_cursor, link.trade_cursor, link.depth_cursor) = (None, None, None);
         link.trades_complete = false;
-        link.trades_from_start &= retain_trades;
+        link.trades.from_start &= retain_trades;
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
@@ -728,7 +733,7 @@ impl Chart {
         self.feed.last_error = Some(FeedError::NotSupported);
     }
 
-    /// Subscribes to live updates once the symbol resolved, and asks for the recent trades.
+    /// Subscribes to live updates once the symbol resolved, and starts eager trade history.
     /// An interval the instrument rules out gets neither.
     fn subscribe(&mut self, link: &mut FeedLink, instrument: Instrument) {
         self.state
@@ -736,7 +741,7 @@ impl Chart {
             .set_instrument_precision(crate::scales::instrument_price_precision(&instrument));
         self.state
             .price_scale_mut()
-            .set_tick_size(instrument.tick_size);
+            .set_instrument_ticks(Some(&instrument));
         let timeframe = self.timeframe.unwrap_or_default();
         let withheld = !supports(self.legend_instrument.as_ref(), timeframe);
         link.instrument = Some(instrument);
@@ -792,10 +797,21 @@ impl Chart {
             clock: link.clock.clone(),
             extended_hours: self.extended_hours,
             overnight_hours: self.overnight_hours,
+            adjusted: link.adjusted,
             conversion: self.conversion.clone(),
             sink,
         };
         link.feed.subscribe(subscription);
+        if !self.trade_history_on_demand
+            || timeframe.is_trade_based()
+            || self.market_replay.is_some()
+        {
+            self.request_latest_trades(link);
+        }
+    }
+
+    fn request_latest_trades(&self, link: &mut FeedLink) {
+        link.initial_trades = InitialTrades::Requested;
         let request = TradeRequest {
             symbol: self.symbol.clone(),
             before: None,
@@ -954,8 +970,11 @@ impl Chart {
         }
         let end = page.end_of_history || (empty && page.continue_before.is_none());
         // The oldest held trade's bar is complete once nothing is left before it.
-        let reached_start = end && !link.trades_from_start;
-        link.trades_from_start |= end;
+        let reached_start = end && !link.trades.from_start;
+        let confirmed = reached_start
+            && link.trades.unconfirmed_page_start().is_some()
+            && !link.clock.timeframe().is_some_and(|tf| tf.is_trade_based());
+        link.trades.from_start |= end;
         let unproven = (link.trades.left_out_at(), link.trades.retained_until());
         let bubbles = &mut link.bubbles;
         let prepared_before = link
@@ -1043,7 +1062,12 @@ impl Chart {
             // A prepared footprint input keeps the executions it received: only a page that
             // changes executions from the cutoff on rebuilds it, as it does the chart's footprint.
             let prepared = prepared_before.is_some() && input.is_footprint();
-            let rebuild = if prepared { tail_changed } else { changed };
+            let rebuild = if prepared {
+                tail_changed
+            } else {
+                // Spread and book sources ignore a rebuild.
+                changed || (confirmed && !input.is_footprint())
+            };
             if rebuild {
                 input.replace_trades(
                     &link.clock,
@@ -1086,9 +1110,45 @@ impl Chart {
         self.pending_scroll_time.filter(|time| *time < before)
     }
 
+    /// A prepared footprint (also a study's) can draw without individual executions. Let its
+    /// first page answer before falling back to raw trades. A drawing or chart type with no
+    /// prepared-page reader needs the tape unless the chart already holds prepared rows.
+    fn needs_initial_trades(&self, link: &FeedLink, executions: bool) -> bool {
+        if !self.trade_history_on_demand
+            || link.initial_trades == InitialTrades::Wanted
+            || self.chart_type == ChartType::Range
+            || link.bubbles.is_some()
+        {
+            return true;
+        }
+        let mut wants_prepared = self.chart_type == ChartType::VolumeFootprint;
+        for (input, _) in &link.study_inputs {
+            if input.is_footprint() {
+                wants_prepared = true;
+            } else if input
+                .services()
+                .contains(&crate::model::FeedService::LiveTrades)
+            {
+                return true;
+            }
+        }
+        (executions || wants_prepared)
+            && (!wants_prepared || link.footprints_stopped || link.footprints_complete)
+            && link
+                .footprint
+                .as_ref()
+                .is_none_or(|flow| flow.live.prepared_before().is_none())
+    }
+
     /// Asks for trades older than the oldest held once the view reaches it, for the order flow
     /// that consumes them: bubbles, a footprint or a study.
     fn scroll_trades(&mut self, link: &mut FeedLink, executions: bool) {
+        if link.initial_trades != InitialTrades::Requested {
+            if link.subscription.is_some() && self.needs_initial_trades(link, executions) {
+                self.request_latest_trades(link);
+            }
+            return;
+        }
         // A page never evicts newer trades, so a full store takes no older ones.
         link.trades_complete |= link.trades.room() == 0;
         let consumed = link.bubbles.is_some()

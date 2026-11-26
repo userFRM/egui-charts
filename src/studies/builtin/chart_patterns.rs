@@ -28,6 +28,8 @@ const MAX_PIVOTS: usize = 16;
 const MAX_PENDING: usize = 8;
 /// Confirmed formations kept; the oldest is dropped first.
 const MAX_CONFIRMED: usize = 64;
+/// A cup spans at least this many bars, whatever the minimum length.
+const MIN_CUP: usize = 20;
 
 /// The formation a detector looks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -663,8 +665,15 @@ fn head_and_shoulders(config: &Config, pivots: &VecDeque<Swing>, top: bool) -> O
 }
 
 /// A cup and handle (or its inverse) through the last four pivots: the rims, the cup's
-/// extreme between them and the handle's.
-fn cup(config: &Config, pivots: &VecDeque<Swing>, bull: bool) -> Option<Candidate> {
+/// extreme between them and the handle's. `bars` holds the high and low of the latest bars, the
+/// newest at position `end - 1`.
+fn cup(
+    config: &Config,
+    pivots: &VecDeque<Swing>,
+    bars: &VecDeque<[f64; 2]>,
+    end: usize,
+    bull: bool,
+) -> Option<Candidate> {
     let w = last_pivots(pivots, 4)?;
     if w[0].high != bull {
         return None;
@@ -678,14 +687,24 @@ fn cup(config: &Config, pivots: &VecDeque<Swing>, bull: bool) -> Option<Candidat
     if !near(left.price, right.price, config.tolerance)
         || depth <= 0.0
         || depth / mean.abs() * 100.0 < config.depth
-        || !(config.min_length..=config.max_length).contains(&duration)
+        || !(config.min_length.max(MIN_CUP)..=config.max_length).contains(&duration)
         || handle.position - left.position > config.max_length
         || 4 * (base.position - left.position) < duration
         || 4 * (right.position - base.position) < duration
         || pullback <= 0.0
         || pullback > config.handle / 100.0 * depth
-        || 2 * (handle.position - right.position) > duration
+        || handle.position - right.position > duration
     {
+        return None;
+    }
+    // A rounded base: at least half the bars between the rims lie in the third of the depth
+    // nearest the cup's extreme, where a V spends a third of them.
+    let from = (left.position + 1).checked_sub(end - bars.len())?;
+    let near_base = bars
+        .range(from..from + duration - 1)
+        .filter(|&&[high, low]| side * (if bull { low } else { high } - base.price) <= depth / 3.0)
+        .count();
+    if 2 * near_base < duration - 1 {
         return None;
     }
     let (kind, upper, lower, on_up, on_down, shown) = if bull {
@@ -728,6 +747,9 @@ struct State {
     /// Index of the last finite bar.
     last: usize,
     swings: Swings,
+    /// High and low of the latest usable bars, oldest first: as many as a cup and its handle
+    /// span when the handle becomes known.
+    extremes: VecDeque<[f64; 2]>,
     pending: Vec<Candidate>,
     confirmed: Vec<Formation>,
     /// Per kind, the last pivot of the latest formation found.
@@ -756,6 +778,15 @@ impl State {
         }
         let seq = self.swings.position;
         self.last = index;
+        self.extremes.push_back([bar.high, bar.low]);
+        if self.extremes.len()
+            > config
+                .max_length
+                .saturating_add(config.strength)
+                .saturating_add(1)
+        {
+            self.extremes.pop_front();
+        }
         if self
             .swings
             .push(bar, config.strength, config.strength, MAX_PIVOTS)
@@ -802,8 +833,8 @@ impl State {
         }
         if scope.covers(PatternFamily::Reversal) {
             found.extend([
-                cup(config, pivots, true),
-                cup(config, pivots, false),
+                cup(config, pivots, &self.extremes, self.swings.position, true),
+                cup(config, pivots, &self.extremes, self.swings.position, false),
                 multiple(config, pivots, true, false),
                 multiple(config, pivots, false, false),
                 multiple(config, pivots, true, true),
@@ -889,7 +920,7 @@ impl State {
 /// | Rising wedge | as the rectangle | neither boundary flat, both rise and the lower more steeply; confirms bearish below the lower boundary, fails above the upper |
 /// | Falling wedge | as the rectangle | neither boundary flat, both fall and the upper more steeply; confirms bullish above the upper boundary, fails below the lower |
 ///
-/// | Cup and handle | high, low, high, low | the rims differ by at most `tolerance` percent of their mean; the cup is at least `depth` percent deep below the mean rim, lasts between `min_length` and `max_length` bars and has its low in the middle half of that time; the handle pulls back from the right rim by at most `handle` percent of the cup depth over at most half the cup's duration; confirms bullish above the higher rim, fails below the cup's low |
+/// | Cup and handle | high, low, high, low | the rims differ by at most `tolerance` percent of their mean; the cup is at least `depth` percent deep below the mean rim, lasts between `min_length`, but at least 20, and `max_length` bars and has its low in the middle half of that time; its base is rounded, with at least half the bars between the rims low within a third of the depth above the cup's low; the handle pulls back from the right rim by at most `handle` percent of the cup depth over at most the cup's duration; confirms bullish above the higher rim, fails below the cup's low |
 /// | Inverted cup and handle | mirror | confirms bearish below the lower rim |
 /// | Double top | high, low, high | the tops differ by at most `tolerance` percent; at least `min_length` bars apart; the valley at least `depth` percent below them; the neckline is the valley's low; confirms bearish below it, fails above the higher top by more than `tolerance` percent |
 /// | Double bottom | mirror | the neckline is the valley's high; confirms bullish above it |
@@ -917,11 +948,12 @@ impl State {
 ///
 /// Line 0 marks a bullish confirmation at the low of its bar, line 1 a bearish one at the
 /// high, each labelled with the abbreviations of the formations it confirms. Line 2,
-/// Developing, holds no values. Boundaries are also generated as drawings, each in the colour,
-/// width and pattern of its plot and hidden with it: Bullish or Bearish once its formation is
-/// confirmed, Developing, grey and dashed by default, until then. A reversal formation draws
-/// only its neckline or breakout level. Hovering a mark or a boundary shows the formation's
-/// name, such as "Bear Flag".
+/// Developing, holds no values. The legend lists none of the three, and the price scale starts
+/// without their tags. Boundaries are also generated as drawings, each in the colour, width and
+/// pattern of its plot and hidden with it: Bullish or Bearish once its formation is confirmed,
+/// Developing, grey and dashed by default, until then. A reversal formation draws only its
+/// neckline or breakout level. Hovering a mark or a boundary shows the formation's name, such as
+/// "Bear Flag".
 #[derive(Clone, Debug)]
 pub struct ChartPatterns {
     scope: Scope,
@@ -1205,6 +1237,15 @@ impl Indicator for ChartPatterns {
         }
     }
 
+    fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
+        // A bullish confirmation marks its bar's low, a bearish one its high.
+        match line {
+            0 => crate::studies::ShapeSide::Below,
+            1 => crate::studies::ShapeSide::Above,
+            _ => crate::studies::ShapeSide::Centred,
+        }
+    }
+
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         let text: Vec<&str> = self
             .marked(line, bar)
@@ -1336,9 +1377,19 @@ impl Indicator for ChartPatterns {
         vec!["Bullish".into(), "Bearish".into(), "Developing".into()]
     }
 
-    /// Developing styles boundaries only and has no value to read.
+    // A confirmation's value only places its mark at the bar's high or low, and Developing
+    // holds no values, so no output is a reading.
     fn legend_lines(&self) -> Vec<usize> {
-        vec![0, 1]
+        Vec::new()
+    }
+
+    fn plot_tagged(&self, _line: usize) -> bool {
+        false
+    }
+
+    // Developing only styles the boundaries of formations not yet confirmed.
+    fn plot_holds_values(&self, line: usize) -> bool {
+        line < 2
     }
 
     // Developing holds no values, and a side holds values only while a formation that confirms
@@ -1563,7 +1614,9 @@ mod tests {
     const DOUBLE_TOP: [f64; 5] = [100.0, 120.0, 105.0, 119.0, 60.0];
     const TRIPLE_TOP: [f64; 7] = [100.0, 120.0, 105.0, 119.5, 105.5, 119.0, 60.0];
     const HEAD_AND_SHOULDERS: [f64; 7] = [100.0, 110.0, 100.0, 120.0, 101.0, 111.0, 80.0];
-    const CUP: [f64; 6] = [110.0, 120.0, 100.0, 119.0, 114.0, 130.0];
+    const CUP: [f64; 8] = [110.0, 120.0, 104.0, 100.0, 104.0, 119.0, 114.0, 130.0];
+    const V_CUP: [f64; 8] = [110.0, 120.0, 110.0, 100.0, 109.5, 119.0, 114.0, 130.0];
+    const NARROW_CUP: [f64; 7] = [110.0, 120.0, 101.0, 100.0, 119.0, 114.0, 130.0];
 
     fn reversal_cases() -> Vec<Case> {
         use FormationKind::*;
@@ -1582,15 +1635,20 @@ mod tests {
             ("inverse head and shoulders", mirror(&HEAD_AND_SHOULDERS), InverseHeadAndShoulders, Some((Bullish, 28))),
             ("head too low", vec![100.0, 110.0, 100.0, 112.0, 101.0, 111.0, 80.0], HeadAndShoulders, None),
             ("unequal shoulders", vec![100.0, 110.0, 100.0, 125.0, 101.0, 116.0, 80.0], HeadAndShoulders, None),
-            ("cup and handle", flat(&CUP), CupAndHandle, Some((Bullish, 23))),
-            ("inverted cup and handle", mirror(&CUP), InvertedCupAndHandle, Some((Bearish, 23))),
-            ("handle too deep", vec![110.0, 120.0, 100.0, 119.0, 105.0, 130.0], CupAndHandle, None),
-            ("unequal rims", vec![110.0, 120.0, 100.0, 112.0, 108.0, 130.0], CupAndHandle, None),
-            ("cup without a break", vec![110.0, 120.0, 100.0, 119.0, 114.0, 116.0], CupAndHandle, None),
+            ("cup and handle", flat(&CUP), CupAndHandle, Some((Bullish, 33))),
+            ("inverted cup and handle", mirror(&CUP), InvertedCupAndHandle, Some((Bearish, 33))),
+            ("cup with a handle longer than half the cup", vec![110.0, 120.0, 104.0, 100.0, 104.0, 119.0, 117.0, 115.5, 114.0, 130.0], CupAndHandle, Some((Bullish, 43))),
+            ("V-shaped cup", V_CUP.to_vec(), CupAndHandle, None),
+            ("V-shaped inverted cup", mirror(&V_CUP), InvertedCupAndHandle, None),
+            ("cup of 15 bars", NARROW_CUP.to_vec(), CupAndHandle, None),
+            ("inverted cup of 15 bars", mirror(&NARROW_CUP), InvertedCupAndHandle, None),
+            ("handle too deep", vec![110.0, 120.0, 104.0, 100.0, 104.0, 119.0, 105.0, 130.0], CupAndHandle, None),
+            ("unequal rims", vec![110.0, 120.0, 104.0, 100.0, 104.0, 112.0, 108.0, 130.0], CupAndHandle, None),
+            ("cup without a break", vec![110.0, 120.0, 104.0, 100.0, 104.0, 119.0, 114.0, 116.0], CupAndHandle, None),
             ("double top that recovers", vec![100.0, 120.0, 105.0, 119.0, 125.0], DoubleTop, None),
             ("head and shoulders that recovers", vec![100.0, 110.0, 100.0, 120.0, 101.0, 111.0, 125.0], HeadAndShoulders, None),
             ("double top with no break", vec![100.0, 120.0, 105.0, 119.0, 112.0], DoubleTop, None),
-            ("cup with a break back down", vec![110.0, 120.0, 100.0, 119.0, 114.0, 95.0], CupAndHandle, None),
+            ("cup with a break back down", vec![110.0, 120.0, 104.0, 100.0, 104.0, 119.0, 114.0, 116.0, 95.0, 130.0], CupAndHandle, None),
         ];
         cases
     }
@@ -1598,8 +1656,9 @@ mod tests {
     /// Each reversal fixture confirms on the hand-computed bar, often later than the first
     /// close beyond the neckline because the last pivot is known only three bars on, or, as a
     /// near miss breaking one rule, does not: unequal tops, a shallow valley, a third top
-    /// that is too low, a head too close to its shoulders, shoulders of unequal height, and a
-    /// handle that gives back more than half the cup. Mirrors give the other direction.
+    /// that is too low, a head too close to its shoulders, shoulders of unequal height, a
+    /// handle that gives back more than half the cup, a V-shaped cup and a cup of 15 bars; a
+    /// handle longer than half the cup still confirms. Mirrors give the other direction.
     #[test]
     fn reversal_fixtures_confirm_where_the_rules_say() {
         use FormationKind::*;
