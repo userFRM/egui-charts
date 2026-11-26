@@ -1381,6 +1381,11 @@ impl Indicator for ChartPatterns {
         vec![0, 1]
     }
 
+    // Developing only styles the boundaries of formations not yet confirmed.
+    fn plot_holds_values(&self, line: usize) -> bool {
+        line < 2
+    }
+
     // Developing holds no values, and a side holds values only while a formation that confirms
     // that way is on: a one-sided formation fails on a break the other way.
     fn alert_outputs(&self) -> Vec<(usize, String)> {
