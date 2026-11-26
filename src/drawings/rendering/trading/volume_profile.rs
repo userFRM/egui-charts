@@ -508,9 +508,7 @@ impl Drawing {
             && let Some(estimate) = &*profile
         {
             let mut estimate = estimate.clone();
-            for (up, down) in estimate.up.iter_mut().zip(&mut estimate.down) {
-                *down += std::mem::take(up);
-            }
+            estimate.count_single_bar(bar);
             return Rc::new(Some(estimate));
         }
         profile

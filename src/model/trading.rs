@@ -260,8 +260,8 @@ pub struct TakeProfitLevel {
     pub quantity: f64,
     /// The price at which a stop loss closes this level's quantity, for an account that accepts
     /// [level stops](Capabilities::take_profit_level_stops): below the entry for a buy, above
-    /// for a sell. When either fills, the other is cancelled. `None` leaves the level to the
-    /// order's [`stop_loss`](OrderRequest::stop_loss).
+    /// for a sell. When either fills or is cancelled, the other is cancelled. `None` leaves the
+    /// level to the order's [`stop_loss`](OrderRequest::stop_loss).
     #[serde(default)]
     pub stop_loss: Option<f64>,
 }
