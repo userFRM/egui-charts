@@ -795,6 +795,8 @@ impl DemoApp {
                 return false;
             }
         }
+        // The fixed table names its chart by slot, which now holds the layout's chart.
+        self.fixed_data_table.0.close();
         self.layout_tabs[self.layout_tab].name = name;
         if self.layout_slot >= layout.charts.len() {
             self.activate_chart_slot(0);
@@ -1797,5 +1799,29 @@ mod tests {
             other.contains(&123.375) && other.contains(&131.125) && !other.contains(&117.625),
             "other layout: {other:?}"
         );
+    }
+
+    /// The fixed table names its chart by slot, so opening a layout must close it rather than
+    /// show the new layout's chart with the old columns: #4162.
+    #[test]
+    fn opening_a_layout_closes_the_fixed_data_table() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.ensure_chart_slots(ChartLayoutMode::TwoHorizontal);
+        app.extra_charts[0].live.set_paused(true);
+        settle(&mut app, &ctx);
+        let saved = app.capture_layout().unwrap();
+        app.fixed_data_table.1 = 1;
+        app.fixed_data_table.0.open();
+        let mut invalid = saved.clone();
+        invalid.charts.pop();
+        assert!(!app.restore_layout("Two".into(), invalid, Ok(Vec::new())));
+        assert!(
+            app.fixed_data_table.0.is_open,
+            "a layout that fails to open changes nothing"
+        );
+        assert!(app.restore_layout("Two".into(), saved, Ok(Vec::new())));
+        assert!(!app.fixed_data_table.0.is_open);
     }
 }
