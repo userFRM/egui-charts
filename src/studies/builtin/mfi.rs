@@ -116,7 +116,11 @@ impl MoneyFlowIndex {
                 let pos_sum: f64 = positive_flows[start..=i].iter().sum();
                 let neg_sum: f64 = negative_flows[start..=i].iter().sum();
 
-                let mfi = super::rsi::from_averages(pos_sum, neg_sum);
+                let mfi = if pos_sum + neg_sum > 0.0 {
+                    super::rsi::from_averages(pos_sum, neg_sum)
+                } else {
+                    50.0
+                };
 
                 values.push(IndicatorValue::Single(mfi.clamp(0.0, 100.0)));
             }
