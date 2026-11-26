@@ -88,6 +88,10 @@ impl Trading {
                 .as_ref()
                 .map_or("", |account| account.currency.as_str()),
             balance: self.account.as_ref().map(|account| account.balance),
+            available_funds: self
+                .account
+                .as_ref()
+                .and_then(|account| account.available_funds),
             capabilities: self.capabilities(),
             rules: &self.rules,
             rules_ready: self.rules_ready && self.rules.symbol == symbol,
@@ -3021,6 +3025,88 @@ mod tests {
             }
             let market = trading.market(&chart, &theme.chart);
             assert_eq!(trading.ticket.request(&ctx, &market), Ok(order));
+        }
+    }
+
+    /// The order info sets the margin against the available funds the broker reports, giving
+    /// back the margin of the order being modified, or against the balance without them, and
+    /// shows the margin in the error colour once it exceeds that figure. A regression compares
+    /// with the balance while positions hold most of it, or warns on every change to a working
+    /// order.
+    #[test]
+    fn the_ticket_sets_margin_against_available_funds() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            // 500 at the limit of 110 are worth 55,000, so 5,500 of margin at 10:1.
+            for (funds, editing, expected, short) in [
+                (Some(2_000.0), false, "5,500.00 / 2,000.00", true),
+                (None, false, "5,500.00 / 100,000.00", false),
+                // The working order holds the same 5,500, which modifying it frees.
+                (Some(2_000.0), true, "5,500.00 / 7,500.00", false),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                chart.symbol = "SYM".into();
+                let request =
+                    OrderRequest::new("SYM", OrderSide::Buy, 500.0, OrderType::Limit(110.0));
+                let order = Order::new(OrderId::new("1"), request.clone(), OrderStatus::Working);
+                let mut account = Account::new(
+                    "USD",
+                    100_000.0,
+                    Capabilities {
+                        market: true,
+                        limit: true,
+                        modify: true,
+                        ..Capabilities::default()
+                    },
+                );
+                account.available_funds = funds;
+                let broker = Arc::new(Recorder {
+                    state: vec![
+                        AccountEvent::Account(account),
+                        AccountEvent::Order(order.clone()),
+                    ],
+                    ..Recorder::default()
+                });
+                let mut trading = Trading::default();
+                trading.set_service(broker.clone());
+                trading.poll(&ctx, &mut Toasts::new());
+                trading.open_ticket(request);
+                let (_, reply) = broker.rules.lock().unwrap().pop().unwrap();
+                let mut rules = TradingRules::new("SYM");
+                rules.leverage = Some(10.0);
+                reply.send(Ok(rules));
+                trading.poll(&ctx, &mut Toasts::new());
+                if editing {
+                    trading.ticket.edit(&order);
+                }
+                let mut color = None;
+                for _ in 0..2 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(340.0, 1200.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| trading.show_ticket(ui, &chart),
+                    );
+                    color = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == expected => {
+                            Some(text.galley.job.sections[0].format.color)
+                        }
+                        _ => None,
+                    });
+                    output.drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    color,
+                    Some(if short { theme.ui.error } else { theme.ui.text }),
+                    "{expected} with funds {funds:?}, editing {editing}, dark {}",
+                    theme.dark
+                );
+            }
         }
     }
 

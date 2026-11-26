@@ -364,9 +364,12 @@ pub(crate) struct Market<'a> {
     pub decimals: usize,
     /// The account's currency.
     pub currency: &'a str,
-    /// The account's balance: sizing and exits can take a percentage of it,
-    /// and an order's margin is set against it.
+    /// The account's balance: sizing and exits can take a percentage of it, and an order's
+    /// margin is set against it when the broker reports no available funds.
     pub balance: Option<f64>,
+    /// The account's available funds, when the broker reports them: an order's margin is set
+    /// against them.
+    pub available_funds: Option<f64>,
     pub capabilities: Capabilities,
     pub rules: &'a TradingRules,
     pub rules_ready: bool,
@@ -1329,6 +1332,7 @@ mod tests {
             decimals: 2,
             currency: "USD",
             balance: Some(10_000.0),
+            available_funds: None,
             capabilities: Capabilities {
                 market: true,
                 limit: true,
@@ -1782,6 +1786,7 @@ mod tests {
             decimals: 2,
             currency: "USD",
             balance: Some(10_000.0),
+            available_funds: None,
             capabilities,
             rules: &rules,
             rules_ready: true,
@@ -1925,6 +1930,7 @@ mod tests {
             decimals: 2,
             currency: "USD",
             balance: Some(10_000.0),
+            available_funds: None,
             capabilities,
             rules: &rules,
             rules_ready: true,
@@ -2070,6 +2076,7 @@ mod tests {
             decimals: 2,
             currency: "USD",
             balance: Some(100_000.0),
+            available_funds: None,
             capabilities,
             rules: &rules,
             rules_ready: true,
@@ -2670,6 +2677,7 @@ mod tests {
             decimals: 2,
             currency: "USD",
             balance: Some(100_000.0),
+            available_funds: None,
             capabilities: Capabilities {
                 market: true,
                 limit: true,
@@ -3058,6 +3066,7 @@ mod tests {
                 decimals: 5,
                 currency: "USD",
                 balance: None,
+                available_funds: None,
                 capabilities,
                 rules: &rules,
                 rules_ready: true,
