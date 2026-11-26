@@ -10,8 +10,9 @@ use egui::Color32;
 /// 1. Standard RSI
 /// 2. Up/Down Streak Length RSI
 /// 3. Percent rank of the one-bar return: the share of the previous rank-period bars whose
-///    return is at or below the latest one. The first bar, and a bar after a zero close, have
-///    no return and count as not at or below.
+///    return is at or below the latest one, within 1e-10 so that equal percentage moves tie.
+///    A move from a zero close is an infinite return; the first bar, and an unchanged zero
+///    close, have none, which is never at or below another return and ranks 0.
 ///
 /// The pane starts with an upper guide at 70, a lower guide at 30 and a light blue fill between
 /// them. Applied study settings edit each guide and the fill independently.
@@ -37,7 +38,8 @@ struct State {
     streak: f64,
     price_rsi: (usize, f64, f64),
     streak_rsi: (usize, f64, f64),
-    /// The one-bar returns of the last rank-period bars, NaN for a bar without one.
+    /// The one-bar returns of the last rank-period bars: infinite after a zero close, NaN for the
+    /// first bar and an unchanged zero close.
     roc: std::collections::VecDeque<f64>,
 }
 
@@ -128,7 +130,7 @@ impl Indicator for ConnorsRSI {
                     return IndicatorValue::None;
                 }
                 let previous = state.previous.replace(bar.close);
-                let (mut price_rsi, mut streak_rsi, mut roc) = (f64::NAN, f64::NAN, None);
+                let (mut price_rsi, mut streak_rsi, mut roc) = (f64::NAN, f64::NAN, f64::NAN);
                 if let Some(previous) = previous {
                     price_rsi =
                         Self::next_rsi(&mut state.price_rsi, bar.close - previous, self.rsi_period);
@@ -153,24 +155,20 @@ impl Indicator for ConnorsRSI {
                         self.streak_period,
                     );
                     state.streak = streak;
-                    if previous != 0.0 {
-                        roc = Some((bar.close - previous) / previous * 100.0);
-                    }
+                    // From a zero close the return is infinite, or NaN if the close stays at zero.
+                    roc = (bar.close - previous) / previous * 100.0;
                 } else {
                     // The first bar is neither equal to nor above a missing close.
                     state.streak = -1.0;
                 }
                 // The share of the previous `rank_period` bars whose return is at or below this
-                // one. A bar without a return holds NaN, which is never at or below, and has no
-                // rank itself.
-                let roc = roc.unwrap_or(f64::NAN);
+                // one, within 1e-10 so equal percentage moves from different prices tie. NaN is
+                // never at or below, and nothing is at or below a NaN return, which so ranks 0.
                 let mut rank = f64::NAN;
                 if state.roc.len() == self.rank_period {
-                    if !roc.is_nan() {
-                        rank = state.roc.iter().filter(|&&v| v <= roc).count() as f64
-                            / self.rank_period as f64
-                            * 100.0;
-                    }
+                    rank = state.roc.iter().filter(|&&v| v - roc <= 1e-10).count() as f64
+                        / self.rank_period as f64
+                        * 100.0;
                     state.roc.pop_front();
                 }
                 state.roc.push_back(roc);
@@ -338,18 +336,63 @@ mod tests {
         assert_values(&mut ConnorsRSI::new(), &closes, &expected);
     }
 
-    /// The bar after the zero close has no return and takes a rank slot that is never at or
-    /// below. Bar 3's return of 100 percent ranks over -100 and that slot: 50, and
-    /// (100 + 100 + 50) / 3. Bar 4's 50 percent ranks over that slot and 100: 0.
+    /// The returns 50 to 50.5 (1.0) and 20 to 20.2 (0.9999999999999963) differ by 4e-15, within
+    /// 1e-10, so they tie: bar 3 ranks over 1 and -60.4 percent at 100 and reads
+    /// (100 + 100 + 100) / 3.
     #[test]
-    fn bar_without_return_fills_a_rank_slot() {
-        let expected = [None, None, None, Some(250.0 / 3.0), Some(200.0 / 3.0)];
-        let closes = [1.0, 0.0, 1.0, 2.0, 3.0];
+    fn equal_percentage_moves_tie() {
         assert_values(
             &mut ConnorsRSI::new().with_periods(1, 1, 2),
-            &closes,
-            &expected,
+            &[50.0, 50.5, 20.0, 20.2],
+            &[None, None, Some(0.0), Some(100.0)],
         );
+    }
+
+    /// The first bar has no return and keeps a rank slot that is never at or below. A rise from
+    /// a zero close is an infinite return that ranks above every finite one, a fall to a negative
+    /// close ranks below every one, and an unchanged zero close has no return and ranks 0. With
+    /// RSI(1) and streak RSI(1) reading 100 on a rise and 0 on a fall:
+    /// - 1, 0, 1, 2, 3: bar 2 ranks +inf over NaN and -100 at 50, bar 3's 100 percent over -100
+    ///   and +inf at 50, bar 4's 50 percent over +inf and 100 at 0.
+    /// - 1, 0, 0, 2, 3: bar 2 ranks 0 with both RSI parts at 100, bar 3's +inf over -100 and NaN
+    ///   ranks 50, bar 4's 50 percent over NaN and +inf ranks 0.
+    /// - 1, 0, -1, 1: bar 2's -inf ranks 0 and falls, and bar 3's -200 percent ranks over -100
+    ///   and -inf at 50.
+    #[test]
+    fn bar_without_return_fills_a_rank_slot() {
+        let rows: [(&[f64], &[Option<f64>]); 3] = [
+            (
+                &[1.0, 0.0, 1.0, 2.0, 3.0],
+                &[
+                    None,
+                    None,
+                    Some(250.0 / 3.0),
+                    Some(250.0 / 3.0),
+                    Some(200.0 / 3.0),
+                ],
+            ),
+            (
+                &[1.0, 0.0, 0.0, 2.0, 3.0],
+                &[
+                    None,
+                    None,
+                    Some(200.0 / 3.0),
+                    Some(250.0 / 3.0),
+                    Some(200.0 / 3.0),
+                ],
+            ),
+            (
+                &[1.0, 0.0, -1.0, 1.0],
+                &[None, None, Some(0.0), Some(250.0 / 3.0)],
+            ),
+        ];
+        for (closes, expected) in rows {
+            assert_values(
+                &mut ConnorsRSI::new().with_periods(1, 1, 2),
+                closes,
+                expected,
+            );
+        }
     }
 
     /// A flat series has no losses, so both RSI components are 100, and each return ties with the
