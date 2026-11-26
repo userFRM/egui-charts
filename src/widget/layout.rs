@@ -7023,11 +7023,13 @@ mod tests {
         layout.set_sync_group(1, Some("Desk".into()));
         layout.set_detached(2, true);
         layout.set_active(0);
+        layout.set_tab_split(Some(TabSplit::new(2, TabSplitSide::Right)));
         show(&mut layout, &mut charts);
         // A, B, C become B, C, A.
         charts.rotate_left(1);
         layout.move_slot(0, 2);
         show(&mut layout, &mut charts);
+        assert_eq!(layout.tab_split().map(|split| split.slot), Some(1));
         assert_eq!(layout.link_groups(2), Some(linked.clone()));
         assert_eq!(layout.sync_group(0), Some("Desk"));
         assert!(layout.is_detached(1) && !layout.is_detached(2));
@@ -7036,6 +7038,7 @@ mod tests {
         charts.remove(0);
         layout.remove_slot(0);
         show(&mut layout, &mut charts);
+        assert_eq!(layout.tab_split().map(|split| split.slot), Some(0));
         assert_eq!(layout.sync_group(0), None);
         assert!(layout.is_detached(0));
         assert_eq!(layout.link_groups(1), Some(linked));
