@@ -550,7 +550,7 @@ impl DemoApp {
                 self.grid_edits += 1;
                 self.ensure_chart_slots(mode);
             }
-            LayoutAction::DownloadData => self.export_csv(None),
+            LayoutAction::DownloadData => self.export_csv(&Default::default(), None),
             LayoutAction::OpenLayout => self.open_layout = true,
             LayoutAction::CreateNew(name) => self.new_layout(Some(name), false),
             LayoutAction::SaveAs(name) => match self

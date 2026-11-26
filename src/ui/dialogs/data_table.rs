@@ -142,7 +142,11 @@ impl DataTableDialog {
             .as_ref()
             .is_none_or(|(cached, ..)| *cached != source)
         {
-            let (mut table, columns) = chart.data_table_with_columns(true);
+            let (mut table, columns) =
+                chart.data_table_with_columns(&crate::widget::DataExportOptions {
+                    values: crate::widget::DataValues::Displayed,
+                    ..Default::default()
+                });
             self.column_ids = columns;
             table.rows.reverse();
             // shortcut: counts characters, which monospace digits share; measure every cell if
@@ -267,7 +271,7 @@ impl DataTableDialog {
             }
             if Button::new("Export CSV").show(ui).clicked() {
                 // The file keeps plain numbers, as `Chart::export_csv` writes them.
-                let mut plain = chart.data_table_with_columns(false).0;
+                let mut plain = chart.data_table();
                 plain.rows.reverse();
                 if let Ok(csv) = plain.csv(&shown) {
                     action = DataTableAction::Export(csv);

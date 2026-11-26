@@ -1849,7 +1849,7 @@ impl DemoApp {
         let target = match config.format {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
-            ExportFormat::Csv => return self.export_csv(save_path),
+            ExportFormat::Csv => return self.export_csv(&config.data, save_path),
             ExportFormat::Svg => {
                 return self.export_svg(ctx, &config.image, config.scope, save_path);
             }
@@ -1858,8 +1858,12 @@ impl DemoApp {
         ctx.request_repaint();
     }
 
-    fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
-        let out = match self.chart.export_csv() {
+    fn export_csv(
+        &mut self,
+        options: &egui_charts::widget::DataExportOptions,
+        save_path: Option<std::path::PathBuf>,
+    ) {
+        let out = match self.chart.export_csv_with(options) {
             Ok(csv) => csv,
             Err(error) => return self.export_failed(save_path.is_some(), error.to_string()),
         };
@@ -4442,7 +4446,7 @@ impl DemoApp {
             }
             ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
             ContextMenuAction::OpenDataTable => self.data_table.open(),
-            ContextMenuAction::ExportCsv => self.export_csv(None),
+            ContextMenuAction::ExportCsv => self.export_csv(&Default::default(), None),
             ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
         }
@@ -11245,6 +11249,33 @@ mod tests {
                 assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, before + 1);
             }
         }
+    }
+
+    /// The dialog's CSV choices reach the file the demo writes.
+    #[test]
+    fn csv_export_follows_the_dialog_data_options() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let path = std::env::temp_dir().join(format!(
+            "egui-charts-export-test-{}.csv",
+            std::process::id()
+        ));
+        let mut data = egui_charts::widget::DataExportOptions::default();
+        data.include_main_series = false;
+        app.run_export(
+            &ctx,
+            egui_charts::ui::export::ExportConfig {
+                format: ExportFormat::Csv,
+                data,
+                ..Default::default()
+            },
+            Some(path.clone()),
+        );
+        let csv = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let header = csv.lines().next().unwrap();
+        assert!(header.starts_with("time"), "{header}");
+        assert!(!header.contains("open"), "{header}");
     }
 
     #[test]
