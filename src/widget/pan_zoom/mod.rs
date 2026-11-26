@@ -2076,7 +2076,8 @@ mod tests {
 
     /// Axes show their drag direction when both scale permissions allow it, otherwise the
     /// plot's cursor for the crosshair style. The plots keep their style cursor: Dot hides the
-    /// pointer under its painted dot, and an axis, which paints no dot, shows the arrow.
+    /// pointer under its painted dot and Magic under its wand, and an axis, which paints neither,
+    /// shows the arrow.
     #[test]
     fn axis_cursors_follow_axis_drag_permissions() {
         use crate::config::CrosshairStyle;
@@ -2090,6 +2091,16 @@ mod tests {
                 CursorIcon::Crosshair,
             ),
             (CrosshairStyle::Dot, CursorIcon::None, CursorIcon::Default),
+            // Without the drawings there is no wand, so the pointer stays.
+            (
+                CrosshairStyle::Magic,
+                if cfg!(feature = "drawings") {
+                    CursorIcon::None
+                } else {
+                    CursorIcon::Default
+                },
+                CursorIcon::Default,
+            ),
         ] {
             for (enabled, drag) in [(true, true), (false, true), (true, false)] {
                 for (target, resize) in [

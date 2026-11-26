@@ -301,11 +301,15 @@ impl Chart {
             }
             response
         };
-        // After every pane, so that a mark is one stroke above all of them.
+        // After every pane, so that a mark is one stroke above all of them, with the Magic
+        // cursor's emoji and wand above the marks.
         #[cfg(feature = "drawings")]
-        self.cursor_modes.render(ui);
-        // The Dot cursor hides the pointer only where its dot stands in for it: elsewhere on the
-        // chart (an axis, an open menu, a held readout, an empty plot) the arrow stays.
+        {
+            self.pointer_dot |= self.cursor_modes.render(ui);
+        }
+        // The Dot and Magic cursors hide the pointer only where their dot or wand stands in for
+        // it: elsewhere on the chart (an axis, an open menu, a held readout, an empty plot) the
+        // arrow stays.
         if !self.pointer_dot
             && ui.rect_contains_pointer(response.rect)
             && ui.ctx().output(|o| o.cursor_icon) == egui::CursorIcon::None
@@ -765,11 +769,8 @@ impl Chart {
             &mark_response,
             hover_rect,
             !eraser_mode
-                && matches!(
-                    self.chart_options.crosshair.style,
-                    crate::config::CrosshairStyle::Demonstration
-                        | crate::config::CrosshairStyle::Magic
-                ),
+                && self.chart_options.crosshair.style
+                    == crate::config::CrosshairStyle::Demonstration,
             !box_selection
                 && !drawing_tool_active
                 && self.drawings.dragging_handle.is_none()
@@ -2720,6 +2721,7 @@ impl Chart {
         // series beneath them; an empty-area click clears the selection. Clicks
         // in a study's pane are resolved where the panes are rendered, outside
         // this rect. A mark, or a click with the eraser or a drawing tool, keeps the selection.
+        // Under the Magic cursor a click away from every drawing also throws its emoji.
         if response.clicked()
             && !drawing_tool_active
             && !eraser_mode
@@ -2733,6 +2735,12 @@ impl Chart {
             match element_at(click_pos) {
                 Some((id, bar_idx)) if !on_drawing => self.selection.select(id, Some(bar_idx)),
                 _ => self.selection.deselect(),
+            }
+            // The Magic cursor's burst is decorative: the click above selects as under the cross.
+            #[cfg(feature = "drawings")]
+            if self.throws_confetti(chart_rect, click_pos) {
+                let now = ui.input(|input| input.time);
+                self.cursor_modes.throw(chart_rect, click_pos, now);
             }
         }
 
