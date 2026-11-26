@@ -32,11 +32,11 @@
 //! A score without a vote has no value. Categories use these thresholds:
 //!
 //! ```text
-//! Strong Buy   score >= 0.5
-//! Buy          0.1 <= score < 0.5
-//! Neutral      -0.1 < score < 0.1
-//! Sell         -0.5 < score <= -0.1
-//! Strong Sell  score <= -0.5
+//! Strong Buy   score > 0.5
+//! Buy          0.1 < score <= 0.5
+//! Neutral      -0.1 <= score <= 0.1
+//! Sell         -0.5 <= score < -0.1
+//! Strong Sell  score < -0.5
 //! ```
 //!
 //! The six outputs are the moving-average, oscillator and summary scores followed by their
@@ -492,15 +492,18 @@ impl TechnicalRatings {
                 votes as f64 / enabled as f64
             }
         };
-        let rated: Vec<f64> = basis
-            .groups()
-            .map(score)
-            .filter(|score| !score.is_nan())
-            .collect();
+        let rated: Vec<usize> = basis.groups().filter(|&group| votes[group] > 0).collect();
+        // Vote sums are whole numbers: over a common denominator the summary is rounded once,
+        // so an exact boundary such as the mean of 0.8 and -0.6 stays 0.1.
         let summary = if rated.is_empty() {
             f64::NAN
         } else {
-            rated.iter().sum::<f64>() / rated.len() as f64
+            let product: usize = rated.iter().map(|&group| votes[group]).product();
+            let numerator: f64 = rated
+                .iter()
+                .map(|&group| sum[group] * (product / votes[group]) as f64)
+                .sum();
+            numerator / (rated.len() * product) as f64
         };
         let chosen = basis.groups();
         [
@@ -615,18 +618,19 @@ impl Default for TechnicalRatings {
     }
 }
 
-/// The displayed rating of a score between -1 and 1.
+/// The displayed rating of a score between -1 and 1. A score on a boundary takes the inner
+/// rating: 0.5 is Buy, 0.1 and -0.1 are Neutral and -0.5 is Sell.
 pub(crate) fn rating(score: f64) -> &'static str {
-    if score >= 0.5 {
+    if score > 0.5 {
         "Strong Buy"
-    } else if score >= 0.1 {
+    } else if score > 0.1 {
         "Buy"
-    } else if score > -0.1 {
-        "Neutral"
-    } else if score > -0.5 {
+    } else if score < -0.5 {
+        "Strong Sell"
+    } else if score < -0.1 {
         "Sell"
     } else {
-        "Strong Sell"
+        "Neutral"
     }
 }
 
@@ -1406,6 +1410,13 @@ mod tests {
                 RatingBasis::All,
                 [0., 1., 0.5, 0.2, 1. / 11., 4. / 26.],
             ),
+            // 0.8 and -0.6 average to exactly 0.1, rated Neutral.
+            (
+                [4., -3.],
+                [5, 5],
+                RatingBasis::All,
+                [0.8, -0.6, 0.1, 5. / 15., 5. / 11., 10. / 26.],
+            ),
             (
                 [0., 1.],
                 [3, 1],
@@ -1437,13 +1448,15 @@ mod tests {
             }
         }
         for (score, label) in [
-            (0.5, "Strong Buy"),
-            (0.1, "Buy"),
-            (-0.1, "Sell"),
-            (-0.5, "Strong Sell"),
+            (0.75, "Strong Buy"),
+            (0.5, "Buy"),
+            (0.1, "Neutral"),
             (0., "Neutral"),
+            (-0.1, "Neutral"),
+            (-0.5, "Sell"),
+            (-0.75, "Strong Sell"),
         ] {
-            assert_eq!(rating(score), label);
+            assert_eq!(rating(score), label, "{score}");
         }
     }
 
