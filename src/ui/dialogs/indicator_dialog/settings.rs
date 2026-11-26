@@ -3064,10 +3064,16 @@ mod tests {
     /// Plots that hold values keep all three. Missed Pivot Levels switched from swings to the
     /// three periods offers its new third plot the same way. The call and put walls of an options
     /// profile offer only their visibility, unticked on a new profile, and their colour.
+    /// Developing of a chart pattern study, which only styles the boundaries of unconfirmed
+    /// formations, is offered as a zone plot is, and each Analyst price forecast output only its
+    /// visibility and colour.
     #[test]
     fn plots_offer_only_the_styles_they_use() {
         use crate::data::{Datafeed, HistoryPage, HistoryRequest, OptionChain, OptionChainQuery};
-        use crate::studies::{AutoKeyLevels, Gaps, MissedPivots, OptionsVolumeProfile};
+        use crate::studies::{
+            AnalystPriceForecast, AutoKeyLevels, ChartPatterns, Gaps, MissedPivots,
+            OptionsVolumeProfile,
+        };
         use egui::accesskit::{Role, Toggled};
         use egui_kittest::Harness;
         use egui_kittest::kittest::{NodeT, Queryable};
@@ -3095,7 +3101,7 @@ mod tests {
             usize,
             &'static [&'static str],
         );
-        let rows: [Row; 6] = [
+        let rows: [Row; 8] = [
             (
                 Box::new(MissedPivots::default()),
                 None,
@@ -3160,6 +3166,26 @@ mod tests {
                 7,
                 15,
                 &["Call wall", "Put wall"],
+            ),
+            // Developing only styles the boundaries of formations not yet confirmed.
+            (
+                Box::new(ChartPatterns::all()),
+                None,
+                &["Bullish", "Bearish", "Developing"],
+                3,
+                2,
+                3,
+                &[],
+            ),
+            // The chart draws the targets dotted at a fixed width.
+            (
+                Box::new(AnalystPriceForecast::default()),
+                None,
+                &["Positive", "Negative"],
+                0,
+                0,
+                2,
+                &[],
             ),
         ];
         for (study, period, names, styled, valued, wells, off) in rows {
