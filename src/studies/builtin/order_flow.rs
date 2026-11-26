@@ -109,7 +109,8 @@ impl OrderFlowStudy {
     /// candles carry the total until the selected anchor period changes (each exchange trading
     /// day by default); otherwise every candle opens at zero. Inputs select an inclusive size
     /// range, whether it measures each fill or its aggressive order, and candles or a cumulative
-    /// line / per-bar histogram. No volume is inferred from
+    /// line / per-bar histogram. The histogram draws a bar whose delta is above zero in the Up
+    /// colour and any other in the Down colour, as the candles do. No volume is inferred from
     /// price bars. The chart connects the same source as Size-Filtered CVD, including its
     /// historical coverage, retention and replay cutoff.
     ///
@@ -702,6 +703,14 @@ impl Indicator for OrderFlowStudy {
         for (old, new) in self.colors.iter_mut().zip(colors) {
             *old = new;
         }
+    }
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        // The per-bar histogram takes its candles' colours: a balanced bar sells.
+        if line != 0 || self.delta != Some(false) || self.candle_style {
+            return None;
+        }
+        let delta = self.values.value(0, bar)?;
+        Some(self.colors[1 + usize::from(delta <= 0.0)])
     }
     fn is_overlay(&self) -> bool {
         false
@@ -2491,5 +2500,63 @@ mod tests {
                 }
             );
         }
+    }
+
+    /// Execution Delta drawn as a histogram colours each bar as its candles do (#4314): the +5
+    /// bar takes Up, and the -5 bar and the balanced bar of a buy and a sell of 5 take Down. A
+    /// bar without executions has no value and no colour. Edited Up and Down colours recolour
+    /// the bars, and a saved study restores them.
+    #[test]
+    fn execution_delta_histogram_colours_bars_by_sign_and_keeps_edited_colours() {
+        use crate::studies::{ConfiguredStudy, IndicatorFactory, StudyTemplate, palette};
+        use OrderSide::{Buy, Sell};
+        let factory = IndicatorFactory::new();
+        // Each source gets the tape once; a second push would double every bar.
+        let fill = |study: &dyn Indicator| {
+            let input = &study.order_flow_inputs()[0];
+            let clock = BarClock::new(Timeframe::Min1);
+            let balanced: &[(f64, OrderSide)] = &[(5.0, Buy), (5.0, Sell)];
+            for (minute, trades) in [(0, &[(5.0, Buy)][..]), (1, &[(5.0, Sell)]), (2, balanced)] {
+                for (second, &(size, side)) in trades.iter().enumerate() {
+                    let at =
+                        start() + TimeDelta::minutes(minute) + TimeDelta::seconds(second as i64);
+                    input.push_trade(&clock, &Tick::new(at, 100.0, size, Some(side)));
+                }
+            }
+        };
+        let read = |study: &mut dyn Indicator| {
+            study.calculate(&bars());
+            (0..4)
+                .map(|bar| (study.values().value(0, bar), study.plot_color(0, bar)))
+                .collect::<Vec<_>>()
+        };
+        let expect = |up, down| {
+            [
+                (Some(5.0), Some(up)),
+                (Some(-5.0), Some(down)),
+                (Some(0.0), Some(down)),
+                (None, None),
+            ]
+        };
+        let mut study = ConfiguredStudy::new(factory.create("Execution Delta").unwrap());
+        study
+            .set_input("representation", InputValue::Choice(1))
+            .unwrap();
+        fill(&study);
+        assert_eq!(read(&mut study), expect(palette::UP, palette::DOWN));
+        let (up, down) = (
+            Color32::from_rgb(10, 200, 40),
+            Color32::from_rgb(200, 20, 120),
+        );
+        let mut settings = study.settings();
+        settings.plots[1].color = up;
+        settings.plots[2].color = down;
+        study.apply_settings(&[], settings).unwrap();
+        assert_eq!(read(&mut study), expect(up, down));
+        let saved = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
+        let template: StudyTemplate = serde_json::from_str(&saved).unwrap();
+        let mut restored = template.create_with(&factory).unwrap();
+        fill(restored.as_ref());
+        assert_eq!(read(restored.as_mut()), expect(up, down));
     }
 }
