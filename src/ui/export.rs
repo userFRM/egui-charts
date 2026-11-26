@@ -71,7 +71,7 @@ pub enum ExportFormat {
     Svg,
     /// Copy to system clipboard
     Clipboard,
-    /// CSV export of loaded bars and visible study plots
+    /// CSV export of the loaded bars and study values that [`ExportConfig::data`] chooses
     Csv,
 }
 
@@ -157,6 +157,9 @@ pub struct ExportConfig {
     /// host shows a layout ([`ExportDialog::set_layout_size`]) and for an image format; otherwise
     /// it asks for [`ExportScope::Chart`].
     pub scope: ExportScope,
+    /// Rows, columns and values of a CSV export, for
+    /// [`Chart::export_csv_with`](crate::widget::Chart::export_csv_with).
+    pub data: crate::widget::DataExportOptions,
 }
 
 impl Default for ExportConfig {
@@ -165,6 +168,7 @@ impl Default for ExportConfig {
             format: ExportFormat::Png,
             image: Default::default(),
             scope: ExportScope::Chart,
+            data: Default::default(),
         }
     }
 }
@@ -618,6 +622,52 @@ impl ExportDialog {
                     if changed {
                         self.reset_status();
                     }
+                } else {
+                    let data = &mut self.config.data;
+                    let mut changed = false;
+                    ui.label(l10n::text(ui.ctx(), "Include"));
+                    ui.vertical(|ui| {
+                        changed |= ui
+                            .checkbox(&mut data.include_time, l10n::text(ui.ctx(), "Time"))
+                            .changed();
+                        changed |= ui
+                            .checkbox(
+                                &mut data.include_main_series,
+                                l10n::text(ui.ctx(), "Main series"),
+                            )
+                            .changed();
+                        changed |= ui
+                            .checkbox(
+                                &mut data.include_hidden_studies,
+                                l10n::text(ui.ctx(), "Hidden studies"),
+                            )
+                            .changed();
+                        changed |= ui
+                            .checkbox(
+                                &mut data.include_values_past_last_bar,
+                                l10n::text(ui.ctx(), "Values past the last bar"),
+                            )
+                            .changed();
+                    });
+                    ui.end_row();
+                    let label = ui.label(l10n::text(ui.ctx(), "Values"));
+                    ui.horizontal(|ui| {
+                        for (values, name) in [
+                            (crate::widget::DataValues::Plain, "Plain"),
+                            (crate::widget::DataValues::Displayed, "As displayed"),
+                            (crate::widget::DataValues::Raw, "Raw"),
+                        ] {
+                            changed |= ui
+                                .radio_value(&mut data.values, values, l10n::text(ui.ctx(), name))
+                                .changed();
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+                    ui.end_row();
+                    if changed {
+                        self.reset_status();
+                    }
                 }
 
                 if self.config.format != ExportFormat::Clipboard {
@@ -652,9 +702,12 @@ impl ExportDialog {
         if self.config.format.is_data_format() {
             ui.add_space(theme.spacing.md);
             ui.label(
-                RichText::new(l10n::text(ui.ctx(), "Exports loaded bars and visible study values, using the chart time zone and price precision."))
-                    .size(theme.text.small)
-                    .color(theme.ui.text_secondary),
+                RichText::new(l10n::text(
+                    ui.ctx(),
+                    "Exports the loaded bars and the chosen study values in the chart time zone.",
+                ))
+                .size(theme.text.small)
+                .color(theme.ui.text_secondary),
             );
         }
         self.draw_status(ui);
@@ -1001,11 +1054,27 @@ mod tests {
             .set_layout_size(Some(egui::vec2(1900.0, 1000.0)));
         h.run_steps(2);
         click(&mut h, "CSV");
+        for label in ["Hidden studies", "Main series", "As displayed"] {
+            click(&mut h, label);
+        }
         h.key_press(Key::Enter);
         h.run_steps(2);
-        assert_eq!(h.state().1.as_ref().unwrap().scope, ExportScope::Chart);
+        let config = h.state().1.as_ref().unwrap();
+        assert_eq!(config.scope, ExportScope::Chart);
+        assert!(config.data.include_time && !config.data.include_main_series);
+        assert!(config.data.include_hidden_studies && !config.data.include_values_past_last_bar);
+        assert_eq!(config.data.values, crate::widget::DataValues::Displayed);
         assert_eq!(h.state().0.config.scope, ExportScope::Layout);
         h.state_mut().0.mark_success();
+        click(&mut h, "Cancel");
+        h.state_mut().0.open();
+        h.run_steps(2);
+        assert_eq!(
+            h.get_by_role_and_label(Role::CheckBox, "Hidden studies")
+                .accesskit_node()
+                .toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
         click(&mut h, "PNG");
         click(&mut h, "Keep proportions");
         edit(&mut h, 0, 6000.0);
