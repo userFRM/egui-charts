@@ -99,7 +99,7 @@ impl OrderTicket {
             Kind::StopLimit => &[("Stop price", false), ("Limit price", true)],
             Kind::TrailingStop => &[],
         };
-        let touch = self.touch(market).or(market.last);
+        let touch = self.reference(market);
         for &(label, limit) in prices {
             muted(ui, label);
             let in_ticks = self.price_in_ticks && touch.is_some();
