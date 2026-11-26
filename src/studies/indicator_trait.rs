@@ -17,6 +17,10 @@ pub(crate) trait ConcreteStudy {
     fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
     where
         Self: 'static;
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study_mut(&mut self, cast: &dyn std::any::Any) -> Option<&mut dyn std::any::Any>
+    where
+        Self: 'static;
 }
 
 impl<T: ?Sized> ConcreteStudy for T {
@@ -26,6 +30,14 @@ impl<T: ?Sized> ConcreteStudy for T {
         Self: 'static,
     {
         cast.downcast_ref::<fn(&T) -> &dyn std::any::Any>()
+            .map(|cast| cast(self))
+    }
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    fn concrete_study_mut(&mut self, cast: &dyn std::any::Any) -> Option<&mut dyn std::any::Any>
+    where
+        Self: 'static,
+    {
+        cast.downcast_ref::<fn(&mut T) -> &mut dyn std::any::Any>()
             .map(|cast| cast(self))
     }
 }
@@ -1208,6 +1220,10 @@ impl dyn Indicator {
     pub(crate) fn concrete<T: 'static>(&self) -> Option<&T> {
         let cast: fn(&T) -> &dyn std::any::Any = |value| value;
         ConcreteStudy::concrete_study(self, &cast)?.downcast_ref()
+    }
+    pub(crate) fn concrete_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        let cast: fn(&mut T) -> &mut dyn std::any::Any = |value| value;
+        ConcreteStudy::concrete_study_mut(self, &cast)?.downcast_mut()
     }
 }
 
