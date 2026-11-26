@@ -13,9 +13,10 @@
 //! ```
 //!
 //! The upward output holds the bar's low and the downward output its high, so the shapes sit
-//! beneath and above the bar. A signal needs `lookback` earlier bars, is known when its bar closes
-//! and never changes with later bars. Bars with a non-finite high, low or close are skipped. The
-//! default lookback is 20 bars.
+//! beneath and above the bar. These values only place the marks: the legend lists neither, and the
+//! price scale starts without their tags. A signal needs `lookback` earlier bars, is known when its
+//! bar closes and never changes with later bars. Bars with a non-finite high, low or close are
+//! skipped. The default lookback is 20 bars.
 
 use crate::model::Bar;
 use crate::studies::palette;
@@ -133,6 +134,15 @@ impl Indicator for Reversal {
         } else {
             crate::studies::ShapeSide::Above
         }
+    }
+
+    // A mark's value only places its triangle at the bar's low or high, so it is no reading.
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn plot_tagged(&self, _line: usize) -> bool {
+        false
     }
 
     fn values(&self) -> &IndicatorValues {
