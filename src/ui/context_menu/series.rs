@@ -1,6 +1,6 @@
 //! Series context menu - right-click menu when series is selected.
 //!
-//! Offers an alert, an indicator, the clicked price and the series settings.
+//! Offers an alert, a note, an indicator, the clicked price and the series settings.
 
 use crate::chart::series::SeriesId;
 use crate::config::KeyboardAction;
@@ -27,6 +27,11 @@ pub enum SeriesContextMenuAction {
     None,
     /// Add a price alert at [`ChartMenus::series_alert_price`](crate::ui::context_menu::ChartMenus::series_alert_price).
     AddAlert,
+    /// Write a note on this symbol, such as with
+    /// [`SymbolDetailsPanel::focus_notes`](crate::ui::widget_bar::SymbolDetailsPanel::focus_notes).
+    /// Offered after
+    /// [`ChartMenus::set_add_note_visible`](crate::ui::context_menu::ChartMenus::set_add_note_visible).
+    AddNote(String),
     /// Add an indicator
     AddIndicator,
     /// Copy the clicked price to clipboard
@@ -40,6 +45,7 @@ impl SeriesContextMenuAction {
         Some(match self {
             Self::None => return None,
             Self::AddAlert => MenuRowId::AddAlert,
+            Self::AddNote(_) => MenuRowId::AddNote,
             Self::AddIndicator => MenuRowId::AddIndicator,
             Self::CopyPrice => MenuRowId::CopyPrice,
             Self::OpenSettings => MenuRowId::SeriesSettings,
@@ -69,6 +75,9 @@ pub struct SeriesContextMenu {
     /// Controls the host hid, set through
     /// [`ChartMenus::set_control_visible`](crate::ui::context_menu::ChartMenus::set_control_visible).
     pub(crate) hidden: HashSet<Control>,
+    /// Offer writing a note on the symbol, set through
+    /// [`ChartMenus::set_add_note_visible`](crate::ui::context_menu::ChartMenus::set_add_note_visible).
+    pub(crate) add_note: bool,
 }
 
 impl Default for SeriesContextMenu {
@@ -89,6 +98,7 @@ impl SeriesContextMenu {
             last_action: SeriesContextMenuAction::None,
             just_opened: false,
             hidden: HashSet::new(),
+            add_note: false,
         }
     }
 
@@ -152,6 +162,16 @@ impl SeriesContextMenu {
                 )
                 .with_icon(&embedded_icons::ALERTS)
                 .with_shortcut(shortcuts.shortcut(KeyboardAction::CreateAlert)),
+            ));
+        }
+        if has_symbol && self.add_note {
+            items.push(MenuEntry::Item(
+                MenuItem::new(
+                    l10n::format_text(ctx, "Add note on {symbol}…", &[("symbol", symbol.as_str())]),
+                    SeriesContextMenuAction::AddNote(symbol.clone()),
+                )
+                .with_icon(&embedded_icons::NOTE)
+                .with_shortcut(shortcuts.shortcut(KeyboardAction::AddNote)),
             ));
         }
         items.extend([

@@ -9,8 +9,9 @@ use egui::Color32;
 /// Composite momentum indicator combining:
 /// 1. Standard RSI
 /// 2. Up/Down Streak Length RSI
-/// 3. Percent rank of the one-bar return: the share of the previous rank-period returns at or
-///    below the latest one
+/// 3. Percent rank of the one-bar return: the share of the previous rank-period bars whose
+///    return is at or below the latest one. The first bar, and a bar after a zero close, have
+///    no return and count as not at or below.
 ///
 /// The pane starts with an upper guide at 70, a lower guide at 30 and a light blue fill between
 /// them. Applied study settings edit each guide and the fill independently.
@@ -36,7 +37,7 @@ struct State {
     streak: f64,
     price_rsi: (usize, f64, f64),
     streak_rsi: (usize, f64, f64),
-    /// The last rank-period one-bar returns.
+    /// The one-bar returns of the last rank-period bars, NaN for a bar without one.
     roc: std::collections::VecDeque<f64>,
 }
 
@@ -155,19 +156,24 @@ impl Indicator for ConnorsRSI {
                     if previous != 0.0 {
                         roc = Some((bar.close - previous) / previous * 100.0);
                     }
+                } else {
+                    // The first bar is neither equal to nor above a missing close.
+                    state.streak = -1.0;
                 }
-                // The share of the previous `rank_period` returns at or below this one. A bar
-                // without a return has no rank and leaves the window as it was.
+                // The share of the previous `rank_period` bars whose return is at or below this
+                // one. A bar without a return holds NaN, which is never at or below, and has no
+                // rank itself.
+                let roc = roc.unwrap_or(f64::NAN);
                 let mut rank = f64::NAN;
-                if let Some(roc) = roc {
-                    if state.roc.len() == self.rank_period {
+                if state.roc.len() == self.rank_period {
+                    if !roc.is_nan() {
                         rank = state.roc.iter().filter(|&&v| v <= roc).count() as f64
                             / self.rank_period as f64
                             * 100.0;
-                        state.roc.pop_front();
                     }
-                    state.roc.push_back(roc);
+                    state.roc.pop_front();
                 }
+                state.roc.push_back(roc);
                 if price_rsi.is_nan() || streak_rsi.is_nan() || rank.is_nan() {
                     IndicatorValue::None
                 } else {
@@ -252,25 +258,12 @@ mod tests {
         }
     }
 
-    /// Wilder RSI(2) of the closes reads 100, 50, 25, 25, 25 and of the streaks 100, 25, 50/3,
-    /// 450/7, 450/7 from bar 2. The rank waits for two previous returns, so the first value is at
-    /// bar 3. The returns 1, 100/101, -100/102, -100/101, 0 and 0 percent rank 0, 0, 100 and, the
-    /// last tied with the zero before it, 100 percent.
-    #[test]
-    fn test_streak_calculation() {
-        let data = [100.0, 101.0, 102.0, 101.0, 100.0, 100.0, 100.0].map(make_bar);
-        let expected = [
-            None,
-            None,
-            None,
-            Some(25.0),
-            Some(125.0 / 9.0),
-            Some(1325.0 / 21.0),
-            Some(1325.0 / 21.0),
-        ];
-        let mut study = ConnorsRSI::new().with_periods(2, 2, 2);
+    /// Asserts each bar's value, `None` where the study has none, to 1e-9.
+    fn assert_values(study: &mut ConnorsRSI, closes: &[f64], expected: &[Option<f64>]) {
+        let data: Vec<Bar> = closes.iter().copied().map(make_bar).collect();
         study.calculate(&data);
-        for (bar, want) in expected.into_iter().enumerate() {
+        assert_eq!(study.values().len(), expected.len());
+        for (bar, &want) in expected.iter().enumerate() {
             let got = study.values().value(0, bar);
             let same = match (got, want) {
                 (Some(got), Some(want)) => (got - want).abs() < 1e-9,
@@ -278,6 +271,85 @@ mod tests {
             };
             assert!(same, "bar {bar}: {got:?} != {want:?}");
         }
+    }
+
+    /// The first bar is neither equal to nor above a missing close, so the streaks run -1, 1, 2,
+    /// -1, -2, 0, 0. Wilder RSI(2) of the closes reads 100, 50, 25, 25, 25 and of the streaks 100,
+    /// 100/3, 300/13, 1900/29, 1900/29 from bar 2. From bar 2 the rank counts the two previous
+    /// bars, the first without a return, so bar 2 ranks 100/101 percent above neither: 0. The
+    /// returns 1, 100/101, -100/102, -100/101, 0 and 0 percent rank 0, 0, 100 and, the last tied
+    /// with the zero before it, 100 percent. RSI(3) of the closes first reads 200/3 at bar 3 and
+    /// 400/9 at bar 5, where the rank over five bars is 40.
+    #[test]
+    fn test_streak_calculation() {
+        let closes = [100.0, 101.0, 102.0, 101.0, 100.0, 100.0, 100.0];
+        let rows = [
+            (
+                (2, 2, 2),
+                [
+                    None,
+                    None,
+                    Some(200.0 / 3.0),
+                    Some(250.0 / 9.0),
+                    Some(625.0 / 39.0),
+                    Some(5525.0 / 87.0),
+                    Some(5525.0 / 87.0),
+                ],
+            ),
+            (
+                (3, 2, 2),
+                [
+                    None,
+                    None,
+                    None,
+                    Some(100.0 / 3.0),
+                    Some(7900.0 / 351.0),
+                    Some(54800.0 / 783.0),
+                    Some(54800.0 / 783.0),
+                ],
+            ),
+            (
+                (3, 2, 5),
+                [
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(39140.0 / 783.0),
+                    Some(44360.0 / 783.0),
+                ],
+            ),
+        ];
+        for ((rsi, streak, rank), expected) in rows {
+            let mut study = ConnorsRSI::new().with_periods(rsi, streak, rank);
+            assert_values(&mut study, &closes, &expected);
+        }
+    }
+
+    /// Doubling closes only gain, so both RSI parts read 100 once warm, and every return is 100
+    /// percent. Bar 100 ranks over bars 0 to 99: bar 0 has no return, the other 99 tie, so the
+    /// rank is 99 and the value (100 + 100 + 99) / 3. Bar 101 ranks over 100 tied returns.
+    #[test]
+    fn first_value_at_rank_period() {
+        let closes: Vec<f64> = (0..102).map(|i| 2f64.powi(i)).collect();
+        let mut expected = vec![None; 100];
+        expected.extend([Some(299.0 / 3.0), Some(100.0)]);
+        assert_values(&mut ConnorsRSI::new(), &closes, &expected);
+    }
+
+    /// The bar after the zero close has no return and takes a rank slot that is never at or
+    /// below. Bar 3's return of 100 percent ranks over -100 and that slot: 50, and
+    /// (100 + 100 + 50) / 3. Bar 4's 50 percent ranks over that slot and 100: 0.
+    #[test]
+    fn bar_without_return_fills_a_rank_slot() {
+        let expected = [None, None, None, Some(250.0 / 3.0), Some(200.0 / 3.0)];
+        let closes = [1.0, 0.0, 1.0, 2.0, 3.0];
+        assert_values(
+            &mut ConnorsRSI::new().with_periods(1, 1, 2),
+            &closes,
+            &expected,
+        );
     }
 
     /// A flat series has no losses, so both RSI components are 100, and each return ties with the
