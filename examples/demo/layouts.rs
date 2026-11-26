@@ -1899,11 +1899,13 @@ mod tests {
             .collect()
     }
 
-    /// The demo adds, moves and closes its charts through the tab strip: a new tab copies the
-    /// active chart and is selected, a moved chart keeps its sync group, a closed tab's chart
-    /// leaves the slots, and the last tab offers no close button.
+    /// The demo adds, splits, moves and closes its charts through the tab strip: a new tab copies
+    /// the active chart and is selected, a tab dropped on the chart area is shown beside it and
+    /// saved so, a moved chart keeps its sync group, a closed tab's chart leaves the slots, and the
+    /// last tab offers no close button.
     #[test]
     fn chart_tabs_add_close_and_move_through_the_strip() {
+        use egui_charts::widget::TabSplitSide;
         use egui_kittest::{Harness, kittest::Queryable};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
@@ -1914,6 +1916,8 @@ mod tests {
         app.ensure_chart_slots(ChartLayoutMode::Tabs);
         app.activate_chart_slot(1);
         app.switch_symbol("STOCKB");
+        // A tab reads its stored drawings once shown, and the layout saves only after that.
+        settle(&mut app, &ctx);
         app.activate_chart_slot(0);
         app.layout.set_sync_group(0, Some("Desk".into()));
         settle(&mut app, &ctx);
@@ -1936,29 +1940,55 @@ mod tests {
             [first.as_str(), "STOCKB", first.as_str()]
         );
         assert_eq!((app.layout_slot, app.layout.active()), (2, 2));
-        // The first tab dragged past the third.
-        let mut tabs: Vec<_> = h
-            .get_all_by_role(egui::Role::Tab)
-            .map(|tab| tab.rect())
-            .collect();
-        tabs.sort_by(|a, b| a.left().total_cmp(&b.left()));
-        let (from, to) = (tabs[0].center(), tabs[2].center() + egui::vec2(10.0, 0.0));
+        let area = app.chart.get_rendered_price_rect();
+        let tabs = |h: &Harness<'_, Box<DemoApp>>| {
+            let mut tabs: Vec<_> = h
+                .get_all_by_role(egui::Role::Tab)
+                .map(|tab| tab.rect())
+                .collect();
+            tabs.sort_by(|a, b| a.left().total_cmp(&b.left()));
+            tabs
+        };
         let button = |pos, pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        h.event(egui::Event::PointerMoved(from));
-        h.step();
-        h.event(button(from, true));
-        h.step();
-        for step in 1..=10 {
-            h.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 10.0)));
+        let drag = |h: &mut Harness<'_, Box<DemoApp>>, from: egui::Pos2, to: egui::Pos2| {
+            h.event(egui::Event::PointerMoved(from));
             h.step();
-        }
-        h.event(button(to, false));
+            h.event(button(from, true));
+            h.step();
+            for step in 1..=10 {
+                h.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 10.0)));
+                h.step();
+            }
+            h.event(button(to, false));
+            h.run_steps(3);
+        };
+        // The first tab dropped on the right part of the chart area is shown there and saved.
+        let to = egui::pos2(area.left() + 0.9 * area.width(), area.center().y);
+        let from = tabs(&h)[0].center();
+        drag(&mut h, from, to);
+        let split = h.state().layout.tab_split();
+        assert_eq!(
+            split.map(|split| (split.slot, split.side)),
+            Some((0, TabSplitSide::Right))
+        );
+        assert_eq!(h.state_mut().capture_layout().unwrap().tab_split, split);
+        // The drop selected the first tab; the third is selected again.
+        let tabs = tabs(&h);
+        h.event(button(tabs[2].center(), true));
+        h.event(button(tabs[2].center(), false));
         h.run_steps(3);
+        assert_eq!(h.state().layout.active(), 2);
+        // The first tab dragged past the third, back on the strip.
+        drag(
+            &mut h,
+            tabs[0].center(),
+            tabs[2].center() + egui::vec2(10.0, 0.0),
+        );
         let app = h.state();
         assert_eq!(
             slot_symbols(app),
