@@ -1102,12 +1102,15 @@ impl Chart {
     }
 
     /// The start of the range to ask for below `before`: the time `scroll_to_time` is heading
-    /// for, while it lies before `before`.
+    /// for, while it lies before `before`. A kept left edge asks by count alone: the bar of the
+    /// new interval that holds its time can open before it, and an empty range would end the
+    /// history.
     fn range_start(
         &self,
         before: chrono::DateTime<chrono::Utc>,
     ) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.pending_scroll_time.filter(|time| *time < before)
+        self.pending_scroll_time
+            .filter(|time| *time < before && self.pending_left_edge.is_none())
     }
 
     /// A prepared footprint (also a study's) can draw without individual executions. Let its

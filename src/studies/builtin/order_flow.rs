@@ -3,23 +3,59 @@
 use super::anchor_period::AnchorPeriod;
 use super::trade_delta::CvdMarkers;
 use crate::data::{OrderFilter, OrderFlowInput, OrderFlowKind, SizeBasis};
-use crate::model::{Bar, BarClock};
+use crate::model::{Bar, BarClock, Timeframe};
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType, StudyCandle, StudyInput,
 };
-use chrono::TimeDelta;
+use chrono::{DateTime, TimeDelta, Utc};
 use egui::Color32;
 
-const ANCHORS: [Option<AnchorPeriod>; 8] = [
-    None,
-    Some(AnchorPeriod::Session),
-    Some(AnchorPeriod::Week),
-    Some(AnchorPeriod::Month),
-    Some(AnchorPeriod::Quarter),
-    Some(AnchorPeriod::Year),
-    Some(AnchorPeriod::Decade),
-    Some(AnchorPeriod::Century),
+/// When the running total of Cumulative Execution Delta and Size-Filtered CVD returns to zero.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Reset {
+    /// Never.
+    Continuous,
+    /// On the first bar of each calendar period of exchange trading days.
+    Period(AnchorPeriod),
+    /// On the first bar of each interval of the study's reset minutes, aligned as the chart's
+    /// clock aligns bars of that length: from each session open, or from midnight in the
+    /// clock's time zone without a session. A whole day follows the trading day, as Session does.
+    Interval,
+}
+
+/// The Reset period choices in their saved order: new choices go at the end.
+const RESETS: [Reset; 9] = [
+    Reset::Continuous,
+    Reset::Period(AnchorPeriod::Session),
+    Reset::Period(AnchorPeriod::Week),
+    Reset::Period(AnchorPeriod::Month),
+    Reset::Period(AnchorPeriod::Quarter),
+    Reset::Period(AnchorPeriod::Year),
+    Reset::Period(AnchorPeriod::Decade),
+    Reset::Period(AnchorPeriod::Century),
+    Reset::Interval,
 ];
+
+/// The reset period of a bar opening at `time`: a bar continues the running total of an earlier
+/// bar only when their keys are equal. Always `None` for [`Reset::Continuous`].
+fn reset_key(
+    reset: Reset,
+    minutes: usize,
+    clock: &BarClock,
+) -> impl Fn(DateTime<Utc>) -> Option<i64> {
+    let sessions = clock.sessions();
+    // A whole day resets with the trading day, as Session does.
+    let interval = (reset == Reset::Interval && minutes < 1440).then(|| {
+        let seconds = std::num::NonZeroU64::new(minutes as u64 * 60).expect("at least one minute");
+        clock.for_timeframe(Timeframe::Custom(seconds))
+    });
+    move |time| match (reset, &interval) {
+        (Reset::Continuous, _) => None,
+        (Reset::Interval, Some(clock)) => Some(clock.bar_open(time).timestamp_millis()),
+        (Reset::Period(period), _) => Some(period.index(sessions.trading_date(time))),
+        (Reset::Interval, None) => Some(AnchorPeriod::Session.index(sessions.trading_date(time))),
+    }
+}
 
 /// An order-flow study in a separate pane. Use the factory titles or [`Self::new`].
 ///
@@ -27,6 +63,8 @@ const ANCHORS: [Option<AnchorPeriod>; 8] = [
 /// if it needs values before that change. Reset period, representation and marker settings reuse
 /// the held source. Book size and book balance use the last synchronized snapshot in the bar;
 /// spread averages every accepted quote equally. Bars without the relevant stream remain gaps.
+/// Each input declares the value the study was built with as its default; Reset inputs in the
+/// settings dialog restores it.
 #[derive(Clone, Debug)]
 pub struct OrderFlowStudy {
     kind: OrderFlowKind,
@@ -44,13 +82,19 @@ pub struct OrderFlowStudy {
     delta: Option<bool>,
     candle_style: bool,
     candles: Vec<StudyCandle>,
-    anchor: Option<AnchorPeriod>,
+    reset: Reset,
+    /// Length of a [`Reset::Interval`] period, 1 to 1440.
+    reset_minutes: usize,
     volume_precision: Option<usize>,
     markers: CvdMarkers,
     /// Earlier bars used to rank each execution range.
     lookback: usize,
     /// Low and high percentile boundaries for Volatility Regime.
     regime: [f64; 2],
+    /// The kind this study was built with; its inputs declare these values as their defaults.
+    initial: OrderFlowKind,
+    /// The order filter this study was built with, the defaults of its filter inputs.
+    initial_filter: OrderFilter,
 }
 
 impl OrderFlowStudy {
@@ -89,19 +133,24 @@ impl OrderFlowStudy {
             delta: None,
             candle_style: false,
             candles: Vec::new(),
-            anchor: None,
+            reset: Reset::Continuous,
+            reset_minutes: 60,
             volume_precision: None,
             markers: CvdMarkers::default(),
             lookback: 100,
             regime: [20.0, 80.0],
+            initial: kind,
+            initial_filter: OrderFilter::default(),
         }
     }
 
     /// Exact execution delta in a separate pane, as candles by default. With `cumulative`,
-    /// candles carry the total until the selected anchor period changes (each exchange trading
-    /// day by default); otherwise every candle opens at zero. Inputs select an inclusive size
+    /// candles carry the total until the selected reset period changes (each exchange trading
+    /// day by default, or each interval of 1 to 1440 minutes, aligned as the chart's clock aligns
+    /// bars of that length); otherwise every candle opens at zero. Inputs select an inclusive size
     /// range, whether it measures each fill or its aggressive order, and candles or a cumulative
-    /// line / per-bar histogram. No volume is inferred from
+    /// line / per-bar histogram. The histogram draws a bar whose delta is above zero in the Up
+    /// colour and any other in the Down colour, as the candles do. No volume is inferred from
     /// price bars. The chart connects the same source as Size-Filtered CVD, including its
     /// historical coverage, retention and replay cutoff.
     ///
@@ -118,7 +167,11 @@ impl OrderFlowStudy {
         Self {
             delta: Some(cumulative),
             candle_style: true,
-            anchor: cumulative.then_some(AnchorPeriod::Session),
+            reset: if cumulative {
+                Reset::Period(AnchorPeriod::Session)
+            } else {
+                Reset::Continuous
+            },
             colors: vec![
                 crate::studies::palette::BLUE,
                 crate::studies::palette::UP,
@@ -178,9 +231,8 @@ impl OrderFlowStudy {
                 }
             }
             OrderFlowKind::FilteredCvd { .. } => {
-                let sessions = self.clock.sessions();
-                let period =
-                    |bar: &Bar| self.anchor.map(|a| a.key(sessions.trading_date(bar.time)));
+                let key = reset_key(self.reset, self.reset_minutes, &self.clock);
+                let period = |bar: &Bar| key(bar.time);
                 let mut last = self
                     .values
                     .line(0)
@@ -271,11 +323,8 @@ impl OrderFlowStudy {
         if self.delta == Some(true) && self.markers.enabled() {
             let start = self.markers.start(data.len(), from);
             let rows = self.rows(data, start);
-            let sessions = self.clock.sessions();
-            let period = |at: usize| {
-                self.anchor
-                    .map(|a| a.key(sessions.trading_date(data[at].time)))
-            };
+            let key = reset_key(self.reset, self.reset_minutes, &self.clock);
+            let period = |at: usize| key(data[at].time);
             self.markers
                 .refresh(data, start, &rows, &mut self.values, |at| {
                     at > 0 && period(at) != period(at - 1)
@@ -286,8 +335,9 @@ impl OrderFlowStudy {
     /// Book size or book balance over the individual orders `filter` accepts: a minimum size,
     /// minimum and maximum resting ages and excluded participants, all but the last also set by the study's
     /// inputs. Needs a feed that sends order events, see [`OrderFlowInput::with_order_filter`].
-    /// Starts a fresh source.
+    /// Starts a fresh source. The filter inputs declare these values as their defaults.
     pub fn with_order_filter(mut self, filter: OrderFilter) -> Self {
+        self.initial_filter = filter.clone();
         self.filter = filter;
         self.reset();
         self
@@ -302,6 +352,272 @@ impl OrderFlowStudy {
         self.candles.clear();
         self.markers.labels.clear();
         self.reset_revision = 0;
+    }
+
+    /// The inputs with their current values, each declaring that value as its default.
+    fn listed_inputs(&self) -> Vec<StudyInput> {
+        let length = |id, label, value, min, max| {
+            StudyInput::new(
+                id,
+                label,
+                InputValue::Length(value),
+                InputKind::Length(min, max),
+            )
+        };
+        let order_filter = || {
+            [
+                StudyInput::new(
+                    "min_size",
+                    "Minimum order size (needs order events)",
+                    InputValue::Number(self.filter.min_size),
+                    InputKind::Number(0.0, f64::MAX),
+                ),
+                StudyInput::new(
+                    "min_age",
+                    "Minimum resting seconds (0 for any, needs order events)",
+                    InputValue::Number(self.filter.min_age.map_or(0.0, |age| age.as_seconds_f64())),
+                    InputKind::Number(0.0, 86400.0),
+                ),
+                StudyInput::new(
+                    "max_age",
+                    "Maximum resting seconds (0 for any, needs order events)",
+                    InputValue::Number(self.filter.max_age.map_or(0.0, |age| age.as_seconds_f64())),
+                    InputKind::Number(0.0, 86400.0),
+                ),
+            ]
+        };
+        let combine = StudyInput::new(
+            "combine_fills",
+            "Combine fills of an aggressive order",
+            InputValue::Toggle(self.basis == SizeBasis::AggressiveOrder),
+            InputKind::Toggle,
+        );
+        match self.kind {
+            OrderFlowKind::Spread => vec![],
+            OrderFlowKind::BookSize { levels, distance } => {
+                let mut inputs = vec![
+                    length("levels", "Nearest levels", levels, 1, 10000),
+                    StudyInput::new(
+                        "distance",
+                        "Price distance (0 uses levels)",
+                        InputValue::Number(distance),
+                        InputKind::Number(0.0, f64::MAX),
+                    ),
+                ];
+                inputs.extend(order_filter());
+                inputs
+            }
+            OrderFlowKind::BookBalance {
+                near_levels,
+                far_levels,
+                near_distance,
+                far_distance,
+            } => {
+                let mut inputs = vec![
+                    length("near_levels", "Near levels", near_levels, 1, 10000),
+                    length(
+                        "far_levels",
+                        "Far levels beyond the near band",
+                        far_levels,
+                        1,
+                        10000,
+                    ),
+                    StudyInput::new(
+                        "near_distance",
+                        "Near price distance (0 uses levels)",
+                        InputValue::Number(near_distance),
+                        InputKind::Number(0.0, f64::MAX),
+                    ),
+                    StudyInput::new(
+                        "far_distance",
+                        "Far price distance beyond the near band",
+                        InputValue::Number(far_distance),
+                        InputKind::Number(0.0, f64::MAX),
+                    ),
+                ];
+                inputs.extend(order_filter());
+                inputs
+            }
+            OrderFlowKind::PriceRange { seconds } => vec![
+                length("seconds", "Window seconds", seconds, 1, 86400),
+                length("lookback", "Lookback bars", self.lookback, 1, 1000),
+                StudyInput::new(
+                    "lower",
+                    "Low regime below percentile",
+                    InputValue::Number(self.regime[0]),
+                    InputKind::Number(0.0, 100.0),
+                ),
+                StudyInput::new(
+                    "upper",
+                    "High regime above percentile",
+                    InputValue::Number(self.regime[1]),
+                    InputKind::Number(0.0, 100.0),
+                ),
+            ],
+            OrderFlowKind::TradeRate {
+                volume,
+                seconds,
+                instant,
+            } => vec![
+                StudyInput::new(
+                    "volume",
+                    "Count volume",
+                    InputValue::Toggle(volume),
+                    InputKind::Toggle,
+                ),
+                length("seconds", "Rolling seconds", seconds, 1, 86400),
+                length("instant", "Instant seconds", instant, 1, 86400),
+            ],
+            OrderFlowKind::SizeDelta { ranges } => {
+                let size = |id: &str, label: String, value| {
+                    StudyInput::new(
+                        id,
+                        label,
+                        InputValue::Number(value),
+                        InputKind::Number(0.0, f64::MAX),
+                    )
+                };
+                let mut inputs: Vec<_> = ranges
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, [min, limit])| {
+                        [
+                            size(
+                                &format!("min{i}"),
+                                format!("Range {} smallest size (included)", i + 1),
+                                *min,
+                            ),
+                            size(
+                                &format!("limit{i}"),
+                                format!("Range {} size limit (excluded)", i + 1),
+                                *limit,
+                            ),
+                        ]
+                    })
+                    .collect();
+                inputs.push(combine);
+                inputs
+            }
+            OrderFlowKind::FlowSum { bars } => vec![
+                length("bars", "Bars", bars, 1, 10_000),
+                StudyInput::new(
+                    "histogram",
+                    "Histogram",
+                    InputValue::Toggle(self.histogram),
+                    InputKind::Toggle,
+                ),
+            ],
+            OrderFlowKind::FilteredCvd { min, max } => {
+                let mut inputs = [("min", "Smallest size", min), ("max", "Largest size", max)]
+                    .map(|(id, label, value)| {
+                        StudyInput::new(
+                            id,
+                            label,
+                            InputValue::Number(value),
+                            InputKind::Number(0.0, f64::MAX),
+                        )
+                    })
+                    .to_vec();
+                inputs.push(combine);
+                if self.delta != Some(false) {
+                    inputs.push(StudyInput::new(
+                        "anchor",
+                        "Reset period",
+                        InputValue::Choice(
+                            RESETS.iter().position(|r| *r == self.reset).unwrap_or(0),
+                        ),
+                        InputKind::Choice(
+                            RESETS
+                                .iter()
+                                .map(|r| match r {
+                                    Reset::Continuous => "Continuous",
+                                    Reset::Period(period) => period.label(),
+                                    Reset::Interval => "Interval",
+                                })
+                                .map(str::to_owned)
+                                .collect(),
+                        ),
+                    ));
+                    inputs.push(
+                        length(
+                            "reset_minutes",
+                            "Reset interval (minutes)",
+                            self.reset_minutes,
+                            1,
+                            1440,
+                        )
+                        .shown_when("anchor", [RESETS.len() - 1]),
+                    );
+                }
+                if self.delta.is_some() {
+                    inputs.push(StudyInput::new(
+                        "representation",
+                        "Representation",
+                        InputValue::Choice(usize::from(!self.candle_style)),
+                        InputKind::Choice(vec![
+                            "Candles".to_owned(),
+                            if self.delta == Some(false) {
+                                "Histogram"
+                            } else {
+                                "Line"
+                            }
+                            .to_owned(),
+                        ]),
+                    ));
+                }
+                if self.delta == Some(true) {
+                    inputs.extend([
+                        StudyInput::new(
+                            "divergence",
+                            "Divergence",
+                            InputValue::Toggle(self.markers.divergence),
+                            InputKind::Toggle,
+                        ),
+                        length(
+                            "swing_bars",
+                            "Swing bars on each side",
+                            self.markers.swing_bars,
+                            1,
+                            10_000,
+                        ),
+                        StudyInput::new(
+                            "exhaustion",
+                            "Exhaustion",
+                            InputValue::Toggle(self.markers.exhaustion),
+                            InputKind::Toggle,
+                        ),
+                        length(
+                            "exhaustion_bars",
+                            "Exhaustion consecutive bars",
+                            self.markers.exhaustion_bars,
+                            2,
+                            10_000,
+                        ),
+                    ]);
+                }
+                inputs
+            }
+            OrderFlowKind::AggressorRate { seconds, instant } => vec![
+                length("seconds", "Rolling seconds", seconds, 1, 86400),
+                length("instant", "Instant seconds", instant, 1, 86400),
+            ],
+            OrderFlowKind::LevelsExecuted { seconds, reversal } => vec![
+                length("seconds", "Window seconds (0 uses bar)", seconds, 0, 86400),
+                StudyInput::new(
+                    "reversal",
+                    "Restart on price reversal",
+                    InputValue::Toggle(reversal),
+                    InputKind::Toggle,
+                ),
+            ],
+            OrderFlowKind::LevelsTradedThrough { seconds } => vec![length(
+                "seconds",
+                "Window seconds (0 uses bar)",
+                seconds,
+                0,
+                86400,
+            )],
+        }
     }
 }
 
@@ -440,6 +756,14 @@ impl Indicator for OrderFlowStudy {
         for (old, new) in self.colors.iter_mut().zip(colors) {
             *old = new;
         }
+    }
+    fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        // The per-bar histogram takes its candles' colours: a balanced bar sells.
+        if line != 0 || self.delta != Some(false) || self.candle_style {
+            return None;
+        }
+        let delta = self.values.value(0, bar)?;
+        Some(self.colors[1 + usize::from(delta <= 0.0)])
     }
     fn is_overlay(&self) -> bool {
         false
@@ -582,272 +906,20 @@ impl Indicator for OrderFlowStudy {
         }
     }
     fn inputs(&self) -> Vec<StudyInput> {
-        let length = |id, label, value, min, max| {
-            StudyInput::new(
-                id,
-                label,
-                InputValue::Length(value),
-                InputKind::Length(min, max),
-            )
+        // Each input declares the value this study was built with, which Reset inputs restores.
+        let mut built = match self.delta {
+            Some(cumulative) => Self::execution_delta(cumulative),
+            None => Self::new(self.initial),
         };
-        let order_filter = || {
-            [
-                StudyInput::new(
-                    "min_size",
-                    "Minimum order size (needs order events)",
-                    InputValue::Number(self.filter.min_size),
-                    InputKind::Number(0.0, f64::MAX),
-                ),
-                StudyInput::new(
-                    "min_age",
-                    "Minimum resting seconds (0 for any, needs order events)",
-                    InputValue::Number(self.filter.min_age.map_or(0.0, |age| age.as_seconds_f64())),
-                    InputKind::Number(0.0, 86400.0),
-                ),
-                StudyInput::new(
-                    "max_age",
-                    "Maximum resting seconds (0 for any, needs order events)",
-                    InputValue::Number(self.filter.max_age.map_or(0.0, |age| age.as_seconds_f64())),
-                    InputKind::Number(0.0, 86400.0),
-                ),
-            ]
-        };
-        let combine = StudyInput::new(
-            "combine_fills",
-            "Combine fills of an aggressive order",
-            InputValue::Toggle(self.basis == SizeBasis::AggressiveOrder),
-            InputKind::Toggle,
-        )
-        .with_default(InputValue::Toggle(false));
-        match self.kind {
-            OrderFlowKind::Spread => vec![],
-            OrderFlowKind::BookSize { levels, distance } => {
-                let mut inputs = vec![
-                    length("levels", "Nearest levels", levels, 1, 10000),
-                    StudyInput::new(
-                        "distance",
-                        "Price distance (0 uses levels)",
-                        InputValue::Number(distance),
-                        InputKind::Number(0.0, f64::MAX),
-                    ),
-                ];
-                inputs.extend(order_filter());
-                inputs
+        built.filter = self.initial_filter.clone();
+        let built = built.listed_inputs();
+        let mut inputs = self.listed_inputs();
+        for input in &mut inputs {
+            if let Some(initial) = built.iter().find(|initial| initial.id == input.id) {
+                input.default = initial.value.clone();
             }
-            OrderFlowKind::BookBalance {
-                near_levels,
-                far_levels,
-                near_distance,
-                far_distance,
-            } => {
-                let mut inputs = vec![
-                    length("near_levels", "Near levels", near_levels, 1, 10000),
-                    length(
-                        "far_levels",
-                        "Far levels beyond the near band",
-                        far_levels,
-                        1,
-                        10000,
-                    ),
-                    StudyInput::new(
-                        "near_distance",
-                        "Near price distance (0 uses levels)",
-                        InputValue::Number(near_distance),
-                        InputKind::Number(0.0, f64::MAX),
-                    ),
-                    StudyInput::new(
-                        "far_distance",
-                        "Far price distance beyond the near band",
-                        InputValue::Number(far_distance),
-                        InputKind::Number(0.0, f64::MAX),
-                    ),
-                ];
-                inputs.extend(order_filter());
-                inputs
-            }
-            OrderFlowKind::PriceRange { seconds } => vec![
-                length("seconds", "Window seconds", seconds, 1, 86400),
-                length("lookback", "Lookback bars", self.lookback, 1, 1000)
-                    .with_default(InputValue::Length(100)),
-                StudyInput::new(
-                    "lower",
-                    "Low regime below percentile",
-                    InputValue::Number(self.regime[0]),
-                    InputKind::Number(0.0, 100.0),
-                )
-                .with_default(InputValue::Number(20.0)),
-                StudyInput::new(
-                    "upper",
-                    "High regime above percentile",
-                    InputValue::Number(self.regime[1]),
-                    InputKind::Number(0.0, 100.0),
-                )
-                .with_default(InputValue::Number(80.0)),
-            ],
-            OrderFlowKind::TradeRate {
-                volume,
-                seconds,
-                instant,
-            } => vec![
-                StudyInput::new(
-                    "volume",
-                    "Count volume",
-                    InputValue::Toggle(volume),
-                    InputKind::Toggle,
-                ),
-                length("seconds", "Rolling seconds", seconds, 1, 86400),
-                length("instant", "Instant seconds", instant, 1, 86400),
-            ],
-            OrderFlowKind::SizeDelta { ranges } => {
-                let size = |id: &str, label: String, value| {
-                    StudyInput::new(
-                        id,
-                        label,
-                        InputValue::Number(value),
-                        InputKind::Number(0.0, f64::MAX),
-                    )
-                };
-                let mut inputs: Vec<_> = ranges
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(i, [min, limit])| {
-                        [
-                            size(
-                                &format!("min{i}"),
-                                format!("Range {} smallest size (included)", i + 1),
-                                *min,
-                            ),
-                            size(
-                                &format!("limit{i}"),
-                                format!("Range {} size limit (excluded)", i + 1),
-                                *limit,
-                            ),
-                        ]
-                    })
-                    .collect();
-                inputs.push(combine);
-                inputs
-            }
-            OrderFlowKind::FlowSum { bars } => vec![
-                length("bars", "Bars", bars, 1, 10_000),
-                StudyInput::new(
-                    "histogram",
-                    "Histogram",
-                    InputValue::Toggle(self.histogram),
-                    InputKind::Toggle,
-                ),
-            ],
-            OrderFlowKind::FilteredCvd { min, max } => {
-                let mut inputs = [("min", "Smallest size", min), ("max", "Largest size", max)]
-                    .map(|(id, label, value)| {
-                        StudyInput::new(
-                            id,
-                            label,
-                            InputValue::Number(value),
-                            InputKind::Number(0.0, f64::MAX),
-                        )
-                    })
-                    .to_vec();
-                inputs.push(combine);
-                if self.delta != Some(false) {
-                    inputs.push(
-                        StudyInput::new(
-                            "anchor",
-                            "Reset period",
-                            InputValue::Choice(
-                                ANCHORS.iter().position(|a| *a == self.anchor).unwrap_or(0),
-                            ),
-                            InputKind::Choice(
-                                ANCHORS
-                                    .iter()
-                                    .map(|a| {
-                                        a.map_or_else(
-                                            || "Continuous".to_owned(),
-                                            |a| format!("{a:?}"),
-                                        )
-                                    })
-                                    .collect(),
-                            ),
-                        )
-                        .with_default(InputValue::Choice(usize::from(self.delta == Some(true)))),
-                    );
-                }
-                if self.delta.is_some() {
-                    inputs.push(
-                        StudyInput::new(
-                            "representation",
-                            "Representation",
-                            InputValue::Choice(usize::from(!self.candle_style)),
-                            InputKind::Choice(vec![
-                                "Candles".to_owned(),
-                                if self.delta == Some(false) {
-                                    "Histogram"
-                                } else {
-                                    "Line"
-                                }
-                                .to_owned(),
-                            ]),
-                        )
-                        .with_default(InputValue::Choice(0)),
-                    );
-                }
-                if self.delta == Some(true) {
-                    inputs.extend([
-                        StudyInput::new(
-                            "divergence",
-                            "Divergence",
-                            InputValue::Toggle(self.markers.divergence),
-                            InputKind::Toggle,
-                        )
-                        .with_default(InputValue::Toggle(false)),
-                        length(
-                            "swing_bars",
-                            "Swing bars on each side",
-                            self.markers.swing_bars,
-                            1,
-                            10_000,
-                        )
-                        .with_default(InputValue::Length(3)),
-                        StudyInput::new(
-                            "exhaustion",
-                            "Exhaustion",
-                            InputValue::Toggle(self.markers.exhaustion),
-                            InputKind::Toggle,
-                        )
-                        .with_default(InputValue::Toggle(false)),
-                        length(
-                            "exhaustion_bars",
-                            "Exhaustion consecutive bars",
-                            self.markers.exhaustion_bars,
-                            2,
-                            10_000,
-                        )
-                        .with_default(InputValue::Length(3)),
-                    ]);
-                }
-                inputs
-            }
-            OrderFlowKind::AggressorRate { seconds, instant } => vec![
-                length("seconds", "Rolling seconds", seconds, 1, 86400),
-                length("instant", "Instant seconds", instant, 1, 86400),
-            ],
-            OrderFlowKind::LevelsExecuted { seconds, reversal } => vec![
-                length("seconds", "Window seconds (0 uses bar)", seconds, 0, 86400),
-                StudyInput::new(
-                    "reversal",
-                    "Restart on price reversal",
-                    InputValue::Toggle(reversal),
-                    InputKind::Toggle,
-                ),
-            ],
-            OrderFlowKind::LevelsTradedThrough { seconds } => vec![length(
-                "seconds",
-                "Window seconds (0 uses bar)",
-                seconds,
-                0,
-                86400,
-            )],
         }
+        inputs
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         if !self
@@ -865,6 +937,7 @@ impl Indicator for OrderFlowStudy {
             ("exhaustion", InputValue::Toggle(on)) => self.markers.exhaustion = *on,
             ("swing_bars", InputValue::Length(n)) => self.markers.swing_bars = *n,
             ("exhaustion_bars", InputValue::Length(n)) => self.markers.exhaustion_bars = *n,
+            ("reset_minutes", InputValue::Length(n)) => self.reset_minutes = *n,
             _ => {}
         }
         if matches!(
@@ -873,6 +946,7 @@ impl Indicator for OrderFlowStudy {
                 | "exhaustion"
                 | "swing_bars"
                 | "exhaustion_bars"
+                | "reset_minutes"
                 | "lookback"
                 | "lower"
                 | "upper"
@@ -885,7 +959,7 @@ impl Indicator for OrderFlowStudy {
         let before = self.kind;
         if let InputValue::Choice(at) = &value {
             match id {
-                "anchor" => self.anchor = ANCHORS[*at],
+                "anchor" => self.reset = RESETS[*at],
                 "representation" => self.candle_style = *at == 0,
                 _ => return Err(crate::studies::StudyError::invalid_input(id)),
             }
@@ -1464,61 +1538,69 @@ mod tests {
         assert_eq!(study.values().value(0, 7), Some(0.0));
     }
 
-    /// Non-default values must survive the same template path used by saved chart layouts.
+    /// Reset inputs restores each declared default (#4313): an order-flow study edited in every
+    /// input, also once saved and restored, declares the values a newly created study starts
+    /// with, and its saved values restore.
     #[test]
-    fn book_balance_and_volatility_regime_inputs_survive_templates() {
+    fn edited_inputs_declare_the_values_a_new_study_starts_with() {
         use crate::studies::{IndicatorFactory, StudyTemplate};
         let factory = IndicatorFactory::new();
-        for (name, edits) in [
-            (
-                "Book Balance",
-                vec![
-                    ("near_levels", InputValue::Length(3)),
-                    ("far_levels", InputValue::Length(7)),
-                    ("near_distance", InputValue::Number(0.5)),
-                    ("far_distance", InputValue::Number(1.25)),
-                    ("min_size", InputValue::Number(2.0)),
-                    ("min_age", InputValue::Number(1.5)),
-                    ("max_age", InputValue::Number(30.0)),
-                ],
-            ),
-            (
-                "Volatility Regime",
-                vec![
-                    ("seconds", InputValue::Length(30)),
-                    ("lookback", InputValue::Length(50)),
-                    ("lower", InputValue::Number(10.0)),
-                    ("upper", InputValue::Number(90.0)),
-                ],
-            ),
-        ] {
+        let mut names: Vec<_> = (factory.list().into_iter())
+            .filter(|name| factory.category(name) == Some(IndicatorFactory::ORDER_FLOW))
+            .collect();
+        names.sort();
+        // 11 aggregations and the two execution deltas; an empty loop proves nothing.
+        assert_eq!(names.len(), 13);
+        let values = |inputs: &[StudyInput]| {
+            (inputs.iter())
+                .map(|i| (i.id.clone(), i.value.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut wrong = Vec::new();
+        for name in &names {
+            let fresh = factory.create(name).unwrap().inputs();
             let mut study = factory.create(name).unwrap();
-            let original = StudyTemplate::from_study(study.as_ref()).inputs;
-            for (id, value) in &edits {
-                study.set_input(id, value.clone()).unwrap();
+            let mut edits = Vec::new();
+            for input in &fresh {
+                let edited = match (&input.value, &input.kind) {
+                    (InputValue::Length(n), InputKind::Length(_, max)) => {
+                        InputValue::Length(if n < max { n + 1 } else { n - 1 })
+                    }
+                    (InputValue::Number(v), _) => {
+                        InputValue::Number(if *v < 1e6 { v + 1.5 } else { 1.5 })
+                    }
+                    (InputValue::Toggle(on), _) => InputValue::Toggle(!on),
+                    (InputValue::Choice(at), InputKind::Choice(labels)) => {
+                        InputValue::Choice((at + 1) % labels.len())
+                    }
+                    other => panic!("{name} {}: {other:?}", input.id),
+                };
+                study.set_input(&input.id, edited.clone()).unwrap();
+                edits.push((input.id.clone(), edited));
             }
-            let edited = StudyTemplate::from_study(study.as_ref());
-            assert_eq!(
-                edited.inputs,
-                edits
-                    .iter()
-                    .map(|(id, value)| (id.to_string(), value.clone()))
-                    .collect::<Vec<_>>(),
-                "{name}"
-            );
-            assert!(
-                edited.inputs.iter().zip(original).all(|(a, b)| *a != b),
-                "{name}"
-            );
-            let saved = serde_json::to_string(&edited).unwrap();
-            let template: StudyTemplate = serde_json::from_str(&saved).unwrap();
-            let restored = template.create_with(&factory).unwrap();
-            assert_eq!(
-                StudyTemplate::from_study(restored.as_ref()).inputs,
-                edited.inputs,
-                "{name}"
-            );
+            let saved = serde_json::to_string(&StudyTemplate::from_study(study.as_ref())).unwrap();
+            let restored = (serde_json::from_str::<StudyTemplate>(&saved).unwrap())
+                .create_with(&factory)
+                .unwrap();
+            let want: Vec<_> = (fresh.iter())
+                .map(|i| (i.id.clone(), i.value.clone()))
+                .collect();
+            for (case, inputs) in [("edited", study.inputs()), ("restored", restored.inputs())] {
+                if values(&inputs) != edits {
+                    wrong.push(format!(
+                        "{name} {case}: values {:?}, want {edits:?}",
+                        values(&inputs)
+                    ));
+                }
+                let got: Vec<_> = (inputs.iter())
+                    .map(|i| (i.id.clone(), i.default.clone()))
+                    .collect();
+                if got != want {
+                    wrong.push(format!("{name} {case}: defaults {got:?}, want {want:?}"));
+                }
+            }
         }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     /// The factory's default ranges count executions of 9.5, 10, 99.5 and 100 lots in one range
@@ -1730,6 +1812,10 @@ mod tests {
                 );
             }
         }
+        // Only the Interval choice reads it: a whole day resets as Session does, not at midnight.
+        study
+            .set_input("reset_minutes", InputValue::Length(1440))
+            .unwrap();
         for (anchor, want) in [
             (0, [4.0, NAN, 7.0, 12.0, 19.0, 30.0, 43.0]),
             (1, [4.0, NAN, 3.0, 5.0, 7.0, 11.0, 13.0]),
@@ -1739,6 +1825,7 @@ mod tests {
             (5, [4.0, NAN, 3.0, 8.0, 15.0, 26.0, 39.0]),
             (6, [4.0, NAN, 7.0, 12.0, 19.0, 30.0, 43.0]),
             (7, [4.0, NAN, 7.0, 12.0, 19.0, 30.0, 43.0]),
+            (8, [4.0, NAN, 3.0, 5.0, 7.0, 11.0, 13.0]),
         ] {
             study
                 .set_input("anchor", InputValue::Choice(anchor))
@@ -1756,6 +1843,92 @@ mod tests {
             assert_eq!(
                 format!("{:?}", lines(&study)),
                 format!("{:?}", lines(&full))
+            );
+        }
+    }
+
+    /// Ten 5-minute bars from 10:20 UTC on Monday 5 January 2026, bar `i` with one buy of
+    /// `i + 1`. An interval resets on the first bar of each interval the chart's clock opens:
+    /// clock hours without a session, hours from the 09:30 open with one, and every bar when
+    /// the interval is shorter than the chart's (#4260).
+    #[test]
+    fn cumulative_delta_candles_reset_on_each_interval_of_the_chart_clock() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday};
+
+        let open: DateTime<Utc> = "2026-01-05T10:20:00Z".parse().unwrap();
+        let data: Vec<_> = (0..10)
+            .map(|i| {
+                Bar::new(
+                    open + TimeDelta::minutes(5 * i),
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    0.0,
+                )
+            })
+            .collect();
+        let utc = BarClock::new(Timeframe::Min5);
+        let session = utc.clone().with_session(
+            TimezoneId::utc(),
+            Session::new([SessionWindow::new(
+                [
+                    Weekday::Mon,
+                    Weekday::Tue,
+                    Weekday::Wed,
+                    Weekday::Thu,
+                    Weekday::Fri,
+                ],
+                NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+                NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+            )]),
+            false,
+        );
+        for (clock, minutes, opens) in [
+            (
+                &utc,
+                60,
+                [0.0, 1.0, 3.0, 6.0, 10.0, 15.0, 21.0, 28.0, 0.0, 9.0],
+            ),
+            (
+                &session,
+                60,
+                [0.0, 1.0, 0.0, 3.0, 7.0, 12.0, 18.0, 25.0, 33.0, 42.0],
+            ),
+            (
+                &utc,
+                30,
+                [0.0, 1.0, 0.0, 3.0, 7.0, 12.0, 18.0, 25.0, 0.0, 9.0],
+            ),
+            (&utc, 3, [0.0; 10]),
+        ] {
+            let mut study = OrderFlowStudy::execution_delta(true);
+            study.set_bar_clock(clock);
+            study.set_input("anchor", InputValue::Choice(8)).unwrap();
+            study
+                .set_input("reset_minutes", InputValue::Length(minutes))
+                .unwrap();
+            for (i, bar) in data.iter().enumerate() {
+                study.order_flow_inputs()[0].push_trade(
+                    clock,
+                    &Tick::new(
+                        bar.time + TimeDelta::seconds(1),
+                        100.0,
+                        i as f64 + 1.0,
+                        Some(OrderSide::Buy),
+                    ),
+                );
+            }
+            // The 11:00 bar resumes from the 10:55 bar's total and key.
+            study.calculate(&data[..8]);
+            study.update(&data, 8);
+            let got: Vec<_> = study.candles().iter().map(|c| c.bar.open).collect();
+            assert_eq!(
+                got,
+                opens,
+                "{minutes} minutes, session {}",
+                clock.has_session()
             );
         }
     }
@@ -2473,5 +2646,63 @@ mod tests {
                 }
             );
         }
+    }
+
+    /// Execution Delta drawn as a histogram colours each bar as its candles do (#4314): the +5
+    /// bar takes Up, and the -5 bar and the balanced bar of a buy and a sell of 5 take Down. A
+    /// bar without executions has no value and no colour. Edited Up and Down colours recolour
+    /// the bars, and a saved study restores them.
+    #[test]
+    fn execution_delta_histogram_colours_bars_by_sign_and_keeps_edited_colours() {
+        use crate::studies::{ConfiguredStudy, IndicatorFactory, StudyTemplate, palette};
+        use OrderSide::{Buy, Sell};
+        let factory = IndicatorFactory::new();
+        // Each source gets the tape once; a second push would double every bar.
+        let fill = |study: &dyn Indicator| {
+            let input = &study.order_flow_inputs()[0];
+            let clock = BarClock::new(Timeframe::Min1);
+            let balanced: &[(f64, OrderSide)] = &[(5.0, Buy), (5.0, Sell)];
+            for (minute, trades) in [(0, &[(5.0, Buy)][..]), (1, &[(5.0, Sell)]), (2, balanced)] {
+                for (second, &(size, side)) in trades.iter().enumerate() {
+                    let at =
+                        start() + TimeDelta::minutes(minute) + TimeDelta::seconds(second as i64);
+                    input.push_trade(&clock, &Tick::new(at, 100.0, size, Some(side)));
+                }
+            }
+        };
+        let read = |study: &mut dyn Indicator| {
+            study.calculate(&bars());
+            (0..4)
+                .map(|bar| (study.values().value(0, bar), study.plot_color(0, bar)))
+                .collect::<Vec<_>>()
+        };
+        let expect = |up, down| {
+            [
+                (Some(5.0), Some(up)),
+                (Some(-5.0), Some(down)),
+                (Some(0.0), Some(down)),
+                (None, None),
+            ]
+        };
+        let mut study = ConfiguredStudy::new(factory.create("Execution Delta").unwrap());
+        study
+            .set_input("representation", InputValue::Choice(1))
+            .unwrap();
+        fill(&study);
+        assert_eq!(read(&mut study), expect(palette::UP, palette::DOWN));
+        let (up, down) = (
+            Color32::from_rgb(10, 200, 40),
+            Color32::from_rgb(200, 20, 120),
+        );
+        let mut settings = study.settings();
+        settings.plots[1].color = up;
+        settings.plots[2].color = down;
+        study.apply_settings(&[], settings).unwrap();
+        assert_eq!(read(&mut study), expect(up, down));
+        let saved = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
+        let template: StudyTemplate = serde_json::from_str(&saved).unwrap();
+        let mut restored = template.create_with(&factory).unwrap();
+        fill(restored.as_ref());
+        assert_eq!(read(restored.as_mut()), expect(up, down));
     }
 }
