@@ -1037,7 +1037,10 @@ impl DemoApp {
         preferences.favorites = settings.indicator_favorites.into_iter().collect();
         self.indicator_dialog.set_preferences(preferences);
         self.market_heatmap.selection = settings.market_heatmap;
-        self.shortcuts = settings.shortcuts;
+        // Settings without bindings return charts that had saved ones to the defaults.
+        self.shortcuts = settings
+            .shortcuts
+            .or(self.shortcuts.as_ref().map(|_| Default::default()));
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);
         }

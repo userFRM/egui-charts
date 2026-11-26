@@ -7180,7 +7180,7 @@ mod tests {
     }
 
     /// A binding saved in the shortcuts dialog reaches every chart of the layout, and it is in
-    /// effect again after a restart on the same storage.
+    /// effect again after a restart on the same storage until settings without bindings arrive.
     #[test]
     fn shortcuts_dialog_bindings_reach_every_chart_and_survive_a_restart() {
         use egui::accesskit::Role;
@@ -7236,6 +7236,15 @@ mod tests {
         let mut restored = DemoApp::new_at(&cc, now, true);
         settle(&mut restored, &ctx);
         assert_eq!(page_left(&restored), [Some(alt_b); 2]);
+
+        // Settings from another client that hold no bindings bring back the defaults.
+        let mut settings = restored.user_settings();
+        settings.shortcuts = None;
+        restored.apply_user_settings(&ctx, settings);
+        settle(&mut restored, &ctx);
+        let default =
+            egui_charts::widget::ShortcutMap::default().shortcut(KeyboardAction::PanLeftFast);
+        assert_eq!(page_left(&restored), [default; 2]);
     }
 
     /// Bulk removal waits for a lock decision, saves only remembered decisions, and restores
