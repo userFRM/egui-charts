@@ -26,19 +26,11 @@ use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 use crate::model::tpo::OUTSIDE_VALUE_AREA_OPACITY;
 use crate::model::{
     Bar, BarClock, ExchangeSessionProvider, SessionProvider, TPOColorMode, TPOConfig,
-    TPODisplayMode, TPOProfile, TPOProfilePeriod, TPOStatisticsRows, derive_tick_size,
-    to_tpo_profiles,
+    TPODisplayMode, TPOProfile, TPOProfilePeriod, TPOStatisticsRows, to_tpo_profiles,
 };
 use crate::styles::typography;
 use crate::theme::{ChartColors, ThemeExt, contrast, readable_color};
 use crate::tokens::DESIGN_TOKENS;
-
-/// Target number of price rows when auto-deriving the TPO bin (tick) size.
-///
-/// The bin height is chosen so the visible price range spans roughly this many
-/// rows, keeping the profile readable across instruments that trade at very
-/// different price magnitudes.
-const TARGET_ROWS: usize = 40;
 
 /// Fixed pixel width of one TPO period column.
 ///
@@ -705,7 +697,7 @@ pub fn render_live_tpo(
         revision,
         (base_config, instrument_tick),
         clock,
-        (price_map, price_rect, &x),
+        (price_rect, &x),
         |profile, config, anchor_x, column_width, room, label_room| {
             let ends = draw_session_profile(
                 painter,
@@ -735,7 +727,7 @@ pub fn render_live_tpo(
     {
         return;
     }
-    let Some(config) = row_config(base_config, instrument_tick, price_map) else {
+    let Some(config) = row_config(base_config, instrument_tick, &full_data[..visible.end]) else {
         return;
     };
     let sessions = clock.sessions();
@@ -798,14 +790,14 @@ pub(crate) fn visit_profiles(
     revision: u64,
     (base_config, instrument_tick): (&TPOConfig, Option<f64>),
     clock: &BarClock,
-    (price_map, price_rect, idx_to_coord): (&PriceMap, Rect, impl Fn(usize) -> f32),
+    (price_rect, idx_to_coord): (Rect, impl Fn(usize) -> f32),
     mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, f32, f32),
 ) {
     if visible.is_empty() || visible.end > full_data.len() {
         return;
     }
 
-    let Some(config) = row_config(base_config, instrument_tick, price_map) else {
+    let Some(config) = row_config(base_config, instrument_tick, &full_data[..visible.end]) else {
         return;
     };
 
@@ -841,11 +833,11 @@ pub(crate) fn latest_level_tags(
     revision: u64,
     config: (&TPOConfig, Option<f64>),
     clock: &BarClock,
-    placement: (&PriceMap, Rect, impl Fn(usize) -> f32),
+    placement: (Rect, impl Fn(usize) -> f32),
     (chart, bullish, bearish): (&ChartColors, Color32, Color32),
 ) -> Vec<(f64, Color32)> {
     let mut tags = Vec::new();
-    let right = placement.1.right();
+    let right = placement.0.right();
     visit_profiles(
         full_data,
         visible,
@@ -879,29 +871,19 @@ pub(crate) fn latest_level_tags(
     tags
 }
 
-/// `base_config` with a row height: its own, or about `TARGET_ROWS` rows over the visible
-/// range, in whole multiples of `instrument_tick` when one is given, and records
-/// `instrument_tick` so the profiles count whole ticks.
+/// `base_config` with a row height: its own, or the automatic height of
+/// [`auto_row_height`](crate::model::tpo::auto_row_height) for `bars`, the bars up to the last
+/// one in view, so zooming or scrolling the price scale keeps the rows. Records `instrument_tick`
+/// so the profiles count whole ticks.
 fn row_config(
     base_config: &TPOConfig,
     instrument_tick: Option<f64>,
-    price_map: &PriceMap,
+    bars: &[Bar],
 ) -> Option<TPOConfig> {
-    let (range, transform) = (price_map.range(), price_map.transform());
-    let price_range = (transform.to_price(range.max) - transform.to_price(range.min)).abs();
-    if !price_range.is_finite() || price_range <= 0.0 {
-        return None;
-    }
     let mut config = base_config.clone();
     config.instrument_tick = instrument_tick;
     if config.tick_size <= 0.0 || !config.tick_size.is_finite() {
-        let step = derive_tick_size(price_range, TARGET_ROWS);
-        config.tick_size = instrument_tick
-            .filter(|tick| *tick > 0.0 && tick.is_finite())
-            .map(|tick| crate::model::tpo::whole_ticks(step, tick) * tick)
-            // A subnormal tick overflows the tick count
-            .filter(|row| row.is_finite())
-            .unwrap_or(step);
+        config.tick_size = crate::model::tpo::auto_row_height(bars, instrument_tick)?;
     }
     Some(config)
 }
@@ -1064,7 +1046,7 @@ pub(crate) fn profile_at(
     if !mapping.rect.contains(pos) || visible.is_empty() || visible.end > full_data.len() {
         return None;
     }
-    let config = row_config(base_config, instrument_tick, &mapping.price)?;
+    let config = row_config(base_config, instrument_tick, &full_data[..visible.end])?;
     let sessions = clock.sessions();
     let bars = whole_sessions(full_data, visible, &sessions, &config, clock.timeframe());
     let units = cached_profiles(
@@ -3981,100 +3963,6 @@ mod tests {
     }
 
     #[test]
-    fn automatic_rows_are_whole_instrument_ticks() {
-        use crate::model::ChartTypeParams;
-        use crate::scales::{PriceRange, PriceTransform};
-        use chrono::TimeZone;
-        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
-        let tick_64 = 1.0 / 64.0;
-        // (tick, visible prices, half-hour periods as (low, high), letters as (period, row price),
-        // point of control with its TPOs)
-        type Case = (
-            f64,
-            (f64, f64),
-            Vec<(f64, f64)>,
-            Vec<(usize, f64)>,
-            (f64, usize),
-        );
-        let cases: [Case; 2] = [
-            // Six points fit rows of 0.2, which round up to one 0.25 tick.
-            (
-                0.25,
-                (5000.0, 5006.0),
-                vec![(5000.0, 5000.25), (5000.25, 5000.5)],
-                vec![(0, 5000.0), (0, 5000.25), (1, 5000.25), (1, 5000.5)],
-                (5000.25, 2),
-            ),
-            // 109.5 to 111 fits rows of 0.05, 3.2 ticks of 1/64, which round up to 4 (0.0625).
-            // Rows start at a multiple of 4 ticks, so the row of 110 holds ticks 0 to 3 above it
-            // and every letter is on it.
-            (
-                tick_64,
-                (109.5, 111.0),
-                vec![
-                    (110.0, 110.0 + 2.0 * tick_64),
-                    (110.0 + tick_64, 110.0 + 3.0 * tick_64),
-                    (110.0 + tick_64, 110.0 + tick_64),
-                ],
-                vec![(0, 110.0), (1, 110.0), (2, 110.0)],
-                (110.0, 3),
-            ),
-        ];
-        for (tick, (low, high), periods, letters, poc) in cases {
-            let map = PriceMap::new(
-                PriceTransform::default(),
-                PriceRange::new(low, high),
-                0.0,
-                400.0,
-                false,
-            );
-            let base = ChartTypeParams::default().tpo_config(Some(tick));
-            let config = row_config(&base, Some(tick), &map).unwrap();
-            let bars: Vec<_> = periods
-                .iter()
-                .enumerate()
-                .map(|(i, &(low, high))| {
-                    Bar::new(
-                        start + Duration::minutes(30 * i as i64),
-                        low,
-                        high,
-                        low,
-                        high,
-                        1.0,
-                    )
-                })
-                .collect();
-            let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min30.into())[0];
-            let mut placed: Vec<_> = profile
-                .letters
-                .iter()
-                .map(|letter| (letter.period_idx, letter.price))
-                .collect();
-            placed.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            assert_eq!(placed, letters, "tick {tick}");
-            assert_eq!(
-                (profile.poc_price, profile.tpo_count_at(profile.poc_price)),
-                poc,
-                "tick {tick}"
-            );
-        }
-        // 0.0006 fits rows of 2e-5, exactly 20 ticks of 1e-6, although the quotient computes as
-        // 20.000000000000004
-        let map = PriceMap::new(
-            PriceTransform::default(),
-            PriceRange::new(0.001, 0.0016),
-            0.0,
-            400.0,
-            false,
-        );
-        let base = ChartTypeParams::default().tpo_config(Some(1e-6));
-        assert_eq!(
-            row_config(&base, Some(1e-6), &map).unwrap().tick_size,
-            20.0 * 1e-6
-        );
-    }
-
-    #[test]
     fn unchanged_sessions_reuse_profiles_and_changed_inputs_rebuild() {
         let mut bars: Vec<_> = [0, 30, 1440]
             .into_iter()
@@ -4855,7 +4743,7 @@ mod tests {
 
     #[test]
     fn statistics_name_widened_row_prices_exactly() {
-        // One session whose automatic rows (0.025) are widened to 0.075, which is not exact in f64.
+        // One session whose rows of 0.025 are widened to 0.075, which is not exact in f64.
         let start = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
             .unwrap()
             .to_utc();
@@ -4892,7 +4780,7 @@ mod tests {
             ..Default::default()
         };
         let config = TPOConfig {
-            tick_size: 0.0,
+            tick_size: 0.025,
             show_statistics: true,
             statistics_rows,
             ..Default::default()
