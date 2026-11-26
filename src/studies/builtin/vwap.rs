@@ -578,6 +578,10 @@ impl Indicator for VolumeWeightedAvgPrice {
                 };
                 let current = Some(self.anchor.period(day));
                 let events = events.partition_point(|time| *time <= bar.time);
+                // An earnings, dividend or split anchor has no period before its first event.
+                if chart_kind.is_some() && events == 0 {
+                    return IndicatorValue::None;
+                }
                 if current != state.period || events != state.events {
                     state.events = events;
                     state.period = current;
@@ -589,18 +593,15 @@ impl Indicator for VolumeWeightedAvgPrice {
                 state.tp_volume += tp * bar.volume;
                 state.tp2_volume += tp * tp * bar.volume;
 
-                let (vwap, sigma) = if state.volume == 0.0 {
-                    (tp, 0.0)
-                } else {
-                    let vwap = state.tp_volume / state.volume;
-                    // Clamped: cancellation can leave a tiny negative variance.
-                    (
-                        vwap,
-                        (state.tp2_volume / state.volume - vwap * vwap)
-                            .max(0.0)
-                            .sqrt(),
-                    )
-                };
+                // No volume has traded in the period yet, so it has no average.
+                if state.volume == 0.0 {
+                    return IndicatorValue::None;
+                }
+                let vwap = state.tp_volume / state.volume;
+                // Clamped: cancellation can leave a tiny negative variance.
+                let sigma = (state.tp2_volume / state.volume - vwap * vwap)
+                    .max(0.0)
+                    .sqrt();
                 let band_unit = if self.percentage_bands {
                     vwap.abs() / 100.0
                 } else {
@@ -965,7 +966,8 @@ mod tests {
                 want: &[&[100.0], &[101.0], &[110.0]],
             },
             Case {
-                // The second day opens on a bar without volume: its typical price.
+                // The second day opens on a bar without volume, which has no value; a later bar
+                // without volume keeps the day's VWAP.
                 name: "bands",
                 zone: None,
                 window: None,
@@ -977,6 +979,7 @@ mod tests {
                     ("2026-03-02 12:00", [103.0, 97.0, 99.0, 1500.0]),
                     ("2026-03-03 10:00", [102.0, 100.0, 101.0, 0.0]),
                     ("2026-03-03 11:00", [104.0, 102.0, 103.0, 500.0]),
+                    ("2026-03-03 12:00", [105.0, 103.0, 104.0, 0.0]),
                 ],
                 want: &[
                     &[100.0, 100.0, 100.0, 100.0, 100.0],
@@ -994,7 +997,8 @@ mod tests {
                         103.52763748239212,
                         98.02791807316342,
                     ],
-                    &[101.0, 101.0, 101.0, 101.0, 101.0],
+                    &[],
+                    &[103.0, 103.0, 103.0, 103.0, 103.0],
                     &[103.0, 103.0, 103.0, 103.0, 103.0],
                 ],
             },
@@ -1034,9 +1038,24 @@ mod tests {
                 study = study.with_anchor(case.anchor);
             }
             study = study.with_std_dev_bands(case.bands.iter().copied());
+            let mut streamed = study.clone();
             study.calculate(&bars);
 
             let lines = 1 + 2 * case.bands.len();
+            // Bar by bar, each update resuming from the last bar, as a live feed streams.
+            for end in 1..=bars.len() {
+                streamed.update(&bars[..end], end - 1);
+            }
+            for line in 0..lines {
+                for bar in 0..bars.len() {
+                    assert_eq!(
+                        streamed.values().value(line, bar),
+                        study.values().value(line, bar),
+                        "{} streamed, line {line}, bar {bar}",
+                        case.name
+                    );
+                }
+            }
             assert_eq!(study.line_count(), lines, "{}", case.name);
             let names = study.line_names();
             assert_eq!(names.len(), lines, "{}", case.name);
@@ -1051,6 +1070,7 @@ mod tests {
                 let got = match got {
                     IndicatorValue::Single(v) if case.bands.is_empty() => vec![*v],
                     IndicatorValue::Multiple(vs) if !case.bands.is_empty() => vs.clone(),
+                    IndicatorValue::None => Vec::new(),
                     other => panic!("{} bar {i}: {other:?}", case.name),
                 };
                 let close = got.len() == want.len()
@@ -1221,7 +1241,9 @@ mod tests {
 
     /// Daily bars from 2 March with typical prices 100, 102, 104, 106 and volumes 1000, 1000,
     /// 2000, 1000; earnings on the third bar's time and a dividend inside the first bar's day, so
-    /// restarting on the second bar, the first at or after it.
+    /// restarting on the second bar, the first at or after it. Each event anchor has no value
+    /// before its first event, and the Events anchor without events runs one period from the
+    /// first bar.
     #[cfg(feature = "widget")]
     #[test]
     fn vwap_restarts_at_the_chart_events_of_its_anchor() {
@@ -1264,21 +1286,28 @@ mod tests {
                 .unwrap(),
         );
         let ctx = egui::Context::default();
-        let values = |chart: &Chart| -> Vec<f64> {
+        let values = |chart: &Chart| -> Vec<Option<f64>> {
             let study = chart.indicators().next().unwrap().1;
-            (0..4)
-                .map(|bar| study.values().value(0, bar).unwrap())
-                .collect()
+            (0..4).map(|bar| study.values().value(0, bar)).collect()
         };
-        let assert_close = |got: Vec<f64>, want: [f64; 4]| {
-            for (got, want) in got.iter().zip(want) {
-                assert!((got - want).abs() < 1e-9, "{got} != {want}");
-            }
+        let assert_close = |got: Vec<Option<f64>>, want: [Option<f64>; 4]| {
+            assert_eq!(got.len(), 4);
+            let close = got.iter().zip(want).all(|(got, want)| match (got, want) {
+                (Some(got), Some(want)) => (got - want).abs() < 1e-9,
+                (got, want) => got.is_none() && want.is_none(),
+            });
+            assert!(close, "{got:?} != {want:?}");
         };
-        let earnings = [100.0, 101.0, 104.0, 314000.0 / 3000.0];
-        let dividends = [100.0, 102.0, 310000.0 / 3000.0, 104.0];
-        let none = [100.0, 101.0, 102.5, 103.2];
-        for (anchor, want, now) in [(9, dividends, 1.0), (10, none, 2.0), (8, earnings, 3.0)] {
+        let earnings = [None, None, Some(104.0), Some(314000.0 / 3000.0)];
+        let dividends = [None, Some(102.0), Some(310000.0 / 3000.0), Some(104.0)];
+        let blank = [None; 4];
+        let whole = [Some(100.0), Some(101.0), Some(102.5), Some(103.2)];
+        for (anchor, want, now) in [
+            (9, dividends, 1.0),
+            (10, blank, 2.0),
+            (5, whole, 3.0),
+            (8, earnings, 4.0),
+        ] {
             chart
                 .indicator_mut(id)
                 .unwrap()
@@ -1289,8 +1318,8 @@ mod tests {
         }
         // Earnings are the anchor from the last round; a change of events recalculates.
         chart.set_time_scale_events(Vec::new());
-        shapes(&ctx, &mut chart, 4.0, Vec::new());
-        assert_close(values(&chart), none);
+        shapes(&ctx, &mut chart, 5.0, Vec::new());
+        assert_close(values(&chart), blank);
     }
 
     /// The local time of a bar at either end of the representable range is out of range

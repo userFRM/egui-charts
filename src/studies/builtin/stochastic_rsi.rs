@@ -9,6 +9,9 @@
 //! %K = SMA(StochRSI, smoothK)
 //! %D = SMA(%K, smoothD)
 //!
+//! A window of equal RSI values keeps the previous StochRSI, and there is none before the first:
+//! a strictly rising series, whose RSI stays at 100, has no value.
+//!
 //! # Interpretation
 //! - Above 0.8: Overbought
 //! - Below 0.2: Oversold
@@ -52,6 +55,8 @@ struct State {
     rsi: std::collections::VecDeque<f64>,
     k: std::collections::VecDeque<f64>,
     d: std::collections::VecDeque<f64>,
+    /// The last stochastic of the RSI window, before %K smoothing.
+    stoch: Option<f64>,
 }
 
 impl StochasticRSI {
@@ -154,10 +159,12 @@ impl Indicator for StochasticRSI {
                 }
                 let low = state.rsi.iter().copied().fold(f64::INFINITY, f64::min);
                 let high = state.rsi.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                let stoch = if (high - low).abs() < 1e-10 {
-                    0.5
-                } else {
-                    (rsi - low) / (high - low)
+                // A window without range keeps the previous value; there is none before the first.
+                if high - low >= 1e-10 {
+                    state.stoch = Some((rsi - low) / (high - low));
+                }
+                let Some(stoch) = state.stoch else {
+                    return IndicatorValue::None;
                 };
                 state.k.push_back(stoch);
                 if state.k.len() > self.smooth_k {

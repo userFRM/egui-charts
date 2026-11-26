@@ -2937,9 +2937,9 @@ mod tests {
     }
 
     /// Reset inputs restores what a new study starts with: the host's default inputs for a study
-    /// that the factory created or restored under them, the constructor's otherwise. A study
-    /// output chosen as the source still makes the study follow the chart's interval when the
-    /// host's defaults calculate it on another one.
+    /// that the factory created or restored under them, the constructor's otherwise, also once
+    /// the study's edited inputs were applied. A study output chosen as the source still makes
+    /// the study follow the chart's interval when the host's defaults calculate it on another one.
     #[test]
     fn reset_inputs_restores_the_host_defaults() {
         use crate::studies::{IndicatorFactory, RSI, StudySource, StudyTemplate};
@@ -2979,14 +2979,19 @@ mod tests {
         let mut edited = host.create("SMA").unwrap();
         edited.set_input("period", InputValue::Length(20)).unwrap();
         let saved = StudyTemplate::from_study(edited.as_ref());
-        for (case, study, period) in [
+        let mut rate = IndicatorFactory::new().create("Trade Rate").unwrap();
+        // Applied earlier, then reopened: the dialog reads the study as edited.
+        rate.set_input("seconds", InputValue::Length(30)).unwrap();
+        for (case, study, input_id, expected) in [
             (
                 "constructor",
                 IndicatorFactory::new().create("SMA").unwrap(),
+                "period",
                 9,
             ),
-            ("host defaults", host.create("SMA").unwrap(), 5),
-            ("restored", saved.create_with(&host).unwrap(), 5),
+            ("host defaults", host.create("SMA").unwrap(), "period", 5),
+            ("restored", saved.create_with(&host).unwrap(), "period", 5),
+            ("edited order flow", rate, "seconds", 60),
         ] {
             let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
             let id = chart.add_indicator(study);
@@ -2995,11 +3000,15 @@ mod tests {
             dialog
                 .inputs
                 .iter_mut()
-                .find(|input| input.id == "period")
+                .find(|input| input.id == input_id)
                 .unwrap()
                 .value = InputValue::Length(20);
             let edit = apply(&mut dialog, true);
-            assert_eq!(input(&edit, "period"), InputValue::Length(period), "{case}");
+            assert_eq!(
+                input(&edit, input_id),
+                InputValue::Length(expected),
+                "{case}"
+            );
         }
 
         defaults.inputs.push((

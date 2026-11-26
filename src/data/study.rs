@@ -93,20 +93,26 @@ impl<'a> StudyData<'a> {
                 .partition_point(|bar| bar.time <= time)
                 .checked_sub(1);
         }
-        // An instant of a chart bar shorter than a day joins the bar of its date in the
-        // history's zone; session histories keep their calendar dates here.
-        let intraday = (clock.timeframe())
-            .is_some_and(|chart| chart.duration_ms() < Timeframe::Day1.duration_ms());
-        let open = if intraday && !self.clock.has_session() {
-            self.clock.instant_open(time)
-        } else {
-            self.clock.bar_open(time)
-        };
+        let open = self.slot_on(clock, time);
         let at = self
             .bars
             .partition_point(|bar| self.clock.bar_open(bar.time) <= open)
             .checked_sub(1)?;
         (self.clock.bar_open(self.bars[at].time) == open).then_some(at)
+    }
+
+    /// The open of the bar of this price history that holds the chart bar at `time` on `clock`,
+    /// where [`bar_at`](Self::bar_at) looks for it.
+    pub(crate) fn slot_on(&self, clock: &BarClock, time: DateTime<Utc>) -> DateTime<Utc> {
+        // An instant of a chart bar shorter than a day joins the bar of its date in the
+        // history's zone; session histories keep their calendar dates here.
+        let intraday = (clock.timeframe())
+            .is_some_and(|chart| chart.duration_ms() < Timeframe::Day1.duration_ms());
+        if intraday && !self.clock.has_session() {
+            self.clock.instant_open(time)
+        } else {
+            self.clock.bar_open(time)
+        }
     }
 
     /// Index of the latest bar closed when the chart bar at `time` closes, as the chart shows

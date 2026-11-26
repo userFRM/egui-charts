@@ -280,15 +280,15 @@ mod tests {
         }
     }
 
-    /// A flat series has no gains or losses, so both RSI components are the neutral 50, and each
-    /// return ties with the previous ones and ranks at 100: (50 + 50 + 100) / 3.
+    /// A flat series has no losses, so both RSI components are 100, and each return ties with the
+    /// previous ones and ranks at 100: (100 + 100 + 100) / 3.
     #[test]
-    fn flat_series_uses_neutral_rsi() {
+    fn flat_series_reads_100() {
         let mut crsi = ConnorsRSI::new().with_periods(3, 2, 5);
         let data: Vec<Bar> = (0..20).map(|_| make_bar(100.0)).collect();
         crsi.calculate(&data);
         match crsi.values.to_rows()[19] {
-            IndicatorValue::Single(v) => assert!((v - 200.0 / 3.0).abs() < 1e-9),
+            IndicatorValue::Single(v) => assert!((v - 100.0).abs() < 1e-9),
             _ => panic!("expected a value after warmup"),
         }
     }

@@ -119,8 +119,11 @@ pub struct TPOConfig {
     pub split_periods: bool,
     /// Color mode for TPO letters
     pub color_mode: TPOColorMode,
-    /// Colours of the entries under [`TPOColorMode::ByPeriod`]: the first pair covers the first
-    /// half of the longest session's periods and the second pair covers the second half.
+    /// Colours of the entries under [`TPOColorMode::ByPeriod`]: the first pair runs through the periods
+    /// lettered A to Z, one step per period, and the second pair through those lettered a to z, so a
+    /// profile of 26 periods or fewer shows only the first pair. Each session of a composite, week or
+    /// month profile counts its periods from its own open, and from the 53rd period the colours repeat
+    /// as the letters do. With custom letters the colours follow the period's position the same way.
     /// Entries keep 3:1 contrast on the background, or 4.5:1 for letters without blocks, moving
     /// toward the chart text colour when needed.
     pub period_colors: [egui::Color32; 4],
