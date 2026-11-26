@@ -199,34 +199,31 @@ pub(crate) fn render_crosshair_lines(
             }
         }
     };
-    match options.style {
-        CrosshairStyle::Full => {
-            let vertical = [
-                Pos2::new(pos.x, context.rect.top()),
-                Pos2::new(pos.x, chart_bottom),
-            ];
-            let horizontal = [
-                Pos2::new(context.rect.left(), pos.y),
-                Pos2::new(context.rect.right(), pos.y),
-            ];
-            let show_horizontal =
-                options.horz_line_visible && context.rect.y_range().contains(pos.y);
-            if cache_lines
-                && options.vert_line_visible
-                && show_horizontal
-                && options.vert_line_style == options.horz_line_style
-                && options.vert_line_color == options.horz_line_color
-                && options.vert_line_width == options.horz_line_width
-            {
-                // One mesh avoids growing and copying the frame mesh again for the other axis.
-                line(
-                    &[vertical, horizontal],
-                    options.vert_line_color,
-                    options.vert_line_width,
-                    options.vert_line_style,
-                );
-                return;
-            }
+    if matches!(options.style, CrosshairStyle::Full | CrosshairStyle::Dot) {
+        let vertical = [
+            Pos2::new(pos.x, context.rect.top()),
+            Pos2::new(pos.x, chart_bottom),
+        ];
+        let horizontal = [
+            Pos2::new(context.rect.left(), pos.y),
+            Pos2::new(context.rect.right(), pos.y),
+        ];
+        let show_horizontal = options.horz_line_visible && context.rect.y_range().contains(pos.y);
+        if cache_lines
+            && options.vert_line_visible
+            && show_horizontal
+            && options.vert_line_style == options.horz_line_style
+            && options.vert_line_color == options.horz_line_color
+            && options.vert_line_width == options.horz_line_width
+        {
+            // One mesh avoids growing and copying the frame mesh again for the other axis.
+            line(
+                &[vertical, horizontal],
+                options.vert_line_color,
+                options.vert_line_width,
+                options.vert_line_style,
+            );
+        } else {
             if options.vert_line_visible {
                 line(
                     &[vertical],
@@ -244,14 +241,14 @@ pub(crate) fn render_crosshair_lines(
                 );
             }
         }
-        CrosshairStyle::Dot if context.rect.contains(pos) => {
-            context.painter.circle_filled(
-                pos,
-                DESIGN_TOKENS.sizing.crosshair.dot_radius,
-                options.vert_line_color,
-            );
-        }
-        _ => {}
+    }
+    // Above the lines, where they cross.
+    if options.style == CrosshairStyle::Dot && context.rect.contains(pos) {
+        context.painter.circle_filled(
+            pos,
+            DESIGN_TOKENS.sizing.crosshair.dot_radius,
+            options.vert_line_color,
+        );
     }
 }
 
@@ -545,10 +542,8 @@ mod tests {
                 CrosshairStyle::Hidden,
             ] {
                 let shown = style != CrosshairStyle::Hidden;
-                let (vertical_shown, horizontal_shown) = (
-                    vertical && style == CrosshairStyle::Full,
-                    horizontal && style == CrosshairStyle::Full,
-                );
+                let lined = matches!(style, CrosshairStyle::Full | CrosshairStyle::Dot);
+                let (vertical_shown, horizontal_shown) = (vertical && lined, horizontal && lined);
                 let options = CrosshairOptions {
                     style,
                     vert_line_visible: vertical,
@@ -613,6 +608,20 @@ mod tests {
                     })
                 }));
                 let dots = !dots.is_empty();
+                // The Dot cursor's dot, in the vertical line's colour, above both lines.
+                let dot_at = output.shapes.iter().position(|shape| {
+                    matches!(&shape.shape, Shape::Circle(circle)
+                        if circle.center == Pos2::new(x, 100.0)
+                            && circle.radius == DESIGN_TOKENS.sizing.crosshair.dot_radius
+                            && circle.fill == Color32::RED)
+                });
+                assert_eq!(dot_at.is_some(), style == CrosshairStyle::Dot);
+                assert!(
+                    dot_at.is_none_or(|at| output.shapes[at..].iter().all(|shape| !matches!(
+                        shape.shape,
+                        Shape::LineSegment { .. } | Shape::Mesh(_)
+                    )))
+                );
                 let fill = |color| {
                     output
                         .shapes

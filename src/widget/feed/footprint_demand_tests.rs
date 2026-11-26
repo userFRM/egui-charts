@@ -105,6 +105,156 @@ fn bounded_latest_page_preserves_the_live_join_and_loads_an_older_view() {
     );
 }
 
+fn loaded_latest(
+    history: &[Bar],
+    cutoff: DateTime<Utc>,
+) -> (Chart, Arc<Script>, Frames, FootprintRequest) {
+    let (mut chart, feed) = chart_and_feed();
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.page().send(page(history.to_vec(), true));
+    resolve(&feed);
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let latest = request(&feed);
+    answer(&feed, &latest, history, cutoff);
+    frames.run(&mut chart);
+    // A second layout pass could otherwise pump the new range before this frame returns.
+    frames
+        .ctx
+        .options_mut(|o| o.max_passes = std::num::NonZeroUsize::MIN);
+    (chart, feed, frames, latest)
+}
+
+#[test]
+fn wheel_pan_requests_the_same_missing_rows_one_frame_earlier_when_opted_in() {
+    fn pan(chart: &mut Chart, frames: &mut Frames, bars: f32) {
+        let pos = chart.last_rendered_price_rect.center();
+        let dx = bars * chart.get_time_scale_state().0;
+        frames.time += 1.0 / 60.0;
+        frame(
+            &frames.ctx,
+            chart,
+            frames.time,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(dx, 0.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+
+    let history = bars(400);
+    let last = history.last().unwrap().time;
+    let cutoff = last + TimeDelta::minutes(1);
+    let [deferred, immediate] = [false, true].map(|by_view| {
+        // Start both gestures with identical prepared coverage.
+        let (mut chart, feed, mut frames, latest) = loaded_latest(&history, cutoff);
+        chart.set_footprint_history_by_view(by_view);
+        let distance = latest.count as f32 + 12.0;
+        let original = chart.visible_time_range().unwrap();
+        pan(&mut chart, &mut frames, distance);
+        let moved = chart.visible_time_range().unwrap();
+        assert!(moved.to < original.from);
+        let target = history.iter().find(|b| b.time >= moved.from).unwrap().time;
+        assert!(target <= moved.to);
+        assert!(!prepared_view(&chart).span_is_complete(target, target));
+        if !by_view {
+            assert!(footprint_requests(&feed).is_empty());
+            frames.run(&mut chart);
+        }
+        let [older]: [_; 1] = footprint_requests(&feed)
+            .try_into()
+            .unwrap_or_else(|pages| {
+                panic!("expected one missing page (by_view={by_view}, target={target}): {pages:?}")
+            });
+        assert!(older.since.is_some_and(|from| from <= target));
+        assert!(older.before.is_some_and(|end| target < end));
+
+        // Reverse with the request in flight. Its real reply can fill the old
+        // view offscreen, and revisiting it must not start a second request.
+        pan(&mut chart, &mut frames, -distance);
+        assert!(chart.visible_time_range().unwrap().from > moved.to);
+        assert_eq!(prepared_view(&chart).bar_at(last).unwrap().ask, 23.0);
+        assert!(prepared_view(&chart).bar_at(target).is_none());
+        assert!(footprint_requests(&feed).is_empty());
+        answer(&feed, &older, &history, cutoff);
+        frames.run(&mut chart);
+        pan(&mut chart, &mut frames, distance);
+        let revisit = chart.visible_time_range().unwrap();
+        assert!(revisit.from <= target && target <= revisit.to);
+        assert_eq!(prepared_view(&chart).bar_at(target).unwrap().ask, 23.0);
+        assert!(footprint_requests(&feed).is_empty());
+        older
+    });
+    assert_eq!(immediate, deferred);
+}
+
+#[test]
+fn restoring_a_view_and_new_clock_in_the_pane_waits_for_rebinding() {
+    let history = bars(400);
+    let cutoff = history.last().unwrap().time + TimeDelta::minutes(1);
+    let (mut chart, feed, mut frames, latest) = loaded_latest(&history, cutoff);
+    let target = history[40].time;
+    assert!(prepared_view(&chart).bar_at(target).is_none());
+
+    // Record a view and timezone change, then redo it by keyboard *after* the frame's pump.
+    let new_clock = chart.user_action(|chart| {
+        let mut options = chart.chart_options().clone();
+        options.time_scale.timezone =
+            crate::scales::TimezoneMode::Timezone("+05:45".parse().unwrap());
+        chart.set_chart_options(options);
+        assert!(
+            chart.set_visible_time_range(crate::widget::VisibleTimeRange {
+                from: history[38].time,
+                to: history[43].time,
+            })
+        );
+        chart.bar_clock()
+    });
+    assert_ne!(new_clock, latest.clock);
+    assert!(chart.undo());
+    assert_eq!(chart.bar_clock(), latest.clock);
+    assert!(chart.visible_time_range().unwrap().from > target);
+
+    let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::CTRL;
+    frames.ctx.set_os(egui::os::OperatingSystem::Nix);
+    frames.time += 1.0 / 60.0;
+    frame(
+        &frames.ctx,
+        &mut chart,
+        frames.time,
+        vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::Key {
+                key: egui::Key::Y,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            },
+        ],
+    );
+    assert_eq!(chart.bar_clock(), new_clock);
+    let restored = chart.visible_time_range().unwrap();
+    assert!(restored.from <= target && target <= restored.to);
+    assert!(footprint_requests(&feed).is_empty(), "stale clock paged");
+
+    frames.run(&mut chart);
+    resolve(&feed);
+    feed.page().send(page(history, true));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let rebound = request(&feed);
+    assert_eq!(rebound.clock, new_clock);
+    assert_eq!((rebound.before, rebound.since), (None, None));
+}
+
 #[test]
 fn delayed_candles_without_a_layout_do_not_stall_or_certify_missing_rows() {
     let (mut chart, feed) = chart_and_feed();

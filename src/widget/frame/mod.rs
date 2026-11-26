@@ -283,6 +283,9 @@ impl Chart {
         }
         // Panes share the available height and the lowest time axis.
         let has_panes = self.has_panes();
+        let footprint_range = self
+            .footprint_history_by_view
+            .then(|| self.state.visible_range());
         let response = if has_panes {
             self.show_with_panes(ui, footprint)
         } else {
@@ -416,6 +419,15 @@ impl Chart {
             self.pending_visible_range = None;
         }
         self.restore_history_view(ui.ctx());
+        // The pump saw the pre-input range. Page only if the settled view needs different bars.
+        if footprint_range.is_some_and(|before| before != self.state.visible_range())
+            && !ui.ctx().will_discard()
+            && self.can_scroll_prepared_footprints()
+            && let Some(mut link) = self.feed_link.take()
+        {
+            self.scroll_footprints(&mut link);
+            self.feed_link = Some(link);
+        }
         self.record_host_events(ui);
         let needs_info = response.clicked()
             || response.double_clicked()
@@ -4073,8 +4085,9 @@ impl Chart {
                 if volume_rect.contains(hover_pos) {
                     main_options.horz_line_visible = false;
                     main_options.horz_label_visible = false;
+                    // No price for the dot: the time line alone, as Full draws it.
                     if main_options.style == crate::config::CrosshairStyle::Dot {
-                        main_options.style = crate::config::CrosshairStyle::Arrow;
+                        main_options.style = crate::config::CrosshairStyle::Full;
                     }
                 }
                 crosshair_tags = rendering::render_crosshair_at_time(
@@ -4296,8 +4309,9 @@ impl Chart {
                         if !main_target || self.synced_crosshair_price.is_none() {
                             options.horz_line_visible = false;
                             options.horz_label_visible = false;
+                            // No price for the dot: the time line alone, as Full draws it.
                             if options.style == crate::config::CrosshairStyle::Dot {
-                                options.style = crate::config::CrosshairStyle::Arrow;
+                                options.style = crate::config::CrosshairStyle::Full;
                             }
                         }
                         let y = match self.synced_crosshair_price {
