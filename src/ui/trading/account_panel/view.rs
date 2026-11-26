@@ -999,9 +999,9 @@ impl Trading {
                         ui.end_row();
                     };
                     let quantity = ui.label(l10n::text(ctx, "Quantity"));
-                    // With levels it is their sum.
+                    // With levels it is their sum; a position exit's broker sizes it.
                     ui.add_enabled(
-                        request.take_profit_levels.is_empty(),
+                        request.take_profit_levels.is_empty() && request.position_bracket.is_none(),
                         egui::DragValue::new(&mut request.quantity).range(0.0..=f64::MAX),
                     )
                     .labelled_by(quantity.id);
@@ -1017,9 +1017,9 @@ impl Trading {
                         }
                         _ => {}
                     }
-                    // A trailing stop takes no exits.
+                    // A trailing stop and a position exit take no exits.
                     let trailing = matches!(request.order_type, OrderType::TrailingStop { .. });
-                    if brackets && !trailing {
+                    if brackets && !trailing && request.position_bracket.is_none() {
                         let reference = match request.order_type {
                             OrderType::Limit(p) | OrderType::Stop(p) => p,
                             OrderType::StopLimit { limit, .. } => limit,
@@ -1092,7 +1092,8 @@ impl Trading {
                 let step = [("step", limit_text(&numbers, step, decimals(step)))];
                 l10n::format_text(ctx, "Enter quantities in steps of {step}", &step)
             };
-            let problem = if !rules_ready {
+            // A position exit's quantity is the broker's, so no quantity rule applies.
+            let problem = if !rules_ready || request.position_bracket.is_some() {
                 None
             } else {
                 match order_quantity(request.quantity, rules) {
@@ -1123,6 +1124,11 @@ impl Trading {
             };
             let valid = rules_ready && problem.is_none() && request != &order.request;
             let theme = ui.active_theme();
+            if request.position_bracket.is_some() {
+                let key = "A position exit keeps its quantity. Cancel it and place a new exit \
+                    to change it.";
+                ui.colored_label(theme.ui.text_muted, l10n::text(ctx, key));
+            }
             if !rules_ready {
                 let waiting = l10n::text(ctx, "Waiting for the symbol's trading rules");
                 ui.colored_label(theme.ui.text_muted, waiting);
