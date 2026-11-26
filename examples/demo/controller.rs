@@ -2062,11 +2062,12 @@ impl eframe::App for DemoApp {
         let detectors = self.live.detectors();
         let mut settings = detectors.settings();
         let before = settings.clone();
-        // Footprint alerts read the imbalances the active chart shows.
+        // Footprint alerts read the imbalances and rows the active chart shows.
+        let rows = self.chart.footprint_row_ticks();
         settings
             .footprint
             .rule
-            .follow_chart(self.chart.chart_type_params());
+            .follow_chart(self.chart.chart_type_params(), rows);
         if settings != before {
             detectors.set_settings(settings);
         }
@@ -9176,17 +9177,21 @@ mod tests {
         params.footprint_diagonal = false;
         params.footprint_imbalance_min_volume = 5.0;
         params.footprint_stack = 2;
+        params.footprint_row_ticks = 2;
+        app.chart.set_chart_type(ChartType::VolumeFootprint);
         app.chart.set_chart_type_params(params);
         settle(&mut app, &ctx);
+        assert_eq!(app.chart.footprint_row_ticks(), 2);
         let rule = app.live.detectors().settings().footprint.rule;
         assert_eq!(
             (
                 rule.imbalance_ratio,
                 rule.diagonal,
                 rule.imbalance_min_volume,
-                rule.stack
+                rule.stack,
+                rule.row_ticks
             ),
-            (4.0, false, 5.0, 2)
+            (4.0, false, 5.0, 2, 2)
         );
     }
 

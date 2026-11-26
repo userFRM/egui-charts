@@ -1519,6 +1519,27 @@ mod tests {
             serde_json::from_str::<DetectorSettings>(saved).unwrap(),
             DetectorSettings::default()
         );
+        // Footprint settings saved before rows could group restore with rows of one tick.
+        let saved = saved.replacen(
+            "\"iceberg_count_alert\"",
+            r#""footprint":{"enabled":true,"alert":false,"sound":false,"rule":{
+                "buy_imbalance":true,"sell_imbalance":false,
+                "stacked_buy_imbalance":false,"stacked_sell_imbalance":false,
+                "buy_zone_rejection":false,"sell_zone_rejection":false,
+                "buy_volume_above":null,"sell_volume_above":null,
+                "delta_above":null,"delta_below":null,
+                "imbalance_ratio":3.0,"diagonal":true,"imbalance_min_volume":0.0,"stack":3
+            }},
+            "iceberg_count_alert""#,
+            1,
+        );
+        let mut expected = DetectorSettings::default();
+        expected.footprint.enabled = true;
+        expected.footprint.rule.buy_imbalance = true;
+        assert_eq!(
+            serde_json::from_str::<DetectorSettings>(&saved).unwrap(),
+            expected
+        );
     }
 
     #[test]
@@ -1925,6 +1946,46 @@ mod tests {
                 &["Buy zone rejection: Buy zone rejection at 100.25 to 100.75"],
             ),
         ];
+        // At 100: 10 bought and 1 sold; at 100.25: 20 sold. Rows of 2 ticks hold 10 against 21.
+        let example = |closing: &'static [&'static str]| -> [Step; 5] {
+            [
+                (0, 100.0, 1.0, Buy, &[]),
+                (60, 100.0, 10.0, Buy, &[]),
+                (61, 100.0, 1.0, Sell, &[]),
+                (62, 100.25, 20.0, Sell, &[]),
+                (120, 100.0, 1.0, Buy, closing),
+            ]
+        };
+        // On rows of 2 ticks, bids of 1 at 100.5 and 101 under asks of 12, 9 and 15 one row
+        // higher, making the buy zone 100.50 to 101.75. Bar 120 rejects it and bar 180 closes
+        // below it, ending it silently. On one-tick rows the asks are 2 imbalances, not a stack.
+        let grouped: [Step; 10] = [
+            (0, 100.0, 1.0, Buy, &[]),
+            (60, 100.0, 1.0, Sell, &[]),
+            (61, 100.5, 1.0, Sell, &[]),
+            (62, 101.0, 1.0, Sell, &[]),
+            (63, 100.75, 12.0, Buy, &[]),
+            (64, 101.25, 9.0, Buy, &[]),
+            (65, 101.75, 15.0, Buy, &[]),
+            (
+                120,
+                100.5,
+                1.0,
+                Sell,
+                &[
+                    "Buy imbalance: Buy imbalance on 3 rows",
+                    "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
+                ],
+            ),
+            (
+                180,
+                100.25,
+                1.0,
+                Buy,
+                &["Buy zone rejection: Buy zone rejection at 100.50 to 101.75"],
+            ),
+            (240, 100.5, 1.0, Buy, &[]),
+        ];
         let settings = |minimum: f64| {
             let mut settings = DetectorSettings::default();
             settings.footprint.enabled = true;
@@ -1951,10 +2012,11 @@ mod tests {
                 })
                 .collect()
         };
-        for (name, minimum, steps) in [
+        for (name, minimum, row_ticks, steps) in [
             (
                 "stack",
                 0.0,
+                1,
                 stacked(&[
                     "Buy imbalance: Buy imbalance on 3 rows",
                     "Stacked buy imbalance: Stacked buy imbalance of 3 rows",
@@ -1964,24 +2026,45 @@ mod tests {
             (
                 "minimum breaks the stack",
                 10.0,
+                1,
                 stacked(&["Buy imbalance: Buy imbalance on 2 rows"]).to_vec(),
             ),
-            ("levels", 0.0, selling.to_vec()),
-            ("horizontal gap breaks the stack", 0.0, gapped.to_vec()),
+            ("levels", 0.0, 1, selling.to_vec()),
+            ("horizontal gap breaks the stack", 0.0, 1, gapped.to_vec()),
+            (
+                "horizontal example, rows of 1 tick",
+                0.0,
+                1,
+                example(&[
+                    "Buy imbalance: Buy imbalance on 1 row",
+                    "Sell imbalance: Sell imbalance on 1 row",
+                ])
+                .to_vec(),
+            ),
+            (
+                "horizontal example, rows of 2 ticks",
+                0.0,
+                2,
+                example(&[]).to_vec(),
+            ),
+            ("grouped stack and zone", 0.0, 2, grouped.to_vec()),
             (
                 "zone rejection",
                 0.0,
+                1,
                 [&stacked(&[])[..7], &rejection[..]].concat(),
             ),
             (
                 "repeated stack",
                 0.0,
+                1,
                 [&stacked(&[])[..7], &repeated[..]].concat(),
             ),
         ] {
             let mut host = Host::new(Some(1_000.0));
             let mut configured = settings(minimum);
-            if name == "horizontal gap breaks the stack" {
+            configured.footprint.rule.row_ticks = row_ticks;
+            if name.starts_with("horizontal") {
                 configured.footprint.rule.diagonal = false;
             }
             host.detectors.set_settings(configured);
@@ -2051,6 +2134,33 @@ mod tests {
                 push(240, 100.5, 1.0, Buy, &[]);
             }
         }
+        // A zone keeps its prices when the rows change: on one-tick rows, bar 120 trades into
+        // the zone that rows of 2 ticks made, at 100.50 to 101.75, and closes inside it.
+        let host = Host::new(None);
+        let mut configured = DetectorSettings::default();
+        configured.footprint.enabled = true;
+        configured.footprint.alert = true;
+        configured.footprint.rule.buy_zone_rejection = true;
+        configured.footprint.rule.row_ticks = 2;
+        host.detectors.set_settings(configured.clone());
+        let push = |second, price, size, side, expected: &[&str]| {
+            let trade = MarketEvent::Trade(fill(second, price, size, side, None));
+            host.detectors.push("ES", time(second), &trade);
+            assert_eq!(alerts(&host), expected, "rows change, second {second}");
+        };
+        for &(second, price, size, side, _) in &grouped[..8] {
+            push(second, price, size, side, &[]);
+        }
+        configured.footprint.rule.row_ticks = 1;
+        host.detectors.set_settings(configured);
+        push(121, 100.75, 1.0, Buy, &[]);
+        push(
+            180,
+            100.0,
+            1.0,
+            Buy,
+            &["Buy zone rejection: Buy zone rejection at 100.50 to 101.75"],
+        );
         // Loaded history, with 101 sold on its own row: marked, never alerted, also when the first
         // live event closes the last history bar.
         let host = Host::new(Some(1_000.0));
