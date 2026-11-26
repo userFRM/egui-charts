@@ -313,6 +313,8 @@ pub struct PriceScale {
     chosen_fraction: Option<crate::model::PriceFraction>,
     #[serde(default)]
     tick_size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tick_tiers: Vec<(f64, f64)>,
     bar_ratio: Option<f64>,
 }
 
@@ -337,6 +339,7 @@ impl PriceScale {
             chosen_precision: None,
             chosen_fraction: None,
             tick_size: None,
+            tick_tiers: Vec::new(),
             bar_ratio: None,
         }
     }
@@ -383,10 +386,18 @@ impl PriceScale {
         self.instrument_precision = decimals;
     }
 
-    /// The instrument's default price grid, separate from the host's tick-mark override.
+    /// The instrument's default price grid, separate from the host's tick-mark override: its
+    /// tick, and its coarser ticks by price range.
     #[cfg(feature = "widget")]
-    pub(crate) fn set_tick_size(&mut self, tick_size: Option<f64>) {
-        self.tick_size = tick_size.filter(|size| size.is_finite() && *size > 0.0);
+    pub(crate) fn set_instrument_ticks(&mut self, instrument: Option<&crate::model::Instrument>) {
+        self.tick_size = instrument
+            .and_then(|instrument| instrument.tick_size)
+            .filter(|size| size.is_finite() && *size > 0.0);
+        let tiers = instrument.map_or(&[][..], |instrument| &instrument.tick_tiers);
+        // pump calls this every frame: copy only on change.
+        if self.tick_tiers != tiers {
+            self.tick_tiers = tiers.to_vec();
+        }
     }
 
     /// Locks scale units per bar at the current bar spacing and pane height.
@@ -599,7 +610,12 @@ impl PriceScale {
             transform.mode,
             PriceScaleMode::Normal | PriceScaleMode::Logarithmic
         ) {
-            tick_marks.min_price_step = tick_marks.min_price_step.or(self.tick_size);
+            tick_marks.min_price_step = tick_marks.min_price_step.or(self.tick_size.map(|tick| {
+                crate::scales::TickGrid::new(tick, &self.tick_tiers).step(
+                    transform.to_price(self.range.min),
+                    transform.to_price(self.range.max),
+                )
+            }));
         }
         PriceMap::new(
             transform,
@@ -906,6 +922,31 @@ impl PriceMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Axis marks lie on the grid of the tick range they are in: across 25, where ticks turn
+    /// from 0.02 to 0.05, marks step by 0.10, while a single 0.01 tick allows 0.05.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn price_marks_follow_the_ticks_of_their_range() {
+        use crate::model::Instrument;
+        let tiered = Instrument::new("T")
+            .with_tick_size(0.01)
+            .with_tick_tier(10.0, 0.02)
+            .with_tick_tier(25.0, 0.05);
+        let flat = Instrument::new("T").with_tick_size(0.01);
+        let marks = |instrument: &Instrument| {
+            let mut scale = PriceScale::new(PriceScaleOptions::default());
+            scale.set_instrument_ticks(Some(instrument));
+            scale.set_range(24.85, 25.25);
+            let marks = scale.map(PriceTransform::default(), 0.0, 300.0).marks();
+            marks
+                .iter()
+                .map(|mark| (mark.price * 100.0).round() / 100.0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(marks(&tiered), [24.9, 25.0, 25.1, 25.2]);
+        assert!(marks(&flat).contains(&24.95), "{:?}", marks(&flat));
+    }
 
     #[test]
     fn percentage_labels_round_zero_without_a_minus() {
