@@ -678,12 +678,14 @@ impl Chart {
         let precision = self
             .instrument()
             .and_then(crate::scales::instrument_price_precision);
-        let tick_size = self
-            .instrument()
-            .and_then(|instrument| instrument.tick_size);
+        let instrument = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.instrument.as_ref())
+            .or(self.legend_instrument.as_ref());
         let scale = self.state.price_scale_mut();
         scale.set_instrument_precision(precision);
-        scale.set_tick_size(tick_size);
+        scale.set_instrument_ticks(instrument);
     }
 
     /// The decimals of the main series' prices in the status line, the tooltip, the data window

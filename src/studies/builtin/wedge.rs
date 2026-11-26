@@ -26,11 +26,12 @@
 //! candidate needs new ones.
 //!
 //! The outputs are the developing upper and lower lines and, on the confirmation bar only, the
-//! price of the line the close broke. The table lists the developing wedge and the last `history`
-//! confirmed ones with the times of their anchors and confirmation. Nothing found or confirmed
-//! changes with later bars. Bars with a non-finite high, low or close are skipped. The defaults
-//! are 5 bars on each side of a pivot, 3 touches, a convergence of 10 percent, at most 100 bars and
-//! 5 confirmed wedges.
+//! price of the line the close broke. The legend reads the two lines; the breakout value only
+//! places its mark, so the legend omits it and the price scale starts without its tag. The table
+//! lists the developing wedge and the last `history` confirmed ones with the times of their
+//! anchors and confirmation. Nothing found or confirmed changes with later bars. Bars with a
+//! non-finite high, low or close are skipped. The defaults are 5 bars on each side of a pivot, 3
+//! touches, a convergence of 10 percent, at most 100 bars and 5 confirmed wedges.
 
 use super::swings::{Swing, Swings};
 use crate::model::Bar;
@@ -325,6 +326,15 @@ impl<const RISING: bool> Indicator for Wedge<RISING> {
             },
             visible: true,
         }
+    }
+
+    // A breakout's value only places its mark on the line it broke, which the legend reads.
+    fn legend_lines(&self) -> Vec<usize> {
+        vec![0, 1]
+    }
+
+    fn plot_tagged(&self, line: usize) -> bool {
+        line < 2
     }
 
     fn values(&self) -> &IndicatorValues {
