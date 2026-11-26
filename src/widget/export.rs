@@ -399,6 +399,13 @@ impl Chart {
                 study.set_timeframe(timeframe);
             }
             study.set_bar_clock(&clock);
+            self.study_data.set_replay_cut(
+                study.as_mut(),
+                &self.symbol,
+                self.timeframe,
+                self.replay_time(),
+                self.replay_newest_closed(),
+            );
         }
         let requests = studies
             .iter()

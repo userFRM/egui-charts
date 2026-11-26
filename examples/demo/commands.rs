@@ -134,13 +134,14 @@ const ROW_KEYS: &[(&str, KeyboardAction)] = &[
 
 /// The quick search rows. A row whose action has a key shows the first one bound in `shortcuts`,
 /// and each saved indicator template of `templates` (id and name) has a row of its own,
-/// as does each study `factory` lists. Each drawing tool row has a star, filled for the tools
-/// in `favorites`.
+/// as does each study `factory` lists and each tool `registry` lists that is not hidden. Each
+/// built-in drawing tool row has a star, filled for the tools in `favorites`.
 pub(super) fn quick_search_commands(
     shortcuts: &ShortcutMap,
     templates: &[(String, String)],
     factory: &IndicatorFactory,
     favorites: &[DrawingToolType],
+    registry: &egui_charts::drawings::DrawingToolRegistry,
 ) -> Vec<Command> {
     let keyed = |command: Command, action: Option<KeyboardAction>| match action
         .and_then(|action| shortcuts.shortcut(action))
@@ -230,6 +231,16 @@ pub(super) fn quick_search_commands(
             }
         }
     }
+    commands.extend(
+        registry
+            .custom_tools()
+            .filter(|(id, _)| registry.custom_availability(id).visible)
+            .map(|(id, tool)| {
+                Command::new(format!("custom-tool:{id}"), tool.name.as_str())
+                    .category("Drawing tools")
+                    .keywords(tool.category.clone())
+            }),
+    );
     let mut names = factory.list();
     names.sort();
     commands.extend(names.into_iter().map(|name| {
@@ -300,6 +311,7 @@ impl DemoApp {
             &self.top_toolbar.indicator_templates,
             self.indicator_dialog.factory(),
             &self.drawing_toolbar.state.favorites,
+            &self.chart.drawings().registry,
         ));
         self.quick_search.set_recent(recent);
         self.quick_search.open();
@@ -344,6 +356,12 @@ impl DemoApp {
         if id.starts_with("tool:") {
             if let Some(tool) = search_tool(id) {
                 self.chart.drawings_mut().set_active_tool(Some(tool));
+            }
+            return;
+        }
+        if let Some(tool) = id.strip_prefix("custom-tool:") {
+            if let Err(error) = self.chart.drawings_mut().set_custom_tool(tool) {
+                self.notify(error);
             }
             return;
         }
@@ -1680,7 +1698,13 @@ mod tests {
         shortcuts
             .bindings
             .retain(|(_, action)| *action != KeyboardAction::Snapshot);
-        let commands = quick_search_commands(&shortcuts, &[], &IndicatorFactory::new(), &[]);
+        let commands = quick_search_commands(
+            &shortcuts,
+            &[],
+            &IndicatorFactory::new(),
+            &[],
+            &Default::default(),
+        );
         let shortcut = |id: &str| commands.iter().find(|row| row.id == id).unwrap().shortcut;
         assert_eq!(shortcut("undo"), Some(edited));
         assert_eq!(shortcut("snapshot"), None);
