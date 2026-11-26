@@ -638,12 +638,10 @@ impl Chart {
                     self.interact_navigation(ui, nav, chart_rect, response.id),
                 )
             });
-        let scale = self.state.time_scale();
-        let mut live_scale = scale.clone();
-        live_scale.scroll_to_realtime();
+        let at_live_edge = self.state.time_scale().is_at_live_edge();
         let realtime_rect = (self.config.show_realtime_btn
             && !self.state.data().is_empty()
-            && (scale.right_offset_precise() - live_scale.right_offset_precise()).abs() > 1e-6)
+            && !at_live_edge)
             .then(|| {
                 rendering::realtime_button_rect(
                     chart_rect,

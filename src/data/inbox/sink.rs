@@ -6,7 +6,9 @@ use crate::data::depth::{Book, Lost};
 use crate::data::depth_history::Sampler;
 use crate::data::merge::{Origin, fold, valid};
 use crate::data::trades::{self, Trades};
-use crate::data::{FeedError, FeedStatus, OrderEvent, OrderQueue, RestingOrder, SubscriptionId};
+use crate::data::{
+    FeedError, FeedStatus, OrderEvent, OrderQueue, RestingOrder, SubscriptionId, ViewId,
+};
 use crate::model::{Bar, BarClock, Level1Quote, OrderBook, Placement, Tick};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::btree_map::Entry;
@@ -202,6 +204,13 @@ impl std::fmt::Debug for Sink {
 }
 
 impl Sink {
+    /// Identity of the chart feed attachment this sink belongs to. It matches the
+    /// [`Reply::view_id`](super::Reply::view_id) of that attachment's history requests, but it survives a symbol or
+    /// interval change, so compare the subscription's symbol and interval too. See [`ViewId`].
+    pub fn view_id(&self) -> ViewId {
+        self.inbox.view_id()
+    }
+
     /// Starts a new replay position on this subscription. The next chart drain clears prior
     /// bars, trades, depth, quote and sampled history before applying subsequent pushes. Resets
     /// trade ids and partial event bars too, so rewinding cannot double-count or retain future

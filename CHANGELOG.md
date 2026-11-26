@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `Reply::view_id` and `Sink::view_id` return an opaque `ViewId` for one chart feed attachment, so a feed serving two charts of the same symbol and interval can tie a history reply to its live sink. The id changes with `Chart::set_feed` and is not shared across attachments, but it survives a symbol or interval change: providers still match the request's symbol and interval. ([#4291](https://github.com/userFRM/egui-charts/issues/4291))
+
 - Nightly builds of the demo for Linux x86_64, Windows x86_64 and macOS arm64. Once a day, the newest main commit whose CI passed is built and published as the `nightly` pre-release on GitHub, with a `SHA256SUMS` file for the archives.
 
 - `Chart::set_footprint_history_by_view` sizes the initial prepared footprint page to the visible bars and footprint consumers without shortening candle history. The feed still chooses the prepared/live cutoff. ([#4142](https://github.com/userFRM/egui-charts/issues/4142))
