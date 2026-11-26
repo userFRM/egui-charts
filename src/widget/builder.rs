@@ -299,6 +299,7 @@ impl Chart {
             selection: SelectionState::new(),
             right_click: None,
             menu_open: false,
+            pointer_dot: false,
             #[cfg(feature = "ui")]
             touch_order_armed: false,
             #[cfg(feature = "ui")]

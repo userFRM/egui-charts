@@ -57,8 +57,8 @@ pub use overlays::{
     StudyValue, ValueFormatters, render_crosshair_full, render_tooltip_with_options,
 };
 pub(crate) use overlays::{
-    realtime_button, realtime_button_rect, render_crosshair_at_time, render_crosshair_lines,
-    render_crosshair_price_tag, snap_to_values,
+    paints_dot, realtime_button, realtime_button_rect, render_crosshair_at_time,
+    render_crosshair_lines, render_crosshair_price_tag, snap_to_values,
 };
 pub use session_breaks::{SessionBreakRenderConfig, SessionBreakRenderer};
 pub(crate) use session_breaks::{exchange_session, render_extended_hours};

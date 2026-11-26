@@ -222,6 +222,7 @@ impl Chart {
         footprint: Option<(FootprintView<'_>, &FootprintConfig)>,
     ) -> Response {
         self.follow_chart_theme(&ui.active_theme());
+        self.pointer_dot = false;
         self.host_events.volume_map = None;
         self.host_events.touch_position = None;
         self.host_events.target = None;
@@ -303,6 +304,14 @@ impl Chart {
         // After every pane, so that a mark is one stroke above all of them.
         #[cfg(feature = "drawings")]
         self.cursor_modes.render(ui);
+        // The Dot cursor hides the pointer only where its dot stands in for it: elsewhere on the
+        // chart (an axis, an open menu, a held readout, an empty plot) the arrow stays.
+        if !self.pointer_dot
+            && ui.rect_contains_pointer(response.rect)
+            && ui.ctx().output(|o| o.cursor_icon) == egui::CursorIcon::None
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+        }
         self.menu_open = false;
         #[cfg(feature = "ui")]
         {
@@ -1018,8 +1027,9 @@ impl Chart {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ZoomIn);
         }
         // Axes that a drag would zoom show its direction, keeping the axis where it began.
-        // The drawing manager may override the cursor below.
-        else if response.hovered() {
+        // The drawing manager may override the cursor below. The other panes' plots take the
+        // plot's cursor too.
+        else if time_response.hovered() {
             let at = ui
                 .input(|i| i.pointer.press_origin().or(i.pointer.hover_pos()))
                 .filter(|_| !owns_drag);
@@ -4102,6 +4112,8 @@ impl Chart {
                         main_options.style = crate::config::CrosshairStyle::Full;
                     }
                 }
+                self.pointer_dot |= rendering::paints_dot(&main_options, price_rect, snapped)
+                    && ui.rect_contains_pointer(price_rect);
                 crosshair_tags = rendering::render_crosshair_at_time(
                     &price_ctx,
                     snapped,
@@ -4177,6 +4189,8 @@ impl Chart {
                     let mut options = crosshair_options.resolved(ui.ctx());
                     options.vert_line_visible = false;
                     let context = RenderContext::new(&painter, volume_rect);
+                    self.pointer_dot |= rendering::paints_dot(&options, volume_rect, pos)
+                        && ui.rect_contains_pointer(volume_rect);
                     rendering::render_crosshair_lines(
                         &context,
                         pos,
