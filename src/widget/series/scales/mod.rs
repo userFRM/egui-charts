@@ -111,8 +111,11 @@ impl Chart {
     /// series' scale wins when displayed, otherwise the nearest named scale at that edge,
     /// then the first named scale. Its options and manual range are retained. Series keep
     /// their data and numeric formats; undo restores the previous assignments and ranges.
-    /// Overlay assignments stay unlabelled. Returns `false` without changes for an unknown
-    /// pane or a study that refuses the new assignment.
+    /// Overlay assignments stay unlabelled. A study that does not permit
+    /// [user edits](Self::set_indicator_user_edit_enabled) keeps its scale;
+    /// [`set_indicator_scale`](Self::set_indicator_scale) still moves it. Returns `false`
+    /// without changes for an unknown pane or an editable study that refuses the new
+    /// assignment.
     pub fn merge_pane_scales(&mut self, pane: PaneId, side: crate::model::AxisSide) -> bool {
         use crate::studies::StudyScale;
         use crate::widget::PaneScale;
@@ -151,7 +154,8 @@ impl Chart {
             .iter()
             .filter_map(|id| self.indicators().find(|(member, _)| member == id))
             .filter(|(_, study)| {
-                study.scale() != StudyScale::Shared(target)
+                study.user_edit_enabled()
+                    && study.scale() != StudyScale::Shared(target)
                     && !(study.scale() == StudyScale::Main
                         && target == self.main_series_scale
                         && pane == self.main_series_pane())
