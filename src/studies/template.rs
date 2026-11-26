@@ -1235,6 +1235,7 @@ mod tests {
     use crate::studies::{
         AverageLine, AverageType, CVD, CloseToCloseVol, EhlersFisher, HL2, HLC3, MACombination,
         MARibbon, PriceChannel, RSI, RankCorrelationIndex, TradingSessions, VolumeWeightedAvgPrice,
+        WilliamsR,
     };
     use chrono::{NaiveTime, TimeZone, Utc, Weekday};
     use egui::Color32;
@@ -3553,27 +3554,43 @@ mod tests {
         }
     }
 
-    /// An RSI saved before it had a middle level draws the lines and band it was saved with. With
-    /// its levels edited to 40 and 20 it draws those two and fills from 20 to 40; saved before
-    /// levels were editable it draws 70 and 30 and fills between them. Both fill in the RSI's band
-    /// colour.
+    /// An RSI or a Williams %R saved before it had a middle level draws the lines and band it was
+    /// saved with, and no middle line. With its levels edited, the RSI's to 40 and 20 and the
+    /// Williams %R's to -10 and -30, it draws those two and fills between them; saved before
+    /// levels were editable it draws 70 and 30, or -20 and -80, and fills between them. Each fills
+    /// in its band colour.
     #[test]
-    fn rsi_saved_before_the_middle_level_draws_its_saved_levels_and_band() {
+    fn saved_before_the_middle_level_draws_its_saved_levels_and_band() {
         let mut edited = ConfiguredStudy::new(Box::new(RSI::new(14)));
         let mut settings = edited.settings();
         settings.levels[0].value = Some(40.0);
         settings.levels[1].value = Some(20.0);
         edited.apply_settings(&[], settings).unwrap();
-        let mut edited = StudyTemplate::from_study(&edited);
-        edited.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
-        edited.settings.levels.truncate(2);
+        let mut rsi_edited = StudyTemplate::from_study(&edited);
+        rsi_edited
+            .inputs
+            .retain(|(id, _)| !id.starts_with("smoothing"));
+        rsi_edited.settings.levels.truncate(2);
         // Settings of that age had no level fields, which read as their serde defaults.
-        let mut older = StudyTemplate::from_study(&RSI::new(14));
-        older.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
-        older.settings.levels.clear();
-        older.settings.fill_between_levels = false;
-        older.settings.level_fill_color = Color32::default();
-        // The lines drawn, the band, which a hidden level still bounds, and its fill.
+        let older = |study: &dyn Indicator| {
+            let mut older = StudyTemplate::from_study(study);
+            older.settings.levels.clear();
+            older.settings.fill_between_levels = false;
+            older.settings.level_fill_color = Color32::default();
+            older
+        };
+        let mut rsi_older = older(&RSI::new(14));
+        rsi_older
+            .inputs
+            .retain(|(id, _)| !id.starts_with("smoothing"));
+        // A Williams %R saved with its levels edited to -10 and -30, both above its middle level.
+        let williams_edited: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Williams %R","inputs":[["period",{"Length":14}],["smoothing",{"Choice":0}],["smoothing_length",{"Length":14}],["smoothing_deviation",{"Number":2.0}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.WilliamsR.html","plots":[{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":-10.0,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":-30.0,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":true,"level_fill_color":[13,9,20,26],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        )
+        .unwrap();
+        let williams_older = older(&WilliamsR::new(14));
+        // The lines drawn, the band, which a hidden level still bounds unless the study names the
+        // two levels that bound it, and its fill.
         let drawn = |template: &StudyTemplate| {
             let study = template.create().unwrap();
             let pane = study.pane();
@@ -3583,7 +3600,13 @@ mod tests {
                 .filter(|level| level.1 != Color32::TRANSPARENT)
                 .map(|level| level.0)
                 .collect();
-            let values = pane.levels.iter().map(|level| level.0);
+            let indices = study.level_fill_indices();
+            let values = pane
+                .levels
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| indices.is_none_or(|indices| indices.contains(index)))
+                .map(|(_, level)| level.0);
             let band = (
                 values.clone().fold(f64::INFINITY, f64::min),
                 values.fold(f64::NEG_INFINITY, f64::max),
@@ -3595,12 +3618,14 @@ mod tests {
                 study.level_fill_color(),
             )
         };
-        let fill = RSI::new(14).level_fill_color();
+        let fill = Color32::from_rgba_unmultiplied(126, 87, 194, 26);
         assert_eq!(
-            [drawn(&edited), drawn(&older)],
+            [&rsi_edited, &rsi_older, &williams_edited, &williams_older].map(drawn),
             [
                 (vec![40.0, 20.0], (20.0, 40.0), true, fill),
                 (vec![70.0, 30.0], (30.0, 70.0), true, fill),
+                (vec![-10.0, -30.0], (-30.0, -10.0), true, fill),
+                (vec![-20.0, -80.0], (-80.0, -20.0), true, fill),
             ]
         );
     }

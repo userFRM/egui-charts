@@ -9,6 +9,7 @@ use egui_charts::drawings::DrawingToolType;
 use egui_charts::icons::{Icon, icons};
 use egui_charts::studies::IndicatorFactory;
 use egui_charts::theme::ThemeExt;
+use egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorDialogAction;
 use egui_charts::ui_kit::command_palette::{Command, CommandPaletteHandler};
 use egui_charts::ui_kit::list_item::ListItem;
 use egui_charts::widget::ShortcutMap;
@@ -133,13 +134,14 @@ const ROW_KEYS: &[(&str, KeyboardAction)] = &[
 
 /// The quick search rows. A row whose action has a key shows the first one bound in `shortcuts`,
 /// and each saved indicator template of `templates` (id and name) has a row of its own,
-/// as does each study `factory` lists. Each drawing tool row has a star, filled for the tools
-/// in `favorites`.
+/// as does each study `factory` lists and each tool `registry` lists that is not hidden. Each
+/// built-in drawing tool row has a star, filled for the tools in `favorites`.
 pub(super) fn quick_search_commands(
     shortcuts: &ShortcutMap,
     templates: &[(String, String)],
     factory: &IndicatorFactory,
     favorites: &[DrawingToolType],
+    registry: &egui_charts::drawings::DrawingToolRegistry,
 ) -> Vec<Command> {
     let keyed = |command: Command, action: Option<KeyboardAction>| match action
         .and_then(|action| shortcuts.shortcut(action))
@@ -229,6 +231,16 @@ pub(super) fn quick_search_commands(
             }
         }
     }
+    commands.extend(
+        registry
+            .custom_tools()
+            .filter(|(id, _)| registry.custom_availability(id).visible)
+            .map(|(id, tool)| {
+                Command::new(format!("custom-tool:{id}"), tool.name.as_str())
+                    .category("Drawing tools")
+                    .keywords(tool.category.clone())
+            }),
+    );
     let mut names = factory.list();
     names.sort();
     commands.extend(names.into_iter().map(|name| {
@@ -299,6 +311,7 @@ impl DemoApp {
             &self.top_toolbar.indicator_templates,
             self.indicator_dialog.factory(),
             &self.drawing_toolbar.state.favorites,
+            &self.chart.drawings().registry,
         ));
         self.quick_search.set_recent(recent);
         self.quick_search.open();
@@ -346,6 +359,12 @@ impl DemoApp {
             }
             return;
         }
+        if let Some(tool) = id.strip_prefix("custom-tool:") {
+            if let Err(error) = self.chart.drawings_mut().set_custom_tool(tool) {
+                self.notify(error);
+            }
+            return;
+        }
         if let Some(template) = id.strip_prefix("template:") {
             self.handle_top_toolbar(
                 ctx,
@@ -354,7 +373,10 @@ impl DemoApp {
             return;
         }
         if let Some(name) = id.strip_prefix("study:") {
-            if let Some(study) = self.indicator_dialog.factory().create(name) {
+            // A study with symbols to choose opens the dialog's prompt and arrives from `show`.
+            if let Some(IndicatorDialogAction::AddIndicator(study)) =
+                self.indicator_dialog.add(name)
+            {
                 self.chart.add_indicator(study);
             }
             return;
@@ -1676,7 +1698,13 @@ mod tests {
         shortcuts
             .bindings
             .retain(|(_, action)| *action != KeyboardAction::Snapshot);
-        let commands = quick_search_commands(&shortcuts, &[], &IndicatorFactory::new(), &[]);
+        let commands = quick_search_commands(
+            &shortcuts,
+            &[],
+            &IndicatorFactory::new(),
+            &[],
+            &Default::default(),
+        );
         let shortcut = |id: &str| commands.iter().find(|row| row.id == id).unwrap().shortcut;
         assert_eq!(shortcut("undo"), Some(edited));
         assert_eq!(shortcut("snapshot"), None);

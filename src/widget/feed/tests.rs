@@ -1047,7 +1047,7 @@ fn time_bar_trade_studies_require_coverage_for_each_output() {
     let range_partial: Rows = [[n; 3], [n; 3]];
     for complete in [true, false] {
         // Each study, its two candles complete, and the same before a terminal page.
-        let studies: [(OrderFlowStudy, Rows, Rows); 6] = [
+        let studies: [(OrderFlowStudy, Rows, Rows); 7] = [
             (
                 OrderFlowStudy::new(OrderFlowKind::AggressorRate {
                     seconds: 60,
@@ -1079,6 +1079,11 @@ fn time_bar_trade_studies_require_coverage_for_each_output() {
                 OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: 2 }),
                 [[n, n, n], [s(3.0), s(3.0), n]],
                 [[n, n, n], [n, n, n]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::SideVolume),
+                [[s(2.0), s(0.0), s(2.0)], [s(1.0), s(0.0), s(1.0)]],
+                [[n, n, n], [s(1.0), s(0.0), s(1.0)]],
             ),
             (
                 OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
@@ -7603,6 +7608,87 @@ fn scroll_to_time_shows_the_nearest_bar_and_loads_older_history() {
         let range = chart.state.time_scale().visible_logical_range();
         assert!((range.left + range.right) / 2.0 > 25.0, "{row}: {range:?}");
     }
+}
+
+/// With the choice on, an interval change keeps the bar at the left edge in place at the same
+/// spacing once the new bars replace the old ones: the bar whose period holds its open, also when
+/// a feed pages older history to reach it. With it off the view stays where it was.
+#[test]
+fn interval_change_keeps_the_left_edge_when_chosen() {
+    let all = bars(3000);
+    let five: Vec<Bar> = all.iter().step_by(5).cloned().collect();
+    let keep = |chart: &mut Chart| {
+        let mut options = chart.chart_options().clone();
+        options.time_scale.keep_left_edge_on_interval_change = true;
+        chart.set_chart_options(options);
+    };
+    // The left pixel cuts the 16:43 bar a quarter of a slot before its centre.
+    let shown = crate::model::LogicalRange::new(1003.25, 1102.25);
+    let check = |chart: &Chart, left: f32, open: &str, row: &str| {
+        let range = chart.visible_logical_range().unwrap();
+        assert!(
+            (range.left - left).abs() < 0.01 && (range.right - left - 99.0).abs() < 0.01,
+            "{row}: {range:?}"
+        );
+        let time = chart.time_at_index(range.left.floor() as usize);
+        assert_eq!(time, Some(open.parse().unwrap()), "{row}");
+    };
+    // Off, the bar at the right edge keeps its place. On, 16:40 holds 16:43; the nearest bar
+    // would be 16:45. A host may supply the new bars a frame later.
+    for (on, wait, left, open) in [
+        (false, false, 121.25, "2024-03-15T10:05:00Z"),
+        (true, false, 200.25, "2024-03-15T16:40:00Z"),
+        (true, true, 200.25, "2024-03-15T16:40:00Z"),
+    ] {
+        let mut chart = Chart::new(BarData::from_bars(all.clone()));
+        let mut frames = Frames::new();
+        chart.set_timeframe(Timeframe::Min1);
+        if on {
+            keep(&mut chart);
+        }
+        frames.run(&mut chart);
+        chart.set_visible_logical_range(shown);
+        frames.run(&mut chart);
+        let spacing = chart.state.time_scale().bar_spacing();
+        chart.set_timeframe(Timeframe::Min5);
+        if wait {
+            frames.run(&mut chart);
+        }
+        chart.set_data(SeriesId::MAIN, five.clone());
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        check(&chart, left, open, &format!("{on} {wait}"));
+        assert_eq!(chart.state.time_scale().bar_spacing(), spacing);
+    }
+
+    // The 16:40 bar opens before the kept open, so older pages are asked by count alone.
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    chart.set_timeframe(Timeframe::Min1);
+    keep(&mut chart);
+    frames.run(&mut chart);
+    feed.page().send(page(all.clone(), false));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    chart.set_visible_logical_range(shown);
+    frames.run(&mut chart);
+    feed.calls();
+    chart.set_timeframe(Timeframe::Min5);
+    frames.run(&mut chart);
+    feed.calls();
+    feed.page().send(page(five[400..].to_vec(), false));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    assert_eq!(
+        feed.calls(),
+        [history("A", Timeframe::Min5, Some(five[400].time))]
+    );
+    feed.page().send(page(five[..400].to_vec(), true));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    check(&chart, 200.25, "2024-03-15T16:40:00Z", "feed");
+    assert!(feed.calls().is_empty());
 }
 
 /// Local navigation keeps the zoom and selects the following bar, including after paging.

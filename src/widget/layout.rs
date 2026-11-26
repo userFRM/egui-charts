@@ -265,7 +265,8 @@ pub enum ChartLayoutMode {
     Sixteen,
     /// Eight columns and two rows.
     SixteenEightColumns,
-    /// One tab per supplied chart, up to sixteen.
+    /// One tab per supplied chart, up to sixteen, and optionally one of them split beside the
+    /// others (see [`ChartLayout::set_tab_split`]).
     Tabs,
 }
 
@@ -802,6 +803,24 @@ impl Split {
     }
 }
 
+/// The rectangles of the first `count` charts of `split` over `rect`, and its borders, with the
+/// minimum chart sizes scaled down to an area too small for them.
+fn split_rects(
+    split: &Split,
+    rect: Rect,
+    count: usize,
+    weights: &[Vec<f32>],
+) -> (Vec<Rect>, Vec<Divider>) {
+    let minimum = split.minimum(count);
+    let scale = Vec2::new(
+        (rect.width() / minimum.x.max(1.0)).min(1.0),
+        (rect.height() / minimum.y.max(1.0)).min(1.0),
+    );
+    let mut output = (Vec::new(), Vec::new());
+    split.rects(rect, count, weights, &mut 0, &mut output, scale);
+    output
+}
+
 impl Tracks {
     /// Charts the arrangement holds.
     fn chart_count(&self) -> usize {
@@ -872,6 +891,110 @@ pub struct ChartLinkGroups {
     pub symbol: ChartLink,
     /// Interval membership.
     pub interval: ChartLink,
+}
+
+/// A change to the charts of the tab preset that its strip asks the host for, which
+/// [`ChartLayout::take_tab_requests`] returns. The layout owns no charts: the host applies the
+/// request to the charts it supplies and confirms it as each variant says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChartTabRequest {
+    /// Supply one more chart after the last and select it with [`ChartLayout::set_active`].
+    /// Never asked for at sixteen charts.
+    Add,
+    /// Stop supplying the chart in this slot, then call [`ChartLayout::remove_slot`]. Never asked
+    /// for the last chart.
+    Close(usize),
+    /// Move the chart in slot `from` to slot `to`, shifting the charts between them by one, as
+    /// `Vec::remove(from)` and `Vec::insert(to, chart)` do, then call [`ChartLayout::move_slot`].
+    Move {
+        /// The slot the chart leaves.
+        from: usize,
+        /// The slot the chart takes.
+        to: usize,
+    },
+}
+
+/// The half of the chart area a split tab takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum TabSplitSide {
+    /// The left half; the other tabs take the right.
+    Left,
+    /// The right half; the other tabs take the left.
+    Right,
+    /// The top half; the other tabs take the bottom.
+    Top,
+    /// The bottom half; the other tabs take the top.
+    Bottom,
+}
+
+/// A chart of the tab preset shown on its own part of the chart area, beside the selected one of
+/// the other tabs, suitable for host serialization.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct TabSplit {
+    /// The slot of the chart shown on its own.
+    pub slot: usize,
+    /// The side it takes.
+    pub side: TabSplitSide,
+    /// The share of the chart area's width, or height when stacked, that it takes, between 0 and
+    /// 1 exclusive; dragging the border between the two charts changes it. Each chart keeps at
+    /// least the size a chart of a grid preset keeps. Read as one half from a document without it.
+    #[serde(default = "TabSplit::half")]
+    pub ratio: f32,
+}
+
+impl TabSplit {
+    /// The chart in `slot` shown on the `side` half.
+    pub fn new(slot: usize, side: TabSplitSide) -> Self {
+        Self {
+            slot,
+            side,
+            ratio: Self::half(),
+        }
+    }
+
+    fn half() -> f32 {
+        0.5
+    }
+
+    /// Whether the split chart is the first of the two, on the left or the top.
+    fn first(&self) -> bool {
+        matches!(self.side, TabSplitSide::Left | TabSplitSide::Top)
+    }
+
+    /// The weights of the two charts from the left or the top, as a split of a grid preset has.
+    fn weights(&self) -> Vec<Vec<f32>> {
+        let (split, other) = (self.ratio, 1.0 - self.ratio);
+        vec![if self.first() {
+            vec![split, other]
+        } else {
+            vec![other, split]
+        }]
+    }
+
+    /// The areas of the split chart and of the other one over `rect`, and the border between
+    /// them, divided as the two charts of a two-chart preset are.
+    fn areas(&self, rect: Rect) -> ([Rect; 2], Vec<Divider>) {
+        let halves = Split {
+            rows: matches!(self.side, TabSplitSide::Top | TabSplitSide::Bottom),
+            children: vec![Split::leaf(), Split::leaf()],
+        };
+        let (areas, dividers) = split_rects(&halves, rect, 2, &self.weights());
+        let areas = if self.first() {
+            [areas[0], areas[1]]
+        } else {
+            [areas[1], areas[0]]
+        };
+        (areas, dividers)
+    }
+}
+
+/// A tab being dragged, by the layout whose strip it belongs to.
+struct TabDrag {
+    layout: egui::Id,
+    slot: usize,
 }
 
 #[derive(Clone, Default)]
@@ -1034,9 +1157,18 @@ pub struct ChartLayout {
     pub sync: ChartSyncOptions,
     /// Offer editable group identifiers instead of the default emoji choices.
     pub text_sync_groups: bool,
+    /// Offer a new tab button, a close button on each tab, middle-click close, dragging tabs to
+    /// reorder them or onto the chart area to split it, and their keys, in the tab preset. The
+    /// host applies the requests [`Self::take_tab_requests`] returns. Off by default.
+    pub tab_controls: bool,
     active: usize,
     /// The chart slot shown alone in place of the preset.
     maximized: Option<usize>,
+    /// The tab shown on its own beside the others.
+    tab_split: Option<TabSplit>,
+    /// The tab shown beside the split one: the last selected other tab.
+    tab_front: usize,
+    tab_requests: Vec<ChartTabRequest>,
     focus_active: bool,
     /// A keyboard or maximized-chart selection fits the source's range at the new plot width.
     focus_range: Option<(usize, usize)>,
@@ -1068,16 +1200,18 @@ impl std::fmt::Debug for ChartLayout {
             .field("mode", &self.mode)
             .field("sync", &self.sync)
             .field("text_sync_groups", &self.text_sync_groups)
+            .field("tab_controls", &self.tab_controls)
             .field("active", &self.active)
             .field("maximized", &self.maximized)
+            .field("tab_split", &self.tab_split)
             .finish_non_exhaustive()
     }
 }
 
 /// Identifies a chart's bars: it changes when they are replaced, not when they stream.
-type BarsKey = (u64, Option<chrono::DateTime<chrono::Utc>>);
+pub(super) type BarsKey = (u64, Option<chrono::DateTime<chrono::Utc>>);
 
-fn bars_key(chart: &Chart) -> BarsKey {
+pub(super) fn bars_key(chart: &Chart) -> BarsKey {
     (
         chart.state.revision(),
         chart.state.shown().first().map(|bar| bar.time),
@@ -1115,7 +1249,9 @@ fn group_name_edit(ui: &mut Ui, current: &str) -> Option<String> {
 /// A range a chart fits once bars of its new interval replace those it held at the switch.
 #[derive(Clone, Copy)]
 struct PendingRange {
-    range: VisibleTimeRange,
+    /// `None` for a chart that keeps its left edge on the switch, until a chart it follows
+    /// sends a range.
+    range: Option<VisibleTimeRange>,
     /// The [`Chart::sync_source`] of the chart it came from, `None` for the chart's own range.
     source: Option<(Timeframe, f64)>,
     bars: BarsKey,
@@ -1360,9 +1496,164 @@ impl ChartLayout {
         {
             moved(&mut step.lock().unwrap().index);
         }
+        if let Some(split) = &mut self.tab_split {
+            moved(&mut split.slot);
+        }
+        moved(&mut self.tab_front);
         self.detached.swap(a, b);
         #[cfg(feature = "drawings")]
         self.drawings.swap_slots(a, b);
+    }
+
+    /// The requests the tab strip queued at the last [`Self::show`], oldest first. Requests not
+    /// taken before the next show are dropped.
+    ///
+    /// ```
+    /// use egui_charts::widget::{Chart, ChartLayout, ChartTabRequest, TabSplit, TabSplitSide};
+    /// # fn apply(layout: &mut ChartLayout, charts: &mut Vec<Chart>) {
+    /// for request in layout.take_tab_requests() {
+    ///     match request {
+    ///         ChartTabRequest::Add => {
+    ///             charts.push(Chart::new(egui_charts::model::BarData::new()));
+    ///             layout.set_active(charts.len() - 1);
+    ///         }
+    ///         ChartTabRequest::Close(slot) => {
+    ///             charts.remove(slot);
+    ///             layout.remove_slot(slot);
+    ///         }
+    ///         ChartTabRequest::Move { from, to } => {
+    ///             let chart = charts.remove(from);
+    ///             charts.insert(to, chart);
+    ///             layout.move_slot(from, to);
+    ///         }
+    ///         _ => {}
+    ///     }
+    /// }
+    /// // A saved split comes back with the charts it names.
+    /// layout.set_tab_split(Some(TabSplit::new(1, TabSplitSide::Right)));
+    /// # }
+    /// ```
+    pub fn take_tab_requests(&mut self) -> Vec<ChartTabRequest> {
+        std::mem::take(&mut self.tab_requests)
+    }
+
+    /// Moves the sync memberships, detached state and drawing links of slot `from` to slot `to`
+    /// with its chart, shifting the slots between by one, for a host that moved that chart, as
+    /// [`ChartTabRequest::Move`] asks. The active chart, the split tab and the tab shown beside it
+    /// stay on their charts. Invalid indices are ignored.
+    pub fn move_slot(&mut self, from: usize, to: usize) {
+        if from.max(to) >= MAX_CHARTS || from == to {
+            return;
+        }
+        let moved = |index: usize| {
+            if index == from {
+                to
+            } else if from < to && (from + 1..=to).contains(&index) {
+                index - 1
+            } else if to < from && (to..from).contains(&index) {
+                index + 1
+            } else {
+                index
+            }
+        };
+        // `swap_slots` carries the split tab and the tab beside it.
+        if from < to {
+            for index in from..to {
+                self.swap_slots(index, index + 1);
+            }
+        } else {
+            for index in (to + 1..=from).rev() {
+                self.swap_slots(index - 1, index);
+            }
+        }
+        self.active = moved(self.active);
+        self.corner_menu = None;
+    }
+
+    /// Drops the sync memberships and detached state of slot `index` and moves those of the
+    /// later slots, with their drawing links, down by one, for a host that stopped supplying its
+    /// chart, as [`ChartTabRequest::Close`] asks. Undo and redo of a membership change of the
+    /// removed chart then change nothing. The active slot keeps its index, so the next chart
+    /// becomes active, or the previous one when the last was removed; a split of the removed
+    /// chart ends. Invalid indices are ignored.
+    pub fn remove_slot(&mut self, index: usize) {
+        if index >= MAX_CHARTS {
+            return;
+        }
+        let (active, front) = (self.active, self.tab_front);
+        if self.tab_split.is_some_and(|split| split.slot == index) {
+            self.tab_split = None;
+        }
+        let last = MAX_CHARTS - 1;
+        self.move_slot(index, last);
+        self.groups[last] = None;
+        self.links.groups[last] = ChartLinkGroups::default();
+        self.detached[last] = false;
+        self.links.pending.retain(|change| change.index != last);
+        for step in self
+            .links
+            .recorded
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+        {
+            let mut step = step.lock().unwrap();
+            if step.index == last {
+                step.symbol = None;
+                step.interval = None;
+            }
+        }
+        if self
+            .focus_range
+            .is_some_and(|(from, to)| from == last || to == last)
+        {
+            self.focus_range = None;
+        }
+        let kept = |slot: usize| if slot > index { slot - 1 } else { slot };
+        self.active = kept(active);
+        self.tab_front = kept(front);
+    }
+
+    /// The chart of the tab preset shown on its own beside the others, if any, for host storage.
+    pub fn tab_split(&self) -> Option<TabSplit> {
+        self.tab_split
+    }
+
+    /// Shows a chart of the tab preset on its own beside the selected one of the others, or ends
+    /// the split with `None`. A slot of sixteen or more ends it too, and a ratio outside 0 to 1
+    /// exclusive shows one half. The next [`Self::show`] ends a split whose slot is past the
+    /// supplied charts or that leaves no other tab; other presets keep it without showing it.
+    pub fn set_tab_split(&mut self, split: Option<TabSplit>) {
+        self.tab_split = split
+            .filter(|split| split.slot < MAX_CHARTS)
+            .map(|mut split| {
+                if !(split.ratio > 0.0 && split.ratio < 1.0) {
+                    split.ratio = TabSplit::half();
+                }
+                split
+            });
+    }
+
+    /// The split the tab preset shows among `count` supplied charts.
+    fn shown_split(&self, count: usize) -> Option<TabSplit> {
+        self.tab_split
+            .filter(|split| self.mode == ChartLayoutMode::Tabs && count > 1 && split.slot < count)
+    }
+
+    /// The tab shown beside `split`: the last selected other tab, or the first other one.
+    fn front_tab(&self, split: TabSplit, count: usize) -> usize {
+        if self.tab_front != split.slot && self.tab_front < count {
+            self.tab_front
+        } else {
+            usize::from(split.slot == 0)
+        }
+    }
+
+    /// Whether the tab preset shows the chart in `index` among `count` supplied charts.
+    fn tab_shown(&self, index: usize, count: usize) -> bool {
+        index == self.active.min(count.saturating_sub(1))
+            || self
+                .shown_split(count)
+                .is_some_and(|split| index == split.slot || index == self.front_tab(split, count))
     }
 
     /// Assigns the legacy group used by view/drawing links and layout-wide field switches.
@@ -1818,6 +2109,14 @@ impl ChartLayout {
     /// Dragging a border resizes its neighbours and Shift also moves the borders aligned with it; a
     /// touch must tap a border before moving it. Double-clicking a border restores the proportions.
     /// Extra charts remain owned by the host and are not painted by a grid preset.
+    /// With [`Self::tab_controls`] the tab strip offers a new tab button, close buttons,
+    /// middle-click close and dragging tabs to reorder them; the host applies the requests
+    /// [`Self::take_tab_requests`] returns. Dropping a tab on the chart area shows it on the half
+    /// nearest the pointer beside the selected other tab, previewing that half while dragging;
+    /// the border between them resizes the two as a grid's border does, and dropping the tab
+    /// back on the strip ends the split. A focused tab closes with Delete or Backspace, moves with
+    /// Command and an arrow, and splits to a side with Command, Shift and its arrow, which ends
+    /// the split when the tab already takes that side.
     pub fn show(&mut self, ui: &mut Ui, charts: &mut [&mut Chart]) -> Response {
         self.show_with(ui, charts, |ui, _, chart| chart.show(ui))
     }
@@ -1832,6 +2131,7 @@ impl ChartLayout {
         charts: &mut [&mut Chart],
         mut render: impl FnMut(&mut Ui, usize, &mut Chart) -> Response,
     ) -> Response {
+        self.tab_requests.clear();
         let total = charts.len().min(MAX_CHARTS);
         let charts = &mut charts[..total];
         let count = total.min(self.mode.chart_count());
@@ -1866,6 +2166,16 @@ impl ChartLayout {
         // Host activation replaces the maximized chart; a detached chart keeps its window.
         if self.maximized.is_some() && !self.detached[self.active] {
             self.maximized = Some(self.active);
+        }
+        if self.mode == ChartLayoutMode::Tabs {
+            self.tab_split = self.shown_split(count);
+        }
+        // The tab beside the split one follows the selection, so the active chart always shows.
+        if let Some(split) = self.shown_split(count) {
+            if self.active != split.slot {
+                self.tab_front = self.active;
+            }
+            self.tab_front = self.front_tab(split, count);
         }
         // A chart supplied or restored in a slot starts a new baseline: nothing changed in it.
         let known = self.previous_charts;
@@ -1914,21 +2224,9 @@ impl ChartLayout {
         self.previous_sync = self.sync.clone();
         // Before this frame's input selects a chart, so a change is sent from the chart it is in.
         self.sync_state(charts, total);
-        let mut tab = None;
-        if self.mode == ChartLayoutMode::Tabs {
-            egui::ScrollArea::horizontal().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (index, chart) in charts.iter().take(count).enumerate() {
-                        if ui
-                            .selectable_label(index == self.active, chart.symbol())
-                            .clicked()
-                        {
-                            tab = Some(index);
-                        }
-                    }
-                });
-            });
-        }
+        let tab = (self.mode == ChartLayoutMode::Tabs)
+            .then(|| self.tab_strip(ui, charts, count))
+            .flatten();
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         if self.previous_preset != Some((self.mode, count)) {
             self.sizing.selected = None;
@@ -1990,7 +2288,7 @@ impl ChartLayout {
             .rect_filled(rect, 0.0, ui.active_theme().ui.border);
         // Select before drawing so keyboard and toolbar state follow pointer input this frame.
         let wheel = super::pan_zoom::raw_wheel_delta(ui) != Vec2::ZERO;
-        if self.mode != ChartLayoutMode::Tabs
+        if (self.mode != ChartLayoutMode::Tabs || self.tab_split.is_some())
             && !over_divider
             && let Some(index) = rects.iter().position(|r| {
                 ui.rect_contains_pointer(*r) && ui.input(|i| i.pointer.any_pressed() || wheel)
@@ -2005,8 +2303,11 @@ impl ChartLayout {
                 .as_ref()
                 .is_some_and(|p| p.1 != chart.timeframe())
             {
-                let own = self.previous_ranges[index].map(|range| PendingRange {
-                    range,
+                // A chart keeping its left edge fits no range of its own, but waits for its bars.
+                let keeps = chart.pending_left_edge.is_some();
+                let range = self.previous_ranges[index];
+                let own = (range.is_some() || keeps).then(|| PendingRange {
+                    range: range.filter(|_| !keeps),
                     source: None,
                     bars: self.previous_bars[index],
                 });
@@ -2032,7 +2333,10 @@ impl ChartLayout {
             .collect();
         let mut rendered = [false; MAX_CHARTS];
         for index in 0..count {
-            if self.mode == ChartLayoutMode::Tabs && index != self.active && !self.detached[index] {
+            if self.mode == ChartLayoutMode::Tabs
+                && !self.tab_shown(index, count)
+                && !self.detached[index]
+            {
                 continue;
             }
             if self.maximized.is_some_and(|slot| slot != index) && !self.detached[index] {
@@ -2082,7 +2386,7 @@ impl ChartLayout {
                 if activate {
                     self.active = index;
                 }
-                if (self.mode != ChartLayoutMode::Tabs || index == self.active)
+                if (self.mode != ChartLayoutMode::Tabs || self.tab_shown(index, count))
                     && self.maximized.is_none_or(|slot| slot == index)
                 {
                     ui.scope_builder(egui::UiBuilder::new().max_rect(rects[index]), |ui| {
@@ -2209,6 +2513,9 @@ impl ChartLayout {
                 );
             }
         }
+        if self.mode == ChartLayoutMode::Tabs && self.tab_controls {
+            self.tab_drop(ui, rect, count);
+        }
         if self.show_dividers(ui, &dividers, count)
             && let Some(id) = charts[self.active].keyboard.chart_id
         {
@@ -2284,13 +2591,13 @@ impl ChartLayout {
                     .is_some_and(|(previous, before)| previous != before);
                 if !changed_by_host {
                     let range = self.pending_ranges[from]
-                        .map(|pending| pending.range)
+                        .and_then(|pending| pending.range)
                         .or_else(|| charts[from].visible_time_range());
                     if let Some(range) = range {
                         let source = charts[from].sync_source();
                         match &mut self.pending_ranges[to] {
                             Some(pending) => {
-                                pending.range = range;
+                                pending.range = Some(range);
                                 pending.source = source;
                             }
                             None => {
@@ -2372,6 +2679,247 @@ impl ChartLayout {
         response
     }
 
+    /// Draws the tab strip and returns the tab clicked in it, which shows from the next frame.
+    /// With [`Self::tab_controls`] it also offers the new tab and close buttons and the keys of a
+    /// focused tab, queues their requests, and takes a tab dropped on it.
+    fn tab_strip(&mut self, ui: &mut Ui, charts: &[&mut Chart], count: usize) -> Option<usize> {
+        use egui::{Key, Modifiers};
+        let layout = ui.scope_id();
+        let controls = self.tab_controls;
+        let dragged = egui::DragAndDrop::payload::<TabDrag>(ui.ctx())
+            .filter(|drag| controls && drag.layout == layout && drag.slot < count)
+            .map(|drag| drag.slot);
+        let mut clicked = None;
+        let mut request = None;
+        let mut split = None;
+        // Each tab's button and the right edge of its close button.
+        let mut tabs = Vec::with_capacity(count);
+        let strip = egui::ScrollArea::horizontal()
+            .id_salt("chart_tabs")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (index, chart) in charts.iter().take(count).enumerate() {
+                        let symbol = chart.symbol();
+                        let selected = index == self.active;
+                        let mut button = egui::Button::selectable(selected, symbol);
+                        if controls {
+                            button = button.sense(Sense::click_and_drag());
+                        }
+                        // Keyed by its chart, so a focused tab keeps the focus as it moves.
+                        let response = ui.push_id(chart.layout_identity, |ui| ui.add(button)).inner;
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Tab, response.enabled(), symbol)
+                        });
+                        ui.ctx().accesskit_node_builder(response.id, |node| {
+                            node.set_selected(selected)
+                        });
+                        let radius = ui.visuals().widgets.inactive.corner_radius;
+                        crate::styles::focus::draw_focus_ring(ui, &response, radius);
+                        if response.clicked() {
+                            clicked = Some(index);
+                        }
+                        if !controls {
+                            tabs.push((response.rect, response.rect.right()));
+                            continue;
+                        }
+                        response.dnd_set_drag_payload(TabDrag {
+                            layout,
+                            slot: index,
+                        });
+                        let closable = count > 1;
+                        if closable && response.middle_clicked() {
+                            request = Some(ChartTabRequest::Close(index));
+                        }
+                        if response.has_focus() {
+                            // Shift first: a key taken with Command alone also matches Shift.
+                            for (key, side) in [
+                                (Key::ArrowLeft, TabSplitSide::Left),
+                                (Key::ArrowRight, TabSplitSide::Right),
+                                (Key::ArrowUp, TabSplitSide::Top),
+                                (Key::ArrowDown, TabSplitSide::Bottom),
+                            ] {
+                                if ui.input_mut(|input| {
+                                    input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, key)
+                                }) && closable
+                                {
+                                    split = Some((index, side));
+                                }
+                            }
+                            for (key, to) in [
+                                (Key::ArrowLeft, index.checked_sub(1)),
+                                (Key::ArrowRight, Some(index + 1).filter(|to| *to < count)),
+                            ] {
+                                if ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, key))
+                                    && let Some(to) = to
+                                {
+                                    request = Some(ChartTabRequest::Move { from: index, to });
+                                }
+                            }
+                            if ui.input_mut(|input| {
+                                input.consume_key(Modifiers::NONE, Key::Delete)
+                                    || input.consume_key(Modifiers::NONE, Key::Backspace)
+                            }) && closable
+                            {
+                                request = Some(ChartTabRequest::Close(index));
+                            }
+                        }
+                        let mut end = response.rect.right();
+                        if closable {
+                            let name = l10n::format_text(
+                                ui.ctx(),
+                                "Close {symbol}",
+                                &[("symbol", symbol)],
+                            );
+                            let close = ui.add(egui::Button::new("×").frame(false));
+                            close.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::Role::Button,
+                                    close.enabled(),
+                                    &name,
+                                )
+                            });
+                            crate::styles::focus::draw_focus_ring(ui, &close, radius);
+                            end = close.rect.right();
+                            if close.on_hover_text(name).clicked() {
+                                request = Some(ChartTabRequest::Close(index));
+                            }
+                        }
+                        tabs.push((response.rect, end));
+                    }
+                    if controls {
+                        let name = l10n::text(ui.ctx(), "New tab");
+                        let add =
+                            ui.add_enabled(count < MAX_CHARTS, egui::Button::new("+").frame(false));
+                        add.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, add.enabled(), &name)
+                        });
+                        crate::styles::focus::draw_focus_ring(
+                            ui,
+                            &add,
+                            ui.visuals().widgets.inactive.corner_radius,
+                        );
+                        if add
+                            .on_hover_text(name)
+                            .on_disabled_hover_text(l10n::text(ui.ctx(), "Sixteen charts at most"))
+                            .clicked()
+                        {
+                            request = Some(ChartTabRequest::Add);
+                        }
+                    }
+                })
+                .response
+                .rect
+            });
+        // The visible part of the row of tabs.
+        let area = Rect::from_x_y_ranges(strip.inner_rect.x_range(), strip.inner.y_range());
+        // A tab dropped on the strip takes the place before the first tab whose middle is right of
+        // the pointer, and leaves a split.
+        if let Some(from) = dragged
+            && let Some(pos) = ui.input(|input| input.pointer.interact_pos())
+            && area.contains(pos)
+        {
+            let place = tabs
+                .iter()
+                .filter(|(tab, _)| tab.center().x < pos.x)
+                .count();
+            let spacing = ui.spacing().item_spacing.x / 2.0;
+            let x = match place.checked_sub(1) {
+                Some(before) => tabs[before].1 + spacing,
+                None => tabs[0].0.left() - spacing,
+            };
+            ui.painter().vline(
+                x,
+                area.y_range(),
+                Stroke::new(2.0, ui.active_theme().ui.accent),
+            );
+            if ui.input(|input| input.pointer.any_released())
+                && egui::DragAndDrop::take_payload::<TabDrag>(ui.ctx()).is_some()
+            {
+                if self.tab_split.is_some_and(|split| split.slot == from) {
+                    self.tab_split = None;
+                }
+                let to = if place > from { place - 1 } else { place };
+                if to != from {
+                    request = Some(ChartTabRequest::Move { from, to });
+                }
+                ui.ctx().request_repaint();
+            }
+        }
+        if let Some((slot, side)) = split {
+            self.split_tab(slot, side, true);
+            ui.ctx().request_repaint();
+        }
+        self.tab_requests.extend(request);
+        clicked
+    }
+
+    /// Previews a tab dragged over the chart area on the half nearest the pointer, and shows it
+    /// there when dropped.
+    fn tab_drop(&mut self, ui: &Ui, rect: Rect, count: usize) {
+        let layout = ui.scope_id();
+        let Some(drag) = egui::DragAndDrop::payload::<TabDrag>(ui.ctx())
+            .filter(|drag| drag.layout == layout && drag.slot < count)
+        else {
+            return;
+        };
+        ui.ctx().request_repaint();
+        let Some(pos) = ui.input(|input| input.pointer.interact_pos()) else {
+            return;
+        };
+        if count < 2 || !rect.is_positive() || !rect.contains(pos) {
+            return;
+        }
+        let (u, v) = (
+            (pos.x - rect.left()) / rect.width(),
+            (pos.y - rect.top()) / rect.height(),
+        );
+        // The first of equal distances wins.
+        let Some((_, side)) = [
+            (u, TabSplitSide::Left),
+            (1.0 - u, TabSplitSide::Right),
+            (v, TabSplitSide::Top),
+            (1.0 - v, TabSplitSide::Bottom),
+        ]
+        .into_iter()
+        .min_by(|a, b| a.0.total_cmp(&b.0)) else {
+            return;
+        };
+        let ([area, _], _) = TabSplit::new(drag.slot, side).areas(rect);
+        let accent = ui.active_theme().ui.accent;
+        ui.painter().rect(
+            area,
+            0.0,
+            accent.gamma_multiply(0.25),
+            Stroke::new(2.0, accent),
+            StrokeKind::Inside,
+        );
+        if ui.input(|input| input.pointer.any_released())
+            && egui::DragAndDrop::take_payload::<TabDrag>(ui.ctx()).is_some()
+        {
+            self.split_tab(drag.slot, side, false);
+        }
+    }
+
+    /// Shows the tab in `slot` on its own at `side`, beside the selected other tab, and selects
+    /// it. Another split ends, and its chart goes back among the other tabs at its slot. With
+    /// `toggle`, the side the tab already takes ends the split instead.
+    fn split_tab(&mut self, slot: usize, side: TabSplitSide, toggle: bool) {
+        let old = self.tab_split;
+        if toggle && old.is_some_and(|split| split.slot == slot && split.side == side) {
+            self.tab_split = None;
+            return;
+        }
+        self.tab_front = match old {
+            Some(old) if old.slot != slot && self.tab_front == slot => old.slot,
+            Some(_) => self.tab_front,
+            None if self.active != slot => self.active,
+            None if slot > 0 => slot - 1,
+            None => 1,
+        };
+        self.tab_split = Some(TabSplit::new(slot, side));
+        self.active = slot;
+    }
+
     fn restore_time_range(&mut self, index: usize, chart: &mut Chart) {
         // Reloads can leave a chart empty for several frames, and a host without a feed replaces
         // the old bars a frame or more after the switch; keep UTC edges until new bars arrive.
@@ -2380,7 +2928,9 @@ impl ChartLayout {
             && bars_key(chart) != pending.bars
         {
             // A range the new bars do not cover keeps the view, but must not block the group.
-            chart.apply_synced_time_range_from(pending.range, pending.source);
+            if let Some(range) = pending.range {
+                chart.apply_synced_time_range_from(range, pending.source);
+            }
             self.pending_ranges[index] = None;
         }
     }
@@ -2538,7 +3088,7 @@ impl ChartLayout {
                 // A chart awaiting its new interval's bars fits the latest range once they arrive.
                 match &mut self.pending_ranges[index] {
                     Some(pending) => {
-                        pending.range = range;
+                        pending.range = Some(range);
                         pending.source = source;
                     }
                     None => {
@@ -2560,32 +3110,36 @@ impl ChartLayout {
             .filter(|(slot, rect)| {
                 !self.is_detached(*slot)
                     && rect.is_positive()
-                    && (self.mode != ChartLayoutMode::Tabs
-                        || *slot == self.active.min(count.saturating_sub(1)))
+                    && (self.mode != ChartLayoutMode::Tabs || self.tab_shown(*slot, count))
             })
             .collect()
     }
 
     fn geometry(&self, rect: Rect, count: usize) -> (Vec<Rect>, Vec<Divider>) {
-        if self.mode == ChartLayoutMode::Tabs || self.maximized.is_some_and(|slot| slot < count) {
+        if self.mode == ChartLayoutMode::Tabs {
+            let Some(split) = self.shown_split(count) else {
+                return (vec![rect; count], Vec::new());
+            };
+            let ([own, other], dividers) = split.areas(rect);
+            let front = self.front_tab(split, count);
+            let rects = (0..count)
+                .map(|index| match index {
+                    index if index == split.slot => own,
+                    index if index == front => other,
+                    _ => Rect::NOTHING,
+                })
+                .collect();
+            return (rects, dividers);
+        }
+        if self.maximized.is_some_and(|slot| slot < count) {
             return (self.rects(rect, count), Vec::new());
         }
-        let split = self.mode.tracks().split();
-        let minimum = split.minimum(count);
-        let scale = Vec2::new(
-            (rect.width() / minimum.x.max(1.0)).min(1.0),
-            (rect.height() / minimum.y.max(1.0)).min(1.0),
-        );
-        let mut output = (Vec::new(), Vec::new());
-        split.rects(
+        split_rects(
+            &self.mode.tracks().split(),
             rect,
             count,
             &self.sizes(self.mode).weights,
-            &mut 0,
-            &mut output,
-            scale,
-        );
-        output
+        )
     }
 
     fn finish_resize(&mut self) {
@@ -2644,7 +3198,18 @@ impl ChartLayout {
                 group[next] = ((divider.lengths[next] - delta) * per_point).max(f32::MIN_POSITIVE);
             }
         }
-        if delta == 0.0 {
+        if drag.mode == ChartLayoutMode::Tabs {
+            // The split keeps its share itself, outside the presets' sizes and their history.
+            let weights = if delta == 0.0 {
+                &drag.weights
+            } else {
+                &weights
+            };
+            if let Some(split) = &mut self.tab_split {
+                let own = weights[0][usize::from(!split.first())];
+                split.ratio = own / (weights[0][0] + weights[0][1]);
+            }
+        } else if delta == 0.0 {
             let before = self.before_resize(drag);
             self.sizing.sizes = before;
         } else {
@@ -2687,7 +3252,12 @@ impl ChartLayout {
                 && (self.sizing.selected == Some(key) || !ui.input(|input| input.any_touches()));
             if apply_input && response.double_clicked() {
                 self.finish_resize();
-                self.reset_sizes(false);
+                match &mut self.tab_split {
+                    Some(split) if self.mode == ChartLayoutMode::Tabs => {
+                        split.ratio = TabSplit::half();
+                    }
+                    _ => self.reset_sizes(false),
+                }
                 ui.ctx().request_repaint();
             } else if apply_input
                 && response.drag_started()
@@ -2701,7 +3271,10 @@ impl ChartLayout {
                     count,
                     start,
                     before: self.saved_sizes(),
-                    weights: self.sizes(self.mode).weights,
+                    weights: match self.shown_split(count) {
+                        Some(split) => split.weights(),
+                        None => self.sizes(self.mode).weights,
+                    },
                     dividers: dividers
                         .iter()
                         .filter(|other| {
@@ -2742,10 +3315,9 @@ impl ChartLayout {
     }
 
     fn rects(&self, rect: Rect, count: usize) -> Vec<Rect> {
-        if self.mode == ChartLayoutMode::Tabs {
-            return vec![rect; count];
-        }
-        if let Some(slot) = self.maximized.filter(|slot| *slot < count) {
+        if self.mode != ChartLayoutMode::Tabs
+            && let Some(slot) = self.maximized.filter(|slot| *slot < count)
+        {
             return (0..count)
                 .map(|index| if index == slot { rect } else { Rect::NOTHING })
                 .collect();
@@ -3860,6 +4432,7 @@ mod tests {
                             .collect(),
                         sizing: None,
                         link_groups: None,
+                        tab_split: None,
                     };
                     let restored =
                         super::super::SavedLayout::from_json(&saved.to_json().unwrap()).unwrap();
@@ -4931,6 +5504,90 @@ mod tests {
                 let actual = chart.visible_time_range().unwrap();
                 assert!((actual.from - source.from).num_milliseconds().abs() < 1);
                 assert!((actual.to - source.to).num_milliseconds().abs() < 1);
+            }
+        }
+    }
+
+    /// With the choice on, a chart whose interval changes in a layout that synchronizes the time
+    /// axis keeps the bar at its left edge at the same spacing once the new bars arrive, and the
+    /// chart beside it follows that view. With it off the layout fits the range from before the
+    /// change. A tab layout that holds both charts behaves the same.
+    #[test]
+    fn interval_change_keeps_the_left_edge_in_a_synced_layout() {
+        use crate::model::LogicalRange;
+        let start: DateTime<chrono::Utc> = "2024-03-15T00:00:00Z".parse().unwrap();
+        let bars = |minutes: i64, count: i64| -> Vec<Bar> {
+            (0..count)
+                .map(|i| {
+                    let time = start + Duration::minutes(i * minutes);
+                    Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0)
+                })
+                .collect()
+        };
+        let ctx = egui::Context::default();
+        let frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2]| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        for mode in [ChartLayoutMode::TwoHorizontal, ChartLayoutMode::Tabs] {
+            for keep in [true, false] {
+                let row = format!("{mode:?} {keep}");
+                let mut layout = ChartLayout {
+                    mode,
+                    ..Default::default()
+                };
+                let mut charts = [(); 2].map(|()| {
+                    let mut chart = Chart::new(BarData::from_bars(bars(1, 3000)));
+                    chart.set_symbol("SAMPLE");
+                    chart.set_timeframe(Timeframe::Min1);
+                    chart
+                        .chart_options
+                        .time_scale
+                        .keep_left_edge_on_interval_change = keep;
+                    chart
+                });
+                // The hidden tab needs a plot width to follow.
+                layout.set_active(1);
+                frame(&mut layout, &mut charts);
+                layout.set_active(0);
+                frame(&mut layout, &mut charts);
+                // The left pixel cuts the 16:43 bar a quarter of a slot before its centre.
+                charts[0].set_visible_logical_range(LogicalRange::new(1003.25, 1102.25));
+                frame(&mut layout, &mut charts);
+                frame(&mut layout, &mut charts);
+                let spacing = charts[0].state.time_scale().bar_spacing();
+                let before = charts[0].visible_time_range().unwrap();
+                charts[0].set_timeframe(Timeframe::Min5);
+                // The host supplies the new bars a frame later.
+                frame(&mut layout, &mut charts);
+                charts[0].set_data(super::super::SeriesId::MAIN, bars(5, 600));
+                frame(&mut layout, &mut charts);
+                frame(&mut layout, &mut charts);
+                let range = charts[0].visible_logical_range().unwrap();
+                let shown = charts[0].visible_time_range().unwrap();
+                if keep {
+                    // 16:40 is the five-minute bar whose period holds 16:43.
+                    assert!((range.left - 200.25).abs() < 0.01, "{row}: {range:?}");
+                    assert!((range.right - 299.25).abs() < 0.01, "{row}: {range:?}");
+                    assert_eq!(charts[0].state.time_scale().bar_spacing(), spacing, "{row}");
+                } else {
+                    // The fit centres a span that needs more than 50 px a bar, as the full-width
+                    // tab does, so compare the middle of the range.
+                    let error = (shown.from - before.from) + (shown.to - before.to);
+                    assert!(error.num_milliseconds().abs() < 2, "{row}: {shown:?}");
+                }
+                let follower = charts[1].visible_time_range().unwrap();
+                for error in [follower.from - shown.from, follower.to - shown.to] {
+                    assert!(error.num_milliseconds().abs() < 1, "{row}: {follower:?}");
+                }
             }
         }
     }
@@ -6236,6 +6893,387 @@ mod tests {
         assert_eq!(charts[2].take_shortcut_requests(), open());
         frame(&mut layout, &mut charts, vec![key(egui::Key::Period)]);
         assert!(charts[2].take_shortcut_requests().is_empty());
+    }
+
+    /// A tab layout in a kittest harness whose host collects the strip's requests each frame,
+    /// with one chart per symbol and the area the charts take.
+    type TabState = (ChartLayout, Vec<Chart>, Vec<ChartTabRequest>, Rect);
+
+    fn tab_harness(symbols: &[&str], controls: bool) -> egui_kittest::Harness<'static, TabState> {
+        let charts = symbols
+            .iter()
+            .map(|symbol| {
+                let mut chart = chart(60);
+                chart.set_symbol(*symbol);
+                chart
+            })
+            .collect();
+        let layout = ChartLayout {
+            mode: ChartLayoutMode::Tabs,
+            tab_controls: controls,
+            ..Default::default()
+        };
+        let mut harness = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(1440.0, 600.0))
+            .build_ui_state(
+                |ui, (layout, charts, requests, rect): &mut TabState| {
+                    *rect = layout
+                        .show(ui, &mut charts.iter_mut().collect::<Vec<_>>())
+                        .rect;
+                    requests.extend(layout.take_tab_requests());
+                },
+                (layout, charts, Vec::new(), Rect::NOTHING),
+            );
+        harness.run();
+        harness
+    }
+
+    /// Presses at `from`, moves to `to` in steps a frame apart, and releases there.
+    fn drag_pointer(harness: &mut egui_kittest::Harness<'static, TabState>, from: Pos2, to: Pos2) {
+        harness.event(Event::PointerMoved(from));
+        harness.step();
+        harness.event(pointer_button(from, true));
+        harness.step();
+        for step in 1..=10 {
+            harness.event(Event::PointerMoved(from.lerp(to, step as f32 / 10.0)));
+            harness.step();
+        }
+        harness.event(pointer_button(to, false));
+        harness.run();
+    }
+
+    fn tab_rect(harness: &egui_kittest::Harness<'static, TabState>, symbol: &str) -> Rect {
+        use egui_kittest::kittest::Queryable;
+        harness
+            .get_by_role_and_label(egui::Role::Tab, symbol)
+            .rect()
+    }
+
+    /// The strip asks the host to add, close and move tabs only with its controls on, never past
+    /// sixteen tabs or for the last one, and a tab dragged along it asks for the place it is
+    /// dropped at: before the first tab whose middle is right of the pointer.
+    #[test]
+    fn tab_strip_requests_add_close_and_move() {
+        use egui::{Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        type Gesture = fn(&mut egui_kittest::Harness<'static, TabState>);
+        type Row<'a> = (&'a str, &'a [&'a str], bool, Gesture, Vec<ChartTabRequest>);
+        let sixteen = [
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P",
+        ];
+        let rows: [Row; 12] = [
+            (
+                "new tab",
+                &["A", "B"],
+                true,
+                |h| h.get_by_label("New tab").click(),
+                vec![ChartTabRequest::Add],
+            ),
+            (
+                "new tab at sixteen",
+                &sixteen,
+                true,
+                |h| h.get_by_label("New tab").click(),
+                vec![],
+            ),
+            (
+                "close button",
+                &["A", "B", "C"],
+                true,
+                |h| h.get_by_label("Close B").click(),
+                vec![ChartTabRequest::Close(1)],
+            ),
+            (
+                "middle click",
+                &["A", "B", "C"],
+                true,
+                |h| {
+                    h.get_by_role_and_label(egui::Role::Tab, "C")
+                        .click_button(PointerButton::Middle);
+                },
+                vec![ChartTabRequest::Close(2)],
+            ),
+            (
+                "last tab",
+                &["A"],
+                true,
+                |h| {
+                    assert!(h.query_by_label("Close A").is_none());
+                    h.get_by_role_and_label(egui::Role::Tab, "A")
+                        .click_button(PointerButton::Middle);
+                },
+                vec![],
+            ),
+            (
+                "Delete on a focused tab",
+                &["A", "B", "C"],
+                true,
+                |h| {
+                    h.get_by_role_and_label(egui::Role::Tab, "B").focus();
+                    h.run();
+                    h.key_press(Key::Delete);
+                },
+                vec![ChartTabRequest::Close(1)],
+            ),
+            (
+                "Command+Right on a focused tab",
+                &["A", "B", "C"],
+                true,
+                |h| {
+                    h.get_by_role_and_label(egui::Role::Tab, "B").focus();
+                    h.run();
+                    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowRight);
+                },
+                vec![ChartTabRequest::Move { from: 1, to: 2 }],
+            ),
+            (
+                "Command+Left on the first tab",
+                &["A", "B", "C"],
+                true,
+                |h| {
+                    h.get_by_role_and_label(egui::Role::Tab, "A").focus();
+                    h.run();
+                    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowLeft);
+                },
+                vec![],
+            ),
+            (
+                "dragged past the last tab",
+                &["A", "B", "C"],
+                true,
+                |h| {
+                    let (a, c) = (tab_rect(h, "A"), tab_rect(h, "C"));
+                    drag_pointer(h, a.center(), c.center() + vec2(10.0, 0.0));
+                },
+                vec![ChartTabRequest::Move { from: 0, to: 2 }],
+            ),
+            (
+                "dragged before the first tab",
+                &["A", "B", "C"],
+                true,
+                |h| {
+                    let (a, c) = (tab_rect(h, "A"), tab_rect(h, "C"));
+                    drag_pointer(h, c.center(), a.center() - vec2(10.0, 0.0));
+                },
+                vec![ChartTabRequest::Move { from: 2, to: 0 }],
+            ),
+            (
+                "dropped at its own place",
+                &["A", "B", "C"],
+                true,
+                |h| {
+                    let (a, b) = (tab_rect(h, "A"), tab_rect(h, "B"));
+                    drag_pointer(h, a.center(), a.center().lerp(b.center(), 0.5));
+                },
+                vec![],
+            ),
+            (
+                "controls off",
+                &["A", "B", "C"],
+                false,
+                |h| {
+                    assert!(h.query_by_label("New tab").is_none());
+                    assert!(h.query_by_label("Close B").is_none());
+                    h.get_by_role_and_label(egui::Role::Tab, "B")
+                        .click_button(PointerButton::Middle);
+                },
+                vec![],
+            ),
+        ];
+        for (name, symbols, controls, gesture, expected) in rows {
+            let mut harness = tab_harness(symbols, controls);
+            gesture(&mut harness);
+            harness.run();
+            assert_eq!(harness.state().2, expected, "{name}");
+        }
+    }
+
+    /// A host that moves a chart with `move_slot` or stops supplying it with `remove_slot` keeps
+    /// each remaining chart's sync group, link groups and detached state with that chart, and the
+    /// active chart stays selected; the freed last slot starts clean.
+    #[test]
+    fn moved_and_removed_slots_keep_each_charts_memberships() {
+        let show = |layout: &mut ChartLayout, charts: &mut Vec<Chart>| {
+            egui::Context::default()
+                .run_ui(RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                })
+                .drop_without_applying_deltas();
+        };
+        let linked = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            ..Default::default()
+        };
+        let mut charts = vec![chart(60), chart(60), chart(60)];
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Tabs,
+            ..Default::default()
+        };
+        layout.set_link_groups(0, linked.clone(), true);
+        layout.set_sync_group(1, Some("Desk".into()));
+        layout.set_detached(2, true);
+        layout.set_active(0);
+        layout.set_tab_split(Some(TabSplit::new(2, TabSplitSide::Right)));
+        show(&mut layout, &mut charts);
+        // A, B, C become B, C, A.
+        charts.rotate_left(1);
+        layout.move_slot(0, 2);
+        show(&mut layout, &mut charts);
+        assert_eq!(layout.tab_split().map(|split| split.slot), Some(1));
+        assert_eq!(layout.link_groups(2), Some(linked.clone()));
+        assert_eq!(layout.sync_group(0), Some("Desk"));
+        assert!(layout.is_detached(1) && !layout.is_detached(2));
+        assert_eq!(layout.active(), 2);
+        // B is closed: C, A.
+        charts.remove(0);
+        layout.remove_slot(0);
+        show(&mut layout, &mut charts);
+        assert_eq!(layout.tab_split().map(|split| split.slot), Some(0));
+        assert_eq!(layout.sync_group(0), None);
+        assert!(layout.is_detached(0));
+        assert_eq!(layout.link_groups(1), Some(linked));
+        assert_eq!(layout.active(), 1);
+        assert_eq!(layout.sync_group(MAX_CHARTS - 1), None);
+        assert_eq!(
+            layout.link_groups(MAX_CHARTS - 1),
+            Some(ChartLinkGroups::default())
+        );
+    }
+
+    /// A tab dragged onto the chart area previews and then takes the half nearest the pointer,
+    /// beside the tab selected before; another tab dropped there takes the split over, and the
+    /// chart that held it goes back among the tabs; dropped back on the strip it ends the split.
+    /// The border between the two halves resizes them as a grid border does. One tab offers no
+    /// split.
+    #[test]
+    fn dropping_a_tab_on_each_edge_splits_with_a_preview() {
+        let close = |a: Rect, b: Rect| (a.min - b.min).length() + (a.max - b.max).length() < 1e-3;
+        let split_frame = |harness: &mut egui_kittest::Harness<'static, TabState>,
+                           symbol: &str,
+                           at: fn(Rect) -> Pos2| {
+            let r = harness.state().3;
+            let (from, to) = (tab_rect(harness, symbol).center(), at(r));
+            harness.event(Event::PointerMoved(from));
+            harness.step();
+            harness.event(pointer_button(from, true));
+            harness.step();
+            for step in 1..=10 {
+                harness.event(Event::PointerMoved(from.lerp(to, step as f32 / 10.0)));
+                harness.step();
+            }
+            // The frame before the release shows the half the drop takes.
+            let previews: Vec<Rect> = harness
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.fill.a() > 0 => Some(rect.rect),
+                    _ => None,
+                })
+                .collect();
+            harness.event(pointer_button(to, false));
+            harness.run();
+            previews
+        };
+        type At = fn(Rect) -> Pos2;
+        let rows: [(At, TabSplitSide); 4] = [
+            (
+                |r| pos2(r.left() + 0.1 * r.width(), r.center().y),
+                TabSplitSide::Left,
+            ),
+            (
+                |r| pos2(r.left() + 0.9 * r.width(), r.center().y),
+                TabSplitSide::Right,
+            ),
+            (
+                |r| pos2(r.center().x, r.top() + 0.1 * r.height()),
+                TabSplitSide::Top,
+            ),
+            (
+                |r| pos2(r.center().x, r.top() + 0.9 * r.height()),
+                TabSplitSide::Bottom,
+            ),
+        ];
+        for (at, side) in rows {
+            let mut harness = tab_harness(&["A", "B", "C"], true);
+            let r = harness.state().3;
+            // Side by side the halves meet at the middle; stacked they leave a two-point gap.
+            let (cx, gap) = (r.center().x, 2.0_f32.min(r.height() / 2.0));
+            let h = (r.height() - gap) / 2.0;
+            let (half, other) = match side {
+                TabSplitSide::Left => (
+                    Rect::from_min_max(r.min, pos2(cx, r.max.y)),
+                    Rect::from_min_max(pos2(cx, r.min.y), r.max),
+                ),
+                TabSplitSide::Right => (
+                    Rect::from_min_max(pos2(cx, r.min.y), r.max),
+                    Rect::from_min_max(r.min, pos2(cx, r.max.y)),
+                ),
+                TabSplitSide::Top => (
+                    Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + h)),
+                    Rect::from_min_max(pos2(r.min.x, r.min.y + h + gap), r.max),
+                ),
+                _ => (
+                    Rect::from_min_max(pos2(r.min.x, r.min.y + h + gap), r.max),
+                    Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + h)),
+                ),
+            };
+            let previews = split_frame(&mut harness, "C", at);
+            assert!(previews.iter().any(|p| close(*p, half)), "{side:?} preview");
+            let layout = &harness.state().0;
+            assert_eq!(layout.tab_split(), Some(TabSplit::new(2, side)), "{side:?}");
+            let shown = layout.visible_chart_rects(r, 3);
+            assert_eq!(
+                shown.iter().map(|(slot, _)| *slot).collect::<Vec<_>>(),
+                [0, 2],
+                "{side:?}"
+            );
+            assert!(
+                close(shown[0].1, other) && close(shown[1].1, half),
+                "{side:?}"
+            );
+            if side == TabSplitSide::Left {
+                // B takes the split over beside A, and C goes back among the tabs.
+                split_frame(&mut harness, "B", |r| {
+                    pos2(r.left() + 0.9 * r.width(), r.center().y)
+                });
+                let layout = &harness.state().0;
+                assert_eq!(
+                    layout.tab_split(),
+                    Some(TabSplit::new(1, TabSplitSide::Right))
+                );
+                let slots: Vec<_> = layout
+                    .visible_chart_rects(r, 3)
+                    .into_iter()
+                    .map(|(slot, _)| slot)
+                    .collect();
+                assert_eq!(slots, [0, 1]);
+                // The border moves 100 points right, which leaves the split chart on the
+                // right 100 points narrower.
+                let border = pos2(cx, r.center().y);
+                drag_pointer(&mut harness, border, border + vec2(100.0, 0.0));
+                let ratio = harness.state().0.tab_split().unwrap().ratio;
+                assert!(
+                    (ratio - (r.width() / 2.0 - 100.0) / r.width()).abs() < 1e-4,
+                    "{ratio}"
+                );
+                // Back on the strip the split ends, at the tab's own place.
+                let b = tab_rect(&harness, "B");
+                drag_pointer(&mut harness, b.center(), b.center() + vec2(8.0, 0.0));
+                let state = harness.state();
+                assert_eq!(state.0.tab_split(), None);
+                assert_eq!(state.2, []);
+            }
+        }
+        let mut harness = tab_harness(&["A"], true);
+        let previews = split_frame(&mut harness, "A", |r| {
+            pos2(r.left() + 0.1 * r.width(), r.center().y)
+        });
+        let r = harness.state().3;
+        let half = Rect::from_min_max(r.min, pos2(r.center().x, r.max.y));
+        assert!(!previews.iter().any(|p| close(*p, half)));
+        assert_eq!(harness.state().0.tab_split(), None);
     }
 
     /// A host exchanges two charts with `swap_slots`, as the demo does when a smaller preset

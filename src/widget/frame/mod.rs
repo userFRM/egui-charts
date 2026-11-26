@@ -222,6 +222,7 @@ impl Chart {
         footprint: Option<(FootprintView<'_>, &FootprintConfig)>,
     ) -> Response {
         self.follow_chart_theme(&ui.active_theme());
+        self.pointer_dot = false;
         self.host_events.volume_map = None;
         self.host_events.touch_position = None;
         self.host_events.target = None;
@@ -300,9 +301,21 @@ impl Chart {
             }
             response
         };
-        // After every pane, so that a mark is one stroke above all of them.
+        // After every pane, so that a mark is one stroke above all of them, with the Magic
+        // cursor's emoji and wand above the marks.
         #[cfg(feature = "drawings")]
-        self.cursor_modes.render(ui);
+        {
+            self.pointer_dot |= self.cursor_modes.render(ui);
+        }
+        // The Dot and Magic cursors hide the pointer only where their dot or wand stands in for
+        // it: elsewhere on the chart (an axis, an open menu, a held readout, an empty plot) the
+        // arrow stays.
+        if !self.pointer_dot
+            && ui.rect_contains_pointer(response.rect)
+            && ui.ctx().output(|o| o.cursor_icon) == egui::CursorIcon::None
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+        }
         self.menu_open = false;
         #[cfg(feature = "ui")]
         {
@@ -638,12 +651,10 @@ impl Chart {
                     self.interact_navigation(ui, nav, chart_rect, response.id),
                 )
             });
-        let scale = self.state.time_scale();
-        let mut live_scale = scale.clone();
-        live_scale.scroll_to_realtime();
+        let at_live_edge = self.state.time_scale().is_at_live_edge();
         let realtime_rect = (self.config.show_realtime_btn
             && !self.state.data().is_empty()
-            && (scale.right_offset_precise() - live_scale.right_offset_precise()).abs() > 1e-6)
+            && !at_live_edge)
             .then(|| {
                 rendering::realtime_button_rect(
                     chart_rect,
@@ -758,11 +769,8 @@ impl Chart {
             &mark_response,
             hover_rect,
             !eraser_mode
-                && matches!(
-                    self.chart_options.crosshair.style,
-                    crate::config::CrosshairStyle::Demonstration
-                        | crate::config::CrosshairStyle::Magic
-                ),
+                && self.chart_options.crosshair.style
+                    == crate::config::CrosshairStyle::Demonstration,
             !box_selection
                 && !drawing_tool_active
                 && self.drawings.dragging_handle.is_none()
@@ -1020,8 +1028,9 @@ impl Chart {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ZoomIn);
         }
         // Axes that a drag would zoom show its direction, keeping the axis where it began.
-        // The drawing manager may override the cursor below.
-        else if response.hovered() {
+        // The drawing manager may override the cursor below. The other panes' plots take the
+        // plot's cursor too.
+        else if time_response.hovered() {
             let at = ui
                 .input(|i| i.pointer.press_origin().or(i.pointer.hover_pos()))
                 .filter(|_| !owns_drag);
@@ -1230,7 +1239,15 @@ impl Chart {
             && self.chart_type == ChartType::VolumeFootprint)
             .then(|| {
                 let colors = [egui::Color32::TRANSPARENT; 4];
-                FootprintConfig::from_chart_params(&self.chart_type_params, colors, feed_row_ticks)
+                let mut config = FootprintConfig::from_chart_params(
+                    &self.chart_type_params,
+                    colors,
+                    feed_row_ticks,
+                );
+                config.tick_tiers = self
+                    .instrument()
+                    .map_or_else(Vec::new, |instrument| instrument.tick_tiers.clone());
+                config
             });
         // The rows the renderer paints decide the fit, whatever `row_ticks` is: the edges of
         // their minimum group are fitted here, and those of the groups zoom raises above it
@@ -1250,9 +1267,10 @@ impl Chart {
         let footprint_prices = painted_rows
             .into_iter()
             .flat_map(|(flow, config)| {
-                let group = crate::chart::overlays::fixed_row_group(flow, config.row_ticks);
                 let bars = &self.state.shown()[start_idx..end_idx];
-                crate::chart::overlays::row_edges(bars, flow, config, move |_| group)
+                crate::chart::overlays::row_edges(bars, flow, config, move |bar| {
+                    crate::chart::overlays::min_row_group(bar, flow, config)
+                })
             })
             .filter(|price| price.is_finite())
             .map(|price| [price, price])
@@ -1426,17 +1444,12 @@ impl Chart {
             let tick = self
                 .instrument()
                 .and_then(|instrument| instrument.tick_size);
-            // Automatic rows depend on the scale span. Revisit after fitting until the rows
-            // actually drawn, including their outer half-tick edges, fit in the scale. Retain
-            // fitted edges when the grid changes, so non-nested grids cannot alternate ranges.
+            // Fit the scale to the rows actually drawn, including their outer half-tick edges.
+            // Automatic rows come from the bars, so a second pass finds the same rows and stops.
             let initial = self.state.price_scale().range();
             let mut fitted = data_range;
             loop {
-                let map =
-                    self.state
-                        .price_scale()
-                        .map(transform, price_rect.top(), price_rect.bottom());
-                let range = map.range();
+                let range = self.state.price_scale().range();
                 let (mut low, mut high) = fitted;
                 let (mut traded_low, mut traded_high) = data_range;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
@@ -1446,7 +1459,7 @@ impl Chart {
                     self.state.revision(),
                     (config, tick),
                     clock,
-                    (&map, price_rect, |i| mapping.idx_to_x(i)),
+                    (price_rect, |i| mapping.idx_to_x(i)),
                     |profile, _, anchor, _, _, _| {
                         if anchor >= price_rect.right() {
                             return;
@@ -1478,7 +1491,7 @@ impl Chart {
                 fitted = (low, high);
                 let next = self.state.price_scale().range();
                 // A flat session without a tick must keep the scale's minimum span, rather than
-                // deriving ever smaller rows from its own fitted row height.
+                // shrinking to the edges of its own rows.
                 if traded_high - traded_low <= 1e-9
                     && next.max - next.min < initial.max - initial.min
                     && initial.contains(low)
@@ -1839,6 +1852,16 @@ impl Chart {
         } else {
             Vec::new()
         };
+        // The newest range bar is drawn apart while it is in view and still in progress.
+        let range_forming = self.chart_type == ChartType::Range
+            && self.state.shows_elements()
+            && start_idx + visible_data.len() == self.state.shown().len()
+            && rendering::candles::price_based::range_forming(
+                &self.execution_ranges,
+                &self.state.data().bars,
+                self.state.revision(),
+                &self.chart_type_params,
+            );
         let render_ctx = rendering::CandleDataContext {
             price_ctx: &clipped_price_ctx,
             volume_ctx: &clipped_volume_ctx,
@@ -1850,6 +1873,7 @@ impl Chart {
             full_data: &self.state.data().bars,
             shows_elements: self.state.shows_elements(),
             range_phantoms: &range_phantoms,
+            range_forming,
             revision: self.state.revision(),
             heikin_ashi: &self.heikin_ashi,
             start_idx,
@@ -1949,6 +1973,11 @@ impl Chart {
         let feed_config = feed.map(|_| FootprintConfig {
             background: plot_background,
             volume_decimals,
+            // Session profiles keep rows of the instrument's tick.
+            tick_tiers: self
+                .instrument()
+                .filter(|_| self.chart_type == ChartType::VolumeFootprint)
+                .map_or_else(Vec::new, |instrument| instrument.tick_tiers.clone()),
             ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],
@@ -2692,6 +2721,7 @@ impl Chart {
         // series beneath them; an empty-area click clears the selection. Clicks
         // in a study's pane are resolved where the panes are rendered, outside
         // this rect. A mark, or a click with the eraser or a drawing tool, keeps the selection.
+        // Under the Magic cursor a click away from every drawing also throws its emoji.
         if response.clicked()
             && !drawing_tool_active
             && !eraser_mode
@@ -2705,6 +2735,12 @@ impl Chart {
             match element_at(click_pos) {
                 Some((id, bar_idx)) if !on_drawing => self.selection.select(id, Some(bar_idx)),
                 _ => self.selection.deselect(),
+            }
+            // The Magic cursor's burst is decorative: the click above selects as under the cross.
+            #[cfg(feature = "drawings")]
+            if self.throws_confetti(chart_rect, click_pos) {
+                let now = ui.input(|input| input.time);
+                self.cursor_modes.throw(chart_rect, click_pos, now);
             }
         }
 
@@ -2901,7 +2937,7 @@ impl Chart {
                     self.state.revision(),
                     (config, tick),
                     &bar_clock,
-                    (&price_map, price_rect, |i| coords.idx_to_x(i)),
+                    (price_rect, |i| coords.idx_to_x(i)),
                     (&ui.active_theme().chart, colors.bullish, colors.bearish),
                 )
                 .into_iter()
@@ -3988,7 +4024,7 @@ impl Chart {
                 self.state.revision(),
                 (config, render_ctx.tick_size),
                 &bar_clock,
-                (&price_map, price_rect, |i| coords.idx_to_x(i)),
+                (price_rect, |i| coords.idx_to_x(i)),
                 |profile, config, anchor, column, _, _| {
                     let cropped = [
                         profile.row_span(profile.profile_low).0,
@@ -4090,6 +4126,8 @@ impl Chart {
                         main_options.style = crate::config::CrosshairStyle::Full;
                     }
                 }
+                self.pointer_dot |= rendering::paints_dot(&main_options, price_rect, snapped)
+                    && ui.rect_contains_pointer(price_rect);
                 crosshair_tags = rendering::render_crosshair_at_time(
                     &price_ctx,
                     snapped,
@@ -4165,6 +4203,8 @@ impl Chart {
                     let mut options = crosshair_options.resolved(ui.ctx());
                     options.vert_line_visible = false;
                     let context = RenderContext::new(&painter, volume_rect);
+                    self.pointer_dot |= rendering::paints_dot(&options, volume_rect, pos)
+                        && ui.rect_contains_pointer(volume_rect);
                     rendering::render_crosshair_lines(
                         &context,
                         pos,

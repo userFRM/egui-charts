@@ -9,6 +9,8 @@ use egui::Color32;
 /// Double Stochastic
 /// Applies the stochastic formula twice for smoother signals
 /// More responsive to overbought/oversold conditions
+/// A window without range keeps the previous value of its stage, and there is no value before the
+/// first window with one; the smoothing averages those values.
 #[derive(Clone, Debug)]
 pub struct DoubleStochastic {
     /// Period for stochastic calculation
@@ -46,19 +48,26 @@ impl Default for DoubleStochastic {
 }
 
 impl DoubleStochastic {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
+    /// The values over `data`, every bar of which has finite inputs, and whether a window of
+    /// either stage has no range before that stage's first window with one, so that a calculation
+    /// that starts at an earlier bar can give it a value carried from there.
+    fn compute(&self, data: &[Bar]) -> (IndicatorValues, bool) {
         let mut values = IndicatorValues::new();
         let min_period = self.period.saturating_add(self.smooth.saturating_mul(2));
         if data.len() < min_period {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
             }
-            return values;
+            return (values, false);
         }
+
+        // A window without range keeps the previous value of its stage; there is none before the
+        // first.
+        let mut opens_flat = false;
 
         // First stochastic
         let mut stoch1: Vec<f64> = Vec::with_capacity(data.len());
+        let mut carried = f64::NAN;
 
         for i in 0..data.len() {
             if i < self.period - 1 {
@@ -71,12 +80,13 @@ impl DoubleStochastic {
                     .fold(f64::NEG_INFINITY, f64::max);
                 let low = window.iter().map(|b| b.low).fold(f64::INFINITY, f64::min);
 
-                let k = if high != low {
-                    (data[i].close - low) / (high - low) * 100.0
+                let k = (data[i].close - low) / (high - low) * 100.0;
+                if k.is_finite() {
+                    carried = k;
                 } else {
-                    50.0
-                };
-                stoch1.push(k);
+                    opens_flat |= carried.is_nan();
+                }
+                stoch1.push(carried);
             }
         }
 
@@ -85,6 +95,7 @@ impl DoubleStochastic {
 
         // Second stochastic on the smoothed values
         let mut stoch2: Vec<f64> = Vec::with_capacity(data.len());
+        let mut carried = f64::NAN;
 
         for i in 0..data.len() {
             let start = if i >= self.period - 1 {
@@ -106,13 +117,13 @@ impl DoubleStochastic {
                         .fold(f64::NEG_INFINITY, |a, &b| a.max(b));
                     let low = valid_values.iter().fold(f64::INFINITY, |a, &b| a.min(b));
 
-                    let current = smooth_stoch1[i];
-                    let k = if high != low && current.is_finite() {
-                        (current - low) / (high - low) * 100.0
+                    let k = (smooth_stoch1[i] - low) / (high - low) * 100.0;
+                    if k.is_finite() {
+                        carried = k;
                     } else {
-                        50.0
-                    };
-                    stoch2.push(k);
+                        opens_flat |= carried.is_nan();
+                    }
+                    stoch2.push(carried);
                 } else {
                     stoch2.push(f64::NAN);
                 }
@@ -130,7 +141,7 @@ impl DoubleStochastic {
             }
         }
 
-        values
+        (values, opens_flat)
     }
 }
 
@@ -154,21 +165,25 @@ impl Indicator for DoubleStochastic {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         let mut values = std::mem::take(&mut self.values);
+        let usable = |b: &Bar| b.high.is_finite() && b.low.is_finite() && b.close.is_finite();
+        let behind = self.period.saturating_add(self.smooth).saturating_mul(2);
         update_window(
             &mut values,
             data,
             from,
-            usable_behind(
-                self.period.saturating_add(self.smooth).saturating_mul(2),
-                |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-            ),
-            |data| {
-                over_finite_bars(
-                    data,
-                    |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-                    |data| self.compute(data),
-                )
+            |data: &[Bar], from: usize| {
+                let read = usable_behind(behind, usable)(data, from);
+                // A stage whose first window read from `read` has no range carries an older value.
+                // shortcut: such a window recomputes from bar 0; walk back to the last window with
+                // a range in each stage if long flat histories show up in update profiles.
+                let opens_flat = || {
+                    let kept: Vec<Bar> =
+                        data[read..].iter().filter(|b| usable(b)).cloned().collect();
+                    self.compute(&kept).1
+                };
+                if read > 0 && opens_flat() { 0 } else { read }
             },
+            |data| over_finite_bars(data, usable, |data| self.compute(data).0),
         );
         self.values = values;
     }
@@ -213,5 +228,68 @@ impl Indicator for DoubleStochastic {
 
     fn line_names(&self) -> Vec<String> {
         vec![format!("DS({},{})", self.period, self.smooth)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DS(3, 2) over a series that turns flat, one that keeps closing at a new high and one flat
+    /// from the start. Stage 1, 100 (close - lowest low) / (highest high - lowest low) over three
+    /// bars, is 20, 250/3, 50, 20, 250/3, 50 on bars 2 to 7 of the swing, then 20 and 25 as the
+    /// bars turn flat at 3, which it keeps from bar 10. Its two-bar mean is 155/3, 200/3, 35,
+    /// 155/3, 200/3, 35, 45/2, then 25. Stage 2 places that mean among its last three: 0, 1000/19,
+    /// 100, 0, 0, 20 and 100 on bars 5 to 11, and from bar 12 the window has no range and keeps
+    /// 100. DS, the two-bar mean of stage 2 shown from bar 6, is 500/19, 1450/19, 50, 0, 10, 60,
+    /// then 100. Closing at each new high holds stage 1 at 100 from bar 8, so stage 2 is 100 and
+    /// keeps it from bar 11, where its window has no range. Over flat bars only, no window has a
+    /// range, so there is no value. Live updates must see the carried value of either stage,
+    /// however far back it is.
+    #[test]
+    fn flat_windows_keep_the_last_value() {
+        // (label, (high, low, close) bars, values by bar)
+        type Row = (&'static str, Vec<(f64, f64, f64)>, Vec<Option<f64>>);
+        let swing = [
+            (4.0, 0.0, 2.0),
+            (5.0, 1.0, 4.0),
+            (3.0, 0.0, 1.0),
+            (6.0, 2.0, 5.0),
+            (5.0, 3.0, 3.0),
+            (4.0, 1.0, 2.0),
+            (7.0, 3.0, 6.0),
+            (6.0, 2.0, 4.0),
+        ];
+        let rises: Vec<_> = (0..14)
+            .map(|i| (10.0 + f64::from(i), 9.0 + f64::from(i), 10.0 + f64::from(i)))
+            .collect();
+        let opening = || {
+            [None; 6]
+                .into_iter()
+                .chain([Some(500.0 / 19.0), Some(1450.0 / 19.0)])
+        };
+        let rows: [Row; 3] = [
+            (
+                "turns flat",
+                [&swing[..], &[(3.0, 3.0, 3.0); 14][..]].concat(),
+                opening()
+                    .chain([Some(50.0), Some(0.0), Some(10.0), Some(60.0)])
+                    .chain([Some(100.0); 10])
+                    .collect(),
+            ),
+            (
+                "rises at the high",
+                [&swing[..], &rises[..]].concat(),
+                opening().chain([Some(100.0); 14]).collect(),
+            ),
+            ("flat from start", vec![(2.0, 2.0, 2.0); 10], vec![None; 10]),
+        ];
+        for (label, hlc, want) in rows {
+            let bars = super::super::hlc_bars(&hlc);
+            let mut study = DoubleStochastic::new(3, 2);
+            study.calculate(&bars);
+            super::super::assert_lines(label, &study, &[want]);
+            super::super::assert_replay_matches_batch(&DoubleStochastic::new(3, 2), &bars);
+        }
     }
 }

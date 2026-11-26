@@ -479,12 +479,17 @@ impl OrderTicket {
                 return Ok(request);
             };
             let mut changed = order.request.clone();
+            let exit = order.request.position_bracket.is_some();
+            // A position exit is sized by its position, so only its price and timing change.
+            if exit && request.quantity != order.request.quantity {
+                return Err("A position exit keeps its quantity".into());
+            }
             changed.quantity = request.quantity;
             changed.order_type = request.order_type;
             changed.time_in_force = request.time_in_force;
             changed.expires = request.expires;
             // An account without bracket support keeps the working order's own exits.
-            if market.capabilities.brackets {
+            if market.capabilities.brackets && !exit {
                 changed.take_profit = request.take_profit;
                 changed.take_profit_levels = request.take_profit_levels;
                 changed.stop_loss = request.stop_loss;
@@ -889,9 +894,11 @@ mod tests {
                     bid: None,
                     ask: None,
                     tick: 0.25,
+                    tick_tiers: &[],
                     decimals: 2,
                     currency: "USD",
                     balance: None,
+                    available_funds: None,
                     rules: &rules,
                     rules_ready: true,
                     offline: None,
@@ -1016,9 +1023,11 @@ mod tests {
             bid: Some(100.0),
             ask: Some(100.25),
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: None,
+            available_funds: None,
             capabilities,
             rules: &rules,
             rules_ready: true,
@@ -1266,18 +1275,20 @@ mod tests {
             }
         }
     }
-    /// Tag gestures open one modification, keep order metadata, and respect account support.
+    /// Tag gestures open one modification, keep order metadata and a position exit's quantity,
+    /// and respect account support.
     #[test]
     fn ladder_tags_open_their_order_for_one_modification() {
         use crate::chart::TradingLineAction;
         use crate::model::{OrderStatus, PositionBracket};
-        for (gesture, modify, expiry) in [
-            ("tab-double-click", true, false),
-            ("double-click", true, false),
-            ("menu", true, false),
-            ("double-click", false, false),
-            ("menu", false, false),
-            ("double-click", true, true),
+        for (gesture, modify, expiry, exit) in [
+            ("tab-double-click", true, false, false),
+            ("double-click", true, false, false),
+            ("menu", true, false, false),
+            ("double-click", false, false, false),
+            ("menu", false, false, false),
+            ("double-click", true, true, false),
+            ("double-click", true, false, true),
         ] {
             let ctx = egui::Context::default();
             ctx.all_styles_mut(|style| {
@@ -1287,8 +1298,11 @@ mod tests {
             let mut rules = TradingRules::new("ES");
             rules.time_in_force.push(TimeInForce::GoodTillDate);
             let mut request = OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(99.5));
-            request.position_bracket = Some(PositionBracket::TakeProfit);
-            request.take_profit = Some(110.0);
+            if exit {
+                request.position_bracket = Some(PositionBracket::TakeProfit);
+            } else {
+                request.take_profit = Some(110.0);
+            }
             if expiry {
                 request.time_in_force = TimeInForce::GoodTillDate;
                 request.expires = Some("2026-12-01T21:00:00Z".parse().unwrap());
@@ -1303,9 +1317,11 @@ mod tests {
                 bid: Some(100.0),
                 ask: Some(100.25),
                 tick: 0.25,
+                tick_tiers: &[],
                 decimals: 2,
                 currency: "USD",
                 balance: None,
+                available_funds: None,
                 capabilities: Capabilities {
                     market: true,
                     limit: true,
@@ -1449,6 +1465,34 @@ mod tests {
                 None
             );
             ticket.quantity = 2.0;
+            if exit {
+                // A position exit keeps its quantity; only its price can change.
+                let labels = frame(&mut ticket, &market, vec![]).1;
+                find(&labels, "A position exit keeps its quantity");
+                let send = find(&labels, "Modify order");
+                frame(&mut ticket, &market, vec![egui::Event::PointerMoved(send)]);
+                frame(&mut ticket, &market, vec![click(send, true)]);
+                assert_eq!(
+                    frame(&mut ticket, &market, vec![click(send, false)]).0,
+                    None
+                );
+                ticket.quantity = 1.0;
+                ticket.price = 99.75;
+                let labels = frame(&mut ticket, &market, vec![]).1;
+                let send = find(&labels, "Modify order");
+                frame(&mut ticket, &market, vec![egui::Event::PointerMoved(send)]);
+                frame(&mut ticket, &market, vec![click(send, true)]);
+                let mut changed = order.request.clone();
+                changed.order_type = OrderType::Limit(99.75);
+                assert_eq!(
+                    frame(&mut ticket, &market, vec![click(send, false)]).0,
+                    Some(Action::Confirm(Box::new(TradingLineAction::Modify(
+                        order.clone(),
+                        changed
+                    ))))
+                );
+                continue;
+            }
             if expiry {
                 ticket.expires = Some("2026-12-01T22:00:00Z".parse().unwrap());
             }

@@ -7,9 +7,11 @@
 //! - **Cross**: Full crosshair with vertical + horizontal lines
 //! - **Dot**: crosshair lines with a dot at the cursor position
 //! - **Arrow**: Standard pointer, no crosshair overlay
-//! - **Demonstration** and **Magic**: fading marks of a press
+//! - **Demonstration**: fading marks of a press
+//! - **Magic**: a wand pointer whose clicks throw emoji confetti
 //! - **Eraser**: Click to delete drawings
 
+mod confetti;
 pub mod eraser;
 
 use crate::config::CrosshairStyle;
@@ -18,8 +20,6 @@ pub use eraser::EraserMode;
 
 /// Seconds a released Demonstration or Alt (Option) mark takes to fade out.
 const MARK_FADE: f32 = 3.0;
-/// Seconds each point of a Magic trail takes to fade out behind the pointer.
-const TRAIL_FADE: f32 = 0.5;
 
 /// Aggregate state for all cursor modes.
 ///
@@ -43,6 +43,8 @@ pub struct CursorModeState {
     /// The plot column of every pane, where the last press was checked and the trail is
     /// painted.
     plot: Option<egui::Rect>,
+    /// The Magic cursor's emoji in flight.
+    confetti: confetti::Confetti,
 }
 
 impl CursorModeState {
@@ -65,28 +67,19 @@ impl CursorModeState {
         for (_, age, _) in &mut self.trail[..fading] {
             *age += dt.max(0.0);
         }
-        let fade = self.fade();
-        self.trail.retain(|(_, age, _)| *age < fade);
+        self.trail.retain(|(_, age, _)| *age < MARK_FADE);
     }
 
-    /// Seconds a point takes to fade out once it ages: a Magic trail's, or a released mark's.
-    fn fade(&self) -> f32 {
-        if self.cursor == Some(CrosshairStyle::Magic) {
-            TRAIL_FADE
-        } else {
-            MARK_FADE
-        }
-    }
-
-    /// Paint the trail over the plot column of every pane, above their content, and keep
-    /// repainting while it fades.
-    pub fn render(&self, ui: &mut egui::Ui) {
+    /// Paint the trail over the plot column of every pane, above their content, then the Magic
+    /// cursor's emoji and, where the chart hid the pointer over a plot, its wand. Keeps
+    /// repainting while a mark fades or an emoji flies. Returns whether the wand stands in for
+    /// the pointer.
+    pub fn render(&mut self, ui: &mut egui::Ui) -> bool {
         use crate::theme::ThemeExt;
         let Some(plot) = self.plot else {
-            return;
+            return false;
         };
         let painter = ui.painter().with_clip_rect(plot);
-        let fade = self.fade();
         for pair in self.trail.windows(2).filter(|pair| pair[1].2) {
             painter.line_segment(
                 [pair[0].0, pair[1].0],
@@ -95,7 +88,7 @@ impl CursorModeState {
                     ui.active_theme()
                         .ui
                         .accent
-                        .gamma_multiply((1.0 - pair[0].1 / fade) * 0.65),
+                        .gamma_multiply((1.0 - pair[0].1 / MARK_FADE) * 0.65),
                 ),
             );
         }
@@ -106,18 +99,28 @@ impl CursorModeState {
                 ui.active_theme()
                     .ui
                     .accent
-                    .gamma_multiply((1.0 - age / fade) * 0.65),
+                    .gamma_multiply((1.0 - age / MARK_FADE) * 0.65),
             );
         }
         if !self.trail.is_empty() {
             ui.ctx().request_repaint();
         }
+        self.confetti.paint(ui, plot);
+        let tip = ui.input(|input| input.pointer.hover_pos()).filter(|_| {
+            self.cursor == Some(CrosshairStyle::Magic)
+                && ui.ctx().output(|output| output.cursor_icon) == egui::CursorIcon::None
+                && ui.rect_contains_pointer(plot)
+        });
+        if let Some(tip) = tip {
+            confetti::paint_wand(ui, plot, tip);
+        }
+        tip.is_some()
     }
 
     /// Whether the primary gesture marks the chart instead of panning, selecting or erasing. The
     /// press decides for the whole gesture: one that `response`, the plots of every pane, receives
-    /// on `plot`, the plot column of every pane, marks when `free` and either `trail` (a
-    /// Demonstration or Magic cursor) or Alt (Option) is held without Ctrl or Command. `plot` is
+    /// on `plot`, the plot column of every pane, marks when `free` and either `trail` (the
+    /// Demonstration cursor) or Alt (Option) is held without Ctrl or Command. `plot` is
     /// kept for painting the trail.
     pub(crate) fn marks(
         &mut self,
@@ -171,9 +174,8 @@ impl CursorModeState {
     }
 
     /// Extend the trail with `mark`, the pointer of a marking gesture over the plot this frame.
-    /// `cursor` is the cursor in force, `None` for the eraser; changing it drops the trail. While
-    /// `held`, the newest stroke stays whole, except under the Magic cursor, whose trail fades
-    /// behind the pointer.
+    /// `cursor` is the cursor in force, `None` for the eraser; changing it drops the trail and
+    /// the Magic cursor's emoji. While `held`, the newest stroke stays whole.
     pub(crate) fn follow(
         &mut self,
         cursor: Option<CrosshairStyle>,
@@ -183,15 +185,22 @@ impl CursorModeState {
         if self.cursor != cursor {
             self.cursor = cursor;
             self.move_pointer(None);
+            self.confetti.clear();
         }
         match mark {
             Some(pos) => self.move_pointer(Some(pos)),
             None => self.last_pointer = None,
         }
-        self.hold = held && self.last_pointer.is_some() && cursor != Some(CrosshairStyle::Magic);
+        self.hold = held && self.last_pointer.is_some();
         if !held {
             self.last_pointer = None;
         }
+    }
+
+    /// Throws a burst of the Magic cursor's emoji from `tip` on `plot`, the plot of the pane
+    /// clicked, at `now` seconds.
+    pub(crate) fn throw(&mut self, plot: egui::Rect, tip: egui::Pos2, now: f64) {
+        self.confetti.throw(plot, tip, now);
     }
 
     pub(crate) fn move_pointer(&mut self, pos: Option<egui::Pos2>) {
@@ -219,31 +228,11 @@ impl CursorModeState {
 mod tests {
     use super::*;
 
-    /// A stationary pointer must not restart a trail after its last point expires.
-    #[test]
-    fn held_trail_expires_without_restarting() {
-        let mut modes = CursorModeState::new();
-        modes.follow(Some(CrosshairStyle::Magic), None, false);
-        for (dt, x, expected) in [
-            (0.0, 10.0, 1),
-            (0.1, 20.0, 2),
-            (0.4, 20.0, 1),
-            (0.2, 20.0, 0),
-            (0.1, 20.0, 0),
-            (0.1, 30.0, 1),
-        ] {
-            modes.update(dt);
-            modes.move_pointer(Some(egui::pos2(x, 10.0)));
-            assert_eq!(modes.trail.len(), expected, "at {x} after {dt}");
-        }
-    }
-
-    /// A held Demonstration or Alt stroke stays whole until its release and a Magic trail fades
-    /// behind the pointer; strokes are never joined, hover marks nothing, and changing the cursor
-    /// drops the trail.
+    /// A held Demonstration or Alt stroke stays whole until its release; strokes are never
+    /// joined, hover marks nothing, and changing the cursor drops the trail.
     #[test]
     fn trails_follow_their_cursor_and_clear_on_switching() {
-        use CrosshairStyle::{Demonstration, Full, Magic};
+        use CrosshairStyle::{Demonstration, Full};
         type Row = (
             f32,
             Option<CrosshairStyle>,
@@ -253,7 +242,7 @@ mod tests {
         );
         const T: bool = true;
         const F: bool = false;
-        let rows: [Row; 13] = [
+        let rows: [Row; 12] = [
             (0.0, Some(Demonstration), None, F, &[]),
             (0.1, Some(Demonstration), Some(10.0), T, &[F]),
             (0.4, Some(Demonstration), Some(20.0), T, &[F, T]),
@@ -262,9 +251,8 @@ mod tests {
             (0.1, Some(Demonstration), Some(40.0), F, &[F, T, T, F]),
             (2.85, Some(Demonstration), None, F, &[F]),
             (0.2, Some(Demonstration), None, F, &[]),
-            (0.0, Some(Magic), Some(10.0), T, &[F]),
-            (0.4, Some(Magic), Some(20.0), T, &[F, T]),
-            (0.2, Some(Magic), Some(30.0), T, &[T, T]),
+            (0.0, Some(Demonstration), Some(10.0), T, &[F]),
+            (0.4, Some(Demonstration), Some(20.0), T, &[F, T]),
             (0.0, Some(Full), Some(40.0), T, &[F]),
             (0.0, None, None, F, &[]),
         ];
@@ -292,7 +280,9 @@ mod tests {
             let mut alphas = Vec::new();
             for dt in [0.0, 1.0, 2.0] {
                 modes.update(dt);
-                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| modes.render(ui));
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    modes.render(ui);
+                });
                 let shapes = std::mem::take(&mut output.shapes);
                 output.drop_without_applying_deltas();
                 alphas.push(shapes.into_iter().find_map(|clipped| match clipped.shape {
@@ -313,7 +303,9 @@ mod tests {
     /// Through `Chart::show`, a click or a drag marks under the Demonstration cursor, or under
     /// the cross with Alt held, on the price pane and on a study pane, without panning or
     /// selecting, and the mark is painted above that pane; hovering marks nothing, and the same
-    /// gestures without Alt pan or select as before.
+    /// gestures without Alt pan or select as before; under the Magic cursor the same gestures pan
+    /// and select as under the cross, and a click off every drawing also throws emoji clipped to
+    /// its pane.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn marks_follow_presses_through_show() {
@@ -321,18 +313,54 @@ mod tests {
         use crate::widget::test_frames::{chart, frame, run};
         use CrosshairStyle::{Demonstration, Full, Magic};
         use egui::{Context, Event, Modifiers, PointerButton, Shape, pos2, vec2};
-        // Style, modifiers, gesture, then the trail length, whether the view moved and the
-        // number of selected drawings and whether a series was selected.
-        for (row, (style, modifiers, gesture, marks, pans, selected, series_selected)) in [
-            (Demonstration, Modifiers::NONE, "hover", 0, false, 0, false),
-            (Demonstration, Modifiers::NONE, "click", 1, false, 0, false),
-            (Demonstration, Modifiers::NONE, "drag", 3, false, 0, false),
-            (Full, Modifiers::ALT, "hover", 0, false, 0, false),
-            (Full, Modifiers::ALT, "click", 1, false, 0, false),
-            (Full, Modifiers::ALT, "drag", 3, false, 0, false),
-            (Full, Modifiers::NONE, "drag", 0, true, 0, false),
-            (Full, Modifiers::ALT, "click on line", 1, false, 0, false),
-            (Full, Modifiers::NONE, "click on line", 0, false, 1, false),
+        // Style, modifiers, gesture, then the trail length, whether the view moved, the number
+        // of selected drawings, whether a series was selected and the number of emoji painted.
+        for (row, (style, modifiers, gesture, marks, pans, selected, series_selected, burst)) in [
+            (
+                Demonstration,
+                Modifiers::NONE,
+                "hover",
+                0,
+                false,
+                0,
+                false,
+                0,
+            ),
+            (
+                Demonstration,
+                Modifiers::NONE,
+                "click",
+                1,
+                false,
+                0,
+                false,
+                0,
+            ),
+            (
+                Demonstration,
+                Modifiers::NONE,
+                "drag",
+                3,
+                false,
+                0,
+                false,
+                0,
+            ),
+            (Full, Modifiers::ALT, "hover", 0, false, 0, false, 0),
+            (Full, Modifiers::ALT, "click", 1, false, 0, false, 0),
+            (Full, Modifiers::ALT, "drag", 3, false, 0, false, 0),
+            (Full, Modifiers::NONE, "drag", 0, true, 0, false, 0),
+            (Full, Modifiers::ALT, "click on line", 1, false, 0, false, 0),
+            (
+                Full,
+                Modifiers::NONE,
+                "click on line",
+                0,
+                false,
+                1,
+                false,
+                0,
+            ),
             (
                 Demonstration,
                 Modifiers::NONE,
@@ -341,18 +369,38 @@ mod tests {
                 false,
                 0,
                 false,
+                0,
             ),
             (
                 Magic,
                 Modifiers::NONE,
                 "click on series",
+                0,
+                false,
+                0,
+                true,
+                40,
+            ),
+            (
+                Full,
+                Modifiers::ALT,
+                "click on series",
                 1,
                 false,
                 0,
                 false,
+                0,
             ),
-            (Full, Modifiers::ALT, "click on series", 1, false, 0, false),
-            (Full, Modifiers::NONE, "click on series", 0, false, 0, true),
+            (
+                Full,
+                Modifiers::NONE,
+                "click on series",
+                0,
+                false,
+                0,
+                true,
+                0,
+            ),
             (
                 Demonstration,
                 Modifiers::NONE,
@@ -361,9 +409,10 @@ mod tests {
                 false,
                 0,
                 false,
+                0,
             ),
-            (Full, Modifiers::ALT, "click on pane", 1, false, 0, false),
-            (Full, Modifiers::NONE, "click on pane", 0, false, 0, true),
+            (Full, Modifiers::ALT, "click on pane", 1, false, 0, false, 0),
+            (Full, Modifiers::NONE, "click on pane", 0, false, 0, true, 0),
             (
                 Full,
                 Modifiers::ALT,
@@ -372,6 +421,7 @@ mod tests {
                 false,
                 0,
                 false,
+                0,
             ),
             (
                 Full,
@@ -381,6 +431,7 @@ mod tests {
                 false,
                 1,
                 false,
+                0,
             ),
             (
                 Demonstration,
@@ -390,6 +441,40 @@ mod tests {
                 false,
                 0,
                 false,
+                0,
+            ),
+            (Magic, Modifiers::NONE, "hover", 0, false, 0, false, 0),
+            (Magic, Modifiers::NONE, "drag", 0, true, 0, false, 0),
+            (Magic, Modifiers::ALT, "click", 1, false, 0, false, 0),
+            (
+                Magic,
+                Modifiers::NONE,
+                "click on line",
+                0,
+                false,
+                1,
+                false,
+                0,
+            ),
+            (
+                Magic,
+                Modifiers::NONE,
+                "click on pane",
+                0,
+                false,
+                0,
+                true,
+                40,
+            ),
+            (
+                Magic,
+                Modifiers::NONE,
+                "click on pane line",
+                0,
+                false,
+                1,
+                false,
+                0,
             ),
         ]
         .into_iter()
@@ -470,14 +555,30 @@ mod tests {
             for (step, events) in steps.into_iter().enumerate() {
                 painted = run(&ctx, &mut chart, (step + 1) as f64 / 60.0, events).0;
             }
+            // The Magic cursor's emoji all lie from U+1F300 on, and nothing else here does.
+            let emoji: Vec<_> = painted
+                .iter()
+                .filter(|(_, shape)| {
+                    matches!(shape, Shape::Text(text)
+                        if text.galley.text().chars().next().is_some_and(|c| c >= '\u{1F300}'))
+                })
+                .collect();
+            assert!(
+                emoji
+                    .iter()
+                    .all(|(clip, _)| pressed_plot.contains_rect(*clip) && clip.contains(at)),
+                "row {}: emoji outside {pressed_plot:?}",
+                row + 1
+            );
             assert_eq!(
                 (
                     chart.cursor_modes.trail.len(),
                     chart.get_time_scale_state() != view,
                     chart.drawings().selected_ids().count(),
                     chart.selected_element().is_some(),
+                    emoji.len(),
                 ),
-                (marks, pans, selected, series_selected),
+                (marks, pans, selected, series_selected, burst),
                 "row {}: {style:?} {modifiers:?} {gesture}",
                 row + 1
             );

@@ -1305,9 +1305,11 @@ pub struct ChartTypeParams {
     pub tpo_extend_poor: bool,
     /// TPO: draw one and two initial balance ranges above its high and below its low.
     pub tpo_initial_balance_extensions: bool,
-    /// TPO: instrument ticks per price row. Zero, or an instrument without a tick size, fits
-    /// about 40 rows to the visible price range, each a whole number of the instrument's ticks
-    /// when it has a tick size.
+    /// TPO: instrument ticks per price row. Zero, or an instrument without a tick size, sizes
+    /// rows from the price range of the latest 300 bars up to the last visible bar, aiming at
+    /// about 80 rows: the ticks per row round up to a multiple of 5 below 100 ticks, of 50 below
+    /// 1,000, of 500 below 10,000 and so on. Without a tick size the row is a 1, 2, 2.5 or 5
+    /// step. Zooming or scrolling the price scale keeps the rows.
     pub tpo_row_ticks: u32,
     /// TPO: share of the TPOs in the value area, in percent.
     pub tpo_value_area: f64,
@@ -1513,7 +1515,7 @@ impl ChartTypeParams {
     pub fn tpo_config(&self, tick_size: Option<f64>) -> super::TPOConfig {
         let session = self.tpo_hours();
         super::TPOConfig {
-            // A zero row lets the renderer fit the rows to the visible range.
+            // A zero row lets the renderer size the rows from the bars.
             tick_size: tick_size.map_or(0.0, |tick| tick * f64::from(self.tpo_row_ticks)),
             period_minutes: self.tpo_period_minutes,
             initial_balance_minutes: self.tpo_initial_balance_minutes,
@@ -1926,6 +1928,10 @@ mod tests {
             [
                 older_expected.styles.columns.up_color,
                 older_expected.styles.columns.down_color,
+            ] = placeholder;
+            [
+                older_expected.styles.range.forming_up,
+                older_expected.styles.range.forming_down,
             ] = placeholder;
             // Flat Baseline fills: rgb(8, 153, 129) and rgb(242, 54, 69) at alpha 30.
             let baseline = &mut older_expected.styles.baseline;

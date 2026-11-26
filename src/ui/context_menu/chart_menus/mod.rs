@@ -299,6 +299,14 @@ impl ChartMenus {
         self.chart.active_watchlist = list;
     }
 
+    /// Offers writing a note on the chart's symbol in the chart and series menus, off by default.
+    /// The choice returns as [`ContextMenuAction::AddNote`] or
+    /// [`SeriesContextMenuAction::AddNote`](crate::ui::dialogs::SeriesContextMenuAction::AddNote).
+    pub fn set_add_note_visible(&mut self, visible: bool) {
+        self.chart.add_note = visible;
+        self.series.add_note = visible;
+    }
+
     /// Lets the host place, reorder and leave out the rows of every chart menu: the chart, series,
     /// study and drawing menus and the price and time axis menus.
     ///
@@ -430,6 +438,12 @@ impl ChartMenus {
             .instrument()
             .and_then(|instrument| instrument.tick_size)
             .filter(|tick| tick.is_finite() && *tick > 0.0);
+        let tiers = chart
+            .instrument()
+            .filter(|_| self.chart.tick_size.is_some())
+            .map_or(&[][..], |instrument| &instrument.tick_tiers);
+        self.chart.tick_tiers.clear();
+        self.chart.tick_tiers.extend_from_slice(tiers);
         self.chart.symbol_price = chart
             .pane_at_position(pos)
             .is_none_or(|pane| Some(pane) == chart.series_pane(SeriesId::MAIN));

@@ -37,6 +37,8 @@ type StrategyConstructor = Box<dyn Fn() -> Box<dyn Strategy> + Send + Sync>;
 /// clock it is the UTC date.
 /// Bollinger Bands Directed trades both sides by default, as Bollinger Bands does, or Long only
 /// or Short only, where a signal on the other side closes the position without reversing it.
+/// Both Bollinger Bands strategies enter at the next price after the close crosses back inside
+/// a band, also when that price is beyond the band.
 /// Built-ins ignore fill callbacks and decide
 /// at bar close, or on forming-bar updates when tick recalculation is enabled.
 ///

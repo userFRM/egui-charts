@@ -38,10 +38,14 @@ impl Chart {
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
         self.follow_market_replay();
         // A restored scale still takes its default grid from the current instrument.
-        let tick_size = self
-            .instrument()
-            .and_then(|instrument| instrument.tick_size);
-        self.state.price_scale_mut().set_tick_size(tick_size);
+        let instrument = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.instrument.as_ref())
+            .or(self.legend_instrument.as_ref());
+        self.state
+            .price_scale_mut()
+            .set_instrument_ticks(instrument);
         // Footprint chart types and drawings that read executions read trades on every interval;
         // time-based drawings read them on every chart type.
         let chart_executions = self.chart_type == ChartType::VolumeFootprint
@@ -623,7 +627,7 @@ impl Chart {
         // describes the chart's symbol, whatever its own `symbol` holds.
         self.legend_instrument = link.instrument.take();
         self.state.price_scale_mut().set_instrument_precision(None);
-        self.state.price_scale_mut().set_tick_size(None);
+        self.state.price_scale_mut().set_instrument_ticks(None);
         if retain_trades {
             link.trades.reanchor();
         } else {
@@ -737,7 +741,7 @@ impl Chart {
             .set_instrument_precision(crate::scales::instrument_price_precision(&instrument));
         self.state
             .price_scale_mut()
-            .set_tick_size(instrument.tick_size);
+            .set_instrument_ticks(Some(&instrument));
         let timeframe = self.timeframe.unwrap_or_default();
         let withheld = !supports(self.legend_instrument.as_ref(), timeframe);
         link.instrument = Some(instrument);
@@ -1098,12 +1102,15 @@ impl Chart {
     }
 
     /// The start of the range to ask for below `before`: the time `scroll_to_time` is heading
-    /// for, while it lies before `before`.
+    /// for, while it lies before `before`. A kept left edge asks by count alone: the bar of the
+    /// new interval that holds its time can open before it, and an empty range would end the
+    /// history.
     fn range_start(
         &self,
         before: chrono::DateTime<chrono::Utc>,
     ) -> Option<chrono::DateTime<chrono::Utc>> {
-        self.pending_scroll_time.filter(|time| *time < before)
+        self.pending_scroll_time
+            .filter(|time| *time < before && self.pending_left_edge.is_none())
     }
 
     /// A prepared footprint (also a study's) can draw without individual executions. Let its

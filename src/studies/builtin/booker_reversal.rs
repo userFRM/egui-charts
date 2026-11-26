@@ -341,30 +341,40 @@ mod tests {
         }
     }
 
-    /// The marks place triangles and hold no reading of the study: a chart whose last bar
-    /// carries a mark lists the study's title in the legend with no value and no `∅` after it,
-    /// and shows no text on the price scale at the mark's price. Each mark price lies between
-    /// the scale's ticks, so any text there is a study tag.
-    #[cfg(feature = "widget")]
+    /// The marks place shapes and hold no reading of the study: a chart whose last bar carries a
+    /// mark lists the study's title in the legend with its readings only, no mark value and no
+    /// `∅` after it, and shows no text on the price scale at the mark's price. Each mark price lies
+    /// between the scale's ticks, so any text there is a study tag.
+    #[cfg(all(feature = "widget", feature = "drawings"))]
     #[test]
     fn marks_show_no_values_in_the_legend_or_on_the_price_scale() {
         use crate::model::BarData;
-        use crate::studies::{Reversal, WilliamsFractals};
+        use crate::studies::{
+            AutoTrendLines, CandlestickPatterns, ChartPatterns, IndicatorFactory,
+            KnoxvilleDivergence, PatternFamily, PivotPointsHighLow, Reversal, RisingWedge,
+            WilliamsFractals,
+        };
         use crate::widget::test_frames::{frame, shapes};
-        // (title, study, (high, low, close) bars, price of the mark on the last bar)
+        // (title, study, (high, low, close) bars, price of the mark on the last bar, readings
+        // the legend keeps on the last bar)
         type Row = (
             &'static str,
             Box<dyn Indicator>,
             Vec<(f64, f64, f64)>,
             Option<f64>,
+            &'static [f64],
         );
-        let rows: [Row; 3] = [
+        let booker = vec![(17.0, 9.0, 10.0), (8.0, 7.0, 7.0), (9.5, 8.5, 9.0)];
+        // Two doji: open and close at the middle of the range. The last one is marked at its high.
+        let doji = vec![(10.0, 8.0, 9.0), (12.3, 10.3, 11.3)];
+        let rows: [Row; 11] = [
             // Labelled in the test above: a buy on the low of 8.5.
             (
                 "Booker Reversal",
                 Box::new(BookerReversal::new(1, 2, 3, 0)),
-                vec![(17.0, 9.0, 10.0), (8.0, 7.0, 7.0), (9.5, 8.5, 9.0)],
+                booker.clone(),
                 Some(8.5),
+                &[],
             ),
             // A new high of 12.3 over bars 4 to 6 that closes below the 10.5 before it.
             (
@@ -381,6 +391,7 @@ mod tests {
                     (12.3, 7.4, 7.5),
                 ],
                 Some(12.3),
+                &[],
             ),
             // Bar 2 is a fractal both ways; the last bar has none yet.
             (
@@ -394,10 +405,80 @@ mod tests {
                     (10.0, 7.0, 8.0),
                 ],
                 None,
+                &[],
+            ),
+            // Bar 1 is a pivot high; the last bar has none yet.
+            (
+                "Pivot Points High Low",
+                Box::new(PivotPointsHighLow::new(1, 1, 1, 1)),
+                vec![(10.0, 8.0, 9.0), (12.0, 9.0, 11.0), (11.0, 8.5, 10.0)],
+                None,
+                &[],
+            ),
+            // Closes 10, 12, 14, 13, 14.5, highs and lows 0.75 away. The RSI(2) is 100 on bar 2,
+            // whose high 14.75 is the window's; bar 4 makes a new high of 15.25 with a momentum
+            // of 1.5 under bar 2's 2, a bearish mark. The momentum readout stays in the legend.
+            (
+                "Knoxville Divergence",
+                Box::new(KnoxvilleDivergence::new(1, 2, 10)),
+                [10.0, 12.0, 14.0, 13.0, 14.5]
+                    .map(|c| (c + 0.75, c - 0.75, c))
+                    .to_vec(),
+                Some(15.25),
+                &[1.5],
+            ),
+            // Too few bars for a swing: no pivot marks.
+            (
+                "Auto Trend Line",
+                Box::new(AutoTrendLines::new()),
+                booker.clone(),
+                None,
+                &[],
+            ),
+            // A doji needs no trend: the Neutral output marks the last bar's high.
+            (
+                "All Candlestick Patterns",
+                Box::new(CandlestickPatterns::default()),
+                doji.clone(),
+                Some(12.3),
+                &[],
+            ),
+            (
+                "Doji",
+                IndicatorFactory::new().create("Doji").unwrap(),
+                doji,
+                Some(12.3),
+                &[],
+            ),
+            // Too few bars for a formation.
+            (
+                "Reversal Chart Patterns",
+                Box::new(ChartPatterns::new(PatternFamily::Reversal)),
+                booker.clone(),
+                None,
+                &[],
+            ),
+            (
+                "All Chart Patterns",
+                Box::new(ChartPatterns::all()),
+                booker,
+                None,
+                &[],
+            ),
+            // The wedge of `wedge.rs`'s test before its breakout: on bar 9 it develops with its
+            // upper line at 24.5 and its lower line at 18, and nothing breaks out yet.
+            (
+                "Rising Wedge",
+                Box::new(RisingWedge::new(1, 1, 2, 0, 100, 5)),
+                [12.0, 10.0, 15.0, 20.0, 17.0, 14.0, 19.0, 23.0, 21.0, 20.0]
+                    .map(|c| (c, c, c))
+                    .to_vec(),
+                None,
+                &[24.5, 18.0],
             ),
         ];
         let mut wrong = Vec::new();
-        for (title, study, hlc, mark) in rows {
+        for (title, study, hlc, mark, kept) in rows {
             let bars = super::super::hlc_bars(&hlc);
             let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
             chart.config_mut().show_volume = false;
@@ -412,7 +493,12 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            let Some(name) = texts.iter().find(|text| text.galley.text() == title) else {
+            // The legend's title, left of a table that may repeat it.
+            let Some(name) = texts
+                .iter()
+                .filter(|text| text.galley.text() == title)
+                .min_by(|a, b| a.pos.x.total_cmp(&b.pos.x))
+            else {
                 wrong.push(format!("{title}: no legend title"));
                 continue;
             };
@@ -425,7 +511,10 @@ mod tests {
             let value = mark.map(|mark| mark.to_string());
             if row.iter().any(|text| {
                 text.contains('∅') || value.as_deref().is_some_and(|value| text.contains(value))
-            }) {
+            }) || !kept
+                .iter()
+                .all(|&kept| row.iter().any(|text| text.parse() == Ok(kept)))
+            {
                 wrong.push(format!("{title}: legend {row:?}"));
             }
             if let Some(mark) = mark {

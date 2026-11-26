@@ -26,19 +26,11 @@ use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 use crate::model::tpo::OUTSIDE_VALUE_AREA_OPACITY;
 use crate::model::{
     Bar, BarClock, ExchangeSessionProvider, SessionProvider, TPOColorMode, TPOConfig,
-    TPODisplayMode, TPOProfile, TPOProfilePeriod, TPOStatisticsRows, derive_tick_size,
-    to_tpo_profiles,
+    TPODisplayMode, TPOProfile, TPOProfilePeriod, TPOStatisticsRows, to_tpo_profiles,
 };
 use crate::styles::typography;
 use crate::theme::{ChartColors, ThemeExt, contrast, readable_color};
 use crate::tokens::DESIGN_TOKENS;
-
-/// Target number of price rows when auto-deriving the TPO bin (tick) size.
-///
-/// The bin height is chosen so the visible price range spans roughly this many
-/// rows, keeping the profile readable across instruments that trade at very
-/// different price magnitudes.
-const TARGET_ROWS: usize = 40;
 
 /// Fixed pixel width of one TPO period column.
 ///
@@ -705,7 +697,7 @@ pub fn render_live_tpo(
         revision,
         (base_config, instrument_tick),
         clock,
-        (price_map, price_rect, &x),
+        (price_rect, &x),
         |profile, config, anchor_x, column_width, room, label_room| {
             let ends = draw_session_profile(
                 painter,
@@ -735,7 +727,7 @@ pub fn render_live_tpo(
     {
         return;
     }
-    let Some(config) = row_config(base_config, instrument_tick, price_map) else {
+    let Some(config) = row_config(base_config, instrument_tick, &full_data[..visible.end]) else {
         return;
     };
     let sessions = clock.sessions();
@@ -798,14 +790,14 @@ pub(crate) fn visit_profiles(
     revision: u64,
     (base_config, instrument_tick): (&TPOConfig, Option<f64>),
     clock: &BarClock,
-    (price_map, price_rect, idx_to_coord): (&PriceMap, Rect, impl Fn(usize) -> f32),
+    (price_rect, idx_to_coord): (Rect, impl Fn(usize) -> f32),
     mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, f32, f32),
 ) {
     if visible.is_empty() || visible.end > full_data.len() {
         return;
     }
 
-    let Some(config) = row_config(base_config, instrument_tick, price_map) else {
+    let Some(config) = row_config(base_config, instrument_tick, &full_data[..visible.end]) else {
         return;
     };
 
@@ -841,11 +833,11 @@ pub(crate) fn latest_level_tags(
     revision: u64,
     config: (&TPOConfig, Option<f64>),
     clock: &BarClock,
-    placement: (&PriceMap, Rect, impl Fn(usize) -> f32),
+    placement: (Rect, impl Fn(usize) -> f32),
     (chart, bullish, bearish): (&ChartColors, Color32, Color32),
 ) -> Vec<(f64, Color32)> {
     let mut tags = Vec::new();
-    let right = placement.1.right();
+    let right = placement.0.right();
     visit_profiles(
         full_data,
         visible,
@@ -879,29 +871,19 @@ pub(crate) fn latest_level_tags(
     tags
 }
 
-/// `base_config` with a row height: its own, or about `TARGET_ROWS` rows over the visible
-/// range, in whole multiples of `instrument_tick` when one is given, and records
-/// `instrument_tick` so the profiles count whole ticks.
+/// `base_config` with a row height: its own, or the automatic height of
+/// [`auto_row_height`](crate::model::tpo::auto_row_height) for `bars`, the bars up to the last
+/// one in view, so zooming or scrolling the price scale keeps the rows. Records `instrument_tick`
+/// so the profiles count whole ticks.
 fn row_config(
     base_config: &TPOConfig,
     instrument_tick: Option<f64>,
-    price_map: &PriceMap,
+    bars: &[Bar],
 ) -> Option<TPOConfig> {
-    let (range, transform) = (price_map.range(), price_map.transform());
-    let price_range = (transform.to_price(range.max) - transform.to_price(range.min)).abs();
-    if !price_range.is_finite() || price_range <= 0.0 {
-        return None;
-    }
     let mut config = base_config.clone();
     config.instrument_tick = instrument_tick;
     if config.tick_size <= 0.0 || !config.tick_size.is_finite() {
-        let step = derive_tick_size(price_range, TARGET_ROWS);
-        config.tick_size = instrument_tick
-            .filter(|tick| *tick > 0.0 && tick.is_finite())
-            .map(|tick| crate::model::tpo::whole_ticks(step, tick) * tick)
-            // A subnormal tick overflows the tick count
-            .filter(|row| row.is_finite())
-            .unwrap_or(step);
+        config.tick_size = crate::model::tpo::auto_row_height(bars, instrument_tick)?;
     }
     Some(config)
 }
@@ -1064,7 +1046,7 @@ pub(crate) fn profile_at(
     if !mapping.rect.contains(pos) || visible.is_empty() || visible.end > full_data.len() {
         return None;
     }
-    let config = row_config(base_config, instrument_tick, &mapping.price)?;
+    let config = row_config(base_config, instrument_tick, &full_data[..visible.end])?;
     let sessions = clock.sessions();
     let bars = whole_sessions(full_data, visible, &sessions, &config, clock.timeframe());
     let units = cached_profiles(
@@ -1184,7 +1166,6 @@ fn draw_session_profile(
     let column_width = column_width.min(row_height);
     let pixels_per_point = painter.ctx().pixels_per_point();
     let gap = 1.0 / pixels_per_point;
-    let levels = profile.price_levels();
     let columns = profile_columns(profile, config);
     let max_right = anchor_x + columns as f32 * column_width;
     let block_width = (column_width - gap).max(gap);
@@ -1281,13 +1262,36 @@ fn draw_session_profile(
         Vec::new()
     };
 
-    for &price in &levels {
-        let y = row_y(price);
+    // Letters by row from the highest row down, each row's left-justified in time order: one
+    // sort per profile keeps every row's letters together, as a letter's price is its row's.
+    // Periods list their rows upward, so reversed a one-period profile is already in order.
+    let mut letters: Vec<_> = profile.letters.iter().rev().collect();
+    letters.sort_by(|a, b| b.price.total_cmp(&a.price).then(a.ts.cmp(&b.ts)));
+    // The cells' pixel grid: each column's edges once per profile, and each row's centre from the
+    // span `row_center_y` gives it, computed from the row's price without keying it again.
+    let edges = |col: usize| {
+        let x = anchor_x + col as f32 * column_width + column_width * 0.5;
+        (
+            (x - block_width * 0.5).round_to_pixels(pixels_per_point),
+            (x + block_width * 0.5).round_to_pixels(pixels_per_point),
+        )
+    };
+    let column_edges: Vec<(f32, f32)> = if use_letters {
+        Vec::new()
+    } else {
+        (0..columns).map(edges).collect()
+    };
+    let half_tick = profile.instrument_tick * 0.5;
+    // The cells, their letters and the profile's lines go to the painter in one call, in paint order.
+    let mut shapes = Vec::with_capacity(if use_letters { 4 } else { letters.len() + 4 });
+    for row in letters.chunk_by(|a, b| a.price == b.price) {
+        let price = row[0].price;
+        let y = coords.price_to_y(((price - half_tick) + (price + tick_size - half_tick)) * 0.5);
         if y < price_rect.top() - row_height || y > price_rect.bottom() + row_height {
             continue;
         }
         let is_poc = config.show_poc && (price - profile.poc_price).abs() < tick_size * 0.5;
-        let single_print = config.show_single_prints && profile.tpo_count_at(price) == 1;
+        let single_print = config.show_single_prints && row.len() == 1;
         let dimmed = !is_poc && dims_outside_value_area && !profile.is_in_value_area(price);
         let row_tone = if is_poc {
             Some(poc_color)
@@ -1302,11 +1306,7 @@ fn draw_session_profile(
         let top = (y - block_height * 0.5).round_to_pixels(pixels_per_point);
         let bottom = (y + block_height * 0.5).round_to_pixels(pixels_per_point);
 
-        // Letters at this level, one per period of each session, left-justified in time order.
-        let mut letters_at_price: Vec<_> = profile.letters_at(price);
-        letters_at_price.sort_by_key(|l| l.ts);
-
-        for (col, letter) in letters_at_price.iter().enumerate() {
+        for (col, letter) in row.iter().enumerate() {
             let col = starts
                 .as_ref()
                 .map_or(col, |starts| starts.partition_point(|ts| *ts < letter.ts));
@@ -1323,8 +1323,7 @@ fn draw_session_profile(
                     color,
                 );
             } else {
-                let left = (x - block_width * 0.5).round_to_pixels(pixels_per_point);
-                let right = (x + block_width * 0.5).round_to_pixels(pixels_per_point);
+                let (left, right) = column_edges.get(col).copied().unwrap_or_else(|| edges(col));
                 let cell = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
                 // An opaque cell hides the highlight behind it, so a single print takes the colour
                 // itself: a tint barely shows on a cell dimmed toward a light background. The POC
@@ -1334,7 +1333,7 @@ fn draw_session_profile(
                 } else {
                     color
                 };
-                painter.rect_filled(cell, 0.0, color);
+                shapes.push(Shape::rect_filled(cell, 0.0, color));
                 if letters_in_cells {
                     let letter_tone = cell_letter_color(color, &chart);
                     let mut format =
@@ -1345,7 +1344,9 @@ fn draw_session_profile(
                     let origin = egui::Align2::CENTER_CENTER
                         .anchor_size(cell.center(), galley.size())
                         .min;
-                    painter.galley(origin, galley, letter_tone);
+                    if !galley.is_empty() {
+                        shapes.push(Shape::galley(origin, galley, letter_tone));
+                    }
                 }
             }
         }
@@ -1366,10 +1367,10 @@ fn draw_session_profile(
         if poor && price_rect.y_range().contains(y) {
             let right =
                 anchor_x + row_reach(profile, starts.as_deref(), price) as f32 * column_width;
-            painter.line_segment(
+            shapes.push(Shape::line_segment(
                 [Pos2::new(right + 4.0, y), Pos2::new(right + 12.0, y)],
                 Stroke::new(DESIGN_TOKENS.stroke.medium, chart.axis_text),
-            );
+            ));
             *end = Some(Pos2::new(right + 12.0, y));
         }
     }
@@ -1377,10 +1378,10 @@ fn draw_session_profile(
     // Letters retain a fine POC underline; blocks carry the POC in the row itself.
     if config.show_poc && use_letters {
         let y = row_y(profile.poc_price) + row_height * 0.5;
-        painter.line_segment(
+        shapes.push(Shape::line_segment(
             [Pos2::new(anchor_x, y), Pos2::new(max_right, y)],
             Stroke::new(render_config.poc_line_width, poc_color),
-        );
+        ));
     }
 
     if config.show_value_area {
@@ -1395,8 +1396,10 @@ fn draw_session_profile(
                 let end = max_right + 6.0;
                 let mut x = anchor_x;
                 while x < end {
-                    painter
-                        .line_segment([Pos2::new(x, y), Pos2::new((x + 2.0).min(end), y)], stroke);
+                    shapes.push(Shape::line_segment(
+                        [Pos2::new(x, y), Pos2::new((x + 2.0).min(end), y)],
+                        stroke,
+                    ));
                     x += 5.0;
                 }
             }
@@ -1404,6 +1407,7 @@ fn draw_session_profile(
     }
 
     if config.show_volume_profile {
+        let levels = profile.price_levels();
         let max = levels
             .iter()
             .map(|&price| profile.volume_at(price))
@@ -1426,17 +1430,18 @@ fn draw_session_profile(
                 } else {
                     chart.axis_text_secondary
                 };
-                painter.rect_filled(
+                shapes.push(Shape::rect_filled(
                     Rect::from_min_max(
                         Pos2::new(left, top),
                         Pos2::new(left + VOLUME_PROFILE_PX * (volume / max) as f32, bottom),
                     ),
                     0.0,
                     color,
-                );
+                ));
             }
         }
     }
+    painter.extend(shapes);
 
     if label_room > 0.0 {
         let mut label_rows = Vec::new();
@@ -1806,7 +1811,7 @@ fn cell_letter_color(cell: Color32, chart: &ChartColors) -> Color32 {
     }
 }
 
-/// Steps in each half of the period palette.
+/// Steps in each half of the period palette, one per letter of A to Z and of a to z.
 const PERIOD_STEPS: usize = 26;
 
 /// One step of the first or second gradient, preserving the default palette's rounding.
@@ -1828,14 +1833,7 @@ fn entry_color(
 ) -> Color32 {
     match config.color_mode {
         TPOColorMode::ByPeriod => {
-            let last = profile.width().saturating_sub(1).max(1);
-            let steps = 2 * PERIOD_STEPS - 1;
-            let position = (period_idx as f32 / last as f32).min(1.0) * steps as f32;
-            let index = position as usize;
-            period_step(&config.period_colors, index).lerp_to_gamma(
-                period_step(&config.period_colors, (index + 1).min(steps)),
-                position.fract(),
-            )
+            period_step(&config.period_colors, period_idx % (2 * PERIOD_STEPS))
         }
         TPOColorMode::Solid => config.solid_color,
         TPOColorMode::ByValueArea => {
@@ -2043,20 +2041,20 @@ mod tests {
                         rgb(96, 25, 45),
                         rgb(96, 25, 45),
                         rgb(214, 56, 100),
-                        rgb(87, 191, 153),
+                        rgb(209, 62, 100),
                         rgb(214, 56, 100),
-                        rgb(87, 191, 153),
-                        rgb(93, 36, 245),
+                        rgb(209, 62, 100),
+                        rgb(204, 67, 100),
                         rgb(214, 56, 100),
                     ],
                     [
                         rgb(237, 165, 185),
                         rgb(237, 165, 185),
                         rgb(214, 56, 100),
-                        rgb(75, 164, 131),
+                        rgb(209, 62, 100),
                         rgb(214, 56, 100),
-                        rgb(75, 164, 131),
-                        rgb(93, 36, 245),
+                        rgb(209, 62, 100),
+                        rgb(204, 67, 100),
                         rgb(214, 56, 100),
                     ],
                 ],
@@ -2077,20 +2075,20 @@ mod tests {
                         rgb(115, 0, 0),
                         rgb(115, 0, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                     [
                         rgb(255, 140, 140),
                         rgb(255, 140, 140),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                 ],
@@ -2141,10 +2139,10 @@ mod tests {
                     rgb(255, 0, 0),
                     rgb(255, 0, 0),
                     rgb(255, 0, 0),
-                    rgb(0, 160, 0),
+                    rgb(245, 6, 0),
                     rgb(255, 0, 0),
-                    rgb(0, 160, 0),
-                    rgb(128, 128, 128),
+                    rgb(245, 6, 0),
+                    rgb(235, 13, 0),
                     rgb(255, 0, 0),
                 ]; 2],
             ),
@@ -2165,20 +2163,20 @@ mod tests {
                         rgb(0, 0, 0),
                         rgb(0, 0, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                     [
                         rgb(255, 255, 255),
                         rgb(255, 255, 255),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                 ],
@@ -2280,6 +2278,71 @@ mod tests {
                     })
                     .collect();
                 assert_eq!(fills, expected, "{name}, background {:?}", theme.chart.bg);
+            }
+        }
+    }
+
+    #[test]
+    fn period_colours_follow_the_letter_case() {
+        let red = Color32::from_rgb(255, 0, 0);
+        let green = Color32::from_rgb(0, 160, 0);
+        let config = TPOConfig {
+            tick_size: 1.0,
+            display_mode: TPODisplayMode::Blocks,
+            period_colors: [red, red, green, green],
+            show_poc: false,
+            show_initial_balance: false,
+            show_opening_range: false,
+            ..Default::default()
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            0.0,
+            400.0,
+            false,
+        );
+        // A to H, then A to Z and a to d: one row holding one block per period.
+        for (periods, uppercase) in [(8, 8), (30, 26)] {
+            let bars: Vec<_> = (0..periods)
+                .map(|i| {
+                    let time = chrono::DateTime::UNIX_EPOCH + Duration::minutes(i * 30);
+                    Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0)
+                })
+                .collect();
+            let profile = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into()).remove(0);
+            let mut expected = vec![red; uppercase];
+            expected.resize(periods as usize, green);
+            for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.begin_pass(egui::RawInput::default());
+                draw_session_profile(
+                    &ctx.layer_painter(egui::LayerId::background()),
+                    rect,
+                    &coords,
+                    &profile,
+                    &config,
+                    &TpoRenderConfig::default(),
+                    10.25,
+                    12.0,
+                    f32::INFINITY,
+                    0.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                );
+                let mut output = ctx.end_pass();
+                output.textures_delta.clear();
+                let fills: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Rect(r) => Some(r.fill),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(fills, expected, "{periods} periods on {:?}", theme.chart.bg);
             }
         }
     }
@@ -2765,6 +2828,10 @@ mod tests {
                         // TPODisplayMode::Both: a letter on its cell, dimmed or not.
                         let cell =
                             block_color(&config, &model, period, price, &profile, &theme.chart);
+                        assert!(
+                            contrast(cell, theme.chart.bg) >= 3.0,
+                            "{name}: {mode:?}, period {period}, price {price} block"
+                        );
                         for fill in [cell, theme.chart.bg.lerp_to_gamma(cell, 0.45)] {
                             let letter = cell_letter_color(fill, &theme.chart);
                             assert!(
@@ -3919,100 +3986,6 @@ mod tests {
     }
 
     #[test]
-    fn automatic_rows_are_whole_instrument_ticks() {
-        use crate::model::ChartTypeParams;
-        use crate::scales::{PriceRange, PriceTransform};
-        use chrono::TimeZone;
-        let start = Utc.with_ymd_and_hms(2024, 1, 2, 14, 30, 0).unwrap();
-        let tick_64 = 1.0 / 64.0;
-        // (tick, visible prices, half-hour periods as (low, high), letters as (period, row price),
-        // point of control with its TPOs)
-        type Case = (
-            f64,
-            (f64, f64),
-            Vec<(f64, f64)>,
-            Vec<(usize, f64)>,
-            (f64, usize),
-        );
-        let cases: [Case; 2] = [
-            // Six points fit rows of 0.2, which round up to one 0.25 tick.
-            (
-                0.25,
-                (5000.0, 5006.0),
-                vec![(5000.0, 5000.25), (5000.25, 5000.5)],
-                vec![(0, 5000.0), (0, 5000.25), (1, 5000.25), (1, 5000.5)],
-                (5000.25, 2),
-            ),
-            // 109.5 to 111 fits rows of 0.05, 3.2 ticks of 1/64, which round up to 4 (0.0625).
-            // Rows start at a multiple of 4 ticks, so the row of 110 holds ticks 0 to 3 above it
-            // and every letter is on it.
-            (
-                tick_64,
-                (109.5, 111.0),
-                vec![
-                    (110.0, 110.0 + 2.0 * tick_64),
-                    (110.0 + tick_64, 110.0 + 3.0 * tick_64),
-                    (110.0 + tick_64, 110.0 + tick_64),
-                ],
-                vec![(0, 110.0), (1, 110.0), (2, 110.0)],
-                (110.0, 3),
-            ),
-        ];
-        for (tick, (low, high), periods, letters, poc) in cases {
-            let map = PriceMap::new(
-                PriceTransform::default(),
-                PriceRange::new(low, high),
-                0.0,
-                400.0,
-                false,
-            );
-            let base = ChartTypeParams::default().tpo_config(Some(tick));
-            let config = row_config(&base, Some(tick), &map).unwrap();
-            let bars: Vec<_> = periods
-                .iter()
-                .enumerate()
-                .map(|(i, &(low, high))| {
-                    Bar::new(
-                        start + Duration::minutes(30 * i as i64),
-                        low,
-                        high,
-                        low,
-                        high,
-                        1.0,
-                    )
-                })
-                .collect();
-            let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min30.into())[0];
-            let mut placed: Vec<_> = profile
-                .letters
-                .iter()
-                .map(|letter| (letter.period_idx, letter.price))
-                .collect();
-            placed.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            assert_eq!(placed, letters, "tick {tick}");
-            assert_eq!(
-                (profile.poc_price, profile.tpo_count_at(profile.poc_price)),
-                poc,
-                "tick {tick}"
-            );
-        }
-        // 0.0006 fits rows of 2e-5, exactly 20 ticks of 1e-6, although the quotient computes as
-        // 20.000000000000004
-        let map = PriceMap::new(
-            PriceTransform::default(),
-            PriceRange::new(0.001, 0.0016),
-            0.0,
-            400.0,
-            false,
-        );
-        let base = ChartTypeParams::default().tpo_config(Some(1e-6));
-        assert_eq!(
-            row_config(&base, Some(1e-6), &map).unwrap().tick_size,
-            20.0 * 1e-6
-        );
-    }
-
-    #[test]
     fn unchanged_sessions_reuse_profiles_and_changed_inputs_rebuild() {
         let mut bars: Vec<_> = [0, 30, 1440]
             .into_iter()
@@ -4793,7 +4766,7 @@ mod tests {
 
     #[test]
     fn statistics_name_widened_row_prices_exactly() {
-        // One session whose automatic rows (0.025) are widened to 0.075, which is not exact in f64.
+        // One session whose rows of 0.025 are widened to 0.075, which is not exact in f64.
         let start = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
             .unwrap()
             .to_utc();
@@ -4830,7 +4803,7 @@ mod tests {
             ..Default::default()
         };
         let config = TPOConfig {
-            tick_size: 0.0,
+            tick_size: 0.025,
             show_statistics: true,
             statistics_rows,
             ..Default::default()

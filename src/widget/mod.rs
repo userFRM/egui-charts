@@ -57,7 +57,10 @@ use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
 #[cfg(feature = "ui")]
 pub(crate) use export::ColumnId;
-pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions, PixelDensity};
+pub use export::{
+    ChartImage, DataColumn, DataExportOptions, DataTable, DataValues, ExportError,
+    ImageExportOptions, PixelDensity,
+};
 pub use feed::checkpoint::{
     TradeReplayCheckpoint, TradeReplayCheckpointError, TradeReplayCheckpointPlan,
 };
@@ -156,6 +159,7 @@ pub use snapshot::{
 mod volume;
 pub use layout::{
     ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
+    ChartTabRequest, TabSplit, TabSplitSide,
 };
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
@@ -280,6 +284,8 @@ pub struct Chart {
     pub(crate) pending_scroll_time: Option<DateTime<Utc>>,
     /// Whether local navigation centres the first bar at or after the pending time.
     pub(crate) pending_scroll_next: bool,
+    /// Puts the bar for `pending_scroll_time` at the left edge instead of the centre.
+    pending_left_edge: Option<sync::LeftEdge>,
     /// A range set before the first layout and the bar spacing, right offset and tracking mode
     /// its last fit left, fitted again at the plot width until the first laid-out frame is shown.
     pending_visible_range: Option<(time_scale::PendingRange, (f32, f64, bool))>,
@@ -597,6 +603,10 @@ pub struct Chart {
     /// Set by the context menus while one is open, so the next frame draws no crosshair or
     /// tooltip under it. Cleared by every frame.
     pub(crate) menu_open: bool,
+    /// Whether this frame painted a marker in a plot under the pointer that stands in for the
+    /// hidden system pointer: the Dot crosshair's dot or the Magic cursor's wand. Cleared by
+    /// every frame.
+    pub(crate) pointer_dot: bool,
     /// Set by the context menus while they would answer a touch held on the price pane with
     /// a limit order, so the next frame's hold asks for one in place of its values. Cleared by
     /// every frame.
@@ -678,12 +688,14 @@ impl Chart {
         let precision = self
             .instrument()
             .and_then(crate::scales::instrument_price_precision);
-        let tick_size = self
-            .instrument()
-            .and_then(|instrument| instrument.tick_size);
+        let instrument = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.instrument.as_ref())
+            .or(self.legend_instrument.as_ref());
         let scale = self.state.price_scale_mut();
         scale.set_instrument_precision(precision);
-        scale.set_tick_size(tick_size);
+        scale.set_instrument_ticks(instrument);
     }
 
     /// The decimals of the main series' prices in the status line, the tooltip, the data window

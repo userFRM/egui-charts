@@ -2237,11 +2237,11 @@ mod tests {
             })
             .collect();
         study.calculate(&bars);
-        // Wilder RSI(2) price 25, streak 450/7, and return rank 100 give 1325/21.
-        assert!((study.values().value(0, 5).unwrap() - 1325.0 / 21.0).abs() < 1e-9);
+        // Wilder RSI(2) price 25, streak 1900/29, and return rank 100 give 5525/87.
+        assert!((study.values().value(0, 5).unwrap() - 5525.0 / 87.0).abs() < 1e-9);
         bars[5].close = 101.0;
         study.update(&bars, 5);
-        assert!((study.values().value(0, 5).unwrap() - 4225.0 / 54.0).abs() < 1e-9);
+        assert!((study.values().value(0, 5).unwrap() - 17425.0 / 222.0).abs() < 1e-9);
         bars.push(crate::model::Bar::new(
             chrono::DateTime::from_timestamp(360, 0).unwrap(),
             102.0,
@@ -2251,7 +2251,7 @@ mod tests {
             1.0,
         ));
         study.update(&bars, 6);
-        assert!((study.values().value(0, 6).unwrap() - 3675.0 / 52.0).abs() < 1e-9);
+        assert!((study.values().value(0, 6).unwrap() - 45025.0 / 636.0).abs() < 1e-9);
         let saved = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
         let mut loaded = serde_json::from_str::<StudyTemplate>(&saved)
             .unwrap()
@@ -2275,7 +2275,7 @@ mod tests {
             .set_input("plot_offset", InputValue::Integer(2))
             .unwrap();
         study.calculate(&bars);
-        assert!((study.plot_value(0, 7).unwrap() - 1325.0 / 21.0).abs() < 1e-9);
+        assert!((study.plot_value(0, 7).unwrap() - 5525.0 / 87.0).abs() < 1e-9);
         study.restore_settings(&after).unwrap();
         let mut hidden = edited.clone();
         hidden.fill_between_levels = false;
@@ -2937,9 +2937,9 @@ mod tests {
     }
 
     /// Reset inputs restores what a new study starts with: the host's default inputs for a study
-    /// that the factory created or restored under them, the constructor's otherwise. A study
-    /// output chosen as the source still makes the study follow the chart's interval when the
-    /// host's defaults calculate it on another one.
+    /// that the factory created or restored under them, the constructor's otherwise, also once
+    /// the study's edited inputs were applied. A study output chosen as the source still makes
+    /// the study follow the chart's interval when the host's defaults calculate it on another one.
     #[test]
     fn reset_inputs_restores_the_host_defaults() {
         use crate::studies::{IndicatorFactory, RSI, StudySource, StudyTemplate};
@@ -2979,14 +2979,19 @@ mod tests {
         let mut edited = host.create("SMA").unwrap();
         edited.set_input("period", InputValue::Length(20)).unwrap();
         let saved = StudyTemplate::from_study(edited.as_ref());
-        for (case, study, period) in [
+        let mut rate = IndicatorFactory::new().create("Trade Rate").unwrap();
+        // Applied earlier, then reopened: the dialog reads the study as edited.
+        rate.set_input("seconds", InputValue::Length(30)).unwrap();
+        for (case, study, input_id, expected) in [
             (
                 "constructor",
                 IndicatorFactory::new().create("SMA").unwrap(),
+                "period",
                 9,
             ),
-            ("host defaults", host.create("SMA").unwrap(), 5),
-            ("restored", saved.create_with(&host).unwrap(), 5),
+            ("host defaults", host.create("SMA").unwrap(), "period", 5),
+            ("restored", saved.create_with(&host).unwrap(), "period", 5),
+            ("edited order flow", rate, "seconds", 60),
         ] {
             let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
             let id = chart.add_indicator(study);
@@ -2995,11 +3000,15 @@ mod tests {
             dialog
                 .inputs
                 .iter_mut()
-                .find(|input| input.id == "period")
+                .find(|input| input.id == input_id)
                 .unwrap()
                 .value = InputValue::Length(20);
             let edit = apply(&mut dialog, true);
-            assert_eq!(input(&edit, "period"), InputValue::Length(period), "{case}");
+            assert_eq!(
+                input(&edit, input_id),
+                InputValue::Length(expected),
+                "{case}"
+            );
         }
 
         defaults.inputs.push((
@@ -3064,10 +3073,16 @@ mod tests {
     /// Plots that hold values keep all three. Missed Pivot Levels switched from swings to the
     /// three periods offers its new third plot the same way. The call and put walls of an options
     /// profile offer only their visibility, unticked on a new profile, and their colour.
+    /// Developing of a chart pattern study, which only styles the boundaries of unconfirmed
+    /// formations, is offered as a zone plot is, and each Analyst price forecast output only its
+    /// visibility and colour.
     #[test]
     fn plots_offer_only_the_styles_they_use() {
         use crate::data::{Datafeed, HistoryPage, HistoryRequest, OptionChain, OptionChainQuery};
-        use crate::studies::{AutoKeyLevels, Gaps, MissedPivots, OptionsVolumeProfile};
+        use crate::studies::{
+            AnalystPriceForecast, AutoKeyLevels, ChartPatterns, Gaps, MissedPivots,
+            OptionsVolumeProfile,
+        };
         use egui::accesskit::{Role, Toggled};
         use egui_kittest::Harness;
         use egui_kittest::kittest::{NodeT, Queryable};
@@ -3095,7 +3110,7 @@ mod tests {
             usize,
             &'static [&'static str],
         );
-        let rows: [Row; 6] = [
+        let rows: [Row; 8] = [
             (
                 Box::new(MissedPivots::default()),
                 None,
@@ -3160,6 +3175,26 @@ mod tests {
                 7,
                 15,
                 &["Call wall", "Put wall"],
+            ),
+            // Developing only styles the boundaries of formations not yet confirmed.
+            (
+                Box::new(ChartPatterns::all()),
+                None,
+                &["Bullish", "Bearish", "Developing"],
+                3,
+                2,
+                3,
+                &[],
+            ),
+            // The chart draws the targets dotted at a fixed width.
+            (
+                Box::new(AnalystPriceForecast::default()),
+                None,
+                &["Positive", "Negative"],
+                0,
+                0,
+                2,
+                &[],
             ),
         ];
         for (study, period, names, styled, valued, wells, off) in rows {

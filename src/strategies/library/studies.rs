@@ -125,7 +125,8 @@ impl StudyStrategy {
             return [false; 2];
         }
         match self.rule {
-            // A band crossing holds for one bar: its stop works through the next bar only.
+            // A band crossing holds for one bar: its entry works through the next bar only,
+            // which matters only while a fill delay holds it.
             Rule::Bollinger | Rule::DirectedBollinger => signals.map(|signal| signal.is_none()),
             // A Keltner stop works until the source falls back through the basis.
             Rule::Keltner => {
@@ -342,9 +343,10 @@ impl Strategy for StudyStrategy {
                 let stop = |column| value(column).map(OrderType::Stop);
                 let market = |condition: bool| condition.then_some(OrderType::Market);
                 match self.rule {
+                    // The crossed band is already passed, so the entry fills at the next price.
                     Rule::Bollinger | Rule::DirectedBollinger => [
-                        stop(2).filter(|_| crosses(&close, line(2), i)),
-                        stop(0).filter(|_| crosses(line(0), &close, i)),
+                        market(crosses(&close, line(2), i)),
+                        market(crosses(line(0), &close, i)),
                     ],
                     // The stops wait beyond the signal bar; `on_bar` adds the run's tick.
                     Rule::Keltner => [

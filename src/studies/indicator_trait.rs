@@ -17,6 +17,10 @@ pub(crate) trait ConcreteStudy {
     fn concrete_study(&self, cast: &dyn std::any::Any) -> Option<&dyn std::any::Any>
     where
         Self: 'static;
+    #[cfg(feature = "widget")]
+    fn concrete_study_mut(&mut self, cast: &dyn std::any::Any) -> Option<&mut dyn std::any::Any>
+    where
+        Self: 'static;
 }
 
 impl<T: ?Sized> ConcreteStudy for T {
@@ -26,6 +30,14 @@ impl<T: ?Sized> ConcreteStudy for T {
         Self: 'static,
     {
         cast.downcast_ref::<fn(&T) -> &dyn std::any::Any>()
+            .map(|cast| cast(self))
+    }
+    #[cfg(feature = "widget")]
+    fn concrete_study_mut(&mut self, cast: &dyn std::any::Any) -> Option<&mut dyn std::any::Any>
+    where
+        Self: 'static,
+    {
+        cast.downcast_ref::<fn(&mut T) -> &mut dyn std::any::Any>()
             .map(|cast| cast(self))
     }
 }
@@ -346,9 +358,10 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 
     /// Whether plot `line` holds per-bar values. Return false for a plot that only styles the
-    /// study's [`zones`](Self::zones): their edges are lines whatever the plot type, and a plot
-    /// without values puts no tag on the price scale and draws no latest value line, so the
-    /// settings dialog offers such a plot only its visibility, colour, width and line pattern.
+    /// study's [`zones`](Self::zones) or drawings, which the chart strokes as lines whatever the
+    /// plot type: a plot without values puts no tag on the price scale and draws no latest value
+    /// line, so the settings dialog offers such a plot only its visibility, colour, width and
+    /// line pattern.
     /// True by default.
     fn plot_holds_values(&self, line: usize) -> bool {
         let _ = line;
@@ -1202,11 +1215,16 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 }
 
-#[cfg(all(feature = "widget", feature = "studies"))]
+#[cfg(feature = "widget")]
 impl dyn Indicator {
+    #[cfg(feature = "studies")]
     pub(crate) fn concrete<T: 'static>(&self) -> Option<&T> {
         let cast: fn(&T) -> &dyn std::any::Any = |value| value;
         ConcreteStudy::concrete_study(self, &cast)?.downcast_ref()
+    }
+    pub(crate) fn concrete_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        let cast: fn(&mut T) -> &mut dyn std::any::Any = |value| value;
+        ConcreteStudy::concrete_study_mut(self, &cast)?.downcast_mut()
     }
 }
 

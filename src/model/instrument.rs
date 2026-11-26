@@ -180,6 +180,16 @@ pub struct Instrument {
     pub symbol_type: Option<SymbolType>,
     /// Smallest price increment: positive and finite. Consumers ignore any other value.
     pub tick_size: Option<f64>,
+    /// Coarser tick sizes from a price upwards, as `(price, tick)` pairs in rising price order.
+    /// Beside a `tick_size` of 0.01, `[(10.0, 0.02), (25.0, 0.05)]` moves prices in 0.01 below
+    /// 10, in 0.02 from 10 and in 0.05 from 25; each range's prices run from its price in steps
+    /// of its tick. The price axis, the Volume Footprint chart's rows, the order ticket, the
+    /// depth ladder, the chart's order lines and the chart menu's order rows use the tick of the
+    /// range a price lies in; other readers, such as studies, range intervals and the strategy
+    /// tester, keep `tick_size`. Empty, the default, keeps `tick_size` at every price. Ignored
+    /// without a valid `tick_size`, and as a whole when a price is not finite, a tick is not
+    /// positive and finite, or the prices do not rise.
+    pub tick_tiers: Vec<(f64, f64)>,
     /// Price represented by one pip: positive and finite. Unknown for instruments without pips.
     pub pip_size: Option<f64>,
     /// Decimals of price labels.
@@ -187,8 +197,9 @@ pub struct Instrument {
     /// The fraction prices are quoted in, such as thirty-seconds for `117'16`. A chart then
     /// labels its price scale, price tags, crosshair, legend, data window and chart data table
     /// in it, unless decimals or another fraction are chosen in the chart settings or on the
-    /// [`PriceScale`](crate::scales::PriceScale). Other readouts and the data exports keep
-    /// [`price_decimals`](Self::price_decimals). `None`, the default, writes decimals.
+    /// [`PriceScale`](crate::scales::PriceScale), and the symbol header writes its prices in it.
+    /// Other readouts and the data exports keep [`price_decimals`](Self::price_decimals). `None`,
+    /// the default, writes decimals.
     pub price_fraction: Option<PriceFraction>,
     /// Decimals of volume readouts, of studies in volume units without a precision chosen in
     /// their settings, of measured volume, of footprint volumes and of volume profile row values.
@@ -249,6 +260,7 @@ impl Instrument {
             identifiers: Vec::new(),
             symbol_type: None,
             tick_size: None,
+            tick_tiers: Vec::new(),
             pip_size: None,
             price_decimals: None,
             price_fraction: None,
@@ -362,6 +374,38 @@ impl Instrument {
         self
     }
 
+    /// Adds a range to [`tick_tiers`](Self::tick_tiers): from `price` upwards prices move in
+    /// `tick`, after the ranges already set.
+    ///
+    /// ```
+    /// use egui_charts::model::Instrument;
+    ///
+    /// let stock = Instrument::new("ABC")
+    ///     .with_tick_size(0.01)
+    ///     .with_tick_tier(10.0, 0.02)
+    ///     .with_tick_tier(25.0, 0.05);
+    /// assert_eq!(stock.tick_at(5.0), Some(0.01));
+    /// assert_eq!(stock.tick_at(20.0), Some(0.02));
+    /// assert_eq!(stock.tick_at(30.0), Some(0.05));
+    /// ```
+    pub fn with_tick_tier(mut self, price: f64, tick: f64) -> Self {
+        self.tick_tiers.push((price, tick));
+        self
+    }
+
+    /// The tick of the range `price` lies in: [`tick_size`](Self::tick_size), or a coarser one of
+    /// [`tick_tiers`](Self::tick_tiers). `None` without a valid tick size.
+    pub fn tick_at(&self, price: f64) -> Option<f64> {
+        let tick = self
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0)?;
+        Some(tick_in_tiers(
+            tick,
+            valid_tick_tiers(&self.tick_tiers),
+            price,
+        ))
+    }
+
     /// Sets [`pip_size`](Self::pip_size).
     pub fn with_pip_size(mut self, pip_size: f64) -> Self {
         self.pip_size = Some(pip_size);
@@ -458,6 +502,25 @@ impl Instrument {
         self.profile_resolutions = resolutions.into_iter().collect();
         self
     }
+}
+
+/// `tiers` when their prices are finite and rising and their ticks positive and finite, else
+/// none: see [`Instrument::tick_tiers`].
+pub(crate) fn valid_tick_tiers(tiers: &[(f64, f64)]) -> &[(f64, f64)] {
+    let valid = tiers
+        .iter()
+        .all(|&(from, tick)| from.is_finite() && tick.is_finite() && tick > 0.0)
+        && tiers.windows(2).all(|pair| pair[0].0 < pair[1].0);
+    if valid { tiers } else { &[] }
+}
+
+/// The tick of the range of valid `tiers` that `price` lies in, else `tick`.
+pub(crate) fn tick_in_tiers(tick: f64, tiers: &[(f64, f64)], price: f64) -> f64 {
+    tiers
+        .iter()
+        .rev()
+        .find(|(from, _)| price >= *from)
+        .map_or(tick, |&(_, tier)| tier)
 }
 
 /// Whether two currency codes name the same currency. A code that mixes upper and lower case

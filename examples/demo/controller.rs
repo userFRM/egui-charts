@@ -12,6 +12,8 @@ mod annotations;
 mod audio;
 #[path = "commands.rs"]
 mod commands;
+#[path = "drawing_tools.rs"]
+mod drawing_tools;
 #[path = "formatting.rs"]
 mod formatting;
 #[path = "ideas.rs"]
@@ -475,6 +477,8 @@ pub struct DemoApp {
     symbol_details: Box<SymbolDetailsPanel>,
     /// The chart symbol's financials, shown in place of the chart while they are open.
     financials: Option<(String, egui_charts::ui::financials::FinancialsPanel)>,
+    /// The symbol details are shown in place of the chart, chosen with their Expand button.
+    details_expanded: bool,
     // Synthetic highlights and headlines from the live feed.
     highlights: NewsPanel,
     news: NewsPanel,
@@ -581,6 +585,7 @@ impl DemoApp {
         let live = Arc::new(LiveFeed::new(symbol, now));
         live.set_paused(paused);
         let quotes = Arc::new(feeds::DemoQuotes::new(live.clone()));
+        let drawing_tools = drawing_tools::registry();
         let mut chart = Box::new(
             egui_charts::ChartBuilder::new()
                 .with_feed(live.clone())
@@ -591,6 +596,7 @@ impl DemoApp {
                 .with_theme(theme.clone())
                 .with_visible_candles(0)
                 .with_chart_options(options)
+                .with_drawing_registry(drawing_tools.clone())
                 .build(),
         );
         chart.config_mut().volume_height_fraction = 0.25;
@@ -721,6 +727,7 @@ impl DemoApp {
                     .storage
                     .and_then(|storage| eframe::get_value(storage, "drawing_toolbar_preferences"))
                     .unwrap_or_default();
+                toolbar.registry = drawing_tools;
                 toolbar
             },
             selection_toolbar: FloatingSelectionToolbar::new(),
@@ -870,6 +877,7 @@ impl DemoApp {
                 .unwrap_or_default(),
             symbol_details: Box::new(SymbolDetailsPanel::new()),
             financials: None,
+            details_expanded: false,
             highlights: NewsPanel::highlights(),
             news: NewsPanel::new(),
             news_hour: None,
@@ -947,6 +955,8 @@ impl DemoApp {
             annotation_editor: false,
             annotation_series: SeriesId::MAIN,
         });
+        // The demo applies the requests of the tab strip's controls.
+        app.layout.tab_controls = true;
         app.settings_dialog
             .templates
             .set_storage(app.storage.clone());
@@ -1011,6 +1021,16 @@ impl DemoApp {
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.storage.clone());
+        app.symbol_details
+            .set_detail_sections(egui_charts::ui::widget_bar::DetailSection::ALL);
+        app.watchlist.set_add_note_visible(true);
+        app.menus.set_add_note_visible(true);
+        if let Some(hidden) = cc
+            .storage
+            .and_then(|storage| eframe::get_value::<Vec<String>>(storage, "symbol_details_hidden"))
+        {
+            app.symbol_details.set_hidden_sections(hidden);
+        }
         app.top_toolbar.layout_menu.set_storage(app.storage.clone());
         app.top_toolbar.layout_menu.set_sharing(sharing);
         app.highlights.set_feed(app.live.clone());
@@ -1849,7 +1869,7 @@ impl DemoApp {
         let target = match config.format {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
-            ExportFormat::Csv => return self.export_csv(save_path),
+            ExportFormat::Csv => return self.export_csv(&config.data, save_path),
             ExportFormat::Svg => {
                 return self.export_svg(ctx, &config.image, config.scope, save_path);
             }
@@ -1858,8 +1878,12 @@ impl DemoApp {
         ctx.request_repaint();
     }
 
-    fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
-        let out = match self.chart.export_csv() {
+    fn export_csv(
+        &mut self,
+        options: &egui_charts::widget::DataExportOptions,
+        save_path: Option<std::path::PathBuf>,
+    ) {
+        let out = match self.chart.export_csv_with(options) {
             Ok(csv) => csv,
             Err(error) => return self.export_failed(save_path.is_some(), error.to_string()),
         };
@@ -1924,6 +1948,11 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "event_visibility", self.chart.event_visibility());
         eframe::set_value(storage, "open_panel", &self.open_panel);
         eframe::set_value(storage, "depth_panel", &self.depth);
+        eframe::set_value(
+            storage,
+            "symbol_details_hidden",
+            &self.symbol_details.hidden_sections(),
+        );
         eframe::set_value(
             storage,
             "drawing_defaults",
@@ -2033,11 +2062,12 @@ impl eframe::App for DemoApp {
         let detectors = self.live.detectors();
         let mut settings = detectors.settings();
         let before = settings.clone();
-        // Footprint alerts read the imbalances the active chart shows.
+        // Footprint alerts read the imbalances and rows the active chart shows.
+        let rows = self.chart.footprint_row_ticks();
         settings
             .footprint
             .rule
-            .follow_chart(self.chart.chart_type_params());
+            .follow_chart(self.chart.chart_type_params(), rows);
         if settings != before {
             detectors.set_settings(settings);
         }
@@ -2612,7 +2642,10 @@ impl DemoApp {
             }
             TopToolbarAction::Undo | TopToolbarAction::Redo => {}
             TopToolbarAction::AddIndicator(name) => {
-                if let Some(study) = self.indicator_dialog.factory().create(&name) {
+                // A study with symbols to choose opens the dialog's prompt and arrives from `show`.
+                if let Some(IndicatorDialogAction::AddIndicator(study)) =
+                    self.indicator_dialog.add(&name)
+                {
                     self.chart.begin_user_action();
                     self.chart.add_indicator(study);
                     self.chart.end_user_action();
@@ -2877,6 +2910,10 @@ impl DemoApp {
             DrawingToolbarAction::SelectTool(tool) => {
                 dm.set_active_tool(Some(tool));
             }
+            // The toolbar offers only registered tools that are enabled.
+            DrawingToolbarAction::SelectCustomTool(id) => {
+                let _ = dm.set_custom_tool(&id);
+            }
             DrawingToolbarAction::ToggleMagnet => {
                 dm.options.magnet_mode = !dm.options.magnet_mode;
                 dm.options.strong_magnet = self.drawing_toolbar.state.magnet_type
@@ -3054,7 +3091,8 @@ impl DemoApp {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
                 SidePanel::Watchlist => {
-                    if ui.available_height() >= 400.0 {
+                    // The expanded details draw in place of the chart instead.
+                    if ui.available_height() >= 400.0 && !self.details_expanded {
                         egui::Panel::bottom("symbol_details")
                             .resizable(true)
                             .default_size(ui.available_height() / 2.0)
@@ -3342,6 +3380,8 @@ impl DemoApp {
         if let Some(own) = &self.own_data {
             let (symbol, timeframe) = (self.chart.symbol(), self.chart.timeframe());
             let tape = own.feed.drain_tape(symbol, timeframe);
+            // The details show synthetic figures, so they leave the chart's place.
+            self.details_expanded = false;
             self.feed_time_and_sales(ctx, tape);
             return;
         }
@@ -3422,10 +3462,28 @@ impl DemoApp {
                 MarketDetailRequest::Seasonality(symbol) => self
                     .symbol_details
                     .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(&bars))),
+                MarketDetailRequest::Section(section, symbol) => self
+                    .symbol_details
+                    .set_detail_rows(&symbol, section, feeds::detail_rows(section, &symbol)),
                 _ => {}
             }
         }
+        if let Some(url) = self
+            .symbol_details
+            .take_opened_row()
+            .and_then(|row| row.url)
+        {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
         self.feed_financials();
+        if self.symbol_details.take_expand_request().is_some() {
+            self.details_expanded = true;
+            self.financials = None;
+            self.open_panel = None;
+        }
+        // Hidden before the larger view first draws, so it never offers itself.
+        self.symbol_details
+            .set_expand_visible(!self.details_expanded);
         self.highlights.set_symbol(&chart_symbol);
         self.news.set_symbol(&chart_symbol);
         let hour = now.timestamp().div_euclid(3600);
@@ -3497,9 +3555,23 @@ impl DemoApp {
         }
     }
 
+    /// Shows the notes of `symbol` with their field focused, beneath the watchlist or in the
+    /// expanded details, and keeps the chart on its symbol.
+    fn add_note(&mut self, symbol: &str) {
+        if self.synthetic_only("Symbol notes") {
+            return;
+        }
+        self.financials = None;
+        if !self.details_expanded {
+            self.open_panel = Some(SidePanel::Watchlist);
+        }
+        self.symbol_details.focus_notes(symbol);
+    }
+
     fn show_watchlist(&mut self, ui: &mut egui::Ui) {
         match self.watchlist.show(ui) {
             WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
             WatchlistAction::AddSymbol => {
                 self.watchlist_search = true;
                 self.symbol_search.open();
@@ -3564,6 +3636,7 @@ impl DemoApp {
             .show(ctx, |ui| action = self.watchlist.show_wide(ui, &details));
         match action {
             WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
             WatchlistAction::CompactView => open = false,
             _ => {}
         }
@@ -3917,6 +3990,40 @@ impl DemoApp {
             }
             return;
         }
+        if self.details_expanded {
+            self.export_dialog.set_chart_size(None);
+            self.export_dialog.set_layout_size(None);
+            let frame = panel_frame(bg).corner_radius(4).inner_margin(16);
+            let back = egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                // A centred column stays readable where rows across the whole chart area do not.
+                let width = ui.available_width().min(760.0);
+                ui.horizontal_top(|ui| {
+                    ui.add_space((ui.available_width() - width) / 2.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        let back = ui
+                            .horizontal(|ui| {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| ui.button("Back to chart").clicked(),
+                                )
+                                .inner
+                            })
+                            .inner;
+                        self.symbol_details.show(ui);
+                        back
+                    })
+                    .inner
+                })
+                .inner
+            });
+            let action = self.symbol_details.take_news_action();
+            self.handle_news(ui.ctx(), action);
+            if back.inner {
+                self.details_expanded = false;
+            }
+            return;
+        }
         let chart = egui::CentralPanel::default()
             .frame(panel_frame(bg).corner_radius(4))
             .show(ui, |ui| {
@@ -3985,6 +4092,9 @@ impl DemoApp {
                         let (_, adjusted) = extra.live.view(false);
                         load_view(&mut extra.chart, &extra.live, session, adjusted);
                     }
+                }
+                for request in self.layout.take_tab_requests() {
+                    self.apply_tab_request(request);
                 }
                 self.highlight_strategy_trade(ui);
                 let mapping = self.chart.get_chart_mapping();
@@ -4356,6 +4466,10 @@ impl DemoApp {
                         .format(price),
                 );
             }
+            ChartContextAction::Chart(ContextMenuAction::AddNote(symbol))
+            | ChartContextAction::Series(SeriesContextMenuAction::AddNote(symbol)) => {
+                self.add_note(&symbol)
+            }
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
             ChartContextAction::Study { id, action } => self.handle_study_context(ctx, id, action),
@@ -4439,7 +4553,7 @@ impl DemoApp {
             }
             ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
             ContextMenuAction::OpenDataTable => self.data_table.open(),
-            ContextMenuAction::ExportCsv => self.export_csv(None),
+            ContextMenuAction::ExportCsv => self.export_csv(&Default::default(), None),
             ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
         }
@@ -4839,6 +4953,10 @@ impl DemoApp {
                     }
                 }
             }
+            A::AddNote => {
+                let symbol = self.chart.symbol().to_owned();
+                self.add_note(&symbol);
+            }
             A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
                 let step = if action == A::NextWatchlistSymbol {
                     self.watchlist.select_next_symbol()
@@ -5074,11 +5192,15 @@ fn browser_download(bytes: &[u8], path: &std::path::Path) -> Result<(), String> 
 }
 
 /// Whether the layout paints the extra chart at `index`: inside the arrangement, and among tabs
-/// only when detached.
+/// only when detached or while a tab is split beside another.
 fn slot_shown(layout: &ChartLayout, active: usize, index: usize) -> bool {
     let slot = if index >= active { index + 1 } else { index };
+    // shortcut: a split runs every tab's feed, as the layout does not name the tab beside the
+    // split one; name it if many tabs with costly feeds make a split slow.
     slot < layout.mode.chart_count()
-        && (layout.mode != ChartLayoutMode::Tabs || layout.is_detached(slot))
+        && (layout.mode != ChartLayoutMode::Tabs
+            || layout.is_detached(slot)
+            || layout.tab_split().is_some())
 }
 
 fn panel_frame(bg: egui::Color32) -> egui::Frame {
@@ -5571,8 +5693,10 @@ mod tests {
         h.get_by_label(&format!("{} UTC · Demo Wire", time.format("%b %-d, %H:%M")));
     }
 
-    /// The watchlist's details use the chart's bars and feed, open headline links and honour
-    /// the three section choices through the demo's menus and action handler.
+    /// The watchlist's details use the chart's bars and feed, list the demo's detail sections,
+    /// open headline and document links and honour the three section choices through the demo's
+    /// menus and action handler, and the sections hidden there stay hidden after a restart on
+    /// the same storage. Expand shows the details in place of the chart until Back to chart.
     #[test]
     fn watchlist_details_sections_reach_the_demo() {
         use eframe::App as _;
@@ -5594,7 +5718,7 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(560.0, 3600.0),
+                        egui::vec2(560.0, 6000.0),
                     )),
                     events,
                     ..Default::default()
@@ -5678,6 +5802,13 @@ mod tests {
             "Earnings",
             "Ex-dividend",
             "News",
+            "Analyst estimates",
+            "Options",
+            "Earnings calls",
+            "Documents",
+            "Fund holdings",
+            "Credit ratings",
+            "Bonds",
         ] {
             assert!(shown.iter().any(|text| text == title), "{title}: {shown:?}");
         }
@@ -5701,6 +5832,47 @@ mod tests {
             matches!(command, egui::OutputCommand::OpenUrl(url) if Some(&url.url) == stories[0].url.as_ref())
         }));
         output.drop_without_applying_deltas();
+        // The demo opens a clicked row's link when it next answers the panel.
+        click(&mut app, Role::Link, "Annual report 2025").drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        assert!(output.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::OpenUrl(url)
+                if url.url == "https://demo.invalid/documents/STOCKA/annual-2025")
+        }));
+        output.drop_without_applying_deltas();
+
+        // Expand shows the details in place of the chart, without its own button, until Back.
+        click(&mut app, Role::Button, "Expand").drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        let offered = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .any(|(_, node)| node.label() == Some("Expand"));
+        output.drop_without_applying_deltas();
+        assert!(app.details_expanded);
+        assert!(app.open_panel.is_none(), "the details leave the side panel");
+        assert!(!offered, "the larger view offers no Expand");
+        for text in ["Back to chart", "Technicals"] {
+            assert!(shown.iter().any(|shown| shown == text), "{text}: {shown:?}");
+        }
+        click(&mut app, Role::Button, "Back to chart").drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        assert!(!app.details_expanded);
+        assert!(
+            !shown.iter().any(|text| text == "Back to chart"),
+            "{shown:?}"
+        );
+        app.open_panel = Some(SidePanel::Watchlist);
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
         click(&mut app, Role::Button, "Layout").drop_without_applying_deltas();
         for title in ["Technicals", "Upcoming events", "News"] {
             click(&mut app, Role::CheckBox, title).drop_without_applying_deltas();
@@ -5715,6 +5887,136 @@ mod tests {
                 "{title}: {shown:?}"
             );
         }
+
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut app = DemoApp::new_at(&cc, chrono::Utc::now(), true);
+        assert!(app.open_panel == Some(SidePanel::Watchlist));
+        settle(&mut app, &ctx);
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        assert!(shown.iter().any(|text| text == "Volume"), "{shown:?}");
+        for title in ["Technicals", "Upcoming events", "News"] {
+            assert!(
+                !shown.iter().any(|text| text == title),
+                "{title}: {shown:?}"
+            );
+        }
+        assert_eq!(
+            app.symbol_details.hidden_sections(),
+            ["Technicals", "Upcoming events", "News"]
+        );
+    }
+
+    /// Notes open from the chart menu, a watchlist row's menu, Alt+N and All notes, each on its
+    /// symbol with the field focused, while the chart keeps its symbol. A regression drops a
+    /// route, leaves the field unfocused or types into another symbol's notes.
+    #[test]
+    fn notes_open_from_the_menus_the_key_and_all_notes() {
+        use eframe::App;
+        use egui::{Event, Key, Modifiers, PointerButton};
+        let ctx = egui::Context::default();
+        // The demo builds its bars from the clock; a fixed time gives every run the same chart.
+        let now = "2026-11-22T02:05:02Z".parse().unwrap();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new_at(&cc, now, true);
+        app.open_catalog_symbol("STOCKA");
+        settle(&mut app, &ctx);
+        app.open_panel = Some(SidePanel::Watchlist);
+        // Tall enough for every details section above the notes.
+        let size = egui::vec2(1440.0, 6000.0);
+        let frame = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            })
+        };
+        let press = |app: &mut DemoApp, pos, button| {
+            frame(app, vec![Event::PointerMoved(pos)]);
+            frame(
+                app,
+                [true, false]
+                    .map(|pressed| Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    })
+                    .to_vec(),
+            );
+        };
+        // The topmost painted `text`, so a menu's row wins over the text beneath it.
+        let click_text = |app: &mut DemoApp, text: &str, button| {
+            let shown = frame(app, vec![]);
+            let pos = shown
+                .iter()
+                .rev()
+                .find(|(shown, _)| shown == text)
+                .unwrap_or_else(|| panic!("missing {text}: {shown:?}"))
+                .1
+                .center();
+            press(app, pos, button);
+        };
+        // The text typed once the field has its focus, and the painted notes after it.
+        let typed = |app: &mut DemoApp, text: &str| {
+            frame(app, vec![]);
+            frame(app, vec![]);
+            frame(app, vec![Event::Text(text.into())]);
+            frame(app, vec![])
+        };
+        let shows = |shown: &[(String, egui::Rect)], words: &[&str]| {
+            shown
+                .iter()
+                .any(|(text, _)| words.iter().all(|word| text.contains(word)))
+        };
+
+        frame(&mut app, vec![]);
+        let chart = app.chart.get_chart_mapping().rect.center();
+        press(&mut app, chart, PointerButton::Secondary);
+        click_text(&mut app, "Add note on STOCKA…", PointerButton::Primary);
+        let shown = typed(&mut app, "chart note");
+        assert!(shows(&shown, &["chart note"]), "{shown:?}");
+
+        click_text(&mut app, "STOCKB", PointerButton::Secondary);
+        click_text(&mut app, "Add note", PointerButton::Primary);
+        let shown = typed(&mut app, "row note");
+        assert!(shows(&shown, &["row note"]), "{shown:?}");
+        assert!(!shows(&shown, &["chart note"]), "{shown:?}");
+
+        // Clicks this soon after the menu's would be a double click on the chart.
+        for _ in 0..20 {
+            frame(&mut app, vec![]);
+        }
+        press(&mut app, chart, PointerButton::Primary);
+        let key = |pressed| Event::Key {
+            key: Key::N,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::ALT,
+        };
+        frame(
+            &mut app,
+            vec![
+                Event::ModifiersChanged(Modifiers::ALT),
+                key(true),
+                key(false),
+            ],
+        );
+        let shown = typed(&mut app, "key");
+        assert!(shows(&shown, &["chart note", "key"]), "{shown:?}");
+
+        click_text(&mut app, "All notes", PointerButton::Primary);
+        click_text(&mut app, "STOCKB", PointerButton::Primary);
+        let shown = frame(&mut app, vec![]);
+        assert!(shows(&shown, &["row note"]), "{shown:?}");
+        assert_eq!(app.chart.symbol(), "STOCKA");
+        assert!(app.open_panel == Some(SidePanel::Watchlist));
     }
 
     /// One frame of the demo's dialogs with `events`, returning its AccessKit nodes.
@@ -8786,17 +9088,21 @@ mod tests {
         params.footprint_diagonal = false;
         params.footprint_imbalance_min_volume = 5.0;
         params.footprint_stack = 2;
+        params.footprint_row_ticks = 2;
+        app.chart.set_chart_type(ChartType::VolumeFootprint);
         app.chart.set_chart_type_params(params);
         settle(&mut app, &ctx);
+        assert_eq!(app.chart.footprint_row_ticks(), 2);
         let rule = app.live.detectors().settings().footprint.rule;
         assert_eq!(
             (
                 rule.imbalance_ratio,
                 rule.diagonal,
                 rule.imbalance_min_volume,
-                rule.stack
+                rule.stack,
+                rule.row_ticks
             ),
-            (4.0, false, 5.0, 2)
+            (4.0, false, 5.0, 2, 2)
         );
     }
 
@@ -10755,6 +11061,93 @@ mod tests {
         assert!(!config.shade_overnight && config.shade_postmarket);
     }
 
+    /// The demo's chart settings offer the switch that keeps the left edge, and with it on an
+    /// interval change keeps the bar at the left edge of the demo chart in place.
+    #[test]
+    fn chart_settings_keep_left_edge_switch_reaches_the_demo_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.open_chart_settings_dialog();
+        let size = egui::vec2(1440.0, 900.0);
+        let show = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+        };
+        // Above the fixed footer of the dialog, which the last row of the tab scrolls down to.
+        let find = |app: &mut DemoApp, label: &str| {
+            show(app, vec![])
+                .into_iter()
+                .find(|(text, rect)| text == label && (180.0..790.0).contains(&rect.center().y))
+                .map(|(_, rect)| rect.center())
+        };
+        show(&mut app, vec![]);
+        let tab = find(&mut app, "Scales and lines").expect("the Scales and lines tab");
+        ui_click(&ctx, size, tab, |ui| app.show_dialogs(ui.ctx()));
+        // The Time scale section ends the tab, below the fold.
+        let switch = (0..20)
+            .find_map(|_| {
+                for _ in 0..5 {
+                    show(&mut app, vec![]);
+                }
+                let found = find(&mut app, "Keep left edge on interval change");
+                if found.is_none() {
+                    show(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(egui::pos2(900.0, 450.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                source: egui::MouseWheelSource::Wheel,
+                                phase: egui::TouchPhase::Move,
+                                delta: egui::vec2(0.0, -100.0),
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                }
+                found
+            })
+            .expect("the switch is offered");
+        ui_click(&ctx, size, switch, |ui| app.show_dialogs(ui.ctx()));
+        let ok = show(&mut app, vec![])
+            .into_iter()
+            .find(|(text, _)| text == "Ok")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+        assert!(
+            app.chart
+                .chart_options()
+                .time_scale
+                .keep_left_edge_on_interval_change
+        );
+        // The open of the bar at the left edge and of the bar after it.
+        let left = |app: &DemoApp| {
+            let index = app.chart.visible_logical_range().unwrap().left.floor() as usize;
+            (
+                app.chart.time_at_index(index).unwrap(),
+                app.chart.time_at_index(index + 1).unwrap(),
+            )
+        };
+        let middle = (app.chart.bars(SeriesId::MAIN).len() / 2) as f32;
+        app.chart
+            .set_visible_logical_range(egui_charts::model::LogicalRange::new(
+                middle + 0.25,
+                middle + 99.25,
+            ));
+        settle(&mut app, &ctx);
+        let (kept, _) = left(&app);
+        app.switch_timeframe(Timeframe::Hour1);
+        settle(&mut app, &ctx);
+        let (open, next) = left(&app);
+        assert!(open <= kept && kept < next, "{open} {kept} {next}");
+    }
+
     /// The settings offer the futures data choices on the demo's futures contracts only;
     /// a changed choice reloads the bars, while Ok without a change keeps them.
     #[test]
@@ -11242,6 +11635,33 @@ mod tests {
                 assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, before + 1);
             }
         }
+    }
+
+    /// The dialog's CSV choices reach the file the demo writes.
+    #[test]
+    fn csv_export_follows_the_dialog_data_options() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let path = std::env::temp_dir().join(format!(
+            "egui-charts-export-test-{}.csv",
+            std::process::id()
+        ));
+        let mut data = egui_charts::widget::DataExportOptions::default();
+        data.include_main_series = false;
+        app.run_export(
+            &ctx,
+            egui_charts::ui::export::ExportConfig {
+                format: ExportFormat::Csv,
+                data,
+                ..Default::default()
+            },
+            Some(path.clone()),
+        );
+        let csv = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let header = csv.lines().next().unwrap();
+        assert!(header.starts_with("time"), "{header}");
+        assert!(!header.contains("open"), "{header}");
     }
 
     #[test]
@@ -12360,8 +12780,8 @@ mod tests {
             (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
-            (Tool::FixedRangeVolumeProfile, "Rows"),
-            (Tool::AnchoredVolumeProfile, "Rows"),
+            (Tool::FixedRangeVolumeProfile, "Developing POC"),
+            (Tool::AnchoredVolumeProfile, "Developing POC"),
             (Tool::RegressionTrend, "Upper deviation"),
             (Tool::BarsPattern, "Mirrored"),
         ] {
@@ -13004,6 +13424,64 @@ mod tests {
         app.drawing_toolbar.state.clear_selection();
         app.handle_drawing_toolbar(DrawingToolbarAction::SetCursorType(CursorType::Dot));
         assert!(!app.chart.is_zoom_mode_active());
+    }
+
+    /// The Magic cursor picked in the drawing toolbar hides the pointer over the plot for its
+    /// wand, and a click there throws a burst of emoji that is gone three seconds later.
+    #[test]
+    fn magic_cursor_throws_emoji_on_a_plot_click() {
+        use eframe::App;
+        use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.handle_drawing_toolbar(DrawingToolbarAction::SetCursorType(CursorType::Magic));
+        settle(&mut app, &ctx);
+        let at = app.chart.get_rendered_price_rect().center();
+        assert!(
+            app.chart.drawings().hit_test(at).is_none(),
+            "a drawing at {at:?}"
+        );
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let mut frame = |time: f64, events: Vec<egui::Event>| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            // The Magic cursor's emoji all lie from U+1F300 on.
+            let emoji = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text().chars().next().is_some_and(|c| c >= '\u{1F300}'))
+                })
+                .count();
+            let cursor = output.platform_output.cursor_icon;
+            output.drop_without_applying_deltas();
+            (emoji, cursor)
+        };
+        frame(10.0, vec![egui::Event::PointerMoved(at)]);
+        assert_eq!(
+            frame(10.1, vec![egui::Event::PointerMoved(at)]),
+            (0, egui::CursorIcon::None)
+        );
+        frame(10.2, vec![button(true)]);
+        assert_eq!(frame(10.25, vec![button(false)]).0, 40);
+        assert_eq!(frame(13.3, vec![]).0, 0);
     }
 
     #[test]
@@ -15172,6 +15650,50 @@ mod tests {
             app.alerts.poll(&ctx, &mut app.toasts);
             assert_eq!(app.alerts.log().len(), 2, "period {period}");
         }
+    }
+
+    /// Buy and Sell Volume on the demo chart offers its buy volume, sell volume and delta as
+    /// alert sources, read from the demo's sided executions (#4262): on a bar with executions,
+    /// buy minus sell volume is the delta.
+    #[test]
+    fn buy_and_sell_volume_outputs_are_demo_alert_sources() {
+        use egui_charts::studies::IndicatorFactory;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T17:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        let study = app.chart.add_indicator(
+            IndicatorFactory::new()
+                .create("Buy and Sell Volume")
+                .unwrap(),
+        );
+        settle(&mut app, &ctx);
+        let (sources, names): (Vec<_>, Vec<_>) = (app.chart.alert_sources().into_iter())
+            .filter(|(source, _)| {
+                matches!(source, AlertSource::Study { id, .. } if *id == study.0.to_string())
+            })
+            .map(|(source, name)| (source, name.to_string()))
+            .unzip();
+        assert_eq!(
+            names,
+            [
+                "Buy and Sell Volume: Buy volume (lots)",
+                "Buy and Sell Volume: Sell volume (lots)",
+                "Buy and Sell Volume: Delta (lots)",
+            ]
+        );
+        let traded = (0..app.chart.bars(SeriesId::MAIN).len()).find_map(|bar| {
+            let [buy, sell, delta] = [0, 1, 2].map(|i| app.chart.alert_value(&sources[i], bar));
+            Some((buy?, sell?, delta?)).filter(|(buy, sell, _)| buy + sell > 0.0)
+        });
+        let (buy, sell, delta) = traded.expect("a bar with executions");
+        assert!(
+            (buy - sell - delta).abs() <= 1e-9 * (buy + sell),
+            "{buy} - {sell} = {delta}"
+        );
     }
 
     /// An alert created with the dialog's defaults requests the alert sound chosen in the chart

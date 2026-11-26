@@ -56,6 +56,8 @@ pub enum MenuRowId {
     AddToWatchlist,
     /// The row of the list at this index of [`ChartMenus::set_watchlists`](super::ChartMenus::set_watchlists).
     Watchlist(usize),
+    /// "Add note" in the chart and series menus.
+    AddNote,
     /// The limit order row of the chart menu.
     LimitOrder,
     /// The stop order row of the chart menu.

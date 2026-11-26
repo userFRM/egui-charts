@@ -12,7 +12,7 @@
 use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::ui_kit::buttons::Button;
-use crate::ui_kit::dialog::{DialogFrame, dialog_header};
+use crate::ui_kit::dialog::{DialogFrame, dialog_header, is_top_dialog};
 use crate::widget::{Chart, ColumnId, DataTable, SeriesId};
 use chrono::{DateTime, Utc};
 use egui::{Align2, Context, FontId, Rect, ScrollArea, Sense, Ui, vec2};
@@ -142,7 +142,11 @@ impl DataTableDialog {
             .as_ref()
             .is_none_or(|(cached, ..)| *cached != source)
         {
-            let (mut table, columns) = chart.data_table_with_columns(true);
+            let (mut table, columns) =
+                chart.data_table_with_columns(&crate::widget::DataExportOptions {
+                    values: crate::widget::DataValues::Displayed,
+                    ..Default::default()
+                });
             self.column_ids = columns;
             table.rows.reverse();
             // shortcut: counts characters, which monospace digits share; measure every cell if
@@ -217,18 +221,8 @@ impl DataTableDialog {
                         if text.starts_with(|c: char| !c.is_control() && !c.is_whitespace()))
                 })
             })
-            && ctx.memory(|m| {
-                // egui keeps closed areas in its z-order. They must not block the table below.
-                m.top_modal_layer().is_none()
-                    && m.layer_ids()
-                        .filter(|id| {
-                            id.order == egui::Order::Middle
-                                && m.areas().is_visible(id)
-                                && m.areas().parent_layer(*id).is_none()
-                        })
-                        .last()
-                        == layer
-            })
+            && ctx.memory(|m| m.top_modal_layer().is_none())
+            && layer.is_some_and(|layer| is_top_dialog(ctx, layer))
             && let egui::Event::Text(query) = ctx.input_mut(|input| input.events.remove(at))
         {
             action = DataTableAction::SearchSymbol(query);
@@ -267,7 +261,7 @@ impl DataTableDialog {
             }
             if Button::new("Export CSV").show(ui).clicked() {
                 // The file keeps plain numbers, as `Chart::export_csv` writes them.
-                let mut plain = chart.data_table_with_columns(false).0;
+                let mut plain = chart.data_table();
                 plain.rows.reverse();
                 if let Ok(csv) = plain.csv(&shown) {
                     action = DataTableAction::Export(csv);
@@ -1101,10 +1095,12 @@ mod tests {
     }
 
     /// The open table shows a new last bar of an added series, which leaves the chart's revisions
-    /// as they are. A column turned off for an added series stays off when the chart restores its
-    /// own layout, which adds the series again under a new id.
+    /// as they are. Switched to candles, a series lists its open, high, low and close, and the
+    /// open table follows the switch and a last bar that moves only its high; the Columns menu
+    /// turns each of the four off on its own. A column turned off for an added series stays off
+    /// when the chart restores its own layout, which adds the series again under a new id.
     #[test]
-    fn added_series_column_follows_its_last_bar_and_keeps_its_choice_through_a_restore() {
+    fn added_series_columns_follow_their_bars_and_keep_their_choices_through_a_restore() {
         let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         let bars: Vec<_> = (0..5)
             .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
@@ -1128,24 +1124,70 @@ mod tests {
         shown_rows(&ctx, &mut dialog, &chart);
         // Newest row first: time, the five main columns, Peer, Other.
         assert_eq!(dialog.cached.as_ref().unwrap().1.rows[0][7], "42.00");
-        let headers = &dialog.cached.as_ref().unwrap().1.headers;
-        let at = headers.iter().position(|h| h == "Peer").unwrap();
-        let column = dialog.column_ids[at].clone();
-        dialog
-            .hidden
-            .get_mut(&chart.data_table_identity())
-            .unwrap()
-            .insert(column);
+        let hide = |dialog: &mut DataTableDialog, chart: &Chart, header: &str| {
+            let headers = &dialog.cached.as_ref().unwrap().1.headers;
+            let at = headers.iter().position(|h| h == header).unwrap();
+            let column = dialog.column_ids[at].clone();
+            dialog
+                .hidden
+                .get_mut(&chart.data_table_identity())
+                .unwrap()
+                .insert(column);
+        };
+        let shown = |dialog: &DataTableDialog, chart: &Chart| {
+            let hidden = &dialog.hidden[&chart.data_table_identity()];
+            dialog.cached.as_ref().unwrap().1.headers[6..]
+                .iter()
+                .zip(&dialog.column_ids[6..])
+                .filter(|(_, column)| !hidden.contains(*column))
+                .map(|(header, _)| header.clone())
+                .collect::<Vec<_>>()
+        };
+        hide(&mut dialog, &chart, "Peer");
+        // Drawn as candles, Other lists its four prices after the same columns.
+        chart.set_series_options(
+            other,
+            crate::widget::SeriesOptions {
+                name: "Other".into(),
+                chart_type: crate::model::ChartType::Candles,
+                ..Default::default()
+            },
+        );
+        shown_rows(&ctx, &mut dialog, &chart);
+        let table = &dialog.cached.as_ref().unwrap().1;
+        assert_eq!(
+            table.headers[6..],
+            [
+                "Peer",
+                "Other: open",
+                "Other: high",
+                "Other: low",
+                "Other: close"
+            ]
+        );
+        assert_eq!(table.rows[0][7..11], ["42.00", "42.00", "42.00", "42.00"]);
+        chart.update(
+            other,
+            Bar::new(
+                start + chrono::Duration::days(4),
+                42.0,
+                43.5,
+                42.0,
+                42.0,
+                0.0,
+            ),
+        );
+        shown_rows(&ctx, &mut dialog, &chart);
+        let table = &dialog.cached.as_ref().unwrap().1;
+        assert_eq!(table.rows[0][7..11], ["42.00", "43.50", "42.00", "42.00"]);
+        hide(&mut dialog, &chart, "Other: high");
+        assert_eq!(
+            shown(&dialog, &chart),
+            ["Other: open", "Other: low", "Other: close"]
+        );
         chart.restore(&layout).unwrap();
         shown_rows(&ctx, &mut dialog, &chart);
-        let hidden = &dialog.hidden[&chart.data_table_identity()];
-        let shown: Vec<_> = dialog.cached.as_ref().unwrap().1.headers[6..]
-            .iter()
-            .zip(&dialog.column_ids[6..])
-            .filter(|(_, column)| !hidden.contains(*column))
-            .map(|(header, _)| header.as_str())
-            .collect();
-        assert_eq!(shown, ["Other"]);
+        assert_eq!(shown(&dialog, &chart), ["Other"]);
     }
 
     /// The dialog and Copy write prices as the data window writes them, for the main series, an

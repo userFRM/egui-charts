@@ -26,7 +26,7 @@ use crate::model::{Alert, AlertId, AlertTrigger};
 /// alert and the service that runs it. A channel is inclusive at both boundaries. The state
 /// conditions [`InsideChannel`](crate::model::AlertCondition::InsideChannel) and
 /// [`OutsideChannel`](crate::model::AlertCondition::OutsideChannel) hold on every evaluation
-/// while the value is in that state, so pair them with a frequency that limits repeats, whereas
+/// that sees a value in that state, so pair them with a frequency that limits repeats, whereas
 /// entering and exiting hold only on the evaluation that crosses a boundary. A crossing,
 /// entering or exiting rule of an alert created or changed by [`save`](Alerts::save) needs a
 /// value observed after the save on the side it leaves: a move made before the save never fires it.

@@ -3,7 +3,9 @@
 //! Marks swing highs and lows: a pivot high is a bar whose high is the highest of a window of
 //! `left` bars before it and `right` bars after it, a pivot low mirrors it with lows. Each
 //! pivot is labelled with its price, at the instrument's price precision or the precision chosen
-//! in the study's settings, and with two decimals when neither is known.
+//! in the study's settings, and with two decimals when neither is known. These values only place
+//! the marks and their labels: the legend lists neither, and the price scale starts without their
+//! tags.
 //!
 //! # Rule
 //!
@@ -278,6 +280,15 @@ impl Indicator for PivotPointsHighLow {
             crate::scales::StudyFormat::Price
                 .format(value, self.label_precision.or(self.precision)),
         )
+    }
+
+    // A pivot's value only places its mark and label, which already shows the price.
+    fn legend_lines(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn plot_tagged(&self, _line: usize) -> bool {
+        false
     }
 
     fn values(&self) -> &IndicatorValues {

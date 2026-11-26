@@ -8,7 +8,8 @@ use egui::{Ui, Vec2};
 /// A scroll moving the right offset linearly to `to` over `duration` seconds.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ScrollAnimation {
-    to: f32,
+    /// The target right offset, or `None` for the live edge at the spacing of each frame.
+    to: Option<f32>,
     duration: f64,
     /// Start time and offset, taken on the first frame, and the offset the last frame set.
     progress: Option<(f64, f64, f64)>,
@@ -124,8 +125,7 @@ impl Chart {
     /// bar afterwards. `animated` scrolls over 400 ms instead of jumping.
     pub fn scroll_to_real_time(&mut self, animated: bool) {
         self.cancel_view_motion();
-        let target = self.state.time_scale().live_edge_offset();
-        self.scroll_to(target, 0.4, animated);
+        self.scroll_to(None, 0.4, animated);
     }
 
     /// Scrolls the latest bar `position` bars from the right edge, keeping the zoom.
@@ -137,7 +137,7 @@ impl Chart {
         if position.is_finite() {
             self.cancel_view_motion();
             self.tracking_mode_active = false;
-            self.scroll_to(position, 1.0, animated);
+            self.scroll_to(Some(position), 1.0, animated);
         }
     }
 
@@ -455,18 +455,20 @@ impl Chart {
         if scale.right_offset_precise() != last {
             return;
         }
+        let to = animation.to.unwrap_or_else(|| scale.live_edge_offset());
         let elapsed = ((now - start) / animation.duration) as f32;
         if elapsed >= 1.0 {
-            scale.set_right_offset(animation.to);
+            scale.set_right_offset(to);
             return;
         }
-        scale.set_right_offset(from + (f64::from(animation.to) - from) * f64::from(elapsed));
+        scale.set_right_offset(from + (f64::from(to) - from) * f64::from(elapsed));
         animation.progress = Some((start, from, scale.right_offset_precise()));
         self.scroll_animation = Some(animation);
         ui.ctx().request_repaint();
     }
 
-    fn scroll_to(&mut self, offset: f32, duration: f64, animated: bool) {
+    /// Scrolls to `offset`, or to the live edge for `None`.
+    fn scroll_to(&mut self, offset: Option<f32>, duration: f64, animated: bool) {
         if animated {
             self.scroll_animation = Some(ScrollAnimation {
                 to: offset,
@@ -474,7 +476,8 @@ impl Chart {
                 progress: None,
             });
         } else {
-            self.state.time_scale_mut().set_right_offset(offset);
+            let scale = self.state.time_scale_mut();
+            scale.set_right_offset(offset.unwrap_or_else(|| scale.live_edge_offset()));
         }
     }
 

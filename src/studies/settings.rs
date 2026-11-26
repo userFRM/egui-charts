@@ -344,7 +344,18 @@ pub(super) fn declared_settings<S: Indicator + ?Sized>(study: &S) -> StudySettin
 /// Missing style lists inherit the study's declared presentation.
 fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     let (levels, fill, color) = declared_levels(study);
-    if (study.name() == "Stochastic" || (study.name() == "MFI" && guides_since(study)))
+    // The built-in Williams %R, saved with two levels or none before its middle level. Its values
+    // are compared so that a host study under the same name keeps its own levels.
+    let williams_r = study.name() == "Williams %R"
+        && study
+            .pane()
+            .levels
+            .iter()
+            .map(|level| level.0)
+            .eq([-20.0, -80.0, -50.0]);
+    if (study.name() == "Stochastic"
+        || (study.name() == "MFI" && guides_since(study))
+        || williams_r)
         && settings.levels.len() == 2
         && levels.len() == 3
     {
@@ -352,6 +363,12 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let mut middle = levels[2];
         middle.visible = false;
         settings.levels.push(middle);
+    } else if williams_r && settings.levels.is_empty() {
+        // Saved before its levels were editable, it drew both bands and their fill.
+        settings.levels = levels;
+        settings.levels[2].visible = false;
+        settings.fill_between_levels = fill;
+        settings.level_fill_color = color;
     } else if matches!(
         study.name(),
         "KST" | "CMF" | "Force Index" | "Advance/Decline Ratio (Bars)"
@@ -795,6 +812,12 @@ pub struct ConfiguredStudy {
     kept: Option<Kept>,
     /// Defaults by input id that replace the declared ones, from `set_input_defaults`.
     input_defaults: Vec<(String, InputValue)>,
+    /// Whether a bar replay cursor completed the chart's newest bar, which then reads closed
+    /// bars as the chart's earlier bars do.
+    newest_closed: bool,
+    /// The time of the first bar of the calculation history that a bar replay cursor has not
+    /// completed and so left out.
+    replay_forming: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Clone for ConfiguredStudy {
@@ -833,6 +856,26 @@ impl ConfiguredStudy {
         .then_some((self.study.as_ref(), self.offset, self.wait_for_close))
     }
 
+    /// The history the study is calculated on while it runs on another symbol or interval.
+    #[cfg(feature = "widget")]
+    pub(crate) fn calculation_history(&self) -> Option<super::StudyDataRequest> {
+        (!self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some())
+            .then(|| self.calculation_request())
+    }
+
+    /// Sets where a bar replay cut the calculation history and whether its cursor completed the
+    /// chart's newest bar; returns whether either changed.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_replay(
+        &mut self,
+        newest_closed: bool,
+        forming: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> bool {
+        let changed = (self.newest_closed, self.replay_forming) != (newest_closed, forming);
+        (self.newest_closed, self.replay_forming) = (newest_closed, forming);
+        changed
+    }
+
     // Select the inner clone once, without first cloning and discarding its calculated data.
     fn clone_with(&self, study: Box<dyn Indicator>) -> Self {
         Self {
@@ -862,6 +905,8 @@ impl ConfiguredStudy {
             aligned_candle_sources: self.aligned_candle_sources.clone(),
             kept: self.kept.clone(),
             input_defaults: self.input_defaults.clone(),
+            newest_closed: self.newest_closed,
+            replay_forming: self.replay_forming,
         }
     }
 
@@ -919,6 +964,8 @@ impl ConfiguredStudy {
             aligned_candle_sources: Vec::new(),
             kept: None,
             input_defaults: Vec::new(),
+            newest_closed: false,
+            replay_forming: None,
         }
     }
     /// Attach a host-chosen help article to this study, retained in saved presentation.
@@ -1445,15 +1492,26 @@ impl Indicator for ConfiguredStudy {
         }
         let mut aligned = IndicatorValues::new();
         self.aligned_bars.clear();
+        let longer = (self.clock.timeframe())
+            .is_some_and(|chart| source.timeframe.duration_ms() > chart.duration_ms());
+        // A replay leaves out the longer bar its cursor is inside; the chart bars it holds read
+        // the bars closed before it, as they did live, and are no gap.
+        let forming = (self.replay_forming)
+            .filter(|_| longer)
+            .map(|time| source.clock.bar_open(time));
         for (at, bar) in data.iter().enumerate() {
-            let output = source.bar_on(&self.clock, bar.time).and_then(|_| {
-                source.closed_on(
-                    &self.clock,
-                    self.wait_for_close,
-                    bar.time,
-                    at + 1 == data.len(),
-                )
-            });
+            let held = source.bar_on(&self.clock, bar.time).is_some()
+                || forming.is_some_and(|open| source.slot_on(&self.clock, bar.time) == open);
+            let output = held
+                .then(|| {
+                    source.closed_on(
+                        &self.clock,
+                        self.wait_for_close,
+                        bar.time,
+                        at + 1 == data.len() && !self.newest_closed,
+                    )
+                })
+                .flatten();
             self.aligned_bars.push(output);
             let values: Vec<_> = (0..self.study.line_count())
                 .map(|line| {
@@ -4695,6 +4753,8 @@ mod tests {
         );
         let mut expected = template.inputs.clone();
         expected.insert(2, ("combine_fills".to_owned(), InputValue::Toggle(false)));
+        // Saved before interval resets: the Continuous choice keeps its index.
+        expected.push(("reset_minutes".to_owned(), InputValue::Length(60)));
         assert_eq!(
             crate::studies::StudyTemplate::from_study(older.as_ref()).inputs,
             expected
