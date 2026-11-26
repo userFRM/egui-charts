@@ -79,7 +79,7 @@ A symbol object requires `name` (`symbol` is also accepted). Optional `ticker`
 is the identifier used for subsequent requests. Metadata fields are `description`,
 `exchange`, `country`, `sector`, `source`, `root`, `logo`, `exchange_logo`,
 `type` (lowercase model symbol type), `minmov`, `pricescale`, `minmove2`, `fractional`,
-`volume_precision`, `currency_code`, `unit` (the price unit shown beside the
+`variable_tick_size`, `volume_precision`, `currency_code`, `unit` (the price unit shown beside the
 currency above the price scale, such as `barrel`), `timezone`, `session`,
 `session_extended` and `session_overnight` (pre-market and post-market, and
 overnight windows, as below), `supported_resolutions`, `data_status`
@@ -88,7 +88,13 @@ overnight windows, as below), `supported_resolutions`, `data_status`
 is `minmov / pricescale`, with `minmov` defaulting to one. A `pricescale` that is
 a power of ten, such as 100, also sets the price decimals (two), so `minmov` 50 with
 `pricescale` 100 writes `101.50` on a 0.50 tick; another `pricescale`, or a `minmov`
-that is not a whole number, takes the decimals from the tick. A precision chosen in
+that is not a whole number, takes the decimals from the tick. `variable_tick_size` lists
+tick sizes by price range, as a tick followed by pairs of a price and the tick from that
+price upwards: `"0.01 10 0.02 25 0.05"` moves prices in 0.01 below 10, in 0.02 from 10 and
+in 0.05 from 25. It replaces the `minmov / pricescale` tick, while `pricescale` still sets
+the decimals. The price axis, Volume Footprint rows and the trading panels use the tick of
+each price. A list whose prices do not rise, or whose ticks are not positive, reports invalid
+data; an empty string is ignored. A precision chosen in
 the chart settings takes precedence. Time zones use the
 library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.TimezoneId.html) parser. Sessions accept `24x7` or
 `HHMM-HHMM[,HHMM-HHMM]:days` windows (one day suffix for all windows), where 1 is Sunday and 7 is Saturday; an overnight

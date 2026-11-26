@@ -10,7 +10,7 @@
 //!
 //! # Calculation
 //! VWAP = Sum(Source * Volume) / Sum(Volume) from the anchor bar, Source = (High + Low + Close) / 3
-//! by default; the source itself while the volume sum is zero.
+//! by default; no value until volume trades from the anchor bar.
 //! Band = VWAP +/- k * multiplier * unit for k = 1, 2 and 3, where the unit is sigma,
 //! sigma^2 = Sum(Volume * Source^2) / Sum(Volume) - VWAP^2, or one percent of the absolute VWAP.
 //!
@@ -152,14 +152,13 @@ impl Sums {
         self.volume += volume;
         self.weighted += price * volume;
         self.squared += price * price * volume;
-        let (vwap, sigma) = if self.volume == 0.0 {
-            (price, 0.0)
-        } else {
-            let vwap = self.weighted / self.volume;
-            // Clamped: cancellation can leave a tiny negative variance.
-            let variance = self.squared / self.volume - vwap * vwap;
-            (vwap, variance.max(0.0).sqrt())
-        };
+        // No volume has traded from the anchor yet, so there is no average.
+        if self.volume == 0.0 {
+            return IndicatorValue::None;
+        }
+        let vwap = self.weighted / self.volume;
+        // Clamped: cancellation can leave a tiny negative variance.
+        let sigma = (self.squared / self.volume - vwap * vwap).max(0.0).sqrt();
         let width = multiplier
             * if percentage {
                 vwap.abs() / 100.0
@@ -459,5 +458,33 @@ impl Indicator for VwapAutoAnchored {
                 [format!("Upper {k}{unit}"), format!("Lower {k}{unit}")]
             }))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One session of hourly bars with typical prices 100 to 103 and volumes 0, 0, 1000 and 0:
+    /// nothing until volume trades, then 102 on every line, kept by the last bar without volume.
+    #[test]
+    fn no_value_until_volume_trades_from_the_anchor() {
+        let bars: Vec<_> = [(100.0, 0.0), (101.0, 0.0), (102.0, 1000.0), (103.0, 0.0)]
+            .into_iter()
+            .zip(0..)
+            .map(|((price, volume), hour)| {
+                let time =
+                    chrono::DateTime::from_timestamp(1_772_409_600 + 3600 * hour, 0).unwrap();
+                Bar::new(time, price, price, price, price, volume)
+            })
+            .collect();
+        let mut study = VwapAutoAnchored::new().with_anchor(AutoAnchor::Session);
+        study.set_timeframe(Timeframe::Hour1);
+        study.calculate(&bars);
+        let got: Vec<_> = (0..4).map(|bar| study.values().value(0, bar)).collect();
+        assert_eq!(got, [None, None, Some(102.0), Some(102.0)]);
+        for line in 1..7 {
+            assert_eq!(study.values().value(line, 3), Some(102.0), "line {line}");
+        }
     }
 }
