@@ -1047,7 +1047,7 @@ fn time_bar_trade_studies_require_coverage_for_each_output() {
     let range_partial: Rows = [[n; 3], [n; 3]];
     for complete in [true, false] {
         // Each study, its two candles complete, and the same before a terminal page.
-        let studies: [(OrderFlowStudy, Rows, Rows); 6] = [
+        let studies: [(OrderFlowStudy, Rows, Rows); 7] = [
             (
                 OrderFlowStudy::new(OrderFlowKind::AggressorRate {
                     seconds: 60,
@@ -1079,6 +1079,11 @@ fn time_bar_trade_studies_require_coverage_for_each_output() {
                 OrderFlowStudy::new(OrderFlowKind::FlowSum { bars: 2 }),
                 [[n, n, n], [s(3.0), s(3.0), n]],
                 [[n, n, n], [n, n, n]],
+            ),
+            (
+                OrderFlowStudy::new(OrderFlowKind::SideVolume),
+                [[s(2.0), s(0.0), s(2.0)], [s(1.0), s(0.0), s(1.0)]],
+                [[n, n, n], [s(1.0), s(0.0), s(1.0)]],
             ),
             (
                 OrderFlowStudy::new(OrderFlowKind::FilteredCvd {

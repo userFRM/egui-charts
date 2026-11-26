@@ -359,6 +359,7 @@ Among others, the factory supplies these studies, each in its own pane:
 | Quoted Spread | `(ask - bid) / instrument_tick_size`, last, arithmetic mean over accepted quotes and maximum per bar. A crossed quote has negative spread. |
 | Book Size | Last synchronized snapshot's summed bid and ask size, plus bid minus ask. Nearest 10 levels per side by default. A positive Price distance uses that inclusive distance from each side's inside market instead of the level count. |
 | Trade Rate | Execution count per bar, count per second over 60 seconds and count per second over 3 seconds. Count volume switches all three to executed size. Zero-size executions count as trades. |
+| Buy and Sell Volume | Buy volume, sell volume and buy minus sell volume of each bar's executions. Executions of unknown side count for neither side; a bar whose executions all lack a side reads zero, and a bar without executions has no value. Its outputs are study alert sources, for conditions the footprint conditions do not offer. |
 | Levels Traded Through | Sum of absolute changes of best bid and best ask, in integer instrument ticks, plus their total. Per bar by default; Window seconds selects a rolling window instead. This measures inside-market movement, not an inference about how an order swept the book. |
 | Book Balance | Last synchronized bid and ask balance, `(bid - ask) / (bid + ask)` in percent, for two disjoint bands on a -100 to 100 scale. The near band takes the nearest 5 levels per side and the far band the next 10 by default. A positive Near price distance selects both bands by distance instead: the near band reaches that distance from each side's inside market and the far band reaches Far price distance further. The near edge belongs only to the near band. Empty or lost bands have no value. The individual-order filters apply as for Book Size. |
 | Volatility Regime | Highest minus lowest execution price in a rolling 60-second window, ranked against the window values of the previous 100 bars. The percentile is the share of available earlier values that are smaller, from 0 to 100; decimal rounding ties do not count as smaller. The legend reads Low below 20, High above 80, and Normal at or between the boundaries. Window, lookback (1 to 1,000 bars) and both boundaries are inputs. Without an earlier value there is no rank. |
@@ -384,13 +385,13 @@ numerically. A lost or overflowing window remains missing until the missing exec
 
 On time bars, if a historical trade page does not reach the start of history, every study that
 reads executions (Trade Rate, Aggressor Rate, Levels Executed, Multi-Range Delta, Rolling Volume
-and Delta, Size-Filtered CVD, Execution Delta and Volatility Regime) leaves the candle containing
-the page's oldest retained execution without a value. This includes an execution stamped at the
-candle open: earlier prints can share its timestamp. Each rolling value becomes available as soon
-as its own window is covered; a rolling sum over bars that includes the candle stays blank, and a
-cumulative delta starts at the next candle. A replay cut inside the candle shows no value for it.
-A later page that reaches the start of history fills every study without a new request. The
-executions stay in Time & Sales.
+and Delta, Buy and Sell Volume, Size-Filtered CVD, Execution Delta and Volatility Regime) leaves
+the candle containing the page's oldest retained execution without a value. This includes an
+execution stamped at the candle open: earlier prints can share its timestamp. Each rolling value
+becomes available as soon as its own window is covered; a rolling sum over bars that includes the
+candle stays blank, and a cumulative delta starts at the next candle. A replay cut inside the
+candle shows no value for it. A later page that reaches the start of history fills every study
+without a new request. The executions stay in Time & Sales.
 
 On history-only tick-count, range, volume and delta intervals, Trade Rate uses the recorded executions
 when the tape reaches its start without a gap and reproduces every candle's key and OHLCV.
@@ -495,12 +496,12 @@ the export hook.
 
 While [`Chart::set_replay_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_replay_time) shows bars up to a cutoff, every input reads as of it: later bars
 are left out, and the bar containing the cutoff, drawn from [`set_replay_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_replay_source), holds only what
-came before it. Multi-Range Delta, Rolling Volume and Delta, Size-Filtered CVD and footprint
-sources sum the held executions before the cutoff unless the trade store dropped one of that
-bar's; a book source shows that bar's book only when the bar's last update came before the
-cutoff; the other studies leave the bar empty. Leaving replay restores the live values. Studies
-added during replay are connected when the feed resumes. A feed that replays history through its
-[`Sink`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html) ([`Sink::reset_replay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.reset_replay)) clears the inputs at each seek and fills them again, so no cutoff
+came before it. Multi-Range Delta, Rolling Volume and Delta, Buy and Sell Volume, Size-Filtered
+CVD and footprint sources sum the held executions before the cutoff unless the trade store
+dropped one of that bar's; a book source shows that bar's book only when the bar's last update
+came before the cutoff; the other studies leave the bar empty. Leaving replay restores the live
+values. Studies added during replay are connected when the feed resumes. A feed that replays history
+through its [`Sink`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html) ([`Sink::reset_replay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html#method.reset_replay)) clears the inputs at each seek and fills them again, so no cutoff
 applies.
 
 ## Execution detectors
@@ -551,7 +552,9 @@ read. A buy volume, sell volume or delta level fires on the execution that takes
 forming bar's value past it, from zero at the bar's open: a sell volume level of 100 fires on the
 101st unit sold. Each condition alerts at most once per bar and rebuilds with the stop sweeps on
 interval changes. Bars that opened before the bar of the first live event since tracking, such
-as loaded history, are marked without an alert.
+as loaded history, are marked without an alert. For other conditions and frequencies, such as
+sell volume below a level at bar close or delta leaving a range, add the Buy and Sell Volume
+study and alert on its outputs.
 
 Icebergs count exact order refills at the same price and side within 100 ms of depletion, or
 an increase within 100 ms of execution without keeping priority. Unrelated adds and cancels
