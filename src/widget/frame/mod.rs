@@ -1443,17 +1443,12 @@ impl Chart {
             let tick = self
                 .instrument()
                 .and_then(|instrument| instrument.tick_size);
-            // Automatic rows depend on the scale span. Revisit after fitting until the rows
-            // actually drawn, including their outer half-tick edges, fit in the scale. Retain
-            // fitted edges when the grid changes, so non-nested grids cannot alternate ranges.
+            // Fit the scale to the rows actually drawn, including their outer half-tick edges.
+            // Automatic rows come from the bars, so a second pass finds the same rows and stops.
             let initial = self.state.price_scale().range();
             let mut fitted = data_range;
             loop {
-                let map =
-                    self.state
-                        .price_scale()
-                        .map(transform, price_rect.top(), price_rect.bottom());
-                let range = map.range();
+                let range = self.state.price_scale().range();
                 let (mut low, mut high) = fitted;
                 let (mut traded_low, mut traded_high) = data_range;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
@@ -1463,7 +1458,7 @@ impl Chart {
                     self.state.revision(),
                     (config, tick),
                     clock,
-                    (&map, price_rect, |i| mapping.idx_to_x(i)),
+                    (price_rect, |i| mapping.idx_to_x(i)),
                     |profile, _, anchor, _, _, _| {
                         if anchor >= price_rect.right() {
                             return;
@@ -1495,7 +1490,7 @@ impl Chart {
                 fitted = (low, high);
                 let next = self.state.price_scale().range();
                 // A flat session without a tick must keep the scale's minimum span, rather than
-                // deriving ever smaller rows from its own fitted row height.
+                // shrinking to the edges of its own rows.
                 if traded_high - traded_low <= 1e-9
                     && next.max - next.min < initial.max - initial.min
                     && initial.contains(low)
@@ -2934,7 +2929,7 @@ impl Chart {
                     self.state.revision(),
                     (config, tick),
                     &bar_clock,
-                    (&price_map, price_rect, |i| coords.idx_to_x(i)),
+                    (price_rect, |i| coords.idx_to_x(i)),
                     (&ui.active_theme().chart, colors.bullish, colors.bearish),
                 )
                 .into_iter()
@@ -4021,7 +4016,7 @@ impl Chart {
                 self.state.revision(),
                 (config, render_ctx.tick_size),
                 &bar_clock,
-                (&price_map, price_rect, |i| coords.idx_to_x(i)),
+                (price_rect, |i| coords.idx_to_x(i)),
                 |profile, config, anchor, column, _, _| {
                     let cropped = [
                         profile.row_span(profile.profile_low).0,
