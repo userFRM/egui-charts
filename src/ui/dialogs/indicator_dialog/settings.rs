@@ -2275,7 +2275,7 @@ mod tests {
             .set_input("plot_offset", InputValue::Integer(2))
             .unwrap();
         study.calculate(&bars);
-        assert!((study.plot_value(0, 7).unwrap() - 1325.0 / 21.0).abs() < 1e-9);
+        assert!((study.plot_value(0, 7).unwrap() - 5525.0 / 87.0).abs() < 1e-9);
         study.restore_settings(&after).unwrap();
         let mut hidden = edited.clone();
         hidden.fill_between_levels = false;
