@@ -85,8 +85,8 @@ impl Chart {
     /// Replaces the live feed with a shared recording-backed driver, or restores it with `None`.
     /// Retains the live bars, quotes, pause state and feed configuration for exit, which gives
     /// back the ATR and percentage sizes and returns to the newest bar as
-    /// [`Self::set_replay_time`] describes. Recorded trades
-    /// build partial bars through the normal feed path, alongside quotes, orders and depth.
+    /// [`Self::set_replay_time`] describes. Recorded trades build partial bars through the
+    /// normal feed path, alongside quotes, orders and depth.
     /// Analyst targets come from the driver, which answers none, and from the live feed on exit.
     /// Attach the same driver to every participating chart, then advance it once per frame before
     /// drawing. Its time is inclusive; [`Self::replay_time`] reports the exclusive cutoff one
