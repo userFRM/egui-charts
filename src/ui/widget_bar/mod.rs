@@ -18,8 +18,8 @@ pub use panels::calendar::{CalendarAction, CalendarPanel};
 pub use panels::chats::ChatsPanel;
 pub use panels::hotlists::{HotlistsAction, HotlistsPanel};
 pub use panels::market_details::{
-    MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality, SeasonalityMonth,
-    WatchlistDetails,
+    DetailRow, DetailSection, MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality,
+    SeasonalityMonth, WatchlistDetails,
 };
 pub use panels::market_heatmap::{
     MarketHeatmapEntry, MarketHeatmapMetric, MarketHeatmapPanel, MarketHeatmapUniverse,
