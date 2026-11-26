@@ -302,6 +302,9 @@ fn summary_lists_open_profit_and_charts_switch_to_percent() {
     h.run();
     h.get_by_label("Open profit");
     h.get_by_label("-1000.00");
+    // Beside each chart: its largest and latest value and the summary's average phase.
+    h.get_by_label("Maximum 3000.00, average 1000.00, current 1000.00");
+    h.get_by_label("Maximum 3000.00, average N/A, current 3000.00");
     let texts = |h: &Harness<'_, StrategyReportPanel>| -> Vec<String> {
         h.output()
             .shapes
@@ -325,6 +328,8 @@ fn summary_lists_open_profit_and_charts_switch_to_percent() {
     h.get_by_role_and_label(Role::CheckBox, "Percent of initial capital")
         .click();
     h.run();
+    h.get_by_label("Maximum 30.00, average 10.00, current 10.00");
+    h.get_by_label("Maximum 30.00, average N/A, current 30.00");
     let shown = texts(&h);
     assert!(
         percent.iter().all(|l| has(&shown, l)) && !money.iter().any(|l| has(&shown, l)),
@@ -417,6 +422,11 @@ fn range_limits_summary_charts_and_trades() {
             row(&h, "Maximum drawdown % (close-to-close)", 1),
             ["25.00%"]
         );
+        // The open drawdown from 1 February lasts to the curve's end on 1 April.
+        assert_eq!(
+            row(&h, "Average drawdown duration in days (close-to-close)", 1),
+            ["60.00"]
+        );
         assert_eq!(
             h.get_by_role_and_label(Role::TextInput, "From (UTC)")
                 .value()
@@ -459,6 +469,8 @@ fn range_limits_summary_charts_and_trades() {
             .type_text("2024-02-15");
         h.run();
         assert_eq!(row(&h, "Net return", 3), ["-33.33%", "-33.33%", "0.00%"]);
+        assert_eq!(row(&h, "Average run-up (close-to-close)", 1), ["100.00"]);
+        h.get_by_label("Maximum 400.00, average N/A, current 350.00");
         let data = h.state().0.data.as_ref().unwrap();
         assert_eq!(data.margin, report.margin[2..]);
         assert_eq!(data.shown.average_margin, Some(100.0));
