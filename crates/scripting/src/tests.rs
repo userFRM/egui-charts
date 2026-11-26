@@ -1974,11 +1974,13 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
         (studies, &fixture[..1000], 1, 2),
         (drawn, &fixture[..1000], 8, 3),
     ] {
+        // No time limit a slow or busy machine could reach before the memory limit.
         let mut capped = limited(
             script,
             Limits {
+                bar: Duration::from_secs(3600),
+                full: Duration::from_secs(3600),
                 memory: mib << 20,
-                ..Limits::default()
             },
         )
         .study();
