@@ -306,6 +306,8 @@ pub(crate) struct ExecutionRanges {
     mixed: bool,
     /// Whether each bar of `built` closed without a trade in its range.
     phantoms: Vec<bool>,
+    /// Whether the last range bar of the held trades is the bar in progress.
+    open: bool,
 }
 
 impl ExecutionRanges {
@@ -340,6 +342,7 @@ impl ExecutionRanges {
                 first.get_or_insert(trade.ts);
                 builder.push_tick(trade);
             }
+            self.open = builder.has_open_bar();
             let elements = builder.elements();
             let bars = elements.iter().map(range_bar::RangeBar::to_bar).collect();
             let phantoms = elements.iter().map(|bar| bar.tick_cnt == 0).collect();
@@ -426,6 +429,21 @@ pub(crate) fn range_phantoms(
     let built = range_bars(full, revision, params);
     let shown = built.shown(start, len);
     shown.iter().map(|bar| bar.tick_cnt == 0).collect()
+}
+
+/// Whether the newest range bar the chart shows is the bar in progress: the last one built from
+/// `executions` while it holds them, else the last one approximated from `full`, for which
+/// `params.range_size` must be valid.
+pub(crate) fn range_forming(
+    executions: &ExecutionRanges,
+    full: &[Bar],
+    revision: u64,
+    params: &ChartTypeParams,
+) -> bool {
+    if executions.built.is_some() {
+        return executions.open;
+    }
+    range_bars(full, revision, params).builder.has_open_bar()
 }
 
 /// The element containing a loaded time. Columns include quiet bars up to the next column's
@@ -839,7 +857,10 @@ mod tests {
     /// 99 to 101 at the wick width with ticks at 100 and 99. With a range of 1, a bar that opens
     /// at 103.5 after a close at 100 completes the bars 100 to 101, 101 to 102 and 102 to 103 in
     /// one jump: only the first held a price, so phantom bars outline the second and third. A bar
-    /// that trades from 100 to 103.5 completes them along its path, and none is a gap. Bricks of
+    /// that trades from 100 to 103.5 completes them along its path, and none is a gap. With a
+    /// range of 2, the closes 100 and 102 complete a bar from 100 to 102, and a close at 103 or
+    /// 101 reaches neither 104 nor 100: the bar from 102 is in progress, rising or falling, and
+    /// takes the forming colour of its direction, filled or thin, while it is in view. Bricks of
     /// 1 from 100 to 102 take the border and wick colours set for rising bricks, a translucent
     /// border as set. Shown Line Break borders take the colour set for rising lines, or else the
     /// rising body colour at full opacity.
@@ -933,7 +954,7 @@ mod tests {
             let (painted, chart) = paint(ChartType::Range, params, source);
             let map = chart.get_chart_mapping();
             let up = chart.config().bullish_color;
-            let drawn: Vec<_> = (0..4)
+            let drawn: Vec<_> = (0..3)
                 .map(|i| {
                     let x = map.idx_to_x(i);
                     painted.iter().find_map(|shape| match shape {
@@ -950,12 +971,77 @@ mod tests {
                     })
                 })
                 .collect();
-            let filled = Some("filled");
             assert_eq!(
                 drawn,
-                [filled, Some(gap), Some(gap), filled],
+                [Some("filled"), Some(gap), Some(gap)],
                 "phantom bars {phantom_bars}, gaps {gap}"
             );
+        }
+
+        let forming = [Color32::from_rgb(7, 8, 9), Color32::from_rgb(10, 11, 12)];
+        // The candle and forming colours painted in each of the first two slots, without repeats.
+        let slots = |painted: &[Shape], chart: &Chart| {
+            let map = chart.get_chart_mapping();
+            let config = chart.config();
+            let known = [
+                config.bullish_color,
+                config.bearish_color,
+                forming[0],
+                forming[1],
+            ];
+            let half = (map.idx_to_x(1) - map.idx_to_x(0)) / 2.0;
+            (0..2)
+                .map(|i| {
+                    let x = map.idx_to_x(i);
+                    let near = |px: f32| (px - x).abs() < half;
+                    let mut found = Vec::new();
+                    for shape in painted {
+                        let color = match shape {
+                            Shape::Rect(r) if (r.rect.center().x - x).abs() < 0.5 => r.fill,
+                            Shape::LineSegment {
+                                points: [a, b],
+                                stroke,
+                            } if near(a.x) && near(b.x) => stroke.color,
+                            _ => continue,
+                        };
+                        if known.contains(&color) && !found.contains(&color) {
+                            found.push(color);
+                        }
+                    }
+                    found
+                })
+                .collect::<Vec<_>>()
+        };
+        for (thin_bars, closes, side) in [
+            (false, [100.0, 102.0, 103.0], 0),
+            (false, [100.0, 102.0, 101.0], 1),
+            (true, [100.0, 102.0, 103.0], 0),
+            (true, [100.0, 102.0, 101.0], 1),
+        ] {
+            let mut params = ChartTypeParams {
+                range_size: 2.0,
+                ..Default::default()
+            };
+            let style = &mut params.styles.range;
+            style.thin_bars = thin_bars;
+            [style.forming_up, style.forming_down] = forming;
+            let (painted, mut chart) = paint(ChartType::Range, params, bars(0, &closes, None));
+            let up = chart.config().bullish_color;
+            assert_eq!(
+                slots(&painted, &chart),
+                [vec![up], vec![forming[side]]],
+                "thin bars {thin_bars}, closes {closes:?}"
+            );
+            if thin_bars || side != 0 {
+                continue;
+            }
+            // Scrolled back until the newest bar is out of view, no bar is drawn as in progress.
+            let (spacing, _) = chart.get_time_scale_state();
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.apply_synced_time_scale(spacing, -1.6);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            assert_eq!(slots(&painted, &chart), [vec![up], vec![]], "scrolled back");
         }
 
         let (border, wick) = (
@@ -1423,6 +1509,32 @@ mod tests {
             assert_eq!(
                 (bars.len(), marks.len(), phantom_closes),
                 (len, len, expected.to_vec())
+            );
+        }
+    }
+
+    /// With a range of 1, a trade at 103.5 after one at 100 closes the bars to 101, 102 and 103
+    /// and leaves the bar from 103 in progress at 103.5. A trade at 104 closes the bars to 101,
+    /// 102, 103 and 104 and ends on that boundary, so the last bar built is complete.
+    #[test]
+    fn newest_range_bar_is_in_progress_until_a_trade_closes_it() {
+        use crate::model::{BarClock, Tick, Timeframe};
+        let time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let params = ChartTypeParams {
+            range_size: 1.0,
+            ..Default::default()
+        };
+        for (prices, forming) in [([100.0, 103.5], true), ([100.0, 104.0], false)] {
+            let trades = prices.map(|price| Tick::new(time, price, 1.0, None));
+            let mut ranges = ExecutionRanges::default();
+            let clock = BarClock::new(Timeframe::Min1);
+            let (bars, _) = ranges
+                .bars(&params, &[], 0, &clock, 0, trades.iter(), None)
+                .unwrap();
+            assert_eq!(
+                (bars.len(), range_forming(&ranges, &[], 0, &params)),
+                (4, forming),
+                "{prices:?}"
             );
         }
     }
