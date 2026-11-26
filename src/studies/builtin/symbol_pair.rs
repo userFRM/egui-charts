@@ -27,7 +27,8 @@
 //! whose correlation has zero variance, are unavailable, never infinite or invented.
 //!
 //! Hosts supply the histories of the symbols named by the inputs, as for any other study with
-//! [`Indicator::data_requests`]; no market data service is included.
+//! [`Indicator::data_requests`]; no market data service is included. The indicator browser asks
+//! for the symbols when it adds one of these studies (see [`StudyInput::confirmed`]).
 //!
 //! # Presentation
 //!
@@ -198,15 +199,19 @@ impl<const RATIO: bool, const CORRELATION: bool, const LOG: bool> Indicator
         let mut inputs = Vec::new();
         for (leg, label) in ["First", "Second"].into_iter().enumerate() {
             let (symbol, source) = (format!("symbol_{leg}"), format!("source_{leg}"));
-            inputs.push(
-                StudyInput::new(
-                    symbol,
-                    format!("{label} symbol"),
-                    InputValue::Symbol(self.symbols[leg].clone()),
-                    InputKind::Symbol,
-                )
-                .with_default(InputValue::Symbol(defaults.symbols[leg].clone())),
-            );
+            let input = StudyInput::new(
+                symbol,
+                format!("{label} symbol"),
+                InputValue::Symbol(self.symbols[leg].clone()),
+                InputKind::Symbol,
+            )
+            .with_default(InputValue::Symbol(defaults.symbols[leg].clone()));
+            // Correlation Coefficient compares the chart with one symbol; the others ask for both.
+            inputs.push(if leg == 1 || !CORRELATION || LOG {
+                input.confirmed()
+            } else {
+                input
+            });
             let position = |source: PriceSource| {
                 PriceSource::all()
                     .iter()

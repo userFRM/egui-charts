@@ -188,6 +188,7 @@ pub(super) struct Symbol {
     pricescale: Option<f64>,
     minmove2: Option<f64>,
     fractional: Option<bool>,
+    variable_tick_size: Option<String>,
     volume_precision: Option<u8>,
     currency_code: Option<String>,
     unit: Option<String>,
@@ -230,6 +231,16 @@ impl Symbol {
             if movement.fract() == 0.0 {
                 instrument.price_decimals = (0..=12u8).find(|&n| 10f64.powi(i32::from(n)) == scale);
             }
+        }
+        // A tick table replaces the minmov tick; pricescale still sets the decimals.
+        if let Some(text) = self
+            .variable_tick_size
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+        {
+            let (tick, tiers) = tick_table(text)?;
+            instrument.tick_size = Some(tick);
+            instrument.tick_tiers = tiers;
         }
         instrument.volume_decimals = self.volume_precision;
         instrument.currency = self.currency_code;
@@ -290,6 +301,26 @@ fn price_fraction(scale: f64, parts: f64) -> Option<PriceFraction> {
     .into_iter()
     .find(|(steps, divided, _)| *steps == scale && *divided == parts)
     .map(|(_, _, fraction)| fraction)
+}
+
+/// A tick followed by pairs of a price and the tick from that price upwards, such as
+/// `0.01 10 0.02 25 0.05`.
+fn tick_table(text: &str) -> Result<(f64, Vec<(f64, f64)>), FeedError> {
+    let error = || invalid("variable_tick_size must alternate positive ticks and rising prices");
+    let numbers = text
+        .split_whitespace()
+        .map(str::parse)
+        .collect::<Result<Vec<f64>, _>>()
+        .map_err(|_| error())?;
+    let (&tick, rest) = numbers.split_first().ok_or_else(error)?;
+    if rest.len() % 2 != 0 || !tick.is_finite() || tick <= 0.0 {
+        return Err(error());
+    }
+    let tiers: Vec<(f64, f64)> = rest.chunks(2).map(|pair| (pair[0], pair[1])).collect();
+    if crate::model::valid_tick_tiers(&tiers).len() != tiers.len() {
+        return Err(error());
+    }
+    Ok((tick, tiers))
 }
 
 fn session(text: &str) -> Result<Session, FeedError> {
