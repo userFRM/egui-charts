@@ -1202,7 +1202,8 @@ mod tests {
     /// HMA is 300.6 below close 302, the drawn cloud is 297 > 288.5 > 266.75 > 249.5,
     /// Momentum rises 10 to 12, MACD is 7.1595 > 7.0319 and UO is 82.87. ADX rises
     /// above 20 on both trends, so it buys the rise but does not sell the fall.
-    /// A flat stretch has no CCI, so its vote is missing.
+    /// A flat stretch has no CCI, and its constant RSI no Stochastic RSI, so their votes are
+    /// missing.
     #[test]
     fn scores_coverage_and_ratings_follow_the_votes() {
         let fixture = |direction: f64| {
@@ -1245,12 +1246,12 @@ mod tests {
             (0.0, 0.0, [0.; 11]),
         ] {
             let mut last_votes = last_votes.map(Some);
-            let oscillator_coverage = if direction == 0.0 {
+            if direction == 0.0 {
                 last_votes[2] = None;
-                10. / 11.
-            } else {
-                1.
-            };
+                last_votes[7] = None;
+            }
+            let voted = last_votes.iter().flatten().count() as f64;
+            let oscillator_coverage = voted / 11.;
             let bars = fixture(direction);
             for basis in [
                 RatingBasis::All,
@@ -1275,7 +1276,7 @@ mod tests {
                     RatingBasis::Oscillators => oscillator,
                 };
                 let coverage = match basis {
-                    RatingBasis::All if direction == 0.0 => 25. / 26.,
+                    RatingBasis::All => (15. + voted) / 26.,
                     RatingBasis::Oscillators => oscillator_coverage,
                     _ => 1.,
                 };
@@ -1319,10 +1320,11 @@ mod tests {
         let bars = fixture(1.0);
         let mut full = TechnicalRatings::new();
         full.calculate(&bars);
+        // Stochastic RSI waits for an RSI window with a range, which the flat start has not.
         for (at, expected) in [
             (0, [6. / 15., 0., 6. / 26.]),
-            (34, [11. / 15., 9. / 11., 20. / 26.]),
-            (35, [11. / 15., 10. / 11., 21. / 26.]),
+            (34, [11. / 15., 8. / 11., 19. / 26.]),
+            (35, [11. / 15., 9. / 11., 20. / 26.]),
             (75, [12. / 15., 1., 23. / 26.]),
             (76, [13. / 15., 1., 24. / 26.]),
             (198, [14. / 15., 1., 25. / 26.]),
