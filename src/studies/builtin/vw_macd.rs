@@ -12,8 +12,8 @@
 //! - **Histogram** = VW-MACD line - signal line.
 //!
 //! The line starts on bar `max(fast, slow) - 1`; earlier bars have no value.
-//! A window whose volume sums to 0 takes the simple average of its closes, as
-//! [`VWMA`](super::VWMA) does.
+//! A bar whose fast or slow window holds no volume has no value; the signal resumes from its last
+//! value when the line returns.
 //!
 //! # Default parameters
 //!
@@ -126,7 +126,8 @@ impl Indicator for VolumeWeightedMACD {
                     if volume > 0.0 {
                         price_volume / volume
                     } else {
-                        state.0.iter().skip(start).map(|v| v[0]).sum::<f64>() / period as f64
+                        // No volume in the window: no average.
+                        f64::NAN
                     }
                 };
                 let (fast, slow) = (average(self.fast_period), average(self.slow_period));
@@ -254,6 +255,31 @@ mod tests {
                         assert!((g - w).abs() < 1e-12, "bar {bar}: {got:?} != {want:?}");
                     }
                 }
+            }
+        }
+
+        // Lengths 2, 3 and 2 over closes 10 to 70 with volumes 1, 1, 0, 0, 0, 1, 1: the line is
+        // 20 - 15 on bar 2; bars 3 and 4 have a window without volume and no value; then the line is
+        // 60 - 60 and 65 - 65, and the signal resumes from 5 with alpha 2/3: 5/3, then 5/9.
+        let mut study = VolumeWeightedMACD::new(2, 3, 2);
+        study.calculate(&bars(
+            &[10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0],
+            &[1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0],
+        ));
+        let want: [Option<[f64; 3]>; 7] = [
+            None,
+            None,
+            Some([5.0, 5.0, 0.0]),
+            None,
+            None,
+            Some([0.0, 5.0 / 3.0, -5.0 / 3.0]),
+            Some([0.0, 5.0 / 9.0, -5.0 / 9.0]),
+        ];
+        for (bar, want) in want.iter().enumerate() {
+            let got = lines(&study, bar);
+            assert_eq!(got.is_some(), want.is_some(), "bar {bar}: {got:?}");
+            for (g, w) in got.iter().flatten().zip(want.iter().flatten()) {
+                assert!((g - w).abs() < 1e-12, "bar {bar}: {got:?} != {want:?}");
             }
         }
 

@@ -130,7 +130,9 @@ enum Request {
 /// extended-hours trade and session volume are shown, the extended-hours change measured from the
 /// regular last price; update times are shown in the time zone set with
 /// [`set_timezone`](Self::set_timezone), UTC by default. The header's layout button shows or
-/// hides sections, the edit button moves to the notes, and a feed that supplies
+/// hides sections; [`hidden_sections`](Self::hidden_sections) and
+/// [`set_hidden_sections`](Self::set_hidden_sections) save and restore that choice. The edit
+/// button moves to the notes, and a feed that supplies
 /// [`SymbolDetails::url`] gets a link to the instrument beside its name, and one that supplies
 /// [`SymbolDetails::category`] gets the category under it. For each new symbol the panel asks the
 /// feed for [`Datafeed::symbol_details`] and shows the statistics, on a card, and the profile it
@@ -325,6 +327,30 @@ impl SymbolDetailsPanel {
     /// Shows update times in `timezone`, such as the chart's.
     pub fn set_timezone(&mut self, timezone: TimezoneId) {
         self.timezone = timezone;
+    }
+
+    /// The sections hidden with the Layout menu, by their English titles in panel order, such as
+    /// `["Volume", "News"]`. Save them and pass them to
+    /// [`set_hidden_sections`](Self::set_hidden_sections) to restore the layout.
+    pub fn hidden_sections(&self) -> Vec<&'static str> {
+        SECTIONS
+            .into_iter()
+            .filter(|section| self.hidden.contains(section))
+            .collect()
+    }
+
+    /// Hides exactly `sections`, by the titles [`hidden_sections`](Self::hidden_sections) returns,
+    /// and shows the others. Names that are not section titles, compared exactly, are ignored, so a
+    /// layout saved by another version restores what it can. The edit button shows Notes again.
+    pub fn set_hidden_sections<S: AsRef<str>>(&mut self, sections: impl IntoIterator<Item = S>) {
+        self.hidden = sections
+            .into_iter()
+            .filter_map(|name| {
+                SECTIONS
+                    .into_iter()
+                    .find(|section| *section == name.as_ref())
+            })
+            .collect();
     }
 
     /// Show or hide Financials in the More menu, shown by default. Hide it when the host cannot
@@ -2095,8 +2121,10 @@ mod tests {
     }
 
     /// The layout menu hides the Technicals, Upcoming events and News sections like the others,
-    /// and they stay hidden for the next symbol until shown again. A regression leaves a section
-    /// out of the menu, draws it while hidden, or shows it again for another symbol.
+    /// and they stay hidden for the next symbol until shown again; `hidden_sections` reads that
+    /// choice in panel order and `set_hidden_sections` restores exactly the named sections. A
+    /// regression leaves a section out of the menu, draws it while hidden, shows it again for
+    /// another symbol, saves the choice in hash order, or restores unknown or miscased names.
     #[test]
     fn layout_menu_hides_the_new_sections_across_symbols() {
         use egui_kittest::{Harness, kittest::Queryable};
@@ -2138,11 +2166,22 @@ mod tests {
         };
         toggle(&mut h);
         assert_eq!(shown(h.state_mut()), [false; 3]);
+        assert_eq!(h.state().hidden_sections(), NEW);
         h.state_mut().set_instrument(&Instrument::new("BBB"));
         answer(h.state_mut());
         h.run();
         assert_eq!(shown(h.state_mut()), [false; 3]);
         toggle(&mut h);
         assert_eq!(shown(h.state_mut()), [true; 3]);
+        assert!(h.state().hidden_sections().is_empty());
+
+        // A restored choice replaces the shown one and skips names that are not section titles.
+        h.state_mut()
+            .set_hidden_sections(["News", "Technicals", "Unknown", "notes", "News"]);
+        assert_eq!(h.state().hidden_sections(), ["Technicals", "News"]);
+        assert_eq!(shown(h.state_mut()), [false, true, false]);
+        assert!(texts(&egui::Context::default(), h.state_mut()).contains(&"Notes".into()));
+        h.state_mut().set_hidden_sections(["Upcoming events"]);
+        assert_eq!(shown(h.state_mut()), [true, false, true]);
     }
 }
