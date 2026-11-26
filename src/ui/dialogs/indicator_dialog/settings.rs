@@ -2237,11 +2237,11 @@ mod tests {
             })
             .collect();
         study.calculate(&bars);
-        // Wilder RSI(2) price 25, streak 450/7, and return rank 100 give 1325/21.
-        assert!((study.values().value(0, 5).unwrap() - 1325.0 / 21.0).abs() < 1e-9);
+        // Wilder RSI(2) price 25, streak 1900/29, and return rank 100 give 5525/87.
+        assert!((study.values().value(0, 5).unwrap() - 5525.0 / 87.0).abs() < 1e-9);
         bars[5].close = 101.0;
         study.update(&bars, 5);
-        assert!((study.values().value(0, 5).unwrap() - 4225.0 / 54.0).abs() < 1e-9);
+        assert!((study.values().value(0, 5).unwrap() - 17425.0 / 222.0).abs() < 1e-9);
         bars.push(crate::model::Bar::new(
             chrono::DateTime::from_timestamp(360, 0).unwrap(),
             102.0,
@@ -2251,7 +2251,7 @@ mod tests {
             1.0,
         ));
         study.update(&bars, 6);
-        assert!((study.values().value(0, 6).unwrap() - 3675.0 / 52.0).abs() < 1e-9);
+        assert!((study.values().value(0, 6).unwrap() - 45025.0 / 636.0).abs() < 1e-9);
         let saved = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
         let mut loaded = serde_json::from_str::<StudyTemplate>(&saved)
             .unwrap()
@@ -2275,7 +2275,7 @@ mod tests {
             .set_input("plot_offset", InputValue::Integer(2))
             .unwrap();
         study.calculate(&bars);
-        assert!((study.plot_value(0, 7).unwrap() - 1325.0 / 21.0).abs() < 1e-9);
+        assert!((study.plot_value(0, 7).unwrap() - 5525.0 / 87.0).abs() < 1e-9);
         study.restore_settings(&after).unwrap();
         let mut hidden = edited.clone();
         hidden.fill_between_levels = false;
