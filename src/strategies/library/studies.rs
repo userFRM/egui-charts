@@ -1,5 +1,6 @@
-//! Signals read public study columns at the signal bar and its predecessor. A crossing
-//! requires a strict inequality now and the opposite inequality or equality one bar ago.
+//! Signals read public study columns at the signal bar and its predecessor; Parabolic SAR also
+//! reads the trend of its SAR on those bars. A crossing requires a strict inequality now and the
+//! opposite inequality or equality one bar ago.
 
 use super::{StrategyFactory, length, number, number_input, set_input, timeframe};
 use crate::model::{Bar, OrderSide, OrderType, PriceSource, StudySource, Timeframe};
@@ -311,6 +312,16 @@ impl Strategy for StudyStrategy {
             Rule::SuperTrend => length(&schema, "atr_period").saturating_add(1),
             _ => 1,
         };
+        // Whether the SAR is in an uptrend on each bar, which its one column does not tell.
+        let trend = match self.rule {
+            Rule::Sar => ParabolicSAR::new(
+                number(&schema, "initial_af"),
+                number(&schema, "af_step"),
+                number(&schema, "max_af"),
+            )
+            .trends(bars),
+            _ => Vec::new(),
+        };
         let mut usable = 0;
         self.signals = (0..bars.len())
             .map(|i| {
@@ -362,7 +373,13 @@ impl Strategy for StudyStrategy {
                             market(crosses(slow, line(0), i)),
                         ]
                     }
-                    Rule::Sar => [before(1).and(stop(0)), before(0).and(stop(1))],
+                    Rule::Sar => {
+                        let turn = previous.and_then(|previous| trend[previous]).zip(trend[i]);
+                        [
+                            stop(0).filter(|_| turn == Some((false, true))),
+                            stop(0).filter(|_| turn == Some((true, false))),
+                        ]
+                    }
                     Rule::Rsi => {
                         let low = number(&self.inputs, "oversold");
                         let high = number(&self.inputs, "overbought");
