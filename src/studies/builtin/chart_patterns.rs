@@ -917,11 +917,12 @@ impl State {
 ///
 /// Line 0 marks a bullish confirmation at the low of its bar, line 1 a bearish one at the
 /// high, each labelled with the abbreviations of the formations it confirms. Line 2,
-/// Developing, holds no values. Boundaries are also generated as drawings, each in the colour,
-/// width and pattern of its plot and hidden with it: Bullish or Bearish once its formation is
-/// confirmed, Developing, grey and dashed by default, until then. A reversal formation draws
-/// only its neckline or breakout level. Hovering a mark or a boundary shows the formation's
-/// name, such as "Bear Flag".
+/// Developing, holds no values. The legend lists none of the three, and the price scale starts
+/// without their tags. Boundaries are also generated as drawings, each in the colour, width and
+/// pattern of its plot and hidden with it: Bullish or Bearish once its formation is confirmed,
+/// Developing, grey and dashed by default, until then. A reversal formation draws only its
+/// neckline or breakout level. Hovering a mark or a boundary shows the formation's name, such as
+/// "Bear Flag".
 #[derive(Clone, Debug)]
 pub struct ChartPatterns {
     scope: Scope,
@@ -1345,9 +1346,14 @@ impl Indicator for ChartPatterns {
         vec!["Bullish".into(), "Bearish".into(), "Developing".into()]
     }
 
-    /// Developing styles boundaries only and has no value to read.
+    // A confirmation's value only places its mark at the bar's high or low, and Developing
+    // holds no values, so no output is a reading.
     fn legend_lines(&self) -> Vec<usize> {
-        vec![0, 1]
+        Vec::new()
+    }
+
+    fn plot_tagged(&self, _line: usize) -> bool {
+        false
     }
 
     // Developing holds no values, and a side holds values only while a formation that confirms
