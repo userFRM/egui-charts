@@ -274,8 +274,6 @@ impl Chart {
                     (d.alert_source(level), name)
                 })
             });
-        // shortcut: a TPO study moved to its own pane reads the main pane's map for automatic
-        // rows; upgrade when studies record their painted map.
         let (start, end) = self.state.visible_range();
         let chart_type = (self.chart_type == ChartType::TimePriceOpportunity
             && self.main_series_visible)
@@ -292,7 +290,6 @@ impl Chart {
                 self.state.revision(),
                 (&config, self.instrument().and_then(|i| i.tick_size)),
                 &clock,
-                &self.last_price_map,
             );
             for (profile, level, price, text) in levels {
                 let source = AlertSource::TPOLevel(TPOLevelSource::new(profile, level, price));

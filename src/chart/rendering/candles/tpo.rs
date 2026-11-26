@@ -796,7 +796,7 @@ fn profile_ends<'a>(
     })
 }
 
-/// The extended levels that [`render_live_tpo`] draws with `price_map` for the bars `visible` of
+/// The extended levels that [`render_live_tpo`] draws for the bars `visible` of
 /// `full_data` and that no later bar has ended, each with its profile's open, its price and the
 /// price written at the profile's tick. Profiles that end before the view come first, built from
 /// the sessions before it as the lines crossing the plot from its left edge are, then those of
@@ -810,7 +810,6 @@ pub(crate) fn open_levels(
     revision: u64,
     (base_config, instrument_tick): (&TPOConfig, Option<f64>),
     clock: &BarClock,
-    price_map: &PriceMap,
 ) -> Vec<(chrono::DateTime<chrono::Utc>, TPOLevel, f64, String)> {
     if visible.is_empty()
         || visible.end > full_data.len()
@@ -819,7 +818,7 @@ pub(crate) fn open_levels(
     {
         return Vec::new();
     }
-    let Some(config) = row_config(base_config, instrument_tick, price_map) else {
+    let Some(config) = row_config(base_config, instrument_tick, &full_data[..visible.end]) else {
         return Vec::new();
     };
     let sessions = clock.sessions();
