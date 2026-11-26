@@ -1946,6 +1946,7 @@ mod tests {
     /// and side, and the price line applies as one undoable step and restores from a saved
     /// layout as edited.
     #[test]
+    #[cfg(feature = "ui")]
     fn tpo_settings_undo_and_restore_every_new_field() {
         use crate::model::{ChartType, LineStyle, PriceSource, TPOProfilePeriod};
         let bars = || {

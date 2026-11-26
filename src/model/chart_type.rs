@@ -1933,6 +1933,8 @@ mod tests {
                 footprint_naked_poc: true,
                 tpo_midpoint: true,
                 tpo_letters: false,
+                // Volume rows keep the TPO value area shading they were saved with.
+                tpo_volume: crate::model::TPOVolumeProfile::saved_without_settings(),
                 ..Default::default()
             };
             // Omitted style switches keep the defaults of documents saved before they existed.
