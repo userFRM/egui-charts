@@ -925,6 +925,78 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         }
     }
 
+    /// The Modify order dialog shows a position exit's quantity without letting it change, says
+    /// why, checks no quantity rule against it and offers no exits of its own, so moving its price
+    /// still saves. A regression lets the user resize an exit the broker refuses to resize, leaves
+    /// the greyed-out quantity unexplained, or blocks the price change with a quantity problem the
+    /// user cannot fix.
+    #[test]
+    fn the_modify_order_dialog_keeps_a_position_exits_quantity() {
+        use crate::model::{PositionBracket, TradingRules};
+        use egui_kittest::kittest::NodeT;
+        let mut request = OrderRequest::new("SYM", OrderSide::Sell, 500.0, OrderType::Stop(95.0));
+        request.position_bracket = Some(PositionBracket::StopLoss);
+        let order = Order::new(OrderId::new("9"), request, OrderStatus::Working);
+        let broker = Arc::new(Recorder {
+            brackets: true,
+            ..Recorder::default()
+        });
+        let mut trading = Trading::default();
+        trading.set_service(broker.clone());
+        let ctx = egui::Context::default();
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.load_rules("SYM");
+        // 500 is below the minimum and off the step.
+        let mut rules = TradingRules::new("SYM");
+        rules.quantity_step = 1000.0;
+        rules.min_quantity = 1000.0;
+        for (_, reply) in std::mem::take(&mut *broker.rules.lock().unwrap()) {
+            reply.send(Ok(rules.clone()));
+        }
+        trading.poll(&ctx, &mut Toasts::new());
+        trading.account_panel.editing = Some((order.clone(), order.request.clone()));
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 600.0))
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::localization::set_translator(ctx, |english| Some(format!("[{english}]")));
+            })
+            .build_ui_state(
+                |ui, trading: &mut Trading| {
+                    trading.show_account_panel(ui, "SYM");
+                },
+                trading,
+            );
+        harness.run();
+        let quantity = harness.get_by_role_and_label(egui::Role::SpinButton, "[Quantity]");
+        assert!(quantity.accesskit_node().is_disabled());
+        harness.get_by_label(
+            "[A position exit keeps its quantity. Cancel it and place a new exit to change it.]",
+        );
+        for absent in [
+            "[Take profit]",
+            "[Stop loss]",
+            "[Enter quantities in steps of 1,000]",
+            "[The quantity is below the minimum of 1,000]",
+        ] {
+            assert!(harness.query_by_label(absent).is_none(), "{absent}");
+        }
+        harness
+            .get_by_role_and_label(egui::Role::SpinButton, "[Stop price]")
+            .set_value_accesskit(96.0);
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::Role::Button, "[Modify order]")
+            .click();
+        harness.run();
+        let mut expected = order.request.clone();
+        expected.order_type = OrderType::Stop(96.0);
+        assert_eq!(
+            *broker.modified.lock().unwrap(),
+            [(order.id.clone(), expected)]
+        );
+    }
+
     /// While the host names no broker and before the broker reports the account, the broker and
     /// account menus show only their chevrons; the accessibility check still finds each named
     /// after what it chooses. A regression leaves them unnamed.

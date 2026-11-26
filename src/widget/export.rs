@@ -182,9 +182,10 @@ pub enum DataValues {
 pub enum DataColumn {
     /// The time of each row, or the key of a horizontal scale other than time.
     Time,
-    /// A value of a series. Of the main series ([`SeriesId::MAIN`](super::SeriesId::MAIN)),
-    /// `plot` 0 to 4 is the open, high, low, close and volume; of an added series, `plot` 0 is its
-    /// close.
+    /// A value of a series. `plot` 0 to 3 is the open, high, low and close, and of the main
+    /// series ([`SeriesId::MAIN`](super::SeriesId::MAIN)) `plot` 4 is its volume. An added series
+    /// drawn from its open, high, low and close, such as candles or bars, lists plots 0 to 3; one
+    /// drawn from a single value, such as a line or an area, lists only its close, `plot` 3.
     Series {
         /// The series.
         id: super::SeriesId,
@@ -202,24 +203,25 @@ pub enum DataColumn {
 
 /// A column of a [`DataTable`]. A study column carries the original id and title of its study
 /// and its plot; the title keeps a choice off a study of another title that a restore adds under
-/// the id the choice was made for. An added series column carries its title and its place among
+/// the id the choice was made for. An added series column carries its title, its place among
 /// the visible series of that title, which a restore, adding the series again under new ids,
-/// keeps.
+/// keeps, and the plot of the value, numbered as [`DataColumn::Series`] numbers it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ColumnId {
     Main(usize),
-    Series(String, usize),
+    Series(String, usize, usize),
     Study(usize, String, usize),
 }
 
-/// The loaded bars, the closes of visible added series and visible study plots as text, aligned
+/// The loaded bars, the prices of visible added series and visible study plots as text, aligned
 /// by chart time: what `Chart::export_csv` (with `csv`) writes and the chart data table lists.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct DataTable {
-    /// Column titles: time, open, high, low, close and volume, then one per visible added series,
-    /// titled as its legend shows it, and one per visible study plot, of those the
-    /// [`DataExportOptions`] list.
+    /// Column titles: time, open, high, low, close and volume, then, for each visible added
+    /// series, its open, high, low and close titled with its legend title and the value, such as
+    /// `B: open`, or its close titled as its legend shows it for a series drawn from a single
+    /// value, and one per visible study plot, of those the [`DataExportOptions`] list.
     pub headers: Vec<String>,
     /// What each column holds, one per header.
     pub columns: Vec<DataColumn>,
@@ -375,8 +377,9 @@ impl Chart {
         format!("{clock} {name}")
     }
 
-    /// Exports all loaded source bars, the close of each visible added series and visible study
-    /// plots as UTF-8 CSV. An added series fills the rows whose time matches one of its bars and
+    /// Exports all loaded source bars, the open, high, low and close of each visible added series
+    /// drawn from them, and the close of one drawn from a single value, and visible study plots
+    /// as UTF-8 CSV. An added series fills the rows whose time matches one of its bars and
     /// leaves the others empty.
     /// Recalculates copies of the studies so streaming updates and pending refreshes are included
     /// without altering the live chart. Price-based charts export source-bar calculations, aligned
@@ -390,10 +393,11 @@ impl Chart {
     /// price scale in their place. Without `price_decimals` or a valid `tick_size`, price studies
     /// take the main series' precision, and without a chosen one the main series and price
     /// studies write the decimals the main series' prices hold, and an added series those its
-    /// closes hold, at least two and at most twelve, so a price the chart shows does not read as
-    /// another number; an added series keeps at least four significant digits. Volumes take the
-    /// instrument's volume decimals, at most twelve as volume studies take them, and without them
-    /// the shortest text that holds their first 15 significant digits; they are never abbreviated.
+    /// listed prices hold, at least two and at most twelve, so a price the chart shows does not
+    /// read as another number; an added series keeps at least four significant digits. Volumes
+    /// take the instrument's volume decimals, at most twelve as volume studies take them, and
+    /// without them the shortest text that holds their first 15 significant digits; they are
+    /// never abbreviated.
     /// Study overrides and non-price units retain their precision. Missing/non-finite values are
     /// empty cells. This lists the defaults of [`DataExportOptions`]; see `Self::export_csv_with`
     /// to choose rows, columns and values.
@@ -416,7 +420,7 @@ impl Chart {
     }
 
     /// The cells of `Self::export_csv` (with `csv`) as a table, with the same bars, added series
-    /// closes, study plots, times and precision. During replay it holds the bars the replay
+    /// prices, study plots, times and precision. During replay it holds the bars the replay
     /// cutoff has completed, and on price-based chart types still the source bars. Loads
     /// nothing: only loaded bars are listed. This lists the defaults of [`DataExportOptions`];
     /// see [`Self::data_table_with`] to choose rows, columns and values.
@@ -498,9 +502,18 @@ impl Chart {
             .collect();
         let mut columns = Vec::new();
         // Each visible added series with its legend title, which falls back to "Series" as the
-        // pane menu does, its place among series of that title and the decimals of its closes.
-        let mut series: Vec<(&[crate::model::Bar], String, usize, usize, super::SeriesId)> =
-            Vec::new();
+        // pane menu does, its place among series of that title, the decimals of its listed
+        // values and the plots it lists: all four prices when it is drawn from them.
+        type Listed<'a> = (
+            &'a [crate::model::Bar],
+            String,
+            usize,
+            usize,
+            super::SeriesId,
+            &'static [usize],
+        );
+        let mut series: Vec<Listed> = Vec::new();
+        let prices = |bar: &crate::model::Bar| [bar.open, bar.high, bar.low, bar.close];
         let mut series_formatters = Vec::new();
         for item in self.price_series.iter().filter(|item| item.visible) {
             series_formatters.push(
@@ -513,19 +526,37 @@ impl Chart {
                 name => name.to_owned(),
             };
             let place = series.iter().filter(|other| other.1 == title).count();
-            // A series of another scale keeps the decimals its closes hold without metadata, and
-            // four significant digits of its smallest close.
+            let plots: &'static [usize] = if item.options.chart_type.uses_ohlc() {
+                &[0, 1, 2, 3]
+            } else {
+                &[3]
+            };
+            let values = |bar: &crate::model::Bar| {
+                let prices = prices(bar);
+                plots.iter().map(move |&plot| prices[plot])
+            };
+            // A series of another scale keeps the decimals its listed values hold without
+            // metadata, and four significant digits of its smallest one.
             let precision = item
                 .bars
                 .iter()
-                .filter(|bar| !bar.is_whitespace() && bar.close.is_finite() && bar.close != 0.0)
-                .map(|bar| (3.0 - bar.close.abs().log10().floor()).clamp(0.0, 12.0) as usize)
+                .filter(|bar| !bar.is_whitespace())
+                .flat_map(values)
+                .filter(|value| value.is_finite() && *value != 0.0)
+                .map(|value| (3.0 - value.abs().log10().floor()).clamp(0.0, 12.0) as usize)
                 .fold(
                     instrument_precision
-                        .unwrap_or_else(|| held_decimals(item.bars.iter().map(|bar| bar.close))),
+                        .unwrap_or_else(|| held_decimals(item.bars.iter().flat_map(values))),
                     usize::max,
                 );
-            series.push((item.bars.as_slice(), title, place, precision, item.id));
+            series.push((
+                item.bars.as_slice(),
+                title,
+                place,
+                precision,
+                item.id,
+                plots,
+            ));
         }
         let main_columns = [
             (options.include_time, ["time"].as_slice(), 0),
@@ -540,7 +571,12 @@ impl Chart {
             .filter(|(included, ..)| *included)
             .flat_map(|(_, names, _)| names.iter().map(|name| (*name).to_owned()))
             .collect();
-        header.extend(series.iter().map(|item| item.1.clone()));
+        header.extend(series.iter().flat_map(|item| {
+            item.5.iter().map(|&plot| match item.5 {
+                [_] => item.1.clone(),
+                _ => format!("{}: {}", item.1, ["open", "high", "low", "close"][plot]),
+            })
+        }));
         let clock = self.bar_clock();
         for study in &mut studies {
             study.set_instrument(self.instrument());
@@ -683,17 +719,20 @@ impl Chart {
                 }
                 _ => {}
             }
-            row.extend(series.iter().zip(&series_formatters).map(
-                |(&(bars, _, _, precision, _), formatter)| {
-                    bars.binary_search_by_key(&time, |other| other.time)
-                        .ok()
-                        .map(|at| &bars[at])
-                        .filter(|other| !other.is_whitespace())
-                        .map_or_else(String::new, |other| {
-                            price(other.close, precision, formatter.as_ref())
-                        })
-                },
-            ));
+            for (&(bars, _, _, precision, _, plots), formatter) in
+                series.iter().zip(&series_formatters)
+            {
+                let other = bars
+                    .binary_search_by_key(&time, |other| other.time)
+                    .ok()
+                    .map(|at| &bars[at])
+                    .filter(|other| !other.is_whitespace());
+                row.extend(plots.iter().map(|&plot| {
+                    other.map_or_else(String::new, |other| {
+                        price(prices(other)[plot], precision, formatter.as_ref())
+                    })
+                }));
+            }
             row.extend(
                 columns
                     .iter()
@@ -724,9 +763,10 @@ impl Chart {
                     plot: column - 1,
                 },
             })
-            .chain(series.iter().map(|item| DataColumn::Series {
-                id: item.4,
-                plot: 0,
+            .chain(series.iter().flat_map(|item| {
+                item.5
+                    .iter()
+                    .map(|&plot| DataColumn::Series { id: item.4, plot })
             }))
             .chain(columns.iter().map(|&(study, line, ..)| DataColumn::Study {
                 id: self.study_ids[study],
@@ -735,11 +775,11 @@ impl Chart {
             .collect();
         let column_ids = main
             .map(ColumnId::Main)
-            .chain(
-                series
+            .chain(series.iter().flat_map(|item| {
+                item.5
                     .iter()
-                    .map(|item| ColumnId::Series(item.1.clone(), item.2)),
-            )
+                    .map(|&plot| ColumnId::Series(item.1.clone(), item.2, plot))
+            }))
             .chain(columns.iter().map(|&(study, line, ..)| {
                 let id = self.study_ids[study].0;
                 #[cfg(feature = "drawings")]
@@ -1478,6 +1518,94 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!([&last[4], &last[6], &last[7]], expected, "{case}");
+        }
+    }
+
+    /// An added series drawn from its open, high, low and close lists all four, titled with its
+    /// legend title and the value and numbered as the main series' prices, with the decimals of
+    /// all four; one drawn from a single value keeps its close alone, still numbered as a close.
+    #[test]
+    #[cfg(feature = "csv")]
+    fn added_series_list_the_prices_their_chart_type_draws() {
+        use crate::model::ChartType;
+        type Row = (
+            &'static str,
+            ChartType,
+            DataValues,
+            &'static [&'static str],
+            &'static [usize],
+            [&'static [&'static str]; 2],
+        );
+        let ohlc: &[&str] = &["B: open", "B: high", "B: low", "B: close"];
+        let cases: [Row; 3] = [
+            (
+                "candles plain",
+                ChartType::Candles,
+                DataValues::Plain,
+                ohlc,
+                &[0, 1, 2, 3],
+                [
+                    &["9.000", "12.000", "8.000", "10.000"],
+                    &["109.500", "111.125", "109.000", "110.000"],
+                ],
+            ),
+            (
+                "candles raw",
+                ChartType::Candles,
+                DataValues::Raw,
+                ohlc,
+                &[0, 1, 2, 3],
+                [&["9", "12", "8", "10"], &["109.5", "111.125", "109", "110"]],
+            ),
+            (
+                "line",
+                ChartType::Line,
+                DataValues::Plain,
+                &["B"],
+                &[3],
+                [&["10.00"], &["110.00"]],
+            ),
+        ];
+        let t0 = DateTime::parse_from_rfc3339("2024-01-02T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let t1 = t0 + chrono::Duration::hours(1);
+        for (case, chart_type, values, headers, plots, cells) in cases {
+            let mut chart = Chart::new(BarData::from_bars(
+                [t0, t1]
+                    .map(|time| Bar::new(time, 10.0, 10.0, 10.0, 10.0, 1.0))
+                    .to_vec(),
+            ));
+            let b = chart.add_series(crate::widget::SeriesOptions {
+                name: "B".into(),
+                chart_type,
+                ..Default::default()
+            });
+            chart.set_data(
+                b,
+                vec![
+                    Bar::new(t0, 9.0, 12.0, 8.0, 10.0, 1.0),
+                    Bar::new(t1, 109.5, 111.125, 109.0, 110.0, 1.0),
+                ],
+            );
+            let options = DataExportOptions {
+                include_main_series: false,
+                values,
+                ..Default::default()
+            };
+            let csv = chart.export_csv_with(&options).unwrap();
+            let mut reader = csv::Reader::from_reader(csv.as_bytes());
+            let header = reader.headers().unwrap().clone();
+            assert_eq!(header.iter().skip(1).collect::<Vec<_>>(), headers, "{case}");
+            let rows: Vec<_> = reader.records().map(Result::unwrap).collect();
+            assert_eq!(rows.len(), 2, "{case}");
+            for (row, expected) in rows.iter().zip(cells) {
+                assert_eq!(row.iter().skip(1).collect::<Vec<_>>(), expected, "{case}");
+            }
+            let expected: Vec<_> = std::iter::once(DataColumn::Time)
+                .chain(plots.iter().map(|&plot| DataColumn::Series { id: b, plot }))
+                .collect();
+            assert_eq!(chart.data_table_with(&options).columns, expected, "{case}");
         }
     }
 
