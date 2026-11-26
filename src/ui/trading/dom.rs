@@ -16,7 +16,7 @@ use super::widgets::{
 use crate::chart::{TradingLineAction, entry_price, pnl_text};
 use crate::icons::icons;
 use crate::model::{Order, OrderId, OrderRequest, OrderSide, OrderType, Tick, TimeInForce};
-use crate::scales::{decimals, to_step};
+use crate::scales::{TickGrid, decimals, to_step};
 use crate::theme::ThemeExt;
 
 /// Height of a price row.
@@ -99,10 +99,10 @@ pub(super) struct Ladder {
 /// The volume traded in each of `rows` rows of `step` ticks, from the row `top` down. Sell
 /// aggressors trade at the bid, buys at the ask. Unclassified prints contribute only to total
 /// volume. The profile covers the given trades, not inferred bar volume.
-fn traded(trades: &[&Tick], tick: f64, step: i64, top: i64, rows: usize) -> Vec<[f64; 3]> {
+fn traded(trades: &[&Tick], grid: TickGrid<'_>, step: i64, top: i64, rows: usize) -> Vec<[f64; 3]> {
     let mut volumes = vec![[0.0; 3]; rows];
     for trade in trades {
-        let level = ((trade.price / tick).round() as i64).div_euclid(step);
+        let level = (grid.ticks(trade.price) as i64).div_euclid(step);
         if let Some(row) = top
             .checked_sub(level)
             .and_then(|row| usize::try_from(row).ok())
@@ -156,6 +156,8 @@ fn format_size(value: f64) -> String {
 pub struct DepthPanel {
     symbol: String,
     tick: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tick_tiers: Vec<(f64, f64)>,
     ladder: Ladder,
 }
 
@@ -189,13 +191,16 @@ impl DepthPanel {
         }
         let instrument = chart.instrument().expect("depth has an instrument");
         let decimals = crate::scales::instrument_price_precision(instrument).map_or(2, usize::from);
-        let tick = instrument
+        let valid = instrument
             .tick_size
-            .filter(|tick| tick.is_finite() && *tick > 0.0)
-            .unwrap_or(10f64.powi(-(decimals as i32)));
-        if self.symbol != chart.symbol() || self.tick != tick {
+            .filter(|tick| tick.is_finite() && *tick > 0.0);
+        let tick = valid.unwrap_or(10f64.powi(-(decimals as i32)));
+        // Price ranges refine the instrument's tick, not the decimals' step.
+        let tiers = valid.map_or(&[][..], |_| &instrument.tick_tiers);
+        if self.symbol != chart.symbol() || self.tick != tick || self.tick_tiers != tiers {
             self.symbol = chart.symbol().to_owned();
             self.tick = tick;
+            self.tick_tiers = tiers.to_vec();
             self.ladder = Ladder {
                 columns: self.ladder.columns,
                 profile: self.ladder.profile,
@@ -251,6 +256,7 @@ impl DepthPanel {
             bid: book.and_then(|book| book.best_bid().map(|level| level.price)),
             ask: book.and_then(|book| book.best_ask().map(|level| level.price)),
             tick,
+            tick_tiers: &self.tick_tiers,
             decimals,
             currency: "",
             balance: None,
@@ -347,12 +353,13 @@ impl Ladder {
         let tif = entry.as_ref().map_or(TimeInForce::Day, |(_, tif)| **tif);
         let theme = ui.active_theme();
         let tick = market.tick;
+        let tick_grid = market.grid();
         let step = i64::from(self.ticks_per_row.max(1));
-        let ticks = |price: f64| (price / tick).round() as i64;
+        let ticks = |price: f64| tick_grid.ticks(price) as i64;
         // The row a price falls in: rows of `step` ticks from a multiple of `step` upwards, below
         // zero too, as footprint rows group.
         let row_key = |price: f64| ticks(price).div_euclid(step);
-        let price = |tick_index: i64| to_step(tick_index as f64 * tick, tick, f64::round);
+        let price = |tick_index: i64| tick_grid.price(tick_index as f64);
         let buy = side_color(&theme, OrderSide::Buy);
         let sell = side_color(&theme, OrderSide::Sell);
         let orders: Vec<&Order> = (market.orders.iter())
@@ -489,7 +496,7 @@ impl Ladder {
 
         let volumes = traded(
             self.accumulated(market.trades, market.session_open),
-            tick,
+            tick_grid,
             step,
             top,
             rows as usize,
@@ -758,8 +765,9 @@ impl Ladder {
                             let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
                             ui.add(egui::DragValue::new(&mut ticks_per_row).range(1..=1_000_000))
                                 .labelled_by(label.id);
-                            // The price step of a row.
-                            let increment = price(i64::from(ticks_per_row));
+                            // The price step of a row, in the lowest price range.
+                            let increment =
+                                to_step(f64::from(ticks_per_row) * tick, tick, f64::round);
                             ui.label(format!("= {}", numbers.price(increment)));
                         });
                         self.ticks_per_row = ticks_per_row;
@@ -1245,7 +1253,13 @@ impl Ladder {
                             let moved =
                                 price(ticks(at).saturating_add(rows_moved.saturating_mul(step)));
                             if moved > 0.0 && moved != at {
-                                let shift = |other: f64| to_step(other + moved - at, tick, f64::round);
+                                let shift = |other: f64| {
+                                    if tick_grid.is_flat() {
+                                        to_step(other + moved - at, tick, f64::round)
+                                    } else {
+                                        tick_grid.offset(other, tick_grid.steps_between(at, moved))
+                                    }
+                                };
                                 let mut changed = working.request.clone();
                                 changed.order_type = match changed.order_type {
                                     OrderType::Limit(_) => OrderType::Limit(moved),
@@ -1435,14 +1449,14 @@ impl Ladder {
                 |(bid, ask)| {
                     l10n::format_text(
                         ui.ctx(),
-                        if ((ask - bid) / tick).round() == 1.0 {
+                        if tick_grid.steps_between(bid, ask) == 1.0 {
                             "{price} ({ticks} tick)"
                         } else {
                             "{price} ({ticks} ticks)"
                         },
                         &[
                             ("price", numbers.price(ask - bid)),
-                            ("ticks", ((ask - bid) / tick).round().to_string()),
+                            ("ticks", tick_grid.steps_between(bid, ask).to_string()),
                         ],
                     )
                 },
@@ -1495,13 +1509,15 @@ impl Ladder {
                         (crate::chart::PnlUnit::Money, Some(pnl)) => pnl,
                         _ => gain * per_point,
                     };
-                    let options = crate::chart::TradingLineOptions::new(market.currency, tick);
+                    let mut options = crate::chart::TradingLineOptions::new(market.currency, tick);
+                    options.tick_tiers = market.tick_tiers;
                     pnl_text(
                         &ctx,
                         market.pnl_unit,
                         money,
                         gain,
                         position.average_price,
+                        position.quantity.signum(),
                         &options,
                     )
                 }
@@ -1722,6 +1738,7 @@ mod tests {
                     bid,
                     ask,
                     tick: 0.25,
+                    tick_tiers: &[],
                     decimals: 2,
                     currency: "USD",
                     balance: None,
@@ -1826,6 +1843,7 @@ mod tests {
             bid: Some(100.0),
             ask: Some(100.25),
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: None,
@@ -2045,6 +2063,7 @@ mod tests {
         let panel = DepthPanel {
             symbol: "ES".into(),
             tick: 0.25,
+            tick_tiers: Vec::new(),
             ladder,
         };
         let saved = serde_json::to_string(&panel).unwrap();
@@ -2194,6 +2213,7 @@ mod tests {
                         bid: Some(6107.0),
                         ask: Some(6107.25),
                         tick: 0.25,
+                        tick_tiers: &[],
                         decimals: 2,
                         currency: "USD",
                         balance: None,
@@ -2480,6 +2500,7 @@ mod tests {
                 bid: Some(100.0),
                 ask: Some(100.25),
                 tick: 0.25,
+                tick_tiers: &[],
                 decimals: 2,
                 currency: "USD",
                 balance: None,
@@ -2633,6 +2654,7 @@ mod tests {
                             bid: Some(last - 0.25),
                             ask: Some(last + 0.25),
                             tick: 0.25,
+                            tick_tiers: &[],
                             decimals: 2,
                             currency: "USD",
                             balance: None,
@@ -2858,6 +2880,7 @@ mod tests {
                     bid: None,
                     ask: None,
                     tick: 0.25,
+                    tick_tiers: &[],
                     decimals: 2,
                     currency: "USD",
                     balance: None,
@@ -2937,7 +2960,7 @@ mod tests {
             (4, 0, vec![[0.0, 0.0, 0.0], [19.0, 0.0, 0.0]]),
         ] {
             assert_eq!(
-                traded(&refs, 0.25, step, top, expected.len()),
+                traded(&refs, TickGrid::new(0.25, &[]), step, top, expected.len()),
                 expected,
                 "{step} ticks a row from {top}"
             );
@@ -3021,6 +3044,7 @@ mod tests {
             bid: Some(100.0),
             ask: Some(100.25),
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: None,
@@ -3187,6 +3211,58 @@ mod tests {
             .filter(|color| [large, notable].contains(color))
             .collect();
         assert_eq!(tiers, [large]);
+
+        // Rows follow the price ranges: 0.02 below 25 and 0.05 from it, one tick apart.
+        let book = OrderBook {
+            ts: Utc::now(),
+            symbol: "ES".into(),
+            bids: vec![level(24.98, 5.0, Some(1))],
+            asks: vec![level(25.0, 4.0, Some(1))],
+        };
+        let tick_tiers = [(10.0, 0.02), (25.0, 0.05)];
+        let market = Market {
+            last: Some(25.0),
+            bid: Some(24.98),
+            ask: Some(25.0),
+            tick: 0.01,
+            tick_tiers: &tick_tiers,
+            ladder: Some(std::borrow::Cow::Borrowed(&book)),
+            highlights: Vec::new(),
+            ..market
+        };
+        let mut ladder = Ladder {
+            ticks_per_row: 1,
+            ..Default::default()
+        };
+        let (_, labels, _) = frame(&egui::Context::default(), &mut ladder, &market, vec![]);
+        let column = find(&labels, "25.00").center().x;
+        let mut prices: Vec<_> = (labels.iter())
+            .filter(|(text, rect)| {
+                (rect.center().x - column).abs() < 0.5 && text.parse::<f64>().is_ok()
+            })
+            .collect();
+        prices.sort_by(|a, b| a.1.center().y.total_cmp(&b.1.center().y));
+        let prices: Vec<_> = prices.iter().map(|(text, _)| text.as_str()).collect();
+        let from = prices
+            .iter()
+            .position(|&text| text == "25.10")
+            .expect("25.10");
+        assert_eq!(
+            prices[from..from + 5],
+            ["25.10", "25.05", "25.00", "24.98", "24.96"],
+            "{prices:?}"
+        );
+        assert!(!prices.contains(&"24.99") && !prices.contains(&"25.01"));
+        // The read-only ladder counts the spread in ticks of the bid's range.
+        let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            ladder.draw(ui, "ES", &market, None);
+        });
+        let spread = output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.text() == "Spread: 0.02 (1 tick)")
+        });
+        output.drop_without_applying_deltas();
+        assert!(spread);
     }
 
     /// A stop-limit order's limit has a dimmer tag of its own unless it falls in the stop's row,
@@ -3228,6 +3304,7 @@ mod tests {
             bid: Some(100.0),
             ask: Some(100.25),
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: None,
@@ -3423,6 +3500,7 @@ mod tests {
             bid: Some(99.75),
             ask: Some(100.25),
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: None,
@@ -3577,6 +3655,7 @@ mod tests {
                 bid: None,
                 ask: None,
                 tick: 0.25,
+                tick_tiers: &[],
                 decimals: 2,
                 currency: "USD",
                 balance: None,
