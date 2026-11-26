@@ -7,9 +7,10 @@
 //! - Readings from -20 to 0: Overbought
 //! - Readings from -100 to -80: Oversold
 //!
-//! The pane draws both levels, dashed and muted, with the band between them filled in the study's
-//! colour at a tenth of full opacity. The pane fits its values and visible levels, so a source from
-//! another study that reads outside -100 to 0 stays in view.
+//! The pane draws dashed, muted levels at -20 and -80 with the band between them filled in the
+//! study's colour at a tenth of full opacity, and a dotted middle level at -50 in the same grey.
+//! Readings have two decimals and no percent sign. The pane fits its values and visible levels, so
+//! a source from another study that reads outside -100 to 0 stays in view.
 //!
 //! # Calculation
 //! %R = (Highest High - Source) / (Highest High - Lowest Low) * -100
@@ -17,6 +18,9 @@
 //! The source is the close by default. Another source replaces the close alone, so the highest
 //! high and lowest low stay those of the bars, and a source outside their range gives a value
 //! outside -100 to 0.
+//!
+//! A window without range, where the formula divides by zero, keeps the previous %R, and there
+//! is no value before the first one; the smoothing averages those values.
 //!
 //! # Example
 //! ```
@@ -49,10 +53,12 @@ pub struct WilliamsR {
     visible: bool,
 }
 
-/// The highs and lows of the last `period` bars with a finite high and low, and the average of %R.
+/// The highs and lows of the last `period` bars with a finite high and low, the last %R of a
+/// window with a range, and the average of %R.
 #[derive(Clone, Debug, Default)]
 struct Rolling {
     window: VecDeque<(f64, f64)>,
+    carried: Option<f64>,
     smoothed: Smoothed,
 }
 
@@ -98,10 +104,6 @@ impl Indicator for WilliamsR {
         smoothing_deviation: number("Band deviation", 0.0, f64::MAX)
             if smoothing in SmoothingType::WITH_BANDS
     ; {});
-
-    fn value_format(&self) -> crate::scales::StudyFormat {
-        crate::scales::StudyFormat::Percent
-    }
 
     fn name(&self) -> &str {
         "Williams %R"
@@ -156,11 +158,13 @@ impl Indicator for WilliamsR {
                 }
                 let highest = state.window.iter().fold(f64::MIN, |max, w| max.max(w.0));
                 let lowest = state.window.iter().fold(f64::MAX, |min, w| min.min(w.1));
-                let range = highest - lowest;
-                let r = if range == 0.0 {
-                    -50.0 // Middle value
-                } else {
-                    (highest - bar.close) / range * -100.0
+                // A window without range keeps the previous %R; there is none before the first.
+                let r = (highest - bar.close) / (highest - lowest) * -100.0;
+                if r.is_finite() {
+                    state.carried = Some(r);
+                }
+                let Some(r) = state.carried else {
+                    return IndicatorValue::None;
                 };
                 state.smoothed.next(kind, length, deviation, r, bar.volume)
             });
@@ -196,6 +200,20 @@ impl Indicator for WilliamsR {
         self.color.gamma_multiply_u8(26)
     }
 
+    /// The band between the overbought and oversold levels, whatever the middle level's value.
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
+    /// The middle level is dotted, the bands dashed.
+    fn level_style(&self, value: f64) -> crate::model::LineStyle {
+        if value == -50.0 {
+            crate::model::LineStyle::Dotted
+        } else {
+            crate::model::LineStyle::Dashed
+        }
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             height: None,
@@ -203,6 +221,7 @@ impl Indicator for WilliamsR {
             levels: vec![
                 (-20.0, palette::MUTED, "Overbought"),
                 (-80.0, palette::MUTED, "Oversold"),
+                (-50.0, palette::MUTED, "Middle"),
             ],
             fill_between_levels: true,
         }
@@ -250,6 +269,53 @@ mod tests {
             .collect()
     }
 
+    /// Williams %R(3) over a series that turns flat and one flat from the start. %R is
+    /// -100 (highest high - close) / (highest high - lowest low): -80 on bar 2 (5 to 0, close 1),
+    /// -60 on bar 3 (5 to 0, close 2) and -100/3 on bar 4 (3 to 0, close 2); from bar 5 the window
+    /// has no range and keeps -100/3. A two-bar SMA of %R averages those values: -70, -140/3, then
+    /// -100/3. Over flat bars only, no window has a range, so there is no value.
+    #[test]
+    fn flat_windows_keep_the_last_r() {
+        // (label, SMA length, (high, low, close) bars, values by line and bar)
+        type Row = (
+            &'static str,
+            Option<usize>,
+            Vec<(f64, f64, f64)>,
+            Vec<Vec<Option<f64>>>,
+        );
+        let flat = (2.0, 2.0, 2.0);
+        let carried = Some(-100.0 / 3.0);
+        let mut turns_flat = vec![(4.0, 0.0, 2.0), (5.0, 1.0, 4.0), (3.0, 0.0, 1.0)];
+        turns_flat.extend([flat; 9]);
+        let r: Vec<_> = [None, None, Some(-80.0), Some(-60.0)]
+            .into_iter()
+            .chain([carried; 8])
+            .collect();
+        let average: Vec<_> = [None, None, None, Some(-70.0), Some(-140.0 / 3.0)]
+            .into_iter()
+            .chain([carried; 7])
+            .collect();
+        let rows: [Row; 3] = [
+            ("turns flat", None, turns_flat.clone(), vec![r.clone()]),
+            ("turns flat, SMA 2", Some(2), turns_flat, vec![r, average]),
+            ("flat from start", None, vec![flat; 8], vec![vec![None; 8]]),
+        ];
+        for (label, sma, hlc, lines) in rows {
+            let bars = super::super::hlc_bars(&hlc);
+            let mut study = WilliamsR::new(3);
+            if let Some(length) = sma {
+                study.set_input("smoothing", InputValue::Choice(1)).unwrap();
+                study
+                    .set_input("smoothing_length", InputValue::Length(length))
+                    .unwrap();
+            }
+            let fresh = study.clone();
+            study.calculate(&bars);
+            super::super::assert_lines(label, &study, &lines);
+            super::super::assert_replay_matches_batch(&fresh, &bars);
+        }
+    }
+
     /// A source stands in for the close alone. By hand, with the median price of 10.5 on bar 1 and
     /// 9 on bar 2: (12 - 10.5) / 4 * -100 = -37.5 and (12 - 9) / 5 * -100 = -60. Another study's
     /// output keeps the bars' range through its warm-up and is not limited to it: 14 on bar 1
@@ -277,7 +343,8 @@ mod tests {
         assert_eq!(study.values().value(0, 2).map(f64::abs), Some(0.0));
     }
 
-    /// The study opens with dashed one-pixel bands at -20 and -80, filled in its colour at a tenth
+    /// The study opens with dashed one-pixel bands at -20 and -80 and a dotted middle level at
+    /// -50, all in the bands' grey, the band between the outer two filled in its colour at a tenth
     /// of full opacity, and a closing-price source.
     #[test]
     fn opens_with_its_bands_fill_and_source() {
@@ -288,19 +355,51 @@ mod tests {
             [
                 (-20.0, palette::MUTED, "Overbought"),
                 (-80.0, palette::MUTED, "Oversold"),
+                (-50.0, palette::MUTED, "Middle"),
             ]
         );
-        for level in &settings.levels {
-            assert_eq!(
-                (level.pattern, level.width, level.visible),
-                (LineStyle::Dashed, 1.0, true)
-            );
-        }
+        let styles: Vec<_> = settings
+            .levels
+            .iter()
+            .map(|level| (level.pattern, level.width, level.visible))
+            .collect();
+        assert_eq!(
+            styles,
+            [
+                (LineStyle::Dashed, 1.0, true),
+                (LineStyle::Dashed, 1.0, true),
+                (LineStyle::Dotted, 1.0, true),
+            ]
+        );
+        // The band spans the levels at indices 0 and 1, -20 and -80.
+        assert_eq!(study.level_fill_indices(), Some([0, 1]));
         assert!(settings.fill_between_levels);
         assert_eq!(
             settings.level_fill_color,
             Color32::from_rgba_unmultiplied(126, 87, 194, 26)
         );
         assert_eq!(study.source(), Some(StudySource::Price(PriceSource::Close)));
+    }
+
+    /// A reading of -45.678 has two decimals and no percent sign: "-45.68" on a new study and on
+    /// one saved without a precision, "-46" and "-45.6780" with 0 and 4 chosen in the style.
+    #[test]
+    fn readings_have_two_decimals_and_no_percent_sign() {
+        let mut study = ConfiguredStudy::new(Box::new(WilliamsR::default()));
+        let mut rows = vec![(study.settings().precision, "-45.68")];
+        rows.extend([(None, "-45.68"), (Some(0), "-46"), (Some(4), "-45.6780")]);
+        for (precision, text) in rows {
+            let mut settings = study.settings();
+            settings.precision = precision;
+            study.apply_settings(&[], settings).unwrap();
+            assert_eq!(
+                [
+                    study.format_value(-45.678),
+                    study.format_plot_value(0, -45.678)
+                ],
+                [text, text],
+                "{precision:?}"
+            );
+        }
     }
 }

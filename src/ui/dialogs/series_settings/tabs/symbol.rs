@@ -232,6 +232,23 @@ impl SymbolTab {
                     Self::switch(ui, "Thin bars", &mut style.thin_bars);
                     Self::switch(ui, "Phantom bars", &mut style.phantom_bars);
                     Self::candle_colors_section(ui, settings);
+                    let body = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut settings.chart_type_params.styles.range;
+                    ui.label(l10n::text(ui.ctx(), "Forming bar"));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        for (color, body) in [&mut style.forming_up, &mut style.forming_down]
+                            .into_iter()
+                            .zip(body)
+                        {
+                            // A style saved before shows the body colour it draws in until picked.
+                            let mut shown = crate::model::or_candle(*color, body);
+                            if Self::color_picker(ui, &mut shown) {
+                                *color = shown;
+                            }
+                        }
+                    });
+                    ui.end_row();
                 }
                 _ => Self::candle_colors_section(ui, settings),
             }

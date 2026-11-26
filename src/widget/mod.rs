@@ -159,6 +159,7 @@ pub use snapshot::{
 mod volume;
 pub use layout::{
     ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
+    ChartTabRequest, TabSplit, TabSplitSide,
 };
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
@@ -283,6 +284,8 @@ pub struct Chart {
     pub(crate) pending_scroll_time: Option<DateTime<Utc>>,
     /// Whether local navigation centres the first bar at or after the pending time.
     pub(crate) pending_scroll_next: bool,
+    /// Puts the bar for `pending_scroll_time` at the left edge instead of the centre.
+    pending_left_edge: Option<sync::LeftEdge>,
     /// A range set before the first layout and the bar spacing, right offset and tracking mode
     /// its last fit left, fitted again at the plot width until the first laid-out frame is shown.
     pending_visible_range: Option<(time_scale::PendingRange, (f32, f64, bool))>,
@@ -600,6 +603,9 @@ pub struct Chart {
     /// Set by the context menus while one is open, so the next frame draws no crosshair or
     /// tooltip under it. Cleared by every frame.
     pub(crate) menu_open: bool,
+    /// Whether this frame painted the Dot crosshair's dot in the plot under the pointer, which
+    /// then stands in for the hidden system pointer. Cleared by every frame.
+    pub(crate) pointer_dot: bool,
     /// Set by the context menus while they would answer a touch held on the price pane with
     /// a limit order, so the next frame's hold asks for one in place of its values. Cleared by
     /// every frame.

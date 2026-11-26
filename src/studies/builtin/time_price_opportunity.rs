@@ -39,6 +39,12 @@ type ProfileEdits<T> = (Option<(usize, usize)>, Vec<T>);
 /// pre-market or post-market alone, counting only the bars of those hours, and custom hours keep
 /// whole periods on the period grid. Split extended hours divides the trading day into its
 /// pre-market, regular and post-market profiles.
+///
+/// Ticks per row 0 sizes rows automatically: from the price range of the latest 300 bars up to
+/// the last visible bar, aiming at about 80 rows, with the ticks per row rounded up to a multiple
+/// of 5 below 100 ticks, of 50 below 1,000, of 500 below 10,000 and so on. Without an instrument
+/// tick size the row is a 1, 2, 2.5 or 5 step. Zooming or scrolling the price scale keeps the
+/// rows.
 #[derive(Clone, Debug)]
 pub struct TimePriceOpportunity {
     row_ticks: usize,
@@ -79,7 +85,7 @@ impl TimePriceOpportunity {
             composites: (None, Vec::new()),
             splits: (None, Vec::new()),
             config: TPOConfig {
-                // A zero row lets the chart fit the rows to the visible range.
+                // A zero row lets the chart size the rows from its bars.
                 tick_size: 0.0,
                 period_minutes: period_minutes.max(1),
                 ..Default::default()

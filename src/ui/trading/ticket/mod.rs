@@ -75,6 +75,8 @@ impl Bracket {
     /// preset.take_profit = Some(Bracket::new(BracketMode::Ticks, 8.0));
     /// preset.sizing = Some(PresetSizing::RiskPercent(1.0));
     /// preset.order_type = Some(OrderKind::Limit);
+    /// preset.price_ticks = Some(-5.0);
+    /// preset.expires_after = Some(std::time::Duration::from_secs(3 * 86_400));
     /// ```
     pub fn new(mode: BracketMode, value: f64) -> Self {
         Self { mode, value }
@@ -184,6 +186,23 @@ pub struct OrderPreset {
     /// The time in force to select, or `None` to keep the ticket's.
     #[serde(default)]
     pub time_in_force: Option<TimeInForce>,
+    /// The limit or stop price, or a stop-limit order's stop price, in ticks from the ask of a
+    /// buy, or from the last price without an ask, saved with a
+    /// [`Limit`](Kind::Limit), [`Stop`](Kind::Stop) or [`StopLimit`](Kind::StopLimit)
+    /// [`order_type`](Self::order_type); negative below. A sell takes the same number of ticks
+    /// the other way from the bid. Applying it enters the price in ticks. `None` keeps the
+    /// ticket's price.
+    #[serde(default)]
+    pub price_ticks: Option<f64>,
+    /// A stop-limit order's limit price, in ticks like [`price_ticks`](Self::price_ticks). Read
+    /// only with `price_ticks`.
+    #[serde(default)]
+    pub limit_ticks: Option<f64>,
+    /// How long after the preset is applied a [`GoodTillDate`](TimeInForce::GoodTillDate) order
+    /// expires, in whole minutes, saved with that [`time_in_force`](Self::time_in_force). `None`
+    /// keeps the ticket's expiry.
+    #[serde(default)]
+    pub expires_after: Option<std::time::Duration>,
 }
 
 fn restores() -> bool {
@@ -228,6 +247,9 @@ impl OrderPreset {
             trail: None,
             trail_activation: None,
             time_in_force: None,
+            price_ticks: None,
+            limit_ticks: None,
+            expires_after: None,
         }
     }
 }
@@ -647,6 +669,14 @@ impl OrderTicket {
         .filter(|price| price.is_finite())
     }
 
+    /// The price that ticks entry counts from: the ask of a buy or the bid of a sell, else the
+    /// last price.
+    fn reference(&self, market: &Market<'_>) -> Option<f64> {
+        self.touch(market)
+            .or(market.last)
+            .filter(|price| price.is_finite())
+    }
+
     /// The price the order enters at: its limit price, its stop price, or for a market order the
     /// ask of a buy or the bid of a sell, or the last price without them. A trailing stop enters
     /// at its stop where it starts trailing: from the activation price, else the last price.
@@ -1036,12 +1066,37 @@ impl OrderTicket {
             {
                 self.set_trail(distance, preset.trail_activation);
             }
+            if self.kind == kind
+                && let Some((reference, ticks)) = self
+                    .reference(market)
+                    .zip(preset.price_ticks.filter(|ticks| ticks.is_finite()))
+            {
+                let sign = if self.side == OrderSide::Buy {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let grid = market.grid();
+                self.price = grid.offset(reference, sign * ticks);
+                if let Some(limit) = preset.limit_ticks.filter(|ticks| ticks.is_finite()) {
+                    self.limit = grid.offset(reference, sign * limit);
+                }
+                self.price_in_ticks = true;
+            }
         }
         if let Some(value) = preset
             .time_in_force
             .filter(|value| market.rules.time_in_force.contains(value))
         {
             self.time_in_force = value;
+            if value == TimeInForce::GoodTillDate
+                && let Some(expires) = preset
+                    .expires_after
+                    .and_then(|after| chrono::TimeDelta::from_std(after).ok())
+                    .and_then(|after| chrono::Utc::now().checked_add_signed(after))
+            {
+                self.expires = Some(expires);
+            }
         }
     }
 
@@ -1059,6 +1114,39 @@ impl OrderTicket {
             }
             _ => (None, None),
         };
+        // A sell counts the other way, so that one preset serves both sides.
+        let sign = if self.side == OrderSide::Buy {
+            1.0
+        } else {
+            -1.0
+        };
+        let ticks = |price: f64| {
+            let reference = self.reference(market)?;
+            Some(sign * market.grid().steps_between(reference, price)).filter(|t| t.is_finite())
+        };
+        let price_ticks = (self.preset_fields.order_type
+            && matches!(self.kind, Kind::Limit | Kind::Stop | Kind::StopLimit))
+        .then(|| ticks(self.price))
+        .flatten();
+        let limit_ticks = price_ticks
+            .filter(|_| self.kind == Kind::StopLimit)
+            .and_then(|_| ticks(self.limit));
+        let expires_after = self
+            .expires
+            .filter(|_| {
+                self.preset_fields.time_in_force && self.time_in_force == TimeInForce::GoodTillDate
+            })
+            .and_then(|expires| {
+                // The field takes whole minutes: round the seconds between typing and saving away.
+                let minutes = (expires - chrono::Utc::now())
+                    .num_seconds()
+                    .saturating_add(30)
+                    / 60;
+                u64::try_from(minutes)
+                    .ok()
+                    .filter(|minutes| *minutes >= 1)
+                    .map(|minutes| std::time::Duration::from_secs(minutes * 60))
+            });
         OrderPreset {
             name,
             quantity,
@@ -1088,6 +1176,9 @@ impl OrderTicket {
                 .preset_fields
                 .time_in_force
                 .then_some(self.time_in_force),
+            price_ticks,
+            limit_ticks,
+            expires_after,
         }
     }
 }
@@ -1430,6 +1521,8 @@ mod tests {
                 serde_json::from_str(&serde_json::to_string(&preset).unwrap()).unwrap();
             assert_eq!(preset.quantity, saved, "{sizing:?}");
             market.capabilities.brackets = brackets;
+            // The market moved: the preset's entry, 0 ticks from it, is the new price.
+            market.last = Some(200.0);
             let mut ticket = OrderTicket {
                 symbol: "ES".into(),
                 kind: Kind::Limit,
@@ -1648,6 +1741,144 @@ mod tests {
             ticket.apply(&preset, &market);
             let request = ticket.request(&ctx, &market).unwrap();
             assert_eq!(request.order_type, expected, "{saved}");
+        }
+    }
+
+    /// A good-till-date preset keeps the time from saving to the expiry and sets the expiry that
+    /// far ahead of the time it is applied. Presets saved before keep the ticket's expiry.
+    #[test]
+    fn presets_keep_the_time_to_a_good_till_date_expiry() {
+        let ctx = egui::Context::default();
+        let mut rules = TradingRules::new("ES");
+        rules.time_in_force.push(TimeInForce::GoodTillDate);
+        let market = market(&rules);
+        let days = chrono::TimeDelta::days(3);
+        let own = "2026-12-01T21:00:00Z".parse().unwrap();
+        let saving = OrderTicket {
+            symbol: "ES".into(),
+            time_in_force: TimeInForce::GoodTillDate,
+            expires: Some(chrono::Utc::now() + days),
+            ..OrderTicket::default()
+        };
+        let saved = serde_json::to_string(&saving.preset(&ctx, "Swing".into(), &market)).unwrap();
+        // Literal produced by serializing OrderPreset on origin/main.
+        let old = r#"{"name":"Swing","quantity":1.0,"take_profit":null,"take_profit_levels":[],"first_level_stop_loss":null,"stop_loss":null,"sizing":"Units","exits":true,"order_type":null,"trail":null,"trail_activation":null,"time_in_force":"GoodTillDate"}"#;
+        for (saved, legacy) in [(saved.as_str(), false), (old, true)] {
+            let preset: OrderPreset = serde_json::from_str(saved).unwrap();
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(),
+                expires: legacy.then_some(own),
+                ..OrderTicket::default()
+            };
+            let before = chrono::Utc::now();
+            ticket.apply(&preset, &market);
+            let after = chrono::Utc::now();
+            let expires = ticket.request(&ctx, &market).unwrap().expires.unwrap();
+            if legacy {
+                assert_eq!(expires, own);
+            } else {
+                assert!(
+                    before + days <= expires && expires <= after + days,
+                    "{expires}"
+                );
+            }
+        }
+    }
+
+    /// A pending order preset keeps its prices in ticks from the quote of its side and applies
+    /// them in ticks from the applying side's quote, mirrored for the other side, after the
+    /// market moves. Presets saved before keep the price seeded from the quote.
+    #[test]
+    fn presets_keep_pending_prices_in_ticks_from_the_quote() {
+        let ctx = egui::Context::default();
+        let rules = TradingRules::new("ES");
+        let quoted = |ask, bid| Market {
+            ask: Some(ask),
+            bid: Some(bid),
+            capabilities: Capabilities {
+                stop_limit: true,
+                ..market(&rules).capabilities
+            },
+            ..market(&rules)
+        };
+        // The market moves 4 ticks up between saving and applying.
+        let (saving_market, applying) = (quoted(100.25, 100.0), quoted(101.25, 101.0));
+        // Literal produced by serializing OrderPreset on origin/main.
+        let old = r#"{"name":"Entry","quantity":1.0,"take_profit":null,"take_profit_levels":[],"first_level_stop_loss":null,"stop_loss":null,"sizing":"Units","exits":true,"order_type":"Limit","trail":null,"trail_activation":null,"time_in_force":"Day"}"#;
+        let stop_limit = |stop, limit| OrderType::StopLimit { stop, limit };
+        for (kind, saved, side, expected, ticks) in [
+            // 5 ticks below the ask of 100.25 when saved.
+            (
+                Kind::Limit,
+                Some((99.0, 99.0)),
+                OrderSide::Buy,
+                OrderType::Limit(100.0),
+                -5.0,
+            ),
+            (
+                Kind::Limit,
+                Some((99.0, 99.0)),
+                OrderSide::Sell,
+                OrderType::Limit(102.25),
+                5.0,
+            ),
+            // Stop 3 and limit 5 ticks above the ask.
+            (
+                Kind::StopLimit,
+                Some((101.0, 101.5)),
+                OrderSide::Buy,
+                stop_limit(102.0, 102.5),
+                3.0,
+            ),
+            (
+                Kind::StopLimit,
+                Some((101.0, 101.5)),
+                OrderSide::Sell,
+                stop_limit(100.25, 99.75),
+                -3.0,
+            ),
+            (
+                Kind::Limit,
+                None,
+                OrderSide::Buy,
+                OrderType::Limit(101.25),
+                0.0,
+            ),
+        ] {
+            let saved = match saved {
+                Some((price, limit)) => {
+                    let ticket = OrderTicket {
+                        symbol: "ES".into(),
+                        kind,
+                        price,
+                        limit,
+                        ..OrderTicket::default()
+                    };
+                    serde_json::to_string(&ticket.preset(&ctx, "Entry".into(), &saving_market))
+                        .unwrap()
+                }
+                None => old.to_owned(),
+            };
+            let preset: OrderPreset = serde_json::from_str(&saved).unwrap();
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(),
+                side,
+                ..OrderTicket::default()
+            };
+            ticket.apply(&preset, &applying);
+            let request = ticket.request(&ctx, &applying).unwrap();
+            assert_eq!(request.order_type, expected, "{saved}, {side:?}");
+            let quote = if side == OrderSide::Buy {
+                101.25
+            } else {
+                101.0
+            };
+            let shown = applying.grid().steps_between(quote, ticket.price);
+            assert_eq!(
+                (ticket.price_in_ticks, shown),
+                (ticks != 0.0, ticks),
+                "{saved}"
+            );
         }
     }
 

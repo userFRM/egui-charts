@@ -404,6 +404,7 @@ pub fn render_chart_type(
                 ctx.price_ctx,
                 shown,
                 ctx.range_phantoms,
+                ctx.range_forming,
                 &params.type_params.styles.range,
                 params.bar_width(),
                 params.wick_width(),
@@ -725,9 +726,16 @@ mod tests {
         chart.config_mut().show_volume = false;
         chart.set_timeframe(Timeframe::Min30);
         chart.set_chart_type(ChartType::TimePriceOpportunity);
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("ES").with_tick_size(0.25),
+        ));
+        chart.config_mut().show_legend_badge = false;
         let single_print = crate::tokens::DESIGN_TOKENS.semantic.tpo.single_print;
         let mut draw = |params: ChartTypeParams| {
-            chart.set_chart_type_params(params);
+            chart.set_chart_type_params(ChartTypeParams {
+                tpo_row_ticks: 1,
+                ..params
+            });
             let ctx = Context::default();
             let output = ctx.run_ui(
                 RawInput {

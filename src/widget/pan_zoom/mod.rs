@@ -948,18 +948,11 @@ impl Chart {
 
         if let Some(time) = self.pending_scroll_time
             && let Some(first) = self.state.data().bars.first()
+            // A kept left edge waits until the new interval's bars replace the old ones.
+            && self.pending_left_edge.is_none_or(|edge| {
+                edge.bars != super::layout::bars_key(self) && !self.state.shown().is_empty()
+            })
         {
-            let bars = &self.state.data().bars;
-            let next = bars.partition_point(|bar| bar.time < time);
-            let index = if self.pending_scroll_next {
-                next.min(bars.len() - 1)
-            } else if next == 0 {
-                0
-            } else if next == bars.len() || time - bars[next - 1].time <= bars[next].time - time {
-                next - 1
-            } else {
-                next
-            };
             let needs_history = time < first.time
                 && !self.symbol.is_empty()
                 && !self.feed.history_complete
@@ -967,13 +960,30 @@ impl Chart {
                     .feed_link
                     .as_ref()
                     .is_some_and(|link| !link.paging_stopped);
-            let scale = self.state.time_scale_mut();
-            let half_window = ((chart_width - 1.0) / scale.bar_spacing() - 1.0) / 2.0;
-            scale.set_right_offset(
-                scale.position(index as f64) - scale.base_idx() as f64 + f64::from(half_window),
-            );
+            if let Some(edge) = self.pending_left_edge {
+                self.keep_left_edge(time, edge);
+            } else {
+                let bars = &self.state.data().bars;
+                let next = bars.partition_point(|bar| bar.time < time);
+                let index = if self.pending_scroll_next {
+                    next.min(bars.len() - 1)
+                } else if next == 0 {
+                    0
+                } else if next == bars.len() || time - bars[next - 1].time <= bars[next].time - time
+                {
+                    next - 1
+                } else {
+                    next
+                };
+                let scale = self.state.time_scale_mut();
+                let half_window = ((chart_width - 1.0) / scale.bar_spacing() - 1.0) / 2.0;
+                scale.set_right_offset(
+                    scale.position(index as f64) - scale.base_idx() as f64 + f64::from(half_window),
+                );
+            }
             if !needs_history {
                 self.pending_scroll_time = None;
+                self.pending_left_edge = None;
             }
         }
 
@@ -2065,20 +2075,26 @@ mod tests {
     }
 
     /// Axes show their drag direction when both scale permissions allow it, otherwise the
-    /// plot's cursor for the crosshair style. The plot keeps its style cursor.
+    /// plot's cursor for the crosshair style. The plots keep their style cursor: Dot hides the
+    /// pointer under its painted dot, and an axis, which paints no dot, shows the arrow.
     #[test]
     fn axis_cursors_follow_axis_drag_permissions() {
         use crate::config::CrosshairStyle;
         use egui::CursorIcon;
 
         let key = crate::model::SeriesScale::Separate(1);
-        for (style, plot) in [
-            (CrosshairStyle::Full, CursorIcon::Crosshair),
-            (CrosshairStyle::Dot, CursorIcon::Default),
+        for (style, plot, axis) in [
+            (
+                CrosshairStyle::Full,
+                CursorIcon::Crosshair,
+                CursorIcon::Crosshair,
+            ),
+            (CrosshairStyle::Dot, CursorIcon::None, CursorIcon::Default),
         ] {
             for (enabled, drag) in [(true, true), (false, true), (true, false)] {
                 for (target, resize) in [
                     ("plot", plot),
+                    ("pane plot", plot),
                     ("time", CursorIcon::ResizeHorizontal),
                     ("price", CursorIcon::ResizeVertical),
                     ("pane", CursorIcon::ResizeVertical),
@@ -2086,7 +2102,7 @@ mod tests {
                 ] {
                     let ctx = egui::Context::default();
                     let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-                    if target == "pane" {
+                    if target.starts_with("pane") {
                         chart.add_indicator(Box::new(
                             crate::studies::CustomIndicator::new("Pane", |bars| {
                                 vec![crate::studies::IndicatorValue::Single(50.0); bars.len()]
@@ -2123,6 +2139,7 @@ mod tests {
                         ),
                         "price" => Pos2::new(rect.right() + 10.0, rect.center().y),
                         "series" => Pos2::new(rect.left() - 10.0, rect.center().y),
+                        "pane plot" => chart.get_rendered_indicator_panes()[0].chart_rect.center(),
                         _ => {
                             let pane = &chart.get_rendered_indicator_panes()[0];
                             Pos2::new(pane.chart_rect.right() + 10.0, pane.panel_rect.center().y)
@@ -2131,7 +2148,13 @@ mod tests {
                     // Hover is hit-tested against the widgets of the previous frame.
                     frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(pos)]);
                     let cursor = frame(&ctx, &mut chart, 1.1, vec![Event::PointerMoved(pos)]);
-                    let expected = if enabled && drag { resize } else { plot };
+                    let expected = if target.ends_with("plot") {
+                        plot
+                    } else if enabled && drag {
+                        resize
+                    } else {
+                        axis
+                    };
                     assert_eq!(
                         cursor, expected,
                         "{style:?}, enabled={enabled}, drag={drag}, {target}"
