@@ -4325,8 +4325,9 @@ mod tests {
 
     /// Charts saved as snapshots and restored into a new layout show each mirrored drawing once,
     /// in the price pane or a linked study pane, still linked, however often that happens. A
-    /// restore or a load replaces only the drawings of the symbol it shows: those a chart put
-    /// aside on other symbols stay linked, and a chart new to a slot starts without links.
+    /// restore or a load deletes no drawing of the other charts: without storage a restore
+    /// replaces the copies a chart put aside on other symbols, and the chart takes the mirrored
+    /// drawings again when it returns to them. A chart new to a slot starts without links.
     #[cfg(feature = "ui")]
     #[test]
     fn mirrored_drawings_restored_from_snapshots_stay_single_and_linked() {
@@ -4397,8 +4398,8 @@ mod tests {
             );
         }
 
-        // Restored from a snapshot of a third symbol, away or on show: the copy put aside on the
-        // symbol stays linked and takes the move made meanwhile.
+        // Restored from a snapshot of a third symbol, away or on show: the other chart keeps its
+        // line, and the restored chart takes it with the move made meanwhile when it returns.
         let third = {
             let mut chart = bars(60);
             chart.set_symbol("THIRD");
