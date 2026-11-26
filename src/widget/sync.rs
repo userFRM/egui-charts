@@ -25,6 +25,19 @@ impl VisibleTimeRange {
     }
 }
 
+/// The bar at the left edge when the interval changed, kept by
+/// [`TimeScaleOptions::keep_left_edge_on_interval_change`](crate::config::TimeScaleOptions::keep_left_edge_on_interval_change).
+/// Its open is the pending scroll time.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LeftEdge {
+    /// The end of the bar's period.
+    end: DateTime<Utc>,
+    /// Where the left edge cut the bar's slot, from -0.5 at its left side to 0.5 at its right.
+    offset: f64,
+    /// The bars held at the change, which the new interval's bars replace.
+    pub(super) bars: super::layout::BarsKey,
+}
+
 impl Chart {
     /// The time of the nearest eligible hovered point, the start of the hovered whitespace slot
     /// after the last bar, or `None` elsewhere outside the data.
@@ -208,6 +221,38 @@ impl Chart {
         Some(bars.partition_point(|bar| bar.time < bars[index].time) as f64)
     }
 
+    /// The open of the bar at the left edge and how to keep it there, `None` without bars or
+    /// before the first laid-out frame.
+    pub(super) fn left_edge(&self) -> Option<(DateTime<Utc>, LeftEdge)> {
+        let shown = self.state.shown();
+        let scale = self.state.time_scale();
+        let left = scale.coord_to_idx_precise(0.0, 0.0, scale.width());
+        if shown.is_empty() || self.prev_width.is_none() || !left.is_finite() {
+            return None;
+        }
+        let index = (left + 0.5).floor().clamp(0.0, (shown.len() - 1) as f64);
+        let (open, end) = self.bar_period(index as usize);
+        let offset = (left - index).clamp(-0.5, 0.5);
+        let bars = super::layout::bars_key(self);
+        Some((open, LeftEdge { end, offset, bars }))
+    }
+
+    /// Puts the bar of the shown interval for the kept left edge at the left of the plot,
+    /// keeping the bar spacing; the oldest bar while older history is loading.
+    pub(super) fn keep_left_edge(&mut self, open: DateTime<Utc>, edge: LeftEdge) {
+        let Some(last) = self.state.shown().len().checked_sub(1) else {
+            return;
+        };
+        let index = self
+            .synced_index(open, edge.end)
+            .unwrap_or(0.0)
+            .min(last as f64);
+        let scale = self.state.time_scale_mut();
+        let slots = (f64::from(scale.width()) - 1.0) / f64::from(scale.bar_spacing());
+        let left = index + edge.offset;
+        scale.set_right_offset(scale.position(left) - scale.base_idx() as f64 + slots - 0.5);
+    }
+
     /// The visible UTC range, including whitespace mapped by [`Self::index_to_time`].
     /// Empty charts return `None`.
     /// Between bars, time is interpolated, so session gaps retain fractional edge positions.
@@ -338,9 +383,13 @@ impl Chart {
 
     /// Restores local bar spacing and right offset, for example after inspecting another view.
     /// These coordinates depend on the data and plot width. Use [`Self::apply_synced_time_range`]
-    /// between independent charts.
+    /// between independent charts. The restored view replaces a left edge that an interval
+    /// change is keeping until its bars arrive.
     pub fn apply_synced_time_scale(&mut self, bar_spacing: f32, right_offset: f32) {
         self.history.clear_view_restore();
+        if self.pending_left_edge.take().is_some() {
+            self.pending_scroll_time = None;
+        }
         self.state.time_scale_mut().set_bar_spacing(bar_spacing);
         self.state.time_scale_mut().set_right_offset(right_offset);
     }

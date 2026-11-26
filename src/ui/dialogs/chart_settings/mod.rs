@@ -888,6 +888,10 @@ impl SettingsDialog {
                     .scales_and_lines
                     .weekday_names
                     .or(scales.weekday_names);
+                let keep_left_edge = template
+                    .scales_and_lines
+                    .keep_left_edge_on_interval_change
+                    .or(scales.keep_left_edge_on_interval_change);
                 let session_breaks = template
                     .show_session_breaks
                     .or(self.settings.show_session_breaks);
@@ -924,6 +928,9 @@ impl SettingsDialog {
                 self.settings.scales_and_lines.date_format = date_format;
                 self.settings.scales_and_lines.use_24_hour = use_24_hour;
                 self.settings.scales_and_lines.weekday_names = weekday_names;
+                self.settings
+                    .scales_and_lines
+                    .keep_left_edge_on_interval_change = keep_left_edge;
                 self.settings.show_session_breaks = session_breaks;
                 self.settings.crosshair_lines = crosshair_lines;
                 self.settings.extended_hours = extended_hours;
@@ -1023,6 +1030,9 @@ impl SettingsDialog {
                 Some(crate::widget::settings::DateFormat::Default);
             self.settings.scales_and_lines.use_24_hour = Some(true);
             self.settings.scales_and_lines.weekday_names = Some(Default::default());
+            self.settings
+                .scales_and_lines
+                .keep_left_edge_on_interval_change = Some(false);
             let palette = crate::config::ChartConfig::default().with_theme(theme);
             // The default styles of the chart types hold the dark preset's candle colours.
             let params = self.settings.chart_type_params.get_or_insert_default();
@@ -1132,6 +1142,7 @@ mod tests {
                 options.crosshair.horz_label_visible = false;
                 options.time_scale.use_24_hour = false;
                 options.time_scale.weekday_names = crate::scales::WeekdayNames::Never;
+                options.time_scale.keep_left_edge_on_interval_change = true;
                 chart.set_chart_options(options);
                 // A customised last price line, which Reset returns to a new chart's.
                 if let Some(style) = chart.series_style_mut(crate::widget::SeriesId::MAIN) {
@@ -1217,12 +1228,14 @@ mod tests {
                     (
                         scales.date_format.clone(),
                         scales.use_24_hour,
-                        scales.weekday_names
+                        scales.weekday_names,
+                        scales.keep_left_edge_on_interval_change
                     ),
                     (
                         Some(crate::widget::settings::DateFormat::Default),
                         Some(true),
-                        Some(crate::scales::WeekdayNames::Default)
+                        Some(crate::scales::WeekdayNames::Default),
+                        Some(false)
                     ),
                     "{preset}"
                 );
@@ -3059,8 +3072,9 @@ mod tests {
         }
     }
 
-    /// Time scale controls display a host pattern by its sample, and choose the date, clock and
-    /// weekday names. Invalid host patterns stay listed without a formatting panic.
+    /// Time scale controls display a host pattern by its sample, and choose the date, clock,
+    /// weekday names and whether an interval change keeps the left edge. Invalid host patterns
+    /// stay listed without a formatting panic.
     #[test]
     fn time_label_choices_are_made_in_the_dialog() {
         use crate::scales::WeekdayNames;
@@ -3079,6 +3093,7 @@ mod tests {
                 "12-hour",
                 "Default",
                 "Always",
+                "Keep left edge on interval change",
                 "Ok",
             ];
             let SettingsAction::Apply(settings) = click_through(&mut dialog, &labels) else {
@@ -3089,20 +3104,22 @@ mod tests {
                 (
                     scales.date_format.clone(),
                     scales.use_24_hour,
-                    scales.weekday_names
+                    scales.weekday_names,
+                    scales.keep_left_edge_on_interval_change
                 ),
                 (
                     Some(DateFormat::Pattern("%d.%m.%Y".into())),
                     Some(false),
-                    Some(WeekdayNames::Always)
+                    Some(WeekdayNames::Always),
+                    Some(true)
                 )
             );
         }
     }
 
     /// Templates saved before the fractional margin, font family, thousands separator, session
-    /// breaks, analyst target colours, last price bar and time label choices keep the chart's
-    /// choices. Their whole-bar margin keeps the chart's fractional margin when it is the same
+    /// breaks, analyst target colours, last price bar, time label and left edge choices keep the
+    /// chart's choices. Their whole-bar margin keeps the chart's fractional margin when it is the same
     /// margin unedited, whether the chart's margin is in bars or pixels.
     /// Their pane separators follow the theme, as they did when such a template was saved.
     #[test]
@@ -3146,6 +3163,7 @@ mod tests {
                 ("/scales_and_lines", "date_format"),
                 ("/scales_and_lines", "use_24_hour"),
                 ("/scales_and_lines", "weekday_names"),
+                ("/scales_and_lines", "keep_left_edge_on_interval_change"),
                 ("/scales_appearance", "font_family"),
             ] {
                 let group = saved.pointer_mut(group).unwrap().as_object_mut().unwrap();
@@ -3159,6 +3177,7 @@ mod tests {
             options.time_scale.right_offset_pixels = pixels;
             options.time_scale.use_24_hour = false;
             options.time_scale.weekday_names = WeekdayNames::Never;
+            options.time_scale.keep_left_edge_on_interval_change = true;
             let mut chart = chart(&[100.0], &[110.0]).with_chart_options(options);
             chart.set_date_format(Some("%d.%m.%Y".into()));
             chart.config_mut().axis_font_family = FontFamily::Monospace;
@@ -3236,6 +3255,11 @@ mod tests {
                     Some(false),
                     Some(WeekdayNames::Never),
                 ),
+                "{pixels:?}"
+            );
+            assert_eq!(
+                shown.scales_and_lines.keep_left_edge_on_interval_change,
+                Some(true),
                 "{pixels:?}"
             );
             dialog.settings().apply_to_chart(&mut chart).unwrap();

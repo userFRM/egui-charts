@@ -8,7 +8,9 @@ use egui_charts::services::UserSettings;
 use egui_charts::studies::IndicatorFactory;
 use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
 use egui_charts::ui::widget_bar::ObjectTreeAction;
-use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SavedLayout, SeriesId};
+use egui_charts::widget::{
+    Chart, ChartLayout, ChartLayoutMode, ChartTabRequest, SavedLayout, SeriesId,
+};
 use std::sync::Arc;
 
 pub(super) struct DemoChart {
@@ -226,6 +228,73 @@ impl DemoApp {
         self.layout.set_active(0);
     }
 
+    /// Applies a request of the tab strip to the charts in their slots and confirms it to the
+    /// layout, so each chart keeps its groups, detached state and drawing links.
+    pub(super) fn apply_tab_request(&mut self, request: ChartTabRequest) {
+        let count = self.extra_charts.len() + 1;
+        match request {
+            ChartTabRequest::Add if count < ChartLayoutMode::Tabs.chart_count() => {
+                let mut copy =
+                    self.copy_chart(&self.chart, &self.live, &self.comparisons, &self.spreads);
+                // New slots read stored drawings and receive the others through synchronization.
+                copy.chart.drawings_mut().drawings.clear();
+                self.extra_charts.push(copy);
+                // The frame's activation brings the new chart into `chart`.
+                self.layout.set_active(count);
+            }
+            ChartTabRequest::Close(slot) if count > 1 && slot < count => {
+                // Replayed charts are named by slot.
+                self.stop_replay();
+                if slot == self.layout_slot {
+                    self.activate_chart_slot(if slot + 1 < count { slot + 1 } else { slot - 1 });
+                }
+                self.extra_charts
+                    .remove(slot - usize::from(slot > self.layout_slot));
+                if self.layout_slot > slot {
+                    self.layout_slot -= 1;
+                }
+                let table = &mut self.fixed_data_table;
+                if table.1 == slot {
+                    table.0.close();
+                } else if table.1 > slot {
+                    table.1 -= 1;
+                }
+                self.layout.remove_slot(slot);
+            }
+            ChartTabRequest::Move { from, to } if from.max(to) < count && from != to => {
+                let moved = |slot: usize| {
+                    if slot == from {
+                        to
+                    } else if from < to && (from + 1..=to).contains(&slot) {
+                        slot - 1
+                    } else if to < from && (to..from).contains(&slot) {
+                        slot + 1
+                    } else {
+                        slot
+                    }
+                };
+                let active = self.layout_slot;
+                let mut extra: Vec<_> = std::mem::take(&mut self.extra_charts)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, chart)| (moved(index + usize::from(index >= active)), chart))
+                    .collect();
+                extra.sort_by_key(|(slot, _)| *slot);
+                self.extra_charts = extra.into_iter().map(|(_, chart)| chart).collect();
+                self.layout_slot = moved(active);
+                for slot in self
+                    .replay_slots
+                    .iter_mut()
+                    .chain([&mut self.fixed_data_table.1])
+                {
+                    *slot = moved(*slot);
+                }
+                self.layout.move_slot(from, to);
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn activate_chart_slot(&mut self, slot: usize) {
         if slot == self.layout_slot {
             return;
@@ -430,6 +499,7 @@ impl DemoApp {
 
     /// Points storage, the toolbars and the grid selector at the workspace on show.
     fn refresh_workspace(&mut self) {
+        self.layout.tab_controls = true;
         // The fixed table names its chart by slot, which now holds another workspace's chart.
         self.fixed_data_table.0.close();
         // Other tabs may have edited the same symbol since this workspace was last shown.
@@ -681,7 +751,12 @@ impl DemoApp {
             .collect::<Result<_, _>>()
             .map_err(|error| format!("Could not save the layout: {error}"))?;
         // The demo keeps the chart sizes in the layout's groups document.
-        Ok(SavedLayout::new(mode, charts))
+        let mut saved = SavedLayout::new(mode, charts);
+        saved.tab_split = self
+            .layout
+            .tab_split()
+            .filter(|_| mode == ChartLayoutMode::Tabs);
+        Ok(saved)
     }
 
     pub(super) fn capture_comparisons(
@@ -736,6 +811,7 @@ impl DemoApp {
             return true;
         }
         if layout.charts.is_empty()
+            || layout.charts.len() > ChartLayoutMode::Tabs.chart_count()
             || (layout.mode != ChartLayoutMode::Tabs
                 && layout.charts.len() != layout.mode.chart_count())
         {
@@ -841,6 +917,7 @@ impl DemoApp {
             }
         }
         self.restore_layout_groups(groups);
+        self.layout.set_tab_split(layout.tab_split);
         for (slot, saved) in comparisons.drain(..).enumerate() {
             if slot == self.layout_slot {
                 super::comparison::restore(
@@ -1799,6 +1876,185 @@ mod tests {
             other.contains(&123.375) && other.contains(&131.125) && !other.contains(&117.625),
             "other layout: {other:?}"
         );
+    }
+
+    /// The symbol and interval of each of the demo's charts in slot order.
+    fn slot_states(app: &DemoApp) -> Vec<(String, Option<Timeframe>)> {
+        (0..app.extra_charts.len() + 1)
+            .map(|slot| {
+                let chart = if slot == app.layout_slot {
+                    &app.chart
+                } else {
+                    &app.extra_charts[slot - usize::from(slot > app.layout_slot)].chart
+                };
+                (chart.symbol().to_owned(), chart.timeframe())
+            })
+            .collect()
+    }
+
+    fn slot_symbols(app: &DemoApp) -> Vec<String> {
+        slot_states(app)
+            .into_iter()
+            .map(|(symbol, _)| symbol)
+            .collect()
+    }
+
+    /// The demo adds, splits, moves and closes its charts through the tab strip: a new tab copies
+    /// the active chart and is selected, a tab dropped on the chart area is shown beside it and
+    /// saved so, a moved chart keeps its sync group, a closed tab's chart leaves the slots, and the
+    /// last tab offers no close button.
+    #[test]
+    fn chart_tabs_add_close_and_move_through_the_strip() {
+        use egui_charts::widget::TabSplitSide;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            chrono::Utc::now(),
+            true,
+        );
+        app.ensure_chart_slots(ChartLayoutMode::Tabs);
+        app.activate_chart_slot(1);
+        app.switch_symbol("STOCKB");
+        // A tab reads its stored drawings once shown, and the layout saves only after that.
+        settle(&mut app, &ctx);
+        app.activate_chart_slot(0);
+        app.layout.set_sync_group(0, Some("Desk".into()));
+        settle(&mut app, &ctx);
+        let first = app.chart.symbol().to_owned();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(5);
+        h.get_by_label("New tab").click();
+        h.run_steps(3);
+        let app = h.state();
+        assert_eq!(
+            slot_symbols(app),
+            [first.as_str(), "STOCKB", first.as_str()]
+        );
+        assert_eq!((app.layout_slot, app.layout.active()), (2, 2));
+        let area = app.chart.get_rendered_price_rect();
+        let tabs = |h: &Harness<'_, Box<DemoApp>>| {
+            let mut tabs: Vec<_> = h
+                .get_all_by_role(egui::Role::Tab)
+                .map(|tab| tab.rect())
+                .collect();
+            tabs.sort_by(|a, b| a.left().total_cmp(&b.left()));
+            tabs
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let drag = |h: &mut Harness<'_, Box<DemoApp>>, from: egui::Pos2, to: egui::Pos2| {
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(button(from, true));
+            h.step();
+            for step in 1..=10 {
+                h.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 10.0)));
+                h.step();
+            }
+            h.event(button(to, false));
+            h.run_steps(3);
+        };
+        // The first tab dropped on the right part of the chart area is shown there and saved.
+        let to = egui::pos2(area.left() + 0.9 * area.width(), area.center().y);
+        let from = tabs(&h)[0].center();
+        drag(&mut h, from, to);
+        let split = h.state().layout.tab_split();
+        assert_eq!(
+            split.map(|split| (split.slot, split.side)),
+            Some((0, TabSplitSide::Right))
+        );
+        assert_eq!(h.state_mut().capture_layout().unwrap().tab_split, split);
+        // The drop selected the first tab; the third is selected again.
+        let tabs = tabs(&h);
+        h.event(button(tabs[2].center(), true));
+        h.event(button(tabs[2].center(), false));
+        h.run_steps(3);
+        assert_eq!(h.state().layout.active(), 2);
+        // The first tab dragged past the third, back on the strip.
+        drag(
+            &mut h,
+            tabs[0].center(),
+            tabs[2].center() + egui::vec2(10.0, 0.0),
+        );
+        let app = h.state();
+        assert_eq!(
+            slot_symbols(app),
+            ["STOCKB", first.as_str(), first.as_str()]
+        );
+        assert_eq!(app.layout.sync_group(2), Some("Desk"));
+        assert_eq!((app.layout_slot, app.layout.active()), (1, 1));
+        // The middle tab, the active one, is closed and its right neighbour takes over.
+        let close = format!("Close {first}");
+        let mut buttons: Vec<_> = h.get_all_by_label(&close).map(|node| node.rect()).collect();
+        buttons.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        h.hover_at(buttons[0].center());
+        h.run_steps(1);
+        h.event(button(buttons[0].center(), true));
+        h.event(button(buttons[0].center(), false));
+        h.run_steps(3);
+        let app = h.state();
+        assert_eq!(slot_symbols(app), ["STOCKB", first.as_str()]);
+        assert_eq!(app.layout.sync_group(1), Some("Desk"));
+        assert_eq!((app.layout_slot, app.layout.active()), (1, 1));
+        h.get_by_label("Close STOCKB").click();
+        h.run_steps(3);
+        assert_eq!(slot_symbols(h.state()), [first.as_str()]);
+        assert!(h.query_by_label(&close).is_none());
+    }
+
+    /// A saved tab layout reopens with its tab count, order and split, and its border's share;
+    /// one saved unsplit ends the split, and one with more than sixteen charts is refused.
+    #[test]
+    fn chart_tabs_reopen_with_their_count_order_and_split() {
+        use egui_charts::widget::{TabSplit, TabSplitSide};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.ensure_chart_slots(ChartLayoutMode::Tabs);
+        app.apply_tab_request(ChartTabRequest::Add);
+        settle(&mut app, &ctx);
+        // Intervals tell the charts apart: a new symbol's drawings would still be loading.
+        for (slot, interval) in [(1, Timeframe::Hour1), (2, Timeframe::Min5)] {
+            app.activate_chart_slot(slot);
+            app.switch_timeframe(interval);
+            // A tab reads its stored drawings once shown.
+            settle(&mut app, &ctx);
+        }
+        app.activate_chart_slot(0);
+        let mut split = TabSplit::new(1, TabSplitSide::Right);
+        split.ratio = 0.3;
+        app.layout.set_tab_split(Some(split));
+        settle(&mut app, &ctx);
+        let charts = slot_states(&app);
+        let saved = app.capture_layout().unwrap();
+        assert_eq!(saved.tab_split, Some(split));
+        app.apply_tab_request(ChartTabRequest::Move { from: 0, to: 2 });
+        app.layout.set_tab_split(None);
+        settle(&mut app, &ctx);
+        assert_ne!(slot_states(&app), charts);
+        assert!(app.restore_layout("Unnamed".into(), saved.clone(), Ok(Vec::new())));
+        settle(&mut app, &ctx);
+        assert_eq!(slot_states(&app), charts);
+        assert_eq!(app.layout.tab_split(), Some(split));
+        let mut unsplit = saved.clone();
+        unsplit.tab_split = None;
+        assert!(app.restore_layout("Unnamed".into(), unsplit, Ok(Vec::new())));
+        assert_eq!(app.layout.tab_split(), None);
+        let mut seventeen = saved.clone();
+        seventeen.charts = vec![saved.charts[0].clone(); 17];
+        assert!(!app.restore_layout("Unnamed".into(), seventeen, Ok(Vec::new())));
     }
 
     /// The fixed table names its chart by slot, so opening a layout must close it rather than
