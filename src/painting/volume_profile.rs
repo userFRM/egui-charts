@@ -474,9 +474,10 @@ pub(crate) fn paint_profile(
             &[key, figures].concat(),
         );
     }
-    // A study's span often starts at the pane's left edge, under the chart legend, so a study whose
-    // rows start at the left notes its source at the right.
-    let note_right = !drawing && !right_aligned;
+    // A study's span often starts at the pane's left edge, under the chart legend, and a drawing's
+    // top row value sits at its left corner, so these note their source at the right when their
+    // rows start at the left.
+    let note_right = !right_aligned && (!drawing || config.show_values);
     // A drawing's colour tints its range: too faint for text.
     let note_color = if drawing {
         painter.ctx().active_theme().ui.text.to_srgba_unmultiplied()
