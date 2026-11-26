@@ -1016,6 +1016,8 @@ impl DemoApp {
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.storage.clone());
+        app.symbol_details
+            .set_detail_sections(egui_charts::ui::widget_bar::DetailSection::ALL);
         if let Some(hidden) = cc
             .storage
             .and_then(|storage| eframe::get_value::<Vec<String>>(storage, "symbol_details_hidden"))
@@ -3449,8 +3451,18 @@ impl DemoApp {
                 MarketDetailRequest::Seasonality(symbol) => self
                     .symbol_details
                     .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(&bars))),
+                MarketDetailRequest::Section(section, symbol) => self
+                    .symbol_details
+                    .set_detail_rows(&symbol, section, feeds::detail_rows(section, &symbol)),
                 _ => {}
             }
+        }
+        if let Some(url) = self
+            .symbol_details
+            .take_opened_row()
+            .and_then(|row| row.url)
+        {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         self.feed_financials();
         self.highlights.set_symbol(&chart_symbol);
@@ -5598,9 +5610,10 @@ mod tests {
         h.get_by_label(&format!("{} UTC · Demo Wire", time.format("%b %-d, %H:%M")));
     }
 
-    /// The watchlist's details use the chart's bars and feed, open headline links and honour
-    /// the three section choices through the demo's menus and action handler, and the sections
-    /// hidden there stay hidden after a restart on the same storage.
+    /// The watchlist's details use the chart's bars and feed, list the demo's detail sections,
+    /// open headline and document links and honour the three section choices through the demo's
+    /// menus and action handler, and the sections hidden there stay hidden after a restart on
+    /// the same storage.
     #[test]
     fn watchlist_details_sections_reach_the_demo() {
         use eframe::App as _;
@@ -5622,7 +5635,7 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(560.0, 3600.0),
+                        egui::vec2(560.0, 6000.0),
                     )),
                     events,
                     ..Default::default()
@@ -5706,6 +5719,13 @@ mod tests {
             "Earnings",
             "Ex-dividend",
             "News",
+            "Analyst estimates",
+            "Options",
+            "Earnings calls",
+            "Documents",
+            "Fund holdings",
+            "Credit ratings",
+            "Bonds",
         ] {
             assert!(shown.iter().any(|text| text == title), "{title}: {shown:?}");
         }
@@ -5727,6 +5747,14 @@ mod tests {
         let output = click(&mut app, Role::Button, &stories[0].headline);
         assert!(output.platform_output.commands.iter().any(|command| {
             matches!(command, egui::OutputCommand::OpenUrl(url) if Some(&url.url) == stories[0].url.as_ref())
+        }));
+        output.drop_without_applying_deltas();
+        // The demo opens a clicked row's link when it next answers the panel.
+        click(&mut app, Role::Link, "Annual report 2025").drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        assert!(output.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::OpenUrl(url)
+                if url.url == "https://demo.invalid/documents/STOCKA/annual-2025")
         }));
         output.drop_without_applying_deltas();
         click(&mut app, Role::Button, "Layout").drop_without_applying_deltas();

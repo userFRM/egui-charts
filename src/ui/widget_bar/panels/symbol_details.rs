@@ -1,5 +1,5 @@
 //! Facts about the chart's symbol: its quote, the key statistics and profile the feed supplies,
-//! and the user's notes, kept through the storage service.
+//! the detail sections the host lists, and the user's notes, kept through the storage service.
 
 use crate::localization as l10n;
 use std::collections::{HashMap, HashSet};
@@ -11,7 +11,9 @@ use egui::text::LayoutJob;
 use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
-use super::market_details::{MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality};
+use super::market_details::{
+    DetailRow, DetailSection, MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality,
+};
 use super::news::NewsAction;
 use super::price_decimals;
 use super::{HEADER_HEIGHT, weighted};
@@ -40,7 +42,7 @@ const HEADLINES: usize = 3;
 /// Days ahead the Upcoming events section looks for the next earnings and dividend.
 const EVENT_DAYS: i64 = 366;
 /// The sections the layout menu shows or hides, in panel order.
-const SECTIONS: [&str; 9] = [
+const SECTIONS: [&str; 16] = [
     "Volume",
     "Key statistics",
     "Profile",
@@ -49,6 +51,13 @@ const SECTIONS: [&str; 9] = [
     "Technicals",
     "Upcoming events",
     "News",
+    DetailSection::AnalystEstimates.title(),
+    DetailSection::Options.title(),
+    DetailSection::EarningsCalls.title(),
+    DetailSection::Documents.title(),
+    DetailSection::FundHoldings.title(),
+    DetailSection::CreditRatings.title(),
+    DetailSection::Bonds.title(),
     "Notes",
 ];
 const MONTHS: [&str; 12] = [
@@ -162,6 +171,14 @@ enum Request {
 /// with [`set_period_returns`](Self::set_period_returns) and
 /// [`set_seasonality`](Self::set_seasonality). A host that never calls it sees neither section.
 /// Each section says whether it is loading, empty, unavailable or failed.
+///
+/// The sections from analyst estimates to bonds list the [`DetailRow`]s the host writes for the
+/// [`DetailSection`]s it offers with [`set_detail_sections`](Self::set_detail_sections), none by
+/// default: [`take_market_requests`](Self::take_market_requests) asks for each once per symbol,
+/// [`set_detail_rows`](Self::set_detail_rows) answers, and a chosen row with a link is reported by
+/// [`take_opened_row`](Self::take_opened_row) for the host to open its document, recording or
+/// page. A section the host does not offer is neither drawn nor listed in the Layout menu, and one
+/// it answers as unavailable is not drawn.
 pub struct SymbolDetailsPanel {
     instrument: Option<Instrument>,
     quote: Option<Quote>,
@@ -173,6 +190,11 @@ pub struct SymbolDetailsPanel {
     financials: Option<CompanyFinancials>,
     returns: Option<MarketDetail<Vec<PeriodReturn>>>,
     seasonality: Option<MarketDetail<Seasonality>>,
+    /// The listed sections the host answers.
+    offered: HashSet<DetailSection>,
+    /// The shown symbol's rows of each offered section, from its first request on.
+    rows: HashMap<DetailSection, MarketDetail<Vec<DetailRow>>>,
+    opened_row: Option<DetailRow>,
     /// `None` until bars of the shown symbol arrive.
     technicals: Option<Technicals>,
     /// The next earnings and the next ex-dividend event of the shown symbol.
@@ -205,6 +227,9 @@ impl Default for SymbolDetailsPanel {
             financials: None,
             returns: None,
             seasonality: None,
+            offered: HashSet::new(),
+            rows: HashMap::new(),
+            opened_row: None,
             technicals: None,
             events: [None, None],
             headlines: Vec::new(),
@@ -235,6 +260,9 @@ impl std::fmt::Debug for SymbolDetailsPanel {
             .field("financials", &self.financials)
             .field("returns", &self.returns)
             .field("seasonality", &self.seasonality)
+            .field("offered", &self.offered)
+            .field("rows", &self.rows)
+            .field("opened_row", &self.opened_row)
             .field(
                 "technicals",
                 &self.technicals.as_ref().map(|t| (t.timeframe, t.len)),
@@ -292,6 +320,7 @@ impl SymbolDetailsPanel {
             self.financials = None;
             self.returns = None;
             self.seasonality = None;
+            self.rows.clear();
             self.technicals = None;
             self.events = [None, None];
             self.headlines.clear();
@@ -374,8 +403,8 @@ impl SymbolDetailsPanel {
 
     /// The market detail the sections still lack for the shown symbol, each returned once; it
     /// marks them loading. Call it every frame and answer with
-    /// [`set_period_returns`](Self::set_period_returns) and
-    /// [`set_seasonality`](Self::set_seasonality).
+    /// [`set_period_returns`](Self::set_period_returns),
+    /// [`set_seasonality`](Self::set_seasonality) and [`set_detail_rows`](Self::set_detail_rows).
     pub fn take_market_requests(&mut self) -> Vec<MarketDetailRequest> {
         let Some(symbol) = self.symbol().map(str::to_owned) else {
             return Vec::new();
@@ -387,7 +416,13 @@ impl SymbolDetailsPanel {
         }
         if self.seasonality.is_none() {
             self.seasonality = Some(MarketDetail::Loading);
-            requests.push(MarketDetailRequest::Seasonality(symbol));
+            requests.push(MarketDetailRequest::Seasonality(symbol.clone()));
+        }
+        for section in DetailSection::ALL {
+            if self.offered.contains(&section) && !self.rows.contains_key(&section) {
+                self.rows.insert(section, MarketDetail::Loading);
+                requests.push(MarketDetailRequest::Section(section, symbol.clone()));
+            }
         }
         requests
     }
@@ -406,6 +441,36 @@ impl SymbolDetailsPanel {
         if self.symbol() == Some(symbol) {
             self.seasonality = Some(seasonality);
         }
+    }
+
+    /// Offers `sections`, the [`DetailSection`]s the host answers, none by default. Only these are
+    /// asked for by [`take_market_requests`](Self::take_market_requests), listed in the Layout
+    /// menu and drawn; the rows of a section left out are dropped.
+    pub fn set_detail_sections(&mut self, sections: impl IntoIterator<Item = DetailSection>) {
+        self.offered = sections.into_iter().collect();
+        self.rows
+            .retain(|section, _| self.offered.contains(section));
+    }
+
+    /// Answers the [`MarketDetailRequest::Section`] of `section` for `symbol`. An answer for a
+    /// symbol the panel no longer shows, or for a section not offered, is ignored.
+    /// [`MarketDetail::Unavailable`] hides the section for this symbol; an empty list says that
+    /// there is nothing to list.
+    pub fn set_detail_rows(
+        &mut self,
+        symbol: &str,
+        section: DetailSection,
+        rows: MarketDetail<Vec<DetailRow>>,
+    ) {
+        if self.symbol() == Some(symbol) && self.offered.contains(&section) {
+            self.rows.insert(section, rows);
+        }
+    }
+
+    /// The row with a [`url`](DetailRow::url) the user chose since the last call, for the host to
+    /// open its document, recording or page.
+    pub fn take_opened_row(&mut self) -> Option<DetailRow> {
+        self.opened_row.take()
     }
 
     /// Rates `bars`, the shown symbol's bars on `timeframe`, oldest first, with the
@@ -823,6 +888,9 @@ impl SymbolDetailsPanel {
             details,
             returns,
             seasonality,
+            offered,
+            rows,
+            opened_row,
             technicals,
             events,
             headlines,
@@ -865,6 +933,13 @@ impl SymbolDetailsPanel {
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show(|ui| {
                     for section in SECTIONS {
+                        // A listed section the host does not offer has nothing to show.
+                        if DetailSection::ALL
+                            .into_iter()
+                            .any(|listed| listed.title() == section && !offered.contains(&listed))
+                        {
+                            continue;
+                        }
                         let mut shown = !hidden.contains(section);
                         if ui
                             .checkbox(&mut shown, l10n::text(ui.ctx(), section))
@@ -1270,6 +1345,25 @@ impl SymbolDetailsPanel {
                         }
                     }
                 }
+                for section in DetailSection::ALL {
+                    let Some(state) = rows.get(&section) else {
+                        continue;
+                    };
+                    if matches!(state, MarketDetail::Unavailable) || !shown(section.title()) {
+                        continue;
+                    }
+                    detail_section(
+                        ui,
+                        section.title(),
+                        state,
+                        |list| list.is_empty(),
+                        |ui, list| {
+                            for row in list {
+                                detail_row(ui, row, opened_row);
+                            }
+                        },
+                    );
+                }
                 if shown("Notes") {
                     ui.add_space(theme.spacing.md);
                     ui.label(RichText::new(l10n::text(ui.ctx(), "Notes")).strong());
@@ -1332,6 +1426,57 @@ pub(super) fn detail_section<T>(
         MarketDetail::Failed(message) => status_message(ui, MessageKind::Error, message),
         MarketDetail::Ready(value) if is_empty(value) => note(ui, "No data"),
         MarketDetail::Ready(value) => body(ui, value),
+    }
+}
+
+/// One host-written row: its label on the left, its value on the right and its note under them.
+/// A row with a link reports itself through `opened` when clicked.
+fn detail_row(ui: &mut Ui, row: &DetailRow, opened: &mut Option<DetailRow>) {
+    let theme = ui.active_theme();
+    let sense = if row.url.is_some() {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let response = ui
+        .scope_builder(egui::UiBuilder::new().sense(sense), |ui| {
+            let label = RichText::new(l10n::text(ui.ctx(), &row.label));
+            let label = if row.url.is_some() {
+                ui.style_mut().interaction.selectable_labels = false;
+                label.strong()
+            } else {
+                label.color(theme.ui.text_secondary)
+            };
+            ui.horizontal(|ui| {
+                ui.label(label);
+                if !row.value.is_empty() {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add(Label::new(l10n::text(ui.ctx(), &row.value)).truncate());
+                    });
+                }
+            });
+            if !row.note.is_empty() {
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), &row.note))
+                        .size(theme.text.small)
+                        .color(theme.ui.text_secondary),
+                );
+            }
+        })
+        .response;
+    let Some(url) = &row.url else {
+        return;
+    };
+    let translated_label = l10n::text(ui.ctx(), &row.label);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Link, ui.is_enabled(), &translated_label)
+    });
+    if response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(l10n::text(ui.ctx(), url))
+        .clicked()
+    {
+        *opened = Some(row.clone());
     }
 }
 
@@ -2118,6 +2263,107 @@ mod tests {
         assert!(!shown.contains(&"Upcoming events".into()), "{shown:?}");
         assert!(!shown.contains(&"News".into()), "{shown:?}");
         assert_eq!(panel.error, None);
+    }
+
+    /// Sections the host lists are asked for, listed in the Layout menu and drawn only once the
+    /// host offers them, each once per symbol. Answers for another symbol or a section not
+    /// offered are dropped, an unavailable one hides, and a click on a linked row is reported
+    /// once. A regression leaves hosts that never answer on "Loading…", shows the previous
+    /// symbol's rows, lists sections the host cannot fill or reports a click every frame.
+    #[test]
+    fn detail_sections_are_asked_listed_and_drawn_only_when_offered() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let painted = |panel: &mut SymbolDetailsPanel| texts(&egui::Context::default(), panel);
+        let mut panel = SymbolDetailsPanel::new();
+        panel.set_instrument(&Instrument::new("AAA"));
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 900.0))
+            .build_ui_state(|ui, panel: &mut SymbolDetailsPanel| panel.show(ui), panel);
+        let layout_lists = |h: &Harness<'_, SymbolDetailsPanel>| {
+            ["Documents", "Bonds", "Credit ratings"].map(|title| {
+                h.query_by_role_and_label(egui::Role::CheckBox, title)
+                    .is_some()
+            })
+        };
+        // The menu opens and closes from its button, so it never covers the rows clicked below.
+        let layout = |h: &mut Harness<'_, SymbolDetailsPanel>| {
+            h.get_by_label("Layout").click();
+            h.run();
+        };
+        layout(&mut h);
+        assert_eq!(
+            layout_lists(&h),
+            [false; 3],
+            "nothing listed without an offer"
+        );
+        layout(&mut h);
+        assert_eq!(
+            h.state_mut().take_market_requests(),
+            [
+                MarketDetailRequest::PeriodReturns("AAA".into()),
+                MarketDetailRequest::Seasonality("AAA".into())
+            ]
+        );
+        h.state_mut()
+            .set_detail_sections([DetailSection::Bonds, DetailSection::Documents]);
+        assert_eq!(
+            h.state_mut().take_market_requests(),
+            [
+                MarketDetailRequest::Section(DetailSection::Documents, "AAA".into()),
+                MarketDetailRequest::Section(DetailSection::Bonds, "AAA".into())
+            ]
+        );
+        assert!(h.state_mut().take_market_requests().is_empty());
+        let shown = painted(h.state_mut());
+        assert_eq!(shown.iter().filter(|t| *t == "Loading…").count(), 4);
+
+        let report = DetailRow::new("Annual report", "PDF")
+            .with_note("Filed Mar 2, 2026")
+            .with_url("https://example.com/report.pdf");
+        let panel = h.state_mut();
+        let answer = |rows: &[&str]| {
+            MarketDetail::Ready(rows.iter().map(|row| DetailRow::new(*row, "A")).collect())
+        };
+        panel.set_detail_rows(
+            "AAA",
+            DetailSection::Documents,
+            MarketDetail::Ready(vec![report.clone()]),
+        );
+        panel.set_detail_rows("AAA", DetailSection::Bonds, MarketDetail::Unavailable);
+        panel.set_detail_rows("BBB", DetailSection::Documents, answer(&["Other"]));
+        panel.set_detail_rows("AAA", DetailSection::CreditRatings, answer(&["Agency"]));
+        let shown = painted(panel);
+        for text in ["Documents", "Annual report", "PDF", "Filed Mar 2, 2026"] {
+            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        for text in ["Bonds", "Other", "Credit ratings", "Agency"] {
+            assert!(!shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        h.run();
+        h.get_by_role_and_label(egui::Role::Link, "Annual report")
+            .click();
+        h.run();
+        assert_eq!(h.state_mut().take_opened_row(), Some(report));
+        assert_eq!(h.state_mut().take_opened_row(), None);
+
+        layout(&mut h);
+        assert_eq!(layout_lists(&h), [true, true, false]);
+        h.get_by_role_and_label(egui::Role::CheckBox, "Documents")
+            .click();
+        h.run();
+        assert_eq!(h.state().hidden_sections(), ["Documents"]);
+        assert!(!painted(h.state_mut()).contains(&"Annual report".into()));
+        h.state_mut().set_instrument(&Instrument::new("BBB"));
+        assert_eq!(
+            h.state_mut().take_market_requests(),
+            [
+                MarketDetailRequest::PeriodReturns("BBB".into()),
+                MarketDetailRequest::Seasonality("BBB".into()),
+                MarketDetailRequest::Section(DetailSection::Documents, "BBB".into()),
+                MarketDetailRequest::Section(DetailSection::Bonds, "BBB".into())
+            ]
+        );
     }
 
     /// The layout menu hides the Technicals, Upcoming events and News sections like the others,
