@@ -12,7 +12,7 @@
 use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::ui_kit::buttons::Button;
-use crate::ui_kit::dialog::{DialogFrame, dialog_header};
+use crate::ui_kit::dialog::{DialogFrame, dialog_header, is_top_dialog};
 use crate::widget::{Chart, ColumnId, DataTable, SeriesId};
 use chrono::{DateTime, Utc};
 use egui::{Align2, Context, FontId, Rect, ScrollArea, Sense, Ui, vec2};
@@ -221,18 +221,8 @@ impl DataTableDialog {
                         if text.starts_with(|c: char| !c.is_control() && !c.is_whitespace()))
                 })
             })
-            && ctx.memory(|m| {
-                // egui keeps closed areas in its z-order. They must not block the table below.
-                m.top_modal_layer().is_none()
-                    && m.layer_ids()
-                        .filter(|id| {
-                            id.order == egui::Order::Middle
-                                && m.areas().is_visible(id)
-                                && m.areas().parent_layer(*id).is_none()
-                        })
-                        .last()
-                        == layer
-            })
+            && ctx.memory(|m| m.top_modal_layer().is_none())
+            && layer.is_some_and(|layer| is_top_dialog(ctx, layer))
             && let egui::Event::Text(query) = ctx.input_mut(|input| input.events.remove(at))
         {
             action = DataTableAction::SearchSymbol(query);

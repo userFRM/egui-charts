@@ -12,6 +12,8 @@ mod annotations;
 mod audio;
 #[path = "commands.rs"]
 mod commands;
+#[path = "drawing_tools.rs"]
+mod drawing_tools;
 #[path = "formatting.rs"]
 mod formatting;
 #[path = "ideas.rs"]
@@ -581,6 +583,7 @@ impl DemoApp {
         let live = Arc::new(LiveFeed::new(symbol, now));
         live.set_paused(paused);
         let quotes = Arc::new(feeds::DemoQuotes::new(live.clone()));
+        let drawing_tools = drawing_tools::registry();
         let mut chart = Box::new(
             egui_charts::ChartBuilder::new()
                 .with_feed(live.clone())
@@ -591,6 +594,7 @@ impl DemoApp {
                 .with_theme(theme.clone())
                 .with_visible_candles(0)
                 .with_chart_options(options)
+                .with_drawing_registry(drawing_tools.clone())
                 .build(),
         );
         chart.config_mut().volume_height_fraction = 0.25;
@@ -721,6 +725,7 @@ impl DemoApp {
                     .storage
                     .and_then(|storage| eframe::get_value(storage, "drawing_toolbar_preferences"))
                     .unwrap_or_default();
+                toolbar.registry = drawing_tools;
                 toolbar
             },
             selection_toolbar: FloatingSelectionToolbar::new(),
@@ -2883,6 +2888,10 @@ impl DemoApp {
         match action {
             DrawingToolbarAction::SelectTool(tool) => {
                 dm.set_active_tool(Some(tool));
+            }
+            // The toolbar offers only registered tools that are enabled.
+            DrawingToolbarAction::SelectCustomTool(id) => {
+                let _ = dm.set_custom_tool(&id);
             }
             DrawingToolbarAction::ToggleMagnet => {
                 dm.options.magnet_mode = !dm.options.magnet_mode;
