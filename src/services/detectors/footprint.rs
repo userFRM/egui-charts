@@ -11,8 +11,8 @@ use crate::services::SignalEvent;
 /// Footprint conditions that mark a bar of the latest subscribed time interval, each at most
 /// once per bar, and alert as [`Detector::alert`](super::Detector::alert) says.
 ///
-/// Imbalances are read when a bar closes, on rows of one instrument tick, with this rule's
-/// ratio, comparison, minimum volume and stack, as
+/// Imbalances are read when a bar closes, on rows of [`row_ticks`](Self::row_ticks) instrument
+/// ticks, with this rule's ratio, comparison, minimum volume and stack, as
 /// [`FootprintBar::imbalance`](crate::data::FootprintBar::imbalance) reads them and the footprint's
 /// stacked imbalance zones join them; [`follow_chart`](Self::follow_chart) copies these from a
 /// chart. The stacks of each closed bar become zones that stay active, through any number of
@@ -41,7 +41,7 @@ use crate::services::SignalEvent;
 /// settings.footprint.alert = true;
 /// settings.footprint.rule.stacked_buy_imbalance = true;
 /// settings.footprint.rule.sell_volume_above = Some(100.0);
-/// settings.footprint.rule.follow_chart(&ChartTypeParams::default());
+/// settings.footprint.rule.follow_chart(&ChartTypeParams::default(), 1);
 /// detectors.set_settings(settings);
 /// ```
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -79,6 +79,10 @@ pub struct FootprintRule {
     pub imbalance_min_volume: f64,
     /// Adjacent imbalances that make a stack, at least one; 3 by default.
     pub stack: usize,
+    /// Instrument ticks per row that imbalances, stacks and zones read, grouped downwards from
+    /// price zero as the chart's footprint groups them; 1 by default, and 0 counts as 1. Settings
+    /// saved without it read rows of one tick.
+    pub row_ticks: u32,
 }
 
 impl Default for FootprintRule {
@@ -98,24 +102,28 @@ impl Default for FootprintRule {
             diagonal: true,
             imbalance_min_volume: 0.0,
             stack: 3,
+            row_ticks: 1,
         }
     }
 }
 
 impl FootprintRule {
     /// Takes the imbalance ratio, comparison, minimum volume and stack of the footprint under
-    /// `params`, such as a chart's `Chart::chart_type_params`, so that alerts read the
-    /// imbalances that chart shows. Its row grouping does not apply: rows stay one tick.
-    pub fn follow_chart(&mut self, params: &ChartTypeParams) {
+    /// `params`, such as a chart's `Chart::chart_type_params`, and `row_ticks`, the instrument
+    /// ticks per row that footprint shows, such as `Chart::footprint_row_ticks`, so that alerts
+    /// read the imbalances and zones that chart shows.
+    pub fn follow_chart(&mut self, params: &ChartTypeParams, row_ticks: u32) {
         self.imbalance_ratio = params.footprint_imbalance_ratio;
         self.diagonal = params.footprint_diagonal;
         self.imbalance_min_volume = params.footprint_imbalance_min_volume;
         self.stack = params.footprint_stack;
+        self.row_ticks = row_ticks;
     }
 }
 
-/// A stacked imbalance zone of an earlier closed bar, in rows of one tick, active until a later
-/// bar closes beyond its far edge or a closed bar is skipped.
+/// A stacked imbalance zone of an earlier closed bar, with the instrument ticks of its lowest and
+/// highest row, so it keeps its prices when the rows change, active until a later bar closes
+/// beyond its far edge or a closed bar is skipped.
 #[derive(PartialEq, Eq)]
 pub(super) struct Zone {
     low: i64,
@@ -141,6 +149,25 @@ pub(super) fn closed(
     let Some(bar) = flow.bar_at(at) else {
         return;
     };
+    // The rows the chart shows: `row_ticks` one-tick rows summed into the row keyed by their
+    // quotient, as `Footprint` groups them.
+    let group = i64::from(rule.row_ticks.clamp(1, 1_000_000));
+    let grouped;
+    let bar = if group == 1 {
+        bar
+    } else {
+        let mut rows = crate::data::FootprintBar::empty(bar.time);
+        rows.absorb_grouped(bar, group);
+        grouped = rows;
+        &grouped
+    };
+    // The instrument ticks from the lowest of row `low` to the highest of row `high`.
+    let ticks = |low: i64, high: i64| {
+        (
+            low.saturating_mul(group),
+            high.saturating_mul(group).saturating_add(group - 1),
+        )
+    };
     let stack = rule.stack.max(1);
     // Per side, sell then buy: imbalanced rows, the run of adjacent ones, the run's first row and
     // the longest run.
@@ -158,8 +185,9 @@ pub(super) fn closed(
         let adjacent = previous.and_then(|key| key.checked_add(1)) == Some(level);
         for (side, active) in [sell, buy].into_iter().enumerate() {
             if let Some(high) = previous.filter(|_| run[side] >= stack && !(active && adjacent)) {
+                let (low, high) = ticks(first[side], high);
                 stacks.push(Zone {
-                    low: first[side],
+                    low,
                     high,
                     buy: side == 1,
                 });
@@ -179,8 +207,9 @@ pub(super) fn closed(
     }
     for side in 0..2 {
         if let Some(high) = previous.filter(|_| run[side] >= stack) {
+            let (low, high) = ticks(first[side], high);
             stacks.push(Zone {
-                low: first[side],
+                low,
                 high,
                 buy: side == 1,
             });
@@ -228,7 +257,9 @@ pub(super) fn closed(
     }
     // Earlier zones only: a close beyond the far edge ends one, trading into it rejects it.
     let row = flow.level_of(close);
-    let traded = bar.levels.keys().next().zip(bar.levels.keys().next_back());
+    let traded = (bar.levels.keys().next())
+        .zip(bar.levels.keys().next_back())
+        .map(|(&low, &high)| ticks(low, high));
     let decimals = crate::scales::decimals(flow.tick_size());
     let price = |key: i64| format!("{:.decimals$}", key as f64 * flow.tick_size());
     let mut rejected: [Vec<String>; 2] = Default::default();
@@ -240,7 +271,7 @@ pub(super) fn closed(
                 row > zone.high
             }
         });
-        if !broken && traded.is_some_and(|(&low, &high)| low <= zone.high && high >= zone.low) {
+        if !broken && traded.is_some_and(|(low, high)| low <= zone.high && high >= zone.low) {
             rejected[usize::from(zone.buy)].push(format!(
                 "{} to {}",
                 price(zone.low),

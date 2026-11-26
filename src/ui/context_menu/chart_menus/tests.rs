@@ -1790,6 +1790,12 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         let mut split = Chart::new(BarData::from_bars(bars.clone()));
         split.set_timeframe(Timeframe::Min30);
         split.set_chart_type(ChartType::TimePriceOpportunity);
+        // Rows of one tick keep the letters where earlier automatic rows put them.
+        split.set_instrument(Some(crate::model::Instrument::new("T").with_tick_size(0.2)));
+        split.set_chart_type_params(crate::model::ChartTypeParams {
+            tpo_row_ticks: 1,
+            ..Default::default()
+        });
         let mut split_menus = ChartMenus::default();
         for _ in 0..2 {
             frame(&mut split, &mut split_menus, vec![]);
@@ -1925,6 +1931,11 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         let mut merged = Chart::new(BarData::from_bars(bars.clone()));
         merged.set_timeframe(Timeframe::Min30);
         merged.set_chart_type(ChartType::TimePriceOpportunity);
+        merged.set_instrument(Some(crate::model::Instrument::new("T").with_tick_size(0.2)));
+        merged.set_chart_type_params(crate::model::ChartTypeParams {
+            tpo_row_ticks: 1,
+            ..Default::default()
+        });
         let mut merged_menus = ChartMenus::default();
         frame(&mut merged, &mut merged_menus, vec![]);
         merged.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
@@ -1985,7 +1996,9 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         let mut columns = Chart::new(BarData::from_bars(bars.clone()));
         columns.set_timeframe(Timeframe::Min30);
         columns.set_chart_type(ChartType::TimePriceOpportunity);
+        columns.set_instrument(Some(crate::model::Instrument::new("T").with_tick_size(0.2)));
         columns.set_chart_type_params(crate::model::ChartTypeParams {
+            tpo_row_ticks: 1,
             tpo_split_periods: true,
             ..Default::default()
         });
@@ -2007,8 +2020,14 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         let mut study_chart = Chart::new(BarData::from_bars(bars.clone()));
         study_chart.set_timeframe(Timeframe::Min30);
         study_chart.set_instrument(Some(crate::model::Instrument::new("X").with_tick_size(1.0)));
-        let study_id =
-            study_chart.add_indicator(Box::new(crate::studies::TimePriceOpportunity::default()));
+        let mut study = crate::studies::TimePriceOpportunity::default();
+        crate::studies::Indicator::set_input(
+            &mut study,
+            "row_ticks",
+            crate::studies::InputValue::Length(1),
+        )
+        .unwrap();
+        let study_id = study_chart.add_indicator(Box::new(study));
         let mut study_menus = ChartMenus::default();
         frame(&mut study_chart, &mut study_menus, vec![]);
         study_chart.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 9.0));
@@ -2167,6 +2186,7 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
             ("hours", crate::studies::InputValue::Choice(2)),
             ("session_start", crate::studies::InputValue::Length(30)),
             ("session_end", crate::studies::InputValue::Length(90)),
+            ("row_ticks", crate::studies::InputValue::Length(1)),
         ] {
             crate::studies::Indicator::set_input(&mut study, id, value).unwrap();
         }
@@ -2224,7 +2244,9 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
         let mut weekly = Chart::new(BarData::from_bars(bars));
         weekly.set_timeframe(Timeframe::Min30);
         weekly.set_chart_type(ChartType::TimePriceOpportunity);
+        weekly.set_instrument(Some(crate::model::Instrument::new("T").with_tick_size(0.2)));
         weekly.set_chart_type_params(crate::model::ChartTypeParams {
+            tpo_row_ticks: 1,
             tpo_profile_period: crate::model::TPOProfilePeriod::Week,
             ..Default::default()
         });
