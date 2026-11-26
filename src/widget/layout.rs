@@ -1249,7 +1249,9 @@ fn group_name_edit(ui: &mut Ui, current: &str) -> Option<String> {
 /// A range a chart fits once bars of its new interval replace those it held at the switch.
 #[derive(Clone, Copy)]
 struct PendingRange {
-    range: VisibleTimeRange,
+    /// `None` for a chart that keeps its left edge on the switch, until a chart it follows
+    /// sends a range.
+    range: Option<VisibleTimeRange>,
     /// The [`Chart::sync_source`] of the chart it came from, `None` for the chart's own range.
     source: Option<(Timeframe, f64)>,
     bars: BarsKey,
@@ -2301,8 +2303,11 @@ impl ChartLayout {
                 .as_ref()
                 .is_some_and(|p| p.1 != chart.timeframe())
             {
-                let own = self.previous_ranges[index].map(|range| PendingRange {
-                    range,
+                // A chart keeping its left edge fits no range of its own, but waits for its bars.
+                let keeps = chart.pending_left_edge.is_some();
+                let range = self.previous_ranges[index];
+                let own = (range.is_some() || keeps).then(|| PendingRange {
+                    range: range.filter(|_| !keeps),
                     source: None,
                     bars: self.previous_bars[index],
                 });
@@ -2586,13 +2591,13 @@ impl ChartLayout {
                     .is_some_and(|(previous, before)| previous != before);
                 if !changed_by_host {
                     let range = self.pending_ranges[from]
-                        .map(|pending| pending.range)
+                        .and_then(|pending| pending.range)
                         .or_else(|| charts[from].visible_time_range());
                     if let Some(range) = range {
                         let source = charts[from].sync_source();
                         match &mut self.pending_ranges[to] {
                             Some(pending) => {
-                                pending.range = range;
+                                pending.range = Some(range);
                                 pending.source = source;
                             }
                             None => {
@@ -2923,7 +2928,9 @@ impl ChartLayout {
             && bars_key(chart) != pending.bars
         {
             // A range the new bars do not cover keeps the view, but must not block the group.
-            chart.apply_synced_time_range_from(pending.range, pending.source);
+            if let Some(range) = pending.range {
+                chart.apply_synced_time_range_from(range, pending.source);
+            }
             self.pending_ranges[index] = None;
         }
     }
@@ -3081,7 +3088,7 @@ impl ChartLayout {
                 // A chart awaiting its new interval's bars fits the latest range once they arrive.
                 match &mut self.pending_ranges[index] {
                     Some(pending) => {
-                        pending.range = range;
+                        pending.range = Some(range);
                         pending.source = source;
                     }
                     None => {
@@ -5497,6 +5504,90 @@ mod tests {
                 let actual = chart.visible_time_range().unwrap();
                 assert!((actual.from - source.from).num_milliseconds().abs() < 1);
                 assert!((actual.to - source.to).num_milliseconds().abs() < 1);
+            }
+        }
+    }
+
+    /// With the choice on, a chart whose interval changes in a layout that synchronizes the time
+    /// axis keeps the bar at its left edge at the same spacing once the new bars arrive, and the
+    /// chart beside it follows that view. With it off the layout fits the range from before the
+    /// change. A tab layout that holds both charts behaves the same.
+    #[test]
+    fn interval_change_keeps_the_left_edge_in_a_synced_layout() {
+        use crate::model::LogicalRange;
+        let start: DateTime<chrono::Utc> = "2024-03-15T00:00:00Z".parse().unwrap();
+        let bars = |minutes: i64, count: i64| -> Vec<Bar> {
+            (0..count)
+                .map(|i| {
+                    let time = start + Duration::minutes(i * minutes);
+                    Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0)
+                })
+                .collect()
+        };
+        let ctx = egui::Context::default();
+        let frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2]| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        for mode in [ChartLayoutMode::TwoHorizontal, ChartLayoutMode::Tabs] {
+            for keep in [true, false] {
+                let row = format!("{mode:?} {keep}");
+                let mut layout = ChartLayout {
+                    mode,
+                    ..Default::default()
+                };
+                let mut charts = [(); 2].map(|()| {
+                    let mut chart = Chart::new(BarData::from_bars(bars(1, 3000)));
+                    chart.set_symbol("SAMPLE");
+                    chart.set_timeframe(Timeframe::Min1);
+                    chart
+                        .chart_options
+                        .time_scale
+                        .keep_left_edge_on_interval_change = keep;
+                    chart
+                });
+                // The hidden tab needs a plot width to follow.
+                layout.set_active(1);
+                frame(&mut layout, &mut charts);
+                layout.set_active(0);
+                frame(&mut layout, &mut charts);
+                // The left pixel cuts the 16:43 bar a quarter of a slot before its centre.
+                charts[0].set_visible_logical_range(LogicalRange::new(1003.25, 1102.25));
+                frame(&mut layout, &mut charts);
+                frame(&mut layout, &mut charts);
+                let spacing = charts[0].state.time_scale().bar_spacing();
+                let before = charts[0].visible_time_range().unwrap();
+                charts[0].set_timeframe(Timeframe::Min5);
+                // The host supplies the new bars a frame later.
+                frame(&mut layout, &mut charts);
+                charts[0].set_data(super::super::SeriesId::MAIN, bars(5, 600));
+                frame(&mut layout, &mut charts);
+                frame(&mut layout, &mut charts);
+                let range = charts[0].visible_logical_range().unwrap();
+                let shown = charts[0].visible_time_range().unwrap();
+                if keep {
+                    // 16:40 is the five-minute bar whose period holds 16:43.
+                    assert!((range.left - 200.25).abs() < 0.01, "{row}: {range:?}");
+                    assert!((range.right - 299.25).abs() < 0.01, "{row}: {range:?}");
+                    assert_eq!(charts[0].state.time_scale().bar_spacing(), spacing, "{row}");
+                } else {
+                    // The fit centres a span that needs more than 50 px a bar, as the full-width
+                    // tab does, so compare the middle of the range.
+                    let error = (shown.from - before.from) + (shown.to - before.to);
+                    assert!(error.num_milliseconds().abs() < 2, "{row}: {shown:?}");
+                }
+                let follower = charts[1].visible_time_range().unwrap();
+                for error in [follower.from - shown.from, follower.to - shown.to] {
+                    assert!(error.num_milliseconds().abs() < 1, "{row}: {follower:?}");
+                }
             }
         }
     }
