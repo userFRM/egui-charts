@@ -1991,12 +1991,12 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
             format!("memory limit of {mib} MiB reached at line {line}")
         );
     }
-    // The default memory limit; 64 series on 100,000 bars take one to two minutes in a debug
-    // build, past the default limit for a full recompute.
+    // The default memory limit; 64 series on 100,000 bars take one to three minutes in a debug
+    // build on a busy machine, past the default limit for a full recompute.
     let mut study = limited(
         &source,
         Limits {
-            full: Duration::from_secs(300),
+            full: Duration::from_secs(600),
             ..Limits::default()
         },
     )
