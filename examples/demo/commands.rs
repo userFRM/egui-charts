@@ -9,6 +9,7 @@ use egui_charts::drawings::DrawingToolType;
 use egui_charts::icons::{Icon, icons};
 use egui_charts::studies::IndicatorFactory;
 use egui_charts::theme::ThemeExt;
+use egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorDialogAction;
 use egui_charts::ui_kit::command_palette::{Command, CommandPaletteHandler};
 use egui_charts::ui_kit::list_item::ListItem;
 use egui_charts::widget::ShortcutMap;
@@ -354,7 +355,10 @@ impl DemoApp {
             return;
         }
         if let Some(name) = id.strip_prefix("study:") {
-            if let Some(study) = self.indicator_dialog.factory().create(name) {
+            // A study with symbols to choose opens the dialog's prompt and arrives from `show`.
+            if let Some(IndicatorDialogAction::AddIndicator(study)) =
+                self.indicator_dialog.add(name)
+            {
                 self.chart.add_indicator(study);
             }
             return;
