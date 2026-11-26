@@ -1075,9 +1075,9 @@ impl std::fmt::Debug for ChartLayout {
 }
 
 /// Identifies a chart's bars: it changes when they are replaced, not when they stream.
-type BarsKey = (u64, Option<chrono::DateTime<chrono::Utc>>);
+pub(super) type BarsKey = (u64, Option<chrono::DateTime<chrono::Utc>>);
 
-fn bars_key(chart: &Chart) -> BarsKey {
+pub(super) fn bars_key(chart: &Chart) -> BarsKey {
     (
         chart.state.revision(),
         chart.state.shown().first().map(|bar| bar.time),

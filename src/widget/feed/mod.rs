@@ -880,19 +880,30 @@ impl Chart {
     /// Shows bars of `timeframe` from the next [`show`](Self::show), by the rules of
     /// [`set_symbol`](Self::set_symbol). Without a feed it sets the legend label and the
     /// session breaks only. It is also the interval the drawings' per-interval visibility is
-    /// checked against.
+    /// checked against. With
+    /// [`keep_left_edge_on_interval_change`](crate::config::TimeScaleOptions::keep_left_edge_on_interval_change)
+    /// on, the bar at the left edge of the view keeps its place once the new bars replace the
+    /// old ones.
     pub fn set_timeframe(&mut self, timeframe: Timeframe) {
-        if self.timeframe != Some(timeframe) {
+        let changed = self.timeframe != Some(timeframe);
+        let options = &self.chart_options.time_scale;
+        let keep =
+            changed && options.keep_left_edge_on_interval_change && !self.tracking_mode_active;
+        // Read on the interval shown so far, before it changes.
+        let left_edge = match (self.pending_scroll_time, self.pending_left_edge) {
+            _ if !keep => None,
+            // A left edge still waiting for bars stays the one to keep.
+            (Some(time), Some(edge)) => Some((time, edge)),
+            _ => self.left_edge(),
+        };
+        if changed {
             self.clear_source_signals();
             self.push_event(super::ChartEvent::TimeframeChanged(timeframe));
             self.bar_close_time = None;
         }
-        if self.timeframe != Some(timeframe)
-            && let Some(link) = &mut self.feed_link
-        {
+        if changed && let Some(link) = &mut self.feed_link {
             link.reload_pending = true;
         }
-        let changed = self.timeframe != Some(timeframe);
         if changed {
             self.pending_scroll_time = None;
         }
@@ -909,6 +920,13 @@ impl Chart {
             self.next_refresh.fill(f64::NEG_INFINITY);
             self.element_studies.dirty = true;
             self.apply_replay_window();
+        }
+        if let Some((time, edge)) = left_edge {
+            self.pending_scroll_time = Some(time);
+            self.pending_scroll_next = false;
+            self.pending_left_edge = Some(edge);
+            // A fling in progress would cancel the edge on the next frame.
+            self.kinetic_scroll = super::state::KineticScrollState::new();
         }
     }
 
