@@ -1482,7 +1482,7 @@ impl Chart {
                 fitted = (low, high);
                 let next = self.state.price_scale().range();
                 // A flat session without a tick must keep the scale's minimum span, rather than
-                // deriving ever smaller rows from its own fitted row height.
+                // shrinking to the edges of its own rows.
                 if traded_high - traded_low <= 1e-9
                     && next.max - next.min < initial.max - initial.min
                     && initial.contains(low)
