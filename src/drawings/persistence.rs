@@ -1689,6 +1689,10 @@ mod tests {
                 config.display = display;
                 config.up_color = [1, 2, 3, 240];
                 config.down_color = [4, 5, 6, 200];
+                config.show_developing_poc = true;
+                config.show_developing_value_area = true;
+                config.developing_poc_color = [31, 32, 33, 34];
+                config.developing_value_area_colors = [[35, 36, 37, 38], [39, 40, 41, 42]];
                 let mut storage = DrawingStorage::new("AAPL");
                 storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
                 let (loaded, skipped) =
@@ -1874,11 +1878,20 @@ mod tests {
                 if let Some(config) = &restored.pitchfork {
                     assert!(config.extend_lines, "older forks retain forward extension");
                 }
-                // These literal older saves have no tick layout and keep their row count.
+                // These literal older saves have no tick layout and keep their row count, and
+                // draw no developing lines.
                 if let Some(config) = restored.volume_profile {
                     assert_eq!(config.row_ticks(), None);
                     assert_eq!((config.rows(), config.value_area()), (50, 0.68));
                     assert_eq!(config.row_size(), None);
+                    assert!(!config.show_developing_poc && !config.show_developing_value_area);
+                    assert_eq!(
+                        (
+                            config.developing_poc_color,
+                            config.developing_value_area_colors
+                        ),
+                        ([255, 152, 0, 255], [[33, 150, 243, 255]; 2])
+                    );
                 }
                 assert!(
                     !serde_json::to_string(&stored.drawing)

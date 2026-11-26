@@ -1070,6 +1070,7 @@ mod tests {
             ),
             (Key::E, alt_shift, None, Some(A::ToggleSession)),
             (Key::W, Modifiers::ALT, None, Some(A::AddToWatchlist)),
+            (Key::N, Modifiers::ALT, None, Some(A::AddNote)),
             (
                 Key::ArrowDown,
                 Modifiers::NONE,

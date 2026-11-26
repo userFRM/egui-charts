@@ -477,6 +477,8 @@ pub struct DemoApp {
     symbol_details: Box<SymbolDetailsPanel>,
     /// The chart symbol's financials, shown in place of the chart while they are open.
     financials: Option<(String, egui_charts::ui::financials::FinancialsPanel)>,
+    /// The symbol details are shown in place of the chart, chosen with their Expand button.
+    details_expanded: bool,
     // Synthetic highlights and headlines from the live feed.
     highlights: NewsPanel,
     news: NewsPanel,
@@ -875,6 +877,7 @@ impl DemoApp {
                 .unwrap_or_default(),
             symbol_details: Box::new(SymbolDetailsPanel::new()),
             financials: None,
+            details_expanded: false,
             highlights: NewsPanel::highlights(),
             news: NewsPanel::new(),
             news_hour: None,
@@ -1018,6 +1021,10 @@ impl DemoApp {
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.storage.clone());
+        app.symbol_details
+            .set_detail_sections(egui_charts::ui::widget_bar::DetailSection::ALL);
+        app.watchlist.set_add_note_visible(true);
+        app.menus.set_add_note_visible(true);
         if let Some(hidden) = cc
             .storage
             .and_then(|storage| eframe::get_value::<Vec<String>>(storage, "symbol_details_hidden"))
@@ -3083,7 +3090,8 @@ impl DemoApp {
                 SidePanel::ObjectTree => self.show_object_tree(ui),
                 SidePanel::Alerts => self.show_alerts_panel(ui),
                 SidePanel::Watchlist => {
-                    if ui.available_height() >= 400.0 {
+                    // The expanded details draw in place of the chart instead.
+                    if ui.available_height() >= 400.0 && !self.details_expanded {
                         egui::Panel::bottom("symbol_details")
                             .resizable(true)
                             .default_size(ui.available_height() / 2.0)
@@ -3371,6 +3379,8 @@ impl DemoApp {
         if let Some(own) = &self.own_data {
             let (symbol, timeframe) = (self.chart.symbol(), self.chart.timeframe());
             let tape = own.feed.drain_tape(symbol, timeframe);
+            // The details show synthetic figures, so they leave the chart's place.
+            self.details_expanded = false;
             self.feed_time_and_sales(ctx, tape);
             return;
         }
@@ -3451,10 +3461,28 @@ impl DemoApp {
                 MarketDetailRequest::Seasonality(symbol) => self
                     .symbol_details
                     .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(&bars))),
+                MarketDetailRequest::Section(section, symbol) => self
+                    .symbol_details
+                    .set_detail_rows(&symbol, section, feeds::detail_rows(section, &symbol)),
                 _ => {}
             }
         }
+        if let Some(url) = self
+            .symbol_details
+            .take_opened_row()
+            .and_then(|row| row.url)
+        {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        }
         self.feed_financials();
+        if self.symbol_details.take_expand_request().is_some() {
+            self.details_expanded = true;
+            self.financials = None;
+            self.open_panel = None;
+        }
+        // Hidden before the larger view first draws, so it never offers itself.
+        self.symbol_details
+            .set_expand_visible(!self.details_expanded);
         self.highlights.set_symbol(&chart_symbol);
         self.news.set_symbol(&chart_symbol);
         let hour = now.timestamp().div_euclid(3600);
@@ -3526,9 +3554,23 @@ impl DemoApp {
         }
     }
 
+    /// Shows the notes of `symbol` with their field focused, beneath the watchlist or in the
+    /// expanded details, and keeps the chart on its symbol.
+    fn add_note(&mut self, symbol: &str) {
+        if self.synthetic_only("Symbol notes") {
+            return;
+        }
+        self.financials = None;
+        if !self.details_expanded {
+            self.open_panel = Some(SidePanel::Watchlist);
+        }
+        self.symbol_details.focus_notes(symbol);
+    }
+
     fn show_watchlist(&mut self, ui: &mut egui::Ui) {
         match self.watchlist.show(ui) {
             WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
             WatchlistAction::AddSymbol => {
                 self.watchlist_search = true;
                 self.symbol_search.open();
@@ -3593,6 +3635,7 @@ impl DemoApp {
             .show(ctx, |ui| action = self.watchlist.show_wide(ui, &details));
         match action {
             WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
+            WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
             WatchlistAction::CompactView => open = false,
             _ => {}
         }
@@ -3943,6 +3986,40 @@ impl DemoApp {
                 .show(ui, |ui| financials.show(ui));
             if back.inner {
                 self.financials = None;
+            }
+            return;
+        }
+        if self.details_expanded {
+            self.export_dialog.set_chart_size(None);
+            self.export_dialog.set_layout_size(None);
+            let frame = panel_frame(bg).corner_radius(4).inner_margin(16);
+            let back = egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                // A centred column stays readable where rows across the whole chart area do not.
+                let width = ui.available_width().min(760.0);
+                ui.horizontal_top(|ui| {
+                    ui.add_space((ui.available_width() - width) / 2.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        let back = ui
+                            .horizontal(|ui| {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| ui.button("Back to chart").clicked(),
+                                )
+                                .inner
+                            })
+                            .inner;
+                        self.symbol_details.show(ui);
+                        back
+                    })
+                    .inner
+                })
+                .inner
+            });
+            let action = self.symbol_details.take_news_action();
+            self.handle_news(ui.ctx(), action);
+            if back.inner {
+                self.details_expanded = false;
             }
             return;
         }
@@ -4387,6 +4464,10 @@ impl DemoApp {
                     egui_charts::scales::DefaultPriceFormatter::with_precision(decimals as usize)
                         .format(price),
                 );
+            }
+            ChartContextAction::Chart(ContextMenuAction::AddNote(symbol))
+            | ChartContextAction::Series(SeriesContextMenuAction::AddNote(symbol)) => {
+                self.add_note(&symbol)
             }
             ChartContextAction::Chart(a) => self.handle_chart_context(a),
             ChartContextAction::Series(a) => self.handle_series_context(a),
@@ -4870,6 +4951,10 @@ impl DemoApp {
                         self.notify(format!("{symbol} is already in that watchlist"));
                     }
                 }
+            }
+            A::AddNote => {
+                let symbol = self.chart.symbol().to_owned();
+                self.add_note(&symbol);
             }
             A::NextWatchlistSymbol | A::PreviousWatchlistSymbol => {
                 let step = if action == A::NextWatchlistSymbol {
@@ -5607,9 +5692,10 @@ mod tests {
         h.get_by_label(&format!("{} UTC · Demo Wire", time.format("%b %-d, %H:%M")));
     }
 
-    /// The watchlist's details use the chart's bars and feed, open headline links and honour
-    /// the three section choices through the demo's menus and action handler, and the sections
-    /// hidden there stay hidden after a restart on the same storage.
+    /// The watchlist's details use the chart's bars and feed, list the demo's detail sections,
+    /// open headline and document links and honour the three section choices through the demo's
+    /// menus and action handler, and the sections hidden there stay hidden after a restart on
+    /// the same storage. Expand shows the details in place of the chart until Back to chart.
     #[test]
     fn watchlist_details_sections_reach_the_demo() {
         use eframe::App as _;
@@ -5631,7 +5717,7 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(560.0, 3600.0),
+                        egui::vec2(560.0, 6000.0),
                     )),
                     events,
                     ..Default::default()
@@ -5715,6 +5801,13 @@ mod tests {
             "Earnings",
             "Ex-dividend",
             "News",
+            "Analyst estimates",
+            "Options",
+            "Earnings calls",
+            "Documents",
+            "Fund holdings",
+            "Credit ratings",
+            "Bonds",
         ] {
             assert!(shown.iter().any(|text| text == title), "{title}: {shown:?}");
         }
@@ -5738,6 +5831,47 @@ mod tests {
             matches!(command, egui::OutputCommand::OpenUrl(url) if Some(&url.url) == stories[0].url.as_ref())
         }));
         output.drop_without_applying_deltas();
+        // The demo opens a clicked row's link when it next answers the panel.
+        click(&mut app, Role::Link, "Annual report 2025").drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        assert!(output.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::OpenUrl(url)
+                if url.url == "https://demo.invalid/documents/STOCKA/annual-2025")
+        }));
+        output.drop_without_applying_deltas();
+
+        // Expand shows the details in place of the chart, without its own button, until Back.
+        click(&mut app, Role::Button, "Expand").drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        let offered = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .any(|(_, node)| node.label() == Some("Expand"));
+        output.drop_without_applying_deltas();
+        assert!(app.details_expanded);
+        assert!(app.open_panel.is_none(), "the details leave the side panel");
+        assert!(!offered, "the larger view offers no Expand");
+        for text in ["Back to chart", "Technicals"] {
+            assert!(shown.iter().any(|shown| shown == text), "{text}: {shown:?}");
+        }
+        click(&mut app, Role::Button, "Back to chart").drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        assert!(!app.details_expanded);
+        assert!(
+            !shown.iter().any(|text| text == "Back to chart"),
+            "{shown:?}"
+        );
+        app.open_panel = Some(SidePanel::Watchlist);
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
         click(&mut app, Role::Button, "Layout").drop_without_applying_deltas();
         for title in ["Technicals", "Upcoming events", "News"] {
             click(&mut app, Role::CheckBox, title).drop_without_applying_deltas();
@@ -5777,6 +5911,111 @@ mod tests {
             app.symbol_details.hidden_sections(),
             ["Technicals", "Upcoming events", "News"]
         );
+    }
+
+    /// Notes open from the chart menu, a watchlist row's menu, Alt+N and All notes, each on its
+    /// symbol with the field focused, while the chart keeps its symbol. A regression drops a
+    /// route, leaves the field unfocused or types into another symbol's notes.
+    #[test]
+    fn notes_open_from_the_menus_the_key_and_all_notes() {
+        use eframe::App;
+        use egui::{Event, Key, Modifiers, PointerButton};
+        let ctx = egui::Context::default();
+        // The demo builds its bars from the clock; a fixed time gives every run the same chart.
+        let now = "2026-11-22T02:05:02Z".parse().unwrap();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new_at(&cc, now, true);
+        app.open_catalog_symbol("STOCKA");
+        settle(&mut app, &ctx);
+        app.open_panel = Some(SidePanel::Watchlist);
+        // Tall enough for every details section above the notes.
+        let size = egui::vec2(1440.0, 6000.0);
+        let frame = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            })
+        };
+        let press = |app: &mut DemoApp, pos, button| {
+            frame(app, vec![Event::PointerMoved(pos)]);
+            frame(
+                app,
+                [true, false]
+                    .map(|pressed| Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    })
+                    .to_vec(),
+            );
+        };
+        // The topmost painted `text`, so a menu's row wins over the text beneath it.
+        let click_text = |app: &mut DemoApp, text: &str, button| {
+            let shown = frame(app, vec![]);
+            let pos = shown
+                .iter()
+                .rev()
+                .find(|(shown, _)| shown == text)
+                .unwrap_or_else(|| panic!("missing {text}: {shown:?}"))
+                .1
+                .center();
+            press(app, pos, button);
+        };
+        // The text typed once the field has its focus, and the painted notes after it.
+        let typed = |app: &mut DemoApp, text: &str| {
+            frame(app, vec![]);
+            frame(app, vec![]);
+            frame(app, vec![Event::Text(text.into())]);
+            frame(app, vec![])
+        };
+        let shows = |shown: &[(String, egui::Rect)], words: &[&str]| {
+            shown
+                .iter()
+                .any(|(text, _)| words.iter().all(|word| text.contains(word)))
+        };
+
+        frame(&mut app, vec![]);
+        let chart = app.chart.get_chart_mapping().rect.center();
+        press(&mut app, chart, PointerButton::Secondary);
+        click_text(&mut app, "Add note on STOCKA…", PointerButton::Primary);
+        let shown = typed(&mut app, "chart note");
+        assert!(shows(&shown, &["chart note"]), "{shown:?}");
+
+        click_text(&mut app, "STOCKB", PointerButton::Secondary);
+        click_text(&mut app, "Add note", PointerButton::Primary);
+        let shown = typed(&mut app, "row note");
+        assert!(shows(&shown, &["row note"]), "{shown:?}");
+        assert!(!shows(&shown, &["chart note"]), "{shown:?}");
+
+        // Clicks this soon after the menu's would be a double click on the chart.
+        for _ in 0..20 {
+            frame(&mut app, vec![]);
+        }
+        press(&mut app, chart, PointerButton::Primary);
+        let key = |pressed| Event::Key {
+            key: Key::N,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::ALT,
+        };
+        frame(
+            &mut app,
+            vec![
+                Event::ModifiersChanged(Modifiers::ALT),
+                key(true),
+                key(false),
+            ],
+        );
+        let shown = typed(&mut app, "key");
+        assert!(shows(&shown, &["chart note", "key"]), "{shown:?}");
+
+        click_text(&mut app, "All notes", PointerButton::Primary);
+        click_text(&mut app, "STOCKB", PointerButton::Primary);
+        let shown = frame(&mut app, vec![]);
+        assert!(shows(&shown, &["row note"]), "{shown:?}");
+        assert_eq!(app.chart.symbol(), "STOCKA");
+        assert!(app.open_panel == Some(SidePanel::Watchlist));
     }
 
     /// One frame of the demo's dialogs with `events`, returning its AccessKit nodes.
@@ -12536,8 +12775,8 @@ mod tests {
             (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
-            (Tool::FixedRangeVolumeProfile, "Rows"),
-            (Tool::AnchoredVolumeProfile, "Rows"),
+            (Tool::FixedRangeVolumeProfile, "Developing POC"),
+            (Tool::AnchoredVolumeProfile, "Developing POC"),
             (Tool::RegressionTrend, "Upper deviation"),
             (Tool::BarsPattern, "Mirrored"),
         ] {
