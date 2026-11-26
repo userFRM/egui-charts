@@ -1503,7 +1503,7 @@ mod tests {
                         InputValue::Length(if n < max { n + 1 } else { n - 1 })
                     }
                     (InputValue::Number(v), _) => {
-                        InputValue::Number(if *v < 1e6 { v + 1.0 } else { 1.0 })
+                        InputValue::Number(if *v < 1e6 { v + 1.5 } else { 1.5 })
                     }
                     (InputValue::Toggle(on), _) => InputValue::Toggle(!on),
                     (InputValue::Choice(at), InputKind::Choice(labels)) => {

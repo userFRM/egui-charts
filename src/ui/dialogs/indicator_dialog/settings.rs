@@ -2938,8 +2938,8 @@ mod tests {
 
     /// Reset inputs restores what a new study starts with: the host's default inputs for a study
     /// that the factory created or restored under them, the constructor's otherwise, also once
-    /// the study's edited inputs were applied. A study output chosen as the source still makes the study follow the chart's interval when the
-    /// host's defaults calculate it on another one.
+    /// the study's edited inputs were applied. A study output chosen as the source still makes
+    /// the study follow the chart's interval when the host's defaults calculate it on another one.
     #[test]
     fn reset_inputs_restores_the_host_defaults() {
         use crate::studies::{IndicatorFactory, RSI, StudySource, StudyTemplate};
