@@ -285,6 +285,7 @@ pub(super) mod tests {
     /// On the 714 px time scale, spacing 20 shows ceil(714/20 - 1) = 35 bars.
     /// A zoom step of 0.2 adds +/-0.2 * 20/10 to spacing and keeps the right edge
     /// (offset -20) fixed; reset restores spacing 6 and the configured 60 px / 6 = 10 bar offset.
+    /// At the live edge a zoom keeps the 60 px or 3 bar margin at the new spacing.
     #[test]
     fn navigation_buttons_apply_each_action() {
         use crate::scales::PriceScaleMode::{Logarithmic, Normal, Percentage};
@@ -355,6 +356,47 @@ pub(super) mod tests {
             assert!((f64::from(chart.get_time_scale_state().1) - offset).abs() < 1e-4);
             assert_eq!(chart.state.price_scale().is_manual(), manual);
             assert_eq!(chart.state.price_scale().options().mode, mode);
+        }
+        // At the live edge a zoom keeps the configured margin at the new spacing, 60 px or
+        // 3 bars, so the chart stays there and shows no scroll to real time button:
+        // (button, pixel margin, bar margin, spacing, offset in bars)
+        for (button, pixels, bars, spacing, offset) in [
+            (0, Some(60.0), 2.5, 19.6, 60.0 / 19.6),
+            (1, Some(60.0), 2.5, 20.4, 60.0 / 20.4),
+            (0, None, 3.0, 19.6, 3.0),
+            (1, None, 3.0, 20.4, 3.0),
+        ] {
+            let case = format!("button {button}, {pixels:?} px, {bars} bars");
+            let ctx = egui::Context::default();
+            let mut chart =
+                chart(&[100.0], &[200.0]).with_chart_options(crate::config::ChartOptions {
+                    time_scale: crate::config::TimeScaleOptions {
+                        right_offset: bars,
+                        right_offset_pixels: pixels,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+            chart.config.navigation_buttons = crate::config::NavigationButtons::OnHover;
+            frame(&ctx, &mut chart, 0.0, Vec::new());
+            chart.state.time_scale_mut().set_bar_spacing(20.0);
+            chart.scroll_to_real_time(false);
+            frame(&ctx, &mut chart, 0.1, Vec::new());
+            assert_eq!(chart.get_time_scale_state(), (20.0, 3.0), "{case}");
+            navigation_click(&ctx, &mut chart, button);
+            let ts = chart.state.time_scale();
+            assert!(
+                (f64::from(ts.bar_spacing()) - spacing).abs() < 1e-4,
+                "{case}: spacing {}",
+                ts.bar_spacing()
+            );
+            assert!(
+                (ts.right_offset_precise() - offset).abs() < 1e-4,
+                "{case}: offset {}, margin {} px",
+                ts.right_offset_precise(),
+                ts.right_offset_precise() * f64::from(ts.bar_spacing())
+            );
+            assert!(ts.is_at_live_edge(), "{case}: scroll to real time shown");
         }
         // View movements are one undo step that keeps redo, here Left arrow presses after the
         // grid was hidden: (presses, whether the grid edit is undone before them)
