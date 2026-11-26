@@ -1166,7 +1166,6 @@ fn draw_session_profile(
     let column_width = column_width.min(row_height);
     let pixels_per_point = painter.ctx().pixels_per_point();
     let gap = 1.0 / pixels_per_point;
-    let levels = profile.price_levels();
     let columns = profile_columns(profile, config);
     let max_right = anchor_x + columns as f32 * column_width;
     let block_width = (column_width - gap).max(gap);
@@ -1263,13 +1262,36 @@ fn draw_session_profile(
         Vec::new()
     };
 
-    for &price in &levels {
-        let y = row_y(price);
+    // Letters by row from the highest row down, each row's left-justified in time order: one
+    // sort per profile keeps every row's letters together, as a letter's price is its row's.
+    // Periods list their rows upward, so reversed a one-period profile is already in order.
+    let mut letters: Vec<_> = profile.letters.iter().rev().collect();
+    letters.sort_by(|a, b| b.price.total_cmp(&a.price).then(a.ts.cmp(&b.ts)));
+    // The cells' pixel grid: each column's edges once per profile, and each row's centre from the
+    // span `row_center_y` gives it, computed from the row's price without keying it again.
+    let edges = |col: usize| {
+        let x = anchor_x + col as f32 * column_width + column_width * 0.5;
+        (
+            (x - block_width * 0.5).round_to_pixels(pixels_per_point),
+            (x + block_width * 0.5).round_to_pixels(pixels_per_point),
+        )
+    };
+    let column_edges: Vec<(f32, f32)> = if use_letters {
+        Vec::new()
+    } else {
+        (0..columns).map(edges).collect()
+    };
+    let half_tick = profile.instrument_tick * 0.5;
+    // The cells, their letters and the profile's lines go to the painter in one call, in paint order.
+    let mut shapes = Vec::with_capacity(if use_letters { 4 } else { letters.len() + 4 });
+    for row in letters.chunk_by(|a, b| a.price == b.price) {
+        let price = row[0].price;
+        let y = coords.price_to_y(((price - half_tick) + (price + tick_size - half_tick)) * 0.5);
         if y < price_rect.top() - row_height || y > price_rect.bottom() + row_height {
             continue;
         }
         let is_poc = config.show_poc && (price - profile.poc_price).abs() < tick_size * 0.5;
-        let single_print = config.show_single_prints && profile.tpo_count_at(price) == 1;
+        let single_print = config.show_single_prints && row.len() == 1;
         let dimmed = !is_poc && dims_outside_value_area && !profile.is_in_value_area(price);
         let row_tone = if is_poc {
             Some(poc_color)
@@ -1284,11 +1306,7 @@ fn draw_session_profile(
         let top = (y - block_height * 0.5).round_to_pixels(pixels_per_point);
         let bottom = (y + block_height * 0.5).round_to_pixels(pixels_per_point);
 
-        // Letters at this level, one per period of each session, left-justified in time order.
-        let mut letters_at_price: Vec<_> = profile.letters_at(price);
-        letters_at_price.sort_by_key(|l| l.ts);
-
-        for (col, letter) in letters_at_price.iter().enumerate() {
+        for (col, letter) in row.iter().enumerate() {
             let col = starts
                 .as_ref()
                 .map_or(col, |starts| starts.partition_point(|ts| *ts < letter.ts));
@@ -1305,8 +1323,7 @@ fn draw_session_profile(
                     color,
                 );
             } else {
-                let left = (x - block_width * 0.5).round_to_pixels(pixels_per_point);
-                let right = (x + block_width * 0.5).round_to_pixels(pixels_per_point);
+                let (left, right) = column_edges.get(col).copied().unwrap_or_else(|| edges(col));
                 let cell = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
                 // An opaque cell hides the highlight behind it, so a single print takes the colour
                 // itself: a tint barely shows on a cell dimmed toward a light background. The POC
@@ -1316,7 +1333,7 @@ fn draw_session_profile(
                 } else {
                     color
                 };
-                painter.rect_filled(cell, 0.0, color);
+                shapes.push(Shape::rect_filled(cell, 0.0, color));
                 if letters_in_cells {
                     let letter_tone = cell_letter_color(color, &chart);
                     let mut format =
@@ -1327,7 +1344,9 @@ fn draw_session_profile(
                     let origin = egui::Align2::CENTER_CENTER
                         .anchor_size(cell.center(), galley.size())
                         .min;
-                    painter.galley(origin, galley, letter_tone);
+                    if !galley.is_empty() {
+                        shapes.push(Shape::galley(origin, galley, letter_tone));
+                    }
                 }
             }
         }
@@ -1348,10 +1367,10 @@ fn draw_session_profile(
         if poor && price_rect.y_range().contains(y) {
             let right =
                 anchor_x + row_reach(profile, starts.as_deref(), price) as f32 * column_width;
-            painter.line_segment(
+            shapes.push(Shape::line_segment(
                 [Pos2::new(right + 4.0, y), Pos2::new(right + 12.0, y)],
                 Stroke::new(DESIGN_TOKENS.stroke.medium, chart.axis_text),
-            );
+            ));
             *end = Some(Pos2::new(right + 12.0, y));
         }
     }
@@ -1359,10 +1378,10 @@ fn draw_session_profile(
     // Letters retain a fine POC underline; blocks carry the POC in the row itself.
     if config.show_poc && use_letters {
         let y = row_y(profile.poc_price) + row_height * 0.5;
-        painter.line_segment(
+        shapes.push(Shape::line_segment(
             [Pos2::new(anchor_x, y), Pos2::new(max_right, y)],
             Stroke::new(render_config.poc_line_width, poc_color),
-        );
+        ));
     }
 
     if config.show_value_area {
@@ -1377,8 +1396,10 @@ fn draw_session_profile(
                 let end = max_right + 6.0;
                 let mut x = anchor_x;
                 while x < end {
-                    painter
-                        .line_segment([Pos2::new(x, y), Pos2::new((x + 2.0).min(end), y)], stroke);
+                    shapes.push(Shape::line_segment(
+                        [Pos2::new(x, y), Pos2::new((x + 2.0).min(end), y)],
+                        stroke,
+                    ));
                     x += 5.0;
                 }
             }
@@ -1386,6 +1407,7 @@ fn draw_session_profile(
     }
 
     if config.show_volume_profile {
+        let levels = profile.price_levels();
         let max = levels
             .iter()
             .map(|&price| profile.volume_at(price))
@@ -1408,17 +1430,18 @@ fn draw_session_profile(
                 } else {
                     chart.axis_text_secondary
                 };
-                painter.rect_filled(
+                shapes.push(Shape::rect_filled(
                     Rect::from_min_max(
                         Pos2::new(left, top),
                         Pos2::new(left + VOLUME_PROFILE_PX * (volume / max) as f32, bottom),
                     ),
                     0.0,
                     color,
-                );
+                ));
             }
         }
     }
+    painter.extend(shapes);
 
     if label_room > 0.0 {
         let mut label_rows = Vec::new();
