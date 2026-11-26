@@ -1,6 +1,6 @@
 //! A simulated account behind the [`Broker`] service.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
@@ -49,10 +49,12 @@ const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 /// once it fills, for the quantity the fill opened: take-profit levels each close their own
 /// quantity, the first ones first when the fill opened less than the order's quantity, as after
 /// closing an opposite position. A level's own stop loss closes the same quantity as its take
-/// profit, and whichever fills cancels the other. The order's stop loss closes the quantity of the
-/// levels without one: when one of their take profits fills, it shrinks by that quantity and is
-/// cancelled once nothing is left; when it fills, those take profits are cancelled. An order
-/// carries at most 4 levels. Each symbol has one net position with its average price: a fill
+/// profit, and filling or cancelling either cancels the other, so a level stays whole or goes. The
+/// order's stop loss closes the quantity of the levels without one: when one of their take profits
+/// fills, it shrinks by that quantity and is cancelled once nothing is left; when it fills, those
+/// take profits are cancelled. Cancelling it or one of those take profits leaves the rest working.
+/// Cancelling an order the account has already cancelled, such as a level's other exit, succeeds.
+/// An order carries at most 4 levels. Each symbol has one net position with its average price: a fill
 /// against it books the realised profit or loss of the closed quantity, and a fill beyond it opens
 /// the other side at the fill price. A fill that flattens or reverses a symbol records its completed
 /// round trip, including partial closes, with profit or loss before commissions. Values use the
@@ -116,6 +118,8 @@ pub struct SavedPaperAccount {
     closed_positions: Vec<ClosedPosition>,
     #[serde(default)]
     trails: Vec<(OrderId, f64)>,
+    #[serde(default)]
+    paired: Vec<OrderId>,
 }
 
 /// The account a replay trading session starts with, as the replay start menu offers it: its
@@ -203,9 +207,14 @@ struct State {
     executions: Vec<Execution>,
     /// Every bracket exit, and the exits of the same group it acts on when it fills: a take
     /// profit's stop loss, which it shrinks or cancels, and a stop loss's take profits, which it
-    /// cancels. A level with its own stop loss is a group of two; the order's stop loss and the
-    /// take profits without their own form the other.
+    /// cancels. A level with its own stop loss is a group of two, whose exits are also cancelled
+    /// together (`paired`); the order's stop loss and the take profits without their own form the
+    /// other.
     exits: HashMap<OrderId, Vec<OrderId>>,
+    /// The exits of take-profit levels with their own stop loss: cancelling one also cancels the
+    /// exit it lists in `exits`, so a level stays whole or goes. The shared group's exits are
+    /// cancelled alone.
+    paired: HashSet<OrderId>,
     /// The best price of each working trailing stop since it started trailing.
     trails: HashMap<OrderId, f64>,
     positions: HashMap<String, Position>,
@@ -549,6 +558,12 @@ impl PaperAccount {
             .filter_map(|order| Some((order.id.clone(), *state.trails.get(&order.id)?)))
             .collect();
         trails.sort_by(|a, b| a.0.0.cmp(&b.0.0));
+        let paired = state
+            .working
+            .iter()
+            .filter(|order| state.paired.contains(&order.id))
+            .map(|order| order.id.clone())
+            .collect();
         SavedPaperAccount {
             currency: self.currency.clone(),
             initial: self.initial,
@@ -569,6 +584,7 @@ impl PaperAccount {
             trips,
             closed_positions: state.closed_positions.clone(),
             trails,
+            paired,
         }
     }
 
@@ -581,7 +597,9 @@ impl PaperAccount {
     /// marks until a host price arrives. Returns `None` when the saved balance or starting balance
     /// is not finite. Older saves without round-trip tracking start it from the saved position's
     /// quantity and average price, with no reported opening time, earlier partial closes or
-    /// commissions, and saves without its commissions count those of later fills only.
+    /// commissions, and saves without its commissions count those of later fills only. In older
+    /// saves, the exits of a take-profit level with its own stop loss are not paired, so each is
+    /// cancelled on its own.
     pub fn restore(mut saved: SavedPaperAccount) -> Option<Self> {
         if !saved.initial.is_finite() || !saved.balance.is_finite() {
             return None;
@@ -619,6 +637,11 @@ impl PaperAccount {
                 .trails
                 .into_iter()
                 .filter(|(id, _)| state.working.iter().any(|order| order.id == *id))
+                .collect();
+            state.paired = saved
+                .paired
+                .into_iter()
+                .filter(|id| state.working.iter().any(|order| order.id == *id))
                 .collect();
             state.trips = saved.trips.into_iter().collect();
             for position in &saved.positions {
@@ -930,6 +953,7 @@ impl State {
 
     fn finish(&mut self, mut order: Order, status: OrderStatus) {
         self.trails.remove(&order.id);
+        self.paired.remove(&order.id);
         order.status = status;
         order.closed = Some(self.now());
         self.push(AccountEvent::Order(order.clone()));
@@ -1228,7 +1252,10 @@ impl State {
                     .collect()
             })
             .collect();
-        for ((exit, _), partners) in exits.into_iter().zip(partners) {
+        for ((exit, group), partners) in exits.into_iter().zip(partners) {
+            if group.is_some() {
+                self.paired.insert(exit.id.clone());
+            }
             self.exits.insert(exit.id.clone(), partners);
             self.push(AccountEvent::Order(exit.clone()));
             self.log(format!(
@@ -1242,21 +1269,30 @@ impl State {
         self.mark(terms);
     }
 
+    /// Cancels the working order `id`; for an exit of a take-profit level with its own stop
+    /// loss, the level's other exit too. Returns whether `id` was working.
     fn cancel_working(&mut self, id: &OrderId) -> bool {
         let Some(index) = self.working.iter().position(|order| &order.id == id) else {
             return false;
         };
         let order = self.working.remove(index);
-        for other in self.exits.remove(id).into_iter().flatten() {
-            if let Some(list) = self.exits.get_mut(&other) {
+        let partners = self.exits.remove(id).unwrap_or_default();
+        for other in &partners {
+            if let Some(list) = self.exits.get_mut(other) {
                 list.retain(|exit| exit != id);
             }
         }
+        let paired = self.paired.contains(id);
         self.log(format!(
             "Order {id} cancelled: {}",
             describe(&order.request)
         ));
         self.finish(order, OrderStatus::Cancelled);
+        if paired {
+            for other in &partners {
+                self.cancel_working(other);
+            }
+        }
         true
     }
 
@@ -1482,6 +1518,11 @@ impl Broker for PaperAccount {
         if state.cancel_working(&id) {
             reply.send(Ok(()));
             state.push(state.account(self));
+        } else if (state.finished.iter().rev())
+            .any(|order| order.id == id && order.status == OrderStatus::Cancelled)
+        {
+            // Already cancelled, as a level's other exit is with the first: nothing changes.
+            reply.send(Ok(()));
         } else {
             reply.send(Err(FeedError::Other(format!(
                 "order {id} is no longer working"
@@ -3117,6 +3158,101 @@ mod tests {
             let quantity = state.positions.get("SYM").map_or(0.0, |p| p.quantity);
             assert_eq!(quantity, position, "held {held}");
             assert_eq!(state.balance, balance, "held {held}");
+        }
+    }
+
+    /// Cancelling either exit of a level with its own stop loss cancels the other and leaves the
+    /// order's other exits as they were, also in a restored account; the order's stop loss and the
+    /// levels without their own are cancelled alone. A regression lets the level's stop close a
+    /// quantity the user took out of the plan, leaves its take profit unprotected, cancels the
+    /// shared stop with a level that has none, or answers Cancel all's second cancel as refused.
+    #[test]
+    fn cancelling_an_exit_of_a_level_with_its_own_stop_cancels_the_level() {
+        let limit = |price, quantity| (OrderType::Limit(price), quantity);
+        let stop = |price, quantity| (OrderType::Stop(price), quantity);
+        let entered = [
+            limit(105.0, 1.0),
+            limit(110.0, 2.0),
+            stop(97.0, 2.0),
+            stop(95.0, 1.0),
+        ];
+        // (cancelled, its level's other exit, exits left working)
+        for (cancelled, partner, left) in [
+            (
+                limit(110.0, 2.0),
+                Some(stop(97.0, 2.0)),
+                vec![limit(105.0, 1.0), stop(95.0, 1.0)],
+            ),
+            (
+                stop(97.0, 2.0),
+                Some(limit(110.0, 2.0)),
+                vec![limit(105.0, 1.0), stop(95.0, 1.0)],
+            ),
+            // The order's stop loss and the levels without their own are cancelled alone.
+            (
+                limit(105.0, 1.0),
+                None,
+                vec![limit(110.0, 2.0), stop(97.0, 2.0), stop(95.0, 1.0)],
+            ),
+            (
+                stop(95.0, 1.0),
+                None,
+                vec![limit(105.0, 1.0), limit(110.0, 2.0), stop(97.0, 2.0)],
+            ),
+        ] {
+            for restored in [false, true] {
+                let mut paper = PaperAccount::new("USD", 10_000.0);
+                paper.set_price("SYM", 100.0);
+                let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 3.0, OrderType::Market);
+                entry.take_profit_levels = vec![
+                    TakeProfitLevel::new(105.0, 1.0),
+                    TakeProfitLevel::new(110.0, 2.0),
+                ];
+                entry.take_profit_levels[1].stop_loss = Some(97.0);
+                entry.stop_loss = Some(95.0);
+                let entry = place(&paper, entry).unwrap();
+                if restored {
+                    paper = PaperAccount::restore(paper.save()).unwrap();
+                }
+                let exits = |status: OrderStatus| {
+                    let state = paper.lock();
+                    (state.working.iter().chain(&state.finished))
+                        .filter(|order| order.status == status)
+                        .map(|order| (order.request.order_type, order.request.quantity))
+                        .collect::<Vec<_>>()
+                };
+                let id_of = |exit: (OrderType, f64)| {
+                    let state = paper.lock();
+                    let order = (state.working.iter())
+                        .find(|order| (order.request.order_type, order.request.quantity) == exit);
+                    order.unwrap().id.clone()
+                };
+                let cancel = |id| {
+                    let inbox = Arc::new(Inbox::default());
+                    paper.cancel(id, inbox.reply(0));
+                    *inbox
+                        .drain()
+                        .answers
+                        .pop()
+                        .unwrap()
+                        .1
+                        .downcast::<Result<(), FeedError>>()
+                        .unwrap()
+                };
+                assert_eq!(exits(OrderStatus::Working), entered, "restored {restored}");
+                let partner_id = partner.map(id_of);
+                assert_eq!(cancel(id_of(cancelled)), Ok(()), "restored {restored}");
+                assert_eq!(exits(OrderStatus::Working), left, "restored {restored}");
+                let gone: Vec<_> = [cancelled].into_iter().chain(partner).collect();
+                assert_eq!(exits(OrderStatus::Cancelled), gone, "restored {restored}");
+                // Cancel all also cancels the other exit, which the account has cancelled already.
+                if let Some(id) = partner_id {
+                    assert_eq!(cancel(id), Ok(()), "restored {restored}");
+                    assert_eq!(exits(OrderStatus::Working), left, "restored {restored}");
+                }
+                // An order that filled is no longer working.
+                assert!(cancel(entry).is_err(), "restored {restored}");
+            }
         }
     }
 
