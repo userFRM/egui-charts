@@ -4736,6 +4736,8 @@ mod tests {
         );
         let mut expected = template.inputs.clone();
         expected.insert(2, ("combine_fills".to_owned(), InputValue::Toggle(false)));
+        // Saved before interval resets: the Continuous choice keeps its index.
+        expected.push(("reset_minutes".to_owned(), InputValue::Length(60)));
         assert_eq!(
             crate::studies::StudyTemplate::from_study(older.as_ref()).inputs,
             expected
