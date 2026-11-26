@@ -336,7 +336,11 @@ impl Chart {
         use crate::config::CrosshairStyle;
         match self.chart_options.crosshair.style {
             CrosshairStyle::Full => egui::CursorIcon::Crosshair,
-            // The dot, the arrow and the trails draw their own marker over the default pointer.
+            // The Magic cursor's wand, which the drawings feature paints, is the pointer; where
+            // none is painted the frame shows the arrow.
+            CrosshairStyle::Magic if cfg!(feature = "drawings") => egui::CursorIcon::None,
+            // The dot, the arrow and the marks draw their own marker over the default pointer;
+            // without the drawings feature the Magic cursor has no wand.
             CrosshairStyle::Dot
             | CrosshairStyle::Arrow
             | CrosshairStyle::Demonstration

@@ -32,6 +32,18 @@ pub(super) type LayeredDrawing = (
 );
 
 impl Chart {
+    /// Whether a click at `pos` on `plot`, the plot of the pane it landed on, throws the Magic
+    /// cursor's emoji. A click on a drawing does not: the drawing takes it, as under the cross
+    /// cursor. Neither does a click in zoom mode, where no wand shows. Both plots call this for
+    /// the clicks they already resolve into a selection, so marks, drawing tools and the eraser
+    /// never throw.
+    pub(super) fn throws_confetti(&self, plot: Rect, pos: Pos2) -> bool {
+        self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
+            && !self.zoom_mode_active
+            && plot.contains(pos)
+            && self.drawings.hit_test(pos).is_none()
+    }
+
     /// Queues the paint of each drawing of the pane last handled whose `series_layer` puts it
     /// under a series or study to move before the first shape of those items: `marks[k]` is
     /// where item `k` of the pane began, `None` for an item that painted nothing.

@@ -55,10 +55,11 @@ pub enum CrosshairStyle {
     /// pressing on a plot marks the same way under the other cursors. A mark can start on any pane
     /// and is drawn across the panes it crosses.
     Demonstration,
-    /// A trail that follows the pointer while the primary button is held, with axis readouts.
-    /// Unlike a Demonstration mark, each point fades half a second after it is drawn, so the trail
-    /// shortens behind a moving pointer. It neither pans the chart nor selects, moves or creates
-    /// drawings.
+    /// The cross cursor's panning, selection and axis readouts, without crosshair lines. Over a
+    /// plot the pointer is a small wand, and each click there throws a burst of emoji from its
+    /// tip that rises, spreads and falls within the pane for up to three seconds. The burst is
+    /// decorative: a click on a drawing selects it as under the cross and throws none. Without the
+    /// `drawings` feature the standard pointer shows and no emoji are thrown.
     Magic,
     /// No crosshair lines or axis labels. Legends, the data window and tooltips still follow
     /// the pointer.

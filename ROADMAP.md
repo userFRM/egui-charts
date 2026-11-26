@@ -115,7 +115,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Demonstration cursor: a click marks a point and a drag marks a path on any pane, also across panes, which fades out over three seconds after the release; hovering marks nothing. Alt (Option) marks the same way under the other cursors.
 - [x] Nested drawing folders in the object tree. New folders take the selected drawings and any fully selected folders, and a folder that holds the new one stays with its own drawings moving in. A folder row selects its descendants, drags into another folder or out to the root, and deletes with its contents in one undo step. Emptied folders go away and an undo restores them; cycles and name clashes are refused. A collapsed folder stays collapsed while the panel shows another chart's drawings. A top-level folder keeps its drawings on the chart, mirrors them across the layout or across every layout, or follows the layout-wide switch. Nested folders follow it and keep their mode at the root. Nesting and modes are saved with the drawings, and a drawing kept on a chart that showed its copy is saved with that chart.
 - [x] Sloping drawing alert levels agree with logarithmic rendering, and parallel, disjoint and flat top/bottom channels expose both lines.
-- [x] Magic cursor mode paints a trail that fades behind the pointer while the primary button is held, so a drag on the plot of any pane marks the chart rather than panning it or moving drawings.
+- [x] Magic cursor mode pans and selects like the cross cursor, without its lines; over a plot the pointer is a small wand, and each click throws a burst of emoji from its tip that falls within the pane and is gone after three seconds.
 
 ## Technical Indicators
 

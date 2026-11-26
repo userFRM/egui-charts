@@ -222,6 +222,7 @@ impl Chart {
         footprint: Option<(FootprintView<'_>, &FootprintConfig)>,
     ) -> Response {
         self.follow_chart_theme(&ui.active_theme());
+        self.pointer_dot = false;
         self.host_events.volume_map = None;
         self.host_events.touch_position = None;
         self.host_events.target = None;
@@ -300,9 +301,21 @@ impl Chart {
             }
             response
         };
-        // After every pane, so that a mark is one stroke above all of them.
+        // After every pane, so that a mark is one stroke above all of them, with the Magic
+        // cursor's emoji and wand above the marks.
         #[cfg(feature = "drawings")]
-        self.cursor_modes.render(ui);
+        {
+            self.pointer_dot |= self.cursor_modes.render(ui);
+        }
+        // The Dot and Magic cursors hide the pointer only where their dot or wand stands in for
+        // it: elsewhere on the chart (an axis, an open menu, a held readout, an empty plot) the
+        // arrow stays.
+        if !self.pointer_dot
+            && ui.rect_contains_pointer(response.rect)
+            && ui.ctx().output(|o| o.cursor_icon) == egui::CursorIcon::None
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+        }
         self.menu_open = false;
         #[cfg(feature = "ui")]
         {
@@ -756,11 +769,8 @@ impl Chart {
             &mark_response,
             hover_rect,
             !eraser_mode
-                && matches!(
-                    self.chart_options.crosshair.style,
-                    crate::config::CrosshairStyle::Demonstration
-                        | crate::config::CrosshairStyle::Magic
-                ),
+                && self.chart_options.crosshair.style
+                    == crate::config::CrosshairStyle::Demonstration,
             !box_selection
                 && !drawing_tool_active
                 && self.drawings.dragging_handle.is_none()
@@ -1018,8 +1028,9 @@ impl Chart {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ZoomIn);
         }
         // Axes that a drag would zoom show its direction, keeping the axis where it began.
-        // The drawing manager may override the cursor below.
-        else if response.hovered() {
+        // The drawing manager may override the cursor below. The other panes' plots take the
+        // plot's cursor too.
+        else if time_response.hovered() {
             let at = ui
                 .input(|i| i.pointer.press_origin().or(i.pointer.hover_pos()))
                 .filter(|_| !owns_drag);
@@ -2715,6 +2726,7 @@ impl Chart {
         // series beneath them; an empty-area click clears the selection. Clicks
         // in a study's pane are resolved where the panes are rendered, outside
         // this rect. A mark, or a click with the eraser or a drawing tool, keeps the selection.
+        // Under the Magic cursor a click away from every drawing also throws its emoji.
         if response.clicked()
             && !drawing_tool_active
             && !eraser_mode
@@ -2728,6 +2740,12 @@ impl Chart {
             match element_at(click_pos) {
                 Some((id, bar_idx)) if !on_drawing => self.selection.select(id, Some(bar_idx)),
                 _ => self.selection.deselect(),
+            }
+            // The Magic cursor's burst is decorative: the click above selects as under the cross.
+            #[cfg(feature = "drawings")]
+            if self.throws_confetti(chart_rect, click_pos) {
+                let now = ui.input(|input| input.time);
+                self.cursor_modes.throw(chart_rect, click_pos, now);
             }
         }
 

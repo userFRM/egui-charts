@@ -13421,6 +13421,64 @@ mod tests {
         assert!(!app.chart.is_zoom_mode_active());
     }
 
+    /// The Magic cursor picked in the drawing toolbar hides the pointer over the plot for its
+    /// wand, and a click there throws a burst of emoji that is gone three seconds later.
+    #[test]
+    fn magic_cursor_throws_emoji_on_a_plot_click() {
+        use eframe::App;
+        use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.handle_drawing_toolbar(DrawingToolbarAction::SetCursorType(CursorType::Magic));
+        settle(&mut app, &ctx);
+        let at = app.chart.get_rendered_price_rect().center();
+        assert!(
+            app.chart.drawings().hit_test(at).is_none(),
+            "a drawing at {at:?}"
+        );
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let mut frame = |time: f64, events: Vec<egui::Event>| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            // The Magic cursor's emoji all lie from U+1F300 on.
+            let emoji = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text)
+                        if text.galley.text().chars().next().is_some_and(|c| c >= '\u{1F300}'))
+                })
+                .count();
+            let cursor = output.platform_output.cursor_icon;
+            output.drop_without_applying_deltas();
+            (emoji, cursor)
+        };
+        frame(10.0, vec![egui::Event::PointerMoved(at)]);
+        assert_eq!(
+            frame(10.1, vec![egui::Event::PointerMoved(at)]),
+            (0, egui::CursorIcon::None)
+        );
+        frame(10.2, vec![button(true)]);
+        assert_eq!(frame(10.25, vec![button(false)]).0, 40);
+        assert_eq!(frame(13.3, vec![]).0, 0);
+    }
+
     #[test]
     fn object_tree_applies_layer_bulk_and_focus_actions() {
         use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
