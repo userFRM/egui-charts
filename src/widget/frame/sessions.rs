@@ -572,10 +572,12 @@ mod tests {
                 chart.set_chart_type(ChartType::TimePriceOpportunity);
                 let mut saved = serde_json::json!({"tpo_row_ticks":1, "tpo_letters":true, "tpo_midpoint":false});
                 for (id, value) in edits {
-                    let InputValue::Toggle(show) = value else {
-                        panic!("chart rows use toggles")
+                    saved[format!("tpo_{id}")] = match value {
+                        InputValue::Toggle(show) => (*show).into(),
+                        // Nested settings arrive as their saved JSON.
+                        InputValue::Text(json) => serde_json::from_str(json).unwrap(),
+                        _ => panic!("chart rows use toggles or saved JSON"),
                     };
-                    saved[format!("tpo_{id}")] = (*show).into();
                 }
                 chart.set_chart_type_params(serde_json::from_value(saved).unwrap());
             }
@@ -746,6 +748,320 @@ mod tests {
             (split - packed - column).abs() < 0.001,
             "packed {packed}, split {split}, column {column}"
         );
+        // The rows hold volumes 7.6, 8.1, 8.43, 7.93 and 7.93 from 99 to 103. The volume point
+        // of control is 101 and its value area 100..=103: from 101, the 15.87 above beats the
+        // 15.7 below, which joins at 24.3 to pass the 28 target.
+        let volume_profile = ("volume_profile", InputValue::Toggle(true));
+        // The volume bars are 36 to 40 px wide, wider than cells and candles, and unlike the
+        // price scale's last price label not in a candle colour.
+        let strip = |painted: &[Shape],
+                     map: &crate::chart::coords::ChartMapping,
+                     chart: &crate::theme::ChartColors|
+         -> Vec<_> {
+            painted
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Rect(r)
+                        if (24.0..=40.0).contains(&r.rect.width())
+                            && ![chart.candle_up, chart.candle_down].contains(&r.fill)
+                            && (99..=103).any(|price| {
+                                (r.rect.center().y - map.price_to_y(f64::from(price))).abs() < 1.0
+                            }) =>
+                    {
+                        Some((r.rect, r.fill))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // A volume profile on the left moves the profile right and keeps the captions left of
+        // both.
+        for (study, edits) in [
+            (
+                false,
+                [
+                    volume_profile.clone(),
+                    ("volume", InputValue::Text(r#"{"left": true}"#.into())),
+                ],
+            ),
+            (
+                true,
+                [
+                    volume_profile.clone(),
+                    ("volume_placement", InputValue::Choice(0)),
+                ],
+            ),
+        ] {
+            let (painted, map, chart) = paint(study, &edits);
+            let (color, dim) = (
+                chart.axis_text_secondary,
+                chart.bg.lerp_to_gamma(chart.axis_text_secondary, 0.45),
+            );
+            let volume = strip(&painted, &map, &chart);
+            let filled = painted
+                .iter()
+                .filter(|s| matches!(s, Shape::Rect(r) if (r.fill == color || r.fill == dim) && r.rect.width() > 2.0 && r.rect.width() <= 40.0))
+                .count();
+            assert_eq!((volume.len(), filled), (5, 5), "study {study}: {volume:?}");
+            // Each cell holds a letter, so the letters on the profile's rows, unlike the legend's
+            // symbol, mark where the profile starts.
+            let rows = map.price_to_y(103.5)..=map.price_to_y(98.5);
+            let letters = painted
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Text(t)
+                        if t.galley.text().len() == 1
+                            && t.galley.text().chars().all(|c| c.is_ascii_uppercase())
+                            && rows.contains(&(t.pos.y + t.galley.size().y / 2.0)) =>
+                    {
+                        Some(t.pos.x)
+                    }
+                    _ => None,
+                })
+                .min_by(f32::total_cmp)
+                .unwrap();
+            let (strip_left, strip_right) = volume.iter().fold(
+                (f32::INFINITY, f32::NEG_INFINITY),
+                |(left, right), (r, _)| (left.min(r.left()), right.max(r.right())),
+            );
+            assert!(
+                strip_right <= letters - 13.0,
+                "study {study}: the strip ends at {strip_right}, the letters start at {letters}"
+            );
+            let poc = painted
+                .iter()
+                .find_map(|s| match s {
+                    Shape::Text(t) if t.galley.text() == "POC" => Some(t.pos.x + t.galley.size().x),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(
+                poc <= strip_left,
+                "study {study}: the caption ends at {poc}, the strip starts at {strip_left}"
+            );
+        }
+        // Each other new study input changes the paint, compared with the edits before its own.
+        let (red, blue) = (egui::Color32::RED, egui::Color32::BLUE);
+        let on = |id| (id, InputValue::Toggle(true));
+        for edits in [
+            vec![("letters_color", InputValue::Color(yellow))],
+            vec![("poc_color", InputValue::Color(yellow))],
+            vec![("value_area_high", InputValue::Toggle(false))],
+            vec![("value_area_low", InputValue::Toggle(false))],
+            vec![on("volume_poc")],
+            vec![
+                on("volume_poc"),
+                ("volume_poc_color", InputValue::Color(yellow)),
+            ],
+            vec![
+                on("volume_poc"),
+                ("volume_poc_style", InputValue::Choice(1)),
+            ],
+            vec![on("volume_value_area_high")],
+            vec![
+                on("volume_value_area_high"),
+                ("volume_value_area_high_color", InputValue::Color(yellow)),
+            ],
+            vec![
+                on("volume_value_area_high"),
+                ("volume_value_area_high_style", InputValue::Choice(2)),
+            ],
+            vec![on("volume_value_area_low")],
+            vec![
+                on("volume_value_area_low"),
+                ("volume_value_area_low_color", InputValue::Color(yellow)),
+            ],
+            vec![
+                on("volume_value_area_low"),
+                ("volume_value_area_low_style", InputValue::Choice(1)),
+            ],
+            vec![on("volume_values")],
+            vec![
+                on("volume_values"),
+                ("volume_values_color", InputValue::Color(yellow)),
+            ],
+            vec![("volume_profile_color", InputValue::Color(red))],
+            vec![("volume_value_area_color", InputValue::Color(blue))],
+        ] {
+            let id = edits[edits.len() - 1].0;
+            // Left of the profile, the strip lies inside the plot, so nothing of it is clipped.
+            let mut before = vec![
+                volume_profile.clone(),
+                ("volume_placement", InputValue::Choice(0)),
+            ];
+            before.extend_from_slice(&edits[..edits.len() - 1]);
+            let (unchanged, _, _) = paint(true, &before);
+            before.extend_from_slice(&edits[edits.len() - 1..]);
+            let (painted, map, chart) = paint(true, &before);
+            assert!(painted != unchanged, "{id} changed nothing");
+            let y = |price| map.price_to_y(price);
+            let volume = strip(&painted, &map, &chart);
+            let (left, right) = volume.iter().fold(
+                (f32::INFINITY, f32::NEG_INFINITY),
+                |(left, right), (r, _)| (left.min(r.left()), right.max(r.right())),
+            );
+            let over_strip = |x: f32| (left - 0.5..=right + 0.5).contains(&x);
+            let lines = |price| -> Vec<_> {
+                painted
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::LineSegment { points, stroke }
+                            if points[0].y == points[1].y
+                                && (points[0].y - y(price)).abs() < 1.0
+                                && over_strip(points[0].x)
+                                && over_strip(points[1].x) =>
+                        {
+                            Some(stroke.color)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let caption = |name| {
+                painted
+                    .iter()
+                    .any(|s| matches!(s, Shape::Text(t) if t.galley.text() == name))
+            };
+            let values: Vec<_> = painted
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Text(t) if over_strip(t.pos.x) && t.galley.text() == "8" => {
+                        Some(t.fallback_color)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let fill_at = |price| {
+                volume
+                    .iter()
+                    .find(|(r, _)| (r.center().y - y(price)).abs() < 1.0)
+                    .map(|&(_, fill)| fill)
+            };
+            let changed = match id {
+                "letters_color" => painted.iter().any(|s| matches!(s, Shape::Text(t) if t.galley.text().len() == 1 && t.fallback_color == yellow)),
+                "poc_color" => painted.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == yellow && r.rect.width() < 24.0 && (r.rect.center().y - y(101.0)).abs() < 1.0)),
+                "value_area_high" => !caption("VAH") && caption("VAL"),
+                "value_area_low" => caption("VAH") && !caption("VAL"),
+                "volume_poc" => lines(101.0).len() == 1,
+                "volume_value_area_high" => lines(103.0).len() == 1,
+                "volume_value_area_low" => lines(100.0).len() == 1,
+                "volume_poc_color" => lines(101.0) == [yellow],
+                "volume_value_area_high_color" => lines(103.0) == [yellow],
+                "volume_value_area_low_color" => lines(100.0) == [yellow],
+                "volume_poc_style" => lines(101.0).len() > 1,
+                "volume_value_area_high_style" => lines(103.0).len() > 1,
+                "volume_value_area_low_style" => lines(100.0).len() > 1,
+                "volume_values" => values.len() == 5,
+                "volume_values_color" => values == [yellow; 5],
+                "volume_profile_color" => {
+                    fill_at(99.0) == Some(red)
+                        && (100..=103).all(|price| fill_at(f64::from(price)) != Some(red))
+                }
+                "volume_value_area_color" => {
+                    (100..=103).all(|price| fill_at(f64::from(price)) == Some(blue))
+                        && fill_at(99.0) != Some(blue)
+                }
+                _ => unreachable!(),
+            };
+            let segments: Vec<_> = painted
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::LineSegment { points, stroke } if points[0].y == points[1].y => {
+                        Some((points[0], points[1].x, stroke.color))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                changed,
+                "{id} did not paint as set: strip {left}..{right}, y(101) {}, {segments:?}",
+                y(101.0)
+            );
+        }
+    }
+
+    /// Two days profiled together paint as the composite of their sessions, in the chart type
+    /// and in the study: Wednesday 2024-03-06 and Thursday 2024-03-07 share a run of two
+    /// calendar days and an ISO week.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn tpo_two_day_profiles_paint_as_their_composite() {
+        use crate::model::{Bar, BarData, ChartType, ChartTypeParams, Instrument, Timeframe};
+        use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+        let day: chrono::DateTime<chrono::Utc> = "2024-03-06T02:00:00Z".parse().unwrap();
+        let next = day + chrono::Duration::days(1);
+        let paint = |params: Option<ChartTypeParams>, edits: &[(&str, InputValue)]| {
+            // Twenty half-hour bars a day from 02:00, with ranges of one to three rows.
+            let bars = (0..40_i64)
+                .map(|i| {
+                    let low = 100.0 + ((i * 7) % 5) as f64;
+                    let open = if i < 20 { day } else { next };
+                    let time = open + chrono::Duration::minutes(30 * (i % 20));
+                    Bar::new(time, low, low + 1.0 + (i % 3) as f64, low, low + 1.0, 1.0)
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.set_timeframe(Timeframe::Min30);
+            chart.set_instrument(Some(Instrument::new("X").with_tick_size(1.0)));
+            match params {
+                Some(params) => {
+                    chart.set_chart_type(ChartType::TimePriceOpportunity);
+                    chart.set_chart_type_params(ChartTypeParams {
+                        tpo_row_ticks: 1,
+                        ..params
+                    });
+                }
+                None => {
+                    // The legend writes the inputs, which differ by design.
+                    chart.config_mut().show_indicator_inputs = false;
+                    let mut tpo = TimePriceOpportunity::default();
+                    tpo.set_input("row_ticks", InputValue::Length(1)).unwrap();
+                    for (id, value) in edits {
+                        tpo.set_input(id, value.clone()).unwrap();
+                    }
+                    chart.add_indicator(Box::new(tpo));
+                }
+            }
+            shapes(&egui::Context::default(), &mut chart, 0.0, vec![])
+        };
+        let two_days = paint(
+            Some(ChartTypeParams {
+                tpo_profile_periods: 2,
+                ..Default::default()
+            }),
+            &[],
+        );
+        let merged = paint(
+            Some(ChartTypeParams {
+                tpo_composites: vec![day..=next],
+                ..Default::default()
+            }),
+            &[],
+        );
+        assert!(two_days == merged, "the chart type's two days differ");
+        assert!(two_days != paint(Some(ChartTypeParams::default()), &[]));
+        let two_days = paint(None, &[("profile_periods", InputValue::Length(2))]);
+        let week = paint(None, &[("profile_period", InputValue::Choice(1))]);
+        let first_difference = |a: &[Shape], b: &[Shape]| {
+            a.iter()
+                .zip(b)
+                .find(|(a, b)| a != b)
+                .map(|pair| format!("{pair:?}"))
+                .unwrap_or_else(|| format!("{} against {} shapes", a.len(), b.len()))
+        };
+        assert!(
+            two_days == week,
+            "the study's two days differ from its week: {}",
+            first_difference(&two_days, &week)
+        );
+        let composite = InputValue::Text(format!("{}/{}", day.to_rfc3339(), next.to_rfc3339()));
+        let merged = paint(None, &[("composites", composite)]);
+        assert!(
+            two_days == merged,
+            "the study's two days differ from their composite: {}",
+            first_difference(&two_days, &merged)
+        );
+        assert!(two_days != paint(None, &[]));
     }
 
     #[cfg(feature = "timezones")]

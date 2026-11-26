@@ -1319,8 +1319,8 @@ pub struct ChartTypeParams {
     /// hours by default, only the regular, extended, pre-market or post-market hours, each
     /// segment of the day, or up to five custom windows. A profile keeps only the bars of its
     /// hours and counts its periods from their open; custom hours keep whole periods on their
-    /// grid, as [`to_tpo_profiles`](super::to_tpo_profiles) describes. Week and month profiles
-    /// keep the chart's hours.
+    /// grid, as [`to_tpo_profiles`](super::to_tpo_profiles) describes. Profiles longer than one
+    /// day keep the chart's hours.
     pub tpo_session: ProfileSession,
     /// TPO: highlight the rows touched by a single period.
     pub tpo_single_prints: bool,
@@ -1328,11 +1328,15 @@ pub struct ChartTypeParams {
     /// saved without the field show it, as every profile did before the setting.
     #[serde(default = "tpo_midpoint_drawn")]
     pub tpo_midpoint: bool,
-    /// TPO: paint each period's letter inside its block. On for a new chart; settings saved
-    /// without the field keep blocks.
+    /// TPO: paint each period's letter, inside its cell while `tpo_blocks` is on. On for a new
+    /// chart; settings saved without the field keep blocks.
     // Settings saved before the field existed were drawn as blocks, so a missing field reads false.
     #[serde(default)]
     pub tpo_letters: bool,
+    /// TPO: paint each period's cell, on by default and in settings saved without the field. With
+    /// `tpo_letters` off it has no effect, since blocks are then the only display; with it off,
+    /// letters are painted alone in their period colours, and as blocks where they do not fit.
+    pub tpo_blocks: bool,
     /// TPO: draw the session statistics table below each profile.
     pub tpo_statistics: bool,
     /// TPO: rows of the statistics table, as in
@@ -1347,8 +1351,13 @@ pub struct ChartTypeParams {
     pub tpo_block_color: egui::Color32,
     /// TPO: opacity of blocks outside the value area, in percent, clamped to 100. Default 45.
     pub tpo_outside_value_area_opacity: u8,
-    /// TPO: length of a profile, as in [`TPOConfig::profile_period`](super::TPOConfig::profile_period).
+    /// TPO: unit of a profile's length, as in
+    /// [`TPOConfig::profile_period`](super::TPOConfig::profile_period).
     pub tpo_profile_period: super::TPOProfilePeriod,
+    /// TPO: how many of `tpo_profile_period` each profile covers, as in
+    /// [`TPOConfig::profile_periods`](super::TPOConfig::profile_periods). One by default and in
+    /// settings saved without it, so a saved week or month profile stays one week or month.
+    pub tpo_profile_periods: u32,
     /// TPO: each period in its own column, as in [`TPOConfig::split_periods`](super::TPOConfig::split_periods).
     pub tpo_split_periods: bool,
     /// TPO: draw the initial balance marker. On by default; its period and extensions apply either way.
@@ -1370,6 +1379,11 @@ pub struct ChartTypeParams {
     pub tpo_close_price: bool,
     /// TPO: draw a volume profile beside each profile. Off by default.
     pub tpo_volume_profile: bool,
+    /// TPO: the volume profile's levels, values, colours and side, as in
+    /// [`TPOConfig::volume_profile`](super::TPOConfig::volume_profile). Settings saved without it
+    /// shade the rows as they were drawn until a colour is picked.
+    #[serde(default = "super::TPOVolumeProfile::saved_without_settings")]
+    pub tpo_volume: super::TPOVolumeProfile,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
@@ -1478,6 +1492,7 @@ impl Default for ChartTypeParams {
             tpo_single_prints: false,
             tpo_midpoint: false,
             tpo_letters: true,
+            tpo_blocks: true,
             tpo_statistics: false,
             tpo_statistics_rows: super::TPOStatisticsRows::default(),
             tpo_colored_blocks: true,
@@ -1490,6 +1505,7 @@ impl Default for ChartTypeParams {
             tpo_block_color: crate::tokens::DESIGN_TOKENS.semantic.tpo.letter_default,
             tpo_outside_value_area_opacity: 45,
             tpo_profile_period: super::TPOProfilePeriod::Session,
+            tpo_profile_periods: 1,
             tpo_split_periods: false,
             tpo_initial_balance: true,
             tpo_labels: super::TPOLabels::default(),
@@ -1499,6 +1515,7 @@ impl Default for ChartTypeParams {
             tpo_open_price: true,
             tpo_close_price: false,
             tpo_volume_profile: false,
+            tpo_volume: super::TPOVolumeProfile::default(),
             tpo_composites: Vec::new(),
             tpo_splits: Vec::new(),
         }
@@ -1524,6 +1541,7 @@ impl ChartTypeParams {
             show_opening_range: self.tpo_open_price,
             show_closing_price: self.tpo_close_price,
             show_volume_profile: self.tpo_volume_profile,
+            volume_profile: self.tpo_volume,
             show_poor_high: self.tpo_poor_high || self.tpo_poor_highs_lows,
             show_poor_low: self.tpo_poor_low || self.tpo_poor_highs_lows,
             extend_poor_extremes: self.tpo_extend_poor,
@@ -1533,6 +1551,7 @@ impl ChartTypeParams {
             split_sessions: session == ProfileSession::Segments,
             session,
             profile_period: self.tpo_profile_period,
+            profile_periods: self.tpo_profile_periods,
             split_periods: self.tpo_split_periods,
             show_single_prints: self.tpo_single_prints,
             show_midpoint: self.tpo_midpoint,
@@ -1547,10 +1566,10 @@ impl ChartTypeParams {
             solid_color: self.tpo_block_color,
             outside_value_area_opacity: f32::from(self.tpo_outside_value_area_opacity.min(100))
                 / 100.0,
-            display_mode: if self.tpo_letters {
-                super::TPODisplayMode::Both
-            } else {
-                super::TPODisplayMode::Blocks
+            display_mode: match (self.tpo_letters, self.tpo_blocks) {
+                (true, true) => super::TPODisplayMode::Both,
+                (true, false) => super::TPODisplayMode::Letters,
+                (false, _) => super::TPODisplayMode::Blocks,
             },
             composites: self.tpo_composites.clone(),
             splits: self.tpo_splits.clone(),
@@ -1559,30 +1578,35 @@ impl ChartTypeParams {
         }
     }
 
+    /// Whether TPO profiles join sessions: weeks, months or more than one day.
+    pub(crate) fn tpo_joins_sessions(&self) -> bool {
+        self.tpo_profile_period != super::TPOProfilePeriod::Session || self.tpo_profile_periods > 1
+    }
+
     /// The hours the TPO profiles keep: `tpo_session` for one-day profiles, the segments of the
-    /// day for settings saved with `tpo_split_sessions` on, and the chart's hours for week and
-    /// month profiles.
+    /// day for settings saved with `tpo_split_sessions` on, and the chart's hours for profiles
+    /// longer than one day.
     pub(crate) fn tpo_hours(&self) -> ProfileSession {
         match &self.tpo_session {
-            _ if self.tpo_profile_period != super::TPOProfilePeriod::Session => {
-                ProfileSession::Chart
-            }
+            _ if self.tpo_joins_sessions() => ProfileSession::Chart,
             ProfileSession::Chart if self.tpo_split_sessions => ProfileSession::Segments,
             session => session.clone(),
         }
     }
 
     /// Drops the TPO merges and splits that these settings carry over from `current` when they
-    /// change the period length, the row size or the profile period: the edits were made for
+    /// change the period length, or the profile period or its count: the edits were made for
     /// `current`'s, and a split would fall inside a period or a merge join profiles that no
-    /// longer exist. Edits that differ from `current`'s were supplied with the settings and stay.
+    /// longer exist. A merge joins whole sessions and a split falls at a period's start, so a
+    /// new row size keeps them. Edits that differ from `current`'s were supplied with the
+    /// settings and stay.
     #[cfg(feature = "widget")]
     pub(crate) fn drop_stale_tpo_edits(&mut self, current: &Self) {
         let made_for = |params: &Self| {
             (
                 params.tpo_period_minutes,
-                params.tpo_row_ticks,
                 params.tpo_profile_period,
+                params.tpo_profile_periods,
             )
         };
         if made_for(self) != made_for(current)
@@ -2334,7 +2358,8 @@ mod tests {
                 1.0,
             ),
         ];
-        for (saved, minutes, high, enabled, single_prints, midpoint) in [
+        use crate::model::TPOProfilePeriod::{Session, Week};
+        for (saved, minutes, high, enabled, single_prints, midpoint, period) in [
             (
                 r#"{"tpo_initial_balance_minutes":30,"tpo_poor_highs_lows":true,"tpo_initial_balance_extensions":true}"#,
                 30,
@@ -2342,6 +2367,7 @@ mod tests {
                 true,
                 false,
                 true,
+                Session,
             ),
             (
                 r#"{"tpo_period_minutes":30,"tpo_row_ticks":1}"#,
@@ -2350,6 +2376,7 @@ mod tests {
                 false,
                 false,
                 true,
+                Session,
             ),
             (
                 r#"{"tpo_single_prints":true,"tpo_midpoint":true}"#,
@@ -2358,6 +2385,7 @@ mod tests {
                 false,
                 true,
                 true,
+                Session,
             ),
             (
                 r#"{"tpo_single_prints":true,"tpo_midpoint":false}"#,
@@ -2366,6 +2394,16 @@ mod tests {
                 false,
                 true,
                 false,
+                Session,
+            ),
+            (
+                r#"{"tpo_profile_period":"Week","tpo_volume_profile":true}"#,
+                60,
+                104.0,
+                false,
+                false,
+                true,
+                Week,
             ),
         ] {
             let params: ChartTypeParams = serde_json::from_str(saved).unwrap();
@@ -2373,8 +2411,23 @@ mod tests {
                 params.tpo_splits.is_empty(),
                 "older settings keep whole sessions"
             );
+            // Settings saved before blocks, profile counts, volume settings and the price line's
+            // style existed paint as before.
+            assert!(params.tpo_blocks);
+            assert_eq!(params.tpo_profile_periods, 1);
+            assert_eq!(
+                params.tpo_volume,
+                crate::model::TPOVolumeProfile::saved_without_settings()
+            );
+            let styles = crate::model::ChartTypeStyles::default();
+            assert_eq!(params.styles.tpo_line, styles.tpo_line);
+            assert_eq!(
+                params.styles.tpo_price_source,
+                crate::model::PriceSource::Close
+            );
             let config = params.tpo_config(Some(1.0));
             assert!(config.splits.is_empty());
+            assert_eq!((config.profile_period, config.profile_periods), (period, 1));
             assert_eq!(config.initial_balance_minutes, minutes);
             assert_eq!(config.show_poor_high, enabled);
             assert_eq!(config.show_poor_low, enabled);

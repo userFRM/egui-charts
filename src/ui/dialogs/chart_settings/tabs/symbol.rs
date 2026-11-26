@@ -1711,14 +1711,15 @@ mod tests {
         }
     }
 
-    /// Every TPO label control changes only its own saved field, after Ok; Cancel discards it.
+    /// Every TPO switch changes only its own saved field, after Ok; Cancel discards it.
     #[test]
-    fn tpo_label_switches_apply_on_ok_only() {
+    fn tpo_switches_apply_on_ok_only() {
         use crate::model::ChartTypeParams;
         use egui::Vec2;
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
         let statistics = serde_json::json!({"tpo_statistics": true});
+        let volume = serde_json::json!({"tpo_volume_profile": true});
         // (settings before the dialog opens, switch, its saved field)
         for (seed, label, field) in [
             (serde_json::json!({}), "POC", "/tpo_labels/poc"),
@@ -1752,6 +1753,19 @@ mod tests {
                 "Statistics: POC",
                 "/tpo_statistics_rows/poc",
             ),
+            (serde_json::json!({}), "Blocks", "/tpo_blocks"),
+            (volume.clone(), "Volume point of control", "/tpo_volume/poc"),
+            (
+                volume.clone(),
+                "Volume value area high",
+                "/tpo_volume/value_area_high",
+            ),
+            (
+                volume.clone(),
+                "Volume value area low",
+                "/tpo_volume/value_area_low",
+            ),
+            (volume.clone(), "Volume values", "/tpo_volume/values"),
         ] {
             let mut seeded = serde_json::to_value(ChartTypeParams::default()).unwrap();
             for (name, value) in seed.as_object().unwrap() {
@@ -1919,12 +1933,13 @@ mod tests {
         }
     }
 
-    /// Choosing a palette colour for an HLC area fill, a column colour or a Baseline fill at the
-    /// base keeps its opacity, which has no control of its own, and leaves the other colours
-    /// alone. Expected: white at the seeded alpha.
+    /// Choosing a palette colour for an HLC area fill, a column colour, a Baseline fill at the
+    /// base or a TPO volume value area colour keeps its opacity, which has no control of its own,
+    /// and leaves the other colours alone; the TPO line's theme default is picked over opaque.
+    /// Expected: white at the seeded alpha, or opaque white.
     #[test]
     fn palette_colour_keeps_the_fill_and_column_opacity() {
-        use crate::model::{ChartTypeParams, ChartTypeStyles, HlcAreaStyle, LinePlotStyle};
+        use crate::model::{ChartTypeParams, HlcAreaStyle, LinePlotStyle};
         use egui::accesskit::Role;
         use egui::{Color32, Vec2};
         use egui_kittest::{Harness, kittest::Queryable};
@@ -1933,20 +1948,20 @@ mod tests {
         // that colour afterwards.
         type Row = (
             ChartType,
-            fn(&mut ChartTypeStyles),
+            fn(&mut ChartTypeParams),
             &'static str,
-            fn(&ChartTypeStyles) -> Color32,
+            fn(&ChartTypeParams) -> Color32,
             [u8; 4],
         );
-        let rows: [Row; 3] = [
+        let rows: [Row; 5] = [
             (
                 ChartType::HlcArea,
-                |styles| {
+                |params| {
                     let line = |r| LinePlotStyle {
                         color: Color32::from_rgb(r, 2, 3),
                         ..Default::default()
                     };
-                    styles.hlc_area = HlcAreaStyle {
+                    params.styles.hlc_area = HlcAreaStyle {
                         high_line: line(101),
                         low_line: line(102),
                         close_line: line(103),
@@ -1956,23 +1971,24 @@ mod tests {
                     };
                 },
                 "#0032C8",
-                |styles| styles.hlc_area.high_to_close_fill,
+                |params| params.styles.hlc_area.high_to_close_fill,
                 [255, 255, 255, 51],
             ),
             (
                 ChartType::Columns,
-                |styles| {
+                |params| {
+                    let styles = &mut params.styles;
                     styles.columns.up_color = Color32::from_rgba_unmultiplied(0, 50, 100, 128);
                     styles.columns.down_color = Color32::from_rgba_unmultiplied(100, 50, 0, 128);
                 },
                 "#003264",
-                |styles| styles.columns.up_color,
+                |params| params.styles.columns.up_color,
                 [255, 255, 255, 128],
             ),
             (
                 ChartType::Baseline,
-                |styles| {
-                    let style = &mut styles.baseline;
+                |params| {
+                    let style = &mut params.styles.baseline;
                     style.above_fill = Color32::from_rgba_unmultiplied(200, 50, 0, 51);
                     style.above_fill_at_base =
                         Some(Color32::from_rgba_unmultiplied(0, 50, 200, 51));
@@ -1982,16 +1998,35 @@ mod tests {
                 },
                 "#0032C8",
                 // What the fill draws at the base.
-                |styles| {
-                    let style = &styles.baseline;
+                |params| {
+                    let style = &params.styles.baseline;
                     style.above_fill_at_base.unwrap_or(style.above_fill)
                 },
                 [255, 255, 255, 51],
             ),
+            // The TPO line's default follows the theme and shows as its accent; a pick is opaque.
+            (
+                ChartType::TimePriceOpportunity,
+                |_| {},
+                "#2962FF",
+                |params| params.styles.tpo_line.color,
+                [255, 255, 255, 255],
+            ),
+            (
+                ChartType::TimePriceOpportunity,
+                |params| {
+                    params.tpo_volume_profile = true;
+                    params.tpo_volume.value_area_color =
+                        Some(Color32::from_rgba_unmultiplied(0, 50, 100, 128));
+                },
+                "#003264",
+                |params| params.tpo_volume.value_area_color.unwrap_or_default(),
+                [255, 255, 255, 128],
+            ),
         ];
         for (chart_type, seed, well, read, expected) in rows {
             let mut params = ChartTypeParams::default();
-            seed(&mut params.styles);
+            seed(&mut params);
             let mut dialog = SettingsDialog::new();
             dialog.set_control_visible(crate::ui::Control::Templates, false);
             dialog.open(ChartSettingsState {
@@ -2016,6 +2051,11 @@ mod tests {
                     (dialog, None),
                 );
             harness.run();
+            // The TPO volume rows lie below the fold.
+            harness
+                .get_by_role_and_label(Role::ColorWell, well)
+                .scroll_to_me();
+            harness.run();
             harness.get_by_role_and_label(Role::ColorWell, well).click();
             harness.run();
             harness
@@ -2026,9 +2066,9 @@ mod tests {
             harness.run();
             let (_, accepted) = harness.state();
             let accepted: &ChartSettingsState = accepted.as_ref().expect("accepted");
-            let styles = &accepted.chart_type_params.as_ref().unwrap().styles;
+            let params = accepted.chart_type_params.as_ref().unwrap();
             assert_eq!(
-                read(styles).to_srgba_unmultiplied(),
+                read(params).to_srgba_unmultiplied(),
                 expected,
                 "{chart_type:?}"
             );

@@ -1285,7 +1285,7 @@ fn steps_per_row(config: &VolumeProfileConfig, step: f64, first: i64, last: i64)
 /// side, and a side with no rows left gives way to the other. `row(i)` is the key and volume of
 /// row `i` of `len`, at least one, in ascending key order, and `poc` the index of the point of
 /// control. Keys between rows are untraded rows of zero volume, crossed in one step.
-pub(super) fn value_area(
+pub(crate) fn value_area(
     len: usize,
     row: impl Fn(usize) -> (i64, f64),
     poc: usize,

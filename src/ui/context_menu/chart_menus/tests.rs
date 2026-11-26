@@ -2226,13 +2226,14 @@ fn tpo_profile_menu_merges_splits_and_resets_sessions() {
     }
 }
 
-/// Merges and splits are made for a period length, row size and profile period: changing one of
-/// them in the settings drops the edits carried over, as one undoable step, while other settings
-/// and edits supplied with the new settings keep them. The study records what its lists were
-/// made for, so the settings dialog's full input list, which still holds the old lists, drops
-/// them too, while lists saved before the record apply whatever the settings.
+/// Merges and splits are made for a period length and profile period: changing one of them in
+/// the settings drops the edits carried over, as one undoable step, while other settings, the
+/// row size among them, and edits supplied with the new settings keep them. The study records
+/// what its lists were made for, so the settings dialog's full input list, which still holds the
+/// old lists, drops them too, while lists saved before the record apply whatever the settings
+/// and lists recorded for another row size apply.
 #[test]
-fn tpo_edits_drop_when_their_period_or_rows_change() {
+fn tpo_edits_drop_when_their_period_changes() {
     use crate::model::{Bar, BarData, ChartType, ChartTypeParams, TPOProfilePeriod, Timeframe};
     use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
     use crate::widget::settings::ChartSettingsState;
@@ -2263,7 +2264,7 @@ fn tpo_edits_drop_when_their_period_or_rows_change() {
     // (series dialog or chart dialog, change, edits kept)
     for (series_dialog, edit, kept) in [
         (true, period, false),
-        (true, rows, false),
+        (true, rows, true),
         (true, week, false),
         (true, value_area, true),
         (true, supplied, true),
@@ -2306,7 +2307,7 @@ fn tpo_edits_drop_when_their_period_or_rows_change() {
     // (input changed, its new value, the dialog's whole list or that input alone, edits kept)
     for (id, value, whole_list, kept) in [
         ("period", InputValue::Length(60), true, false),
-        ("row_ticks", InputValue::Length(2), true, false),
+        ("row_ticks", InputValue::Length(2), true, true),
         ("value_area", InputValue::Number(60.0), true, true),
         ("period", InputValue::Length(60), false, false),
     ] {
@@ -2395,6 +2396,14 @@ fn tpo_edits_drop_when_their_period_or_rows_change() {
             .value
     };
     assert_eq!(saved(&tpo, "splits"), text(&format!("60,0|{split}")));
+    // A list made for another row size applies.
+    let mut tpo = TimePriceOpportunity::default();
+    tpo.set_input("splits", text(&format!("30,4|{split}")))
+        .unwrap();
+    assert_eq!(tpo.tpo().unwrap().splits, [day(2) + Duration::minutes(60)]);
+    let mut tpo = TimePriceOpportunity::default();
+    tpo.set_input("splits", text(split)).unwrap();
+    tpo.set_input("period", InputValue::Length(60)).unwrap();
     // A list made for another period does not apply and is not saved.
     tpo.set_input("composites", text(&format!("30,0|{merge}")))
         .unwrap();

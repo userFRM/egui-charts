@@ -784,7 +784,7 @@ pub struct RangeStyle {
 
 /// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, column, high-low, line,
 /// step, marker, area, HLC area, baseline, Renko, Kagi, Line Break, Point and Figure and Range
-/// chart types.
+/// chart types, and of the TPO chart type's line.
 /// Defaults use the design-token palette and remain independent of candle colours.
 ///
 /// ```
@@ -833,6 +833,7 @@ pub struct RangeStyle {
 /// columns.up_color = egui::Color32::BLUE;
 /// styles.columns = columns;
 /// styles.step_line_price_source = Some(PriceSource::High);
+/// styles.tpo_price_source = PriceSource::High;
 /// styles.line_gradient = true;
 /// styles.line_gradient_end = egui::Color32::from_rgba_premultiplied(0, 0, 120, 120);
 /// ```
@@ -917,6 +918,11 @@ pub struct ChartTypeStyles {
     pub point_figure: PointFigureStyle,
     /// Range chart.
     pub range: RangeStyle,
+    /// Line the TPO chart draws through its bars. Its colour defaults to
+    /// [`Color32::PLACEHOLDER`], which draws the theme's accent colour, at hairline width.
+    pub tpo_line: LinePlotStyle,
+    /// Price the TPO chart's line draws, the close by default.
+    pub tpo_price_source: PriceSource,
     /// Radius in logical points of the marker drawn on the line at the crosshair's bar in the
     /// Line, Step line, Line with markers, Area and Baseline charts. Non-positive or non-finite
     /// radii hide it, the default.
@@ -962,6 +968,12 @@ impl Default for ChartTypeStyles {
             kagi: KagiStyle::default(),
             point_figure: PointFigureStyle::default(),
             range: RangeStyle::default(),
+            tpo_line: LinePlotStyle {
+                color: Color32::PLACEHOLDER,
+                width: DESIGN_TOKENS.stroke.hairline,
+                ..LinePlotStyle::default()
+            },
+            tpo_price_source: PriceSource::Close,
             crosshair_marker_radius: 0.0,
             crosshair_marker_fill: None,
             crosshair_marker_border_color: None,

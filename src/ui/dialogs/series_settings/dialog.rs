@@ -900,7 +900,7 @@ mod tests {
     /// The TPO chart type's Hours row edits a draft of its one-day profiles' hours: Ok applies
     /// it as one undoable step, writing the choice and turning the legacy Split extended hours
     /// off, Cancel drops it, a chart saved with that flag opens on Each segment of the day, and
-    /// week profiles, which keep the chart's hours, offer no Hours row.
+    /// week or two-day profiles, which keep the chart's hours, offer no Hours row.
     #[test]
     fn tpo_hours_apply_on_ok_only_and_undo() {
         use egui::accesskit::Role;
@@ -931,6 +931,11 @@ mod tests {
             ),
             (
                 serde_json::json!({"tpo_profile_period": "Week"}),
+                &[][..],
+                serde_json::Value::Null,
+            ),
+            (
+                serde_json::json!({"tpo_profile_periods": 2}),
                 &[][..],
                 serde_json::Value::Null,
             ),

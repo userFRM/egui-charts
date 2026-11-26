@@ -565,11 +565,19 @@ impl StudyTemplate {
                         .push((id.to_owned(), InputValue::Toggle(false)));
                 }
             }
-            // Every TPO profile drew its midpoint before it had a setting.
-            "Time Price Opportunity" if !has("midpoint") => {
-                template
-                    .inputs
-                    .push(("midpoint".to_owned(), InputValue::Toggle(true)));
+            // Every TPO profile drew its midpoint before it had a setting, and shaded its volume
+            // rows by the TPO value area before the volume profile had settings.
+            "Time Price Opportunity" if !has("midpoint") || !has("volume_tpo_value_area") => {
+                if !has("midpoint") {
+                    template
+                        .inputs
+                        .push(("midpoint".to_owned(), InputValue::Toggle(true)));
+                }
+                if !has("volume_tpo_value_area") {
+                    template
+                        .inputs
+                        .push(("volume_tpo_value_area".to_owned(), InputValue::Toggle(true)));
+                }
             }
             // Missed pivots were swings before they could follow a period.
             "Missed Pivot Levels" if !has("period") => {
@@ -1437,9 +1445,13 @@ mod tests {
                 Color32::from_rgb(93, 36, 245),
             ],
             solid_color: Color32::from_rgb(189, 189, 189),
+            letter_color: None,
             outside_value_area_opacity: 0.45,
             show_poc: true,
+            poc_color: None,
             show_value_area: true,
+            show_value_area_high: true,
+            show_value_area_low: true,
             show_midpoint: false,
             show_initial_balance: true,
             show_initial_balance_extensions: false,
@@ -1453,10 +1465,12 @@ mod tests {
             labels: crate::model::TPOLabels::default(),
             show_closing_price: false,
             show_volume_profile: false,
+            volume_profile: crate::model::TPOVolumeProfile::saved_without_settings(),
             split_sessions: false,
             session: crate::model::ProfileSession::Chart,
             regular_hours: None,
             profile_period: crate::model::TPOProfilePeriod::Session,
+            profile_periods: 1,
             custom_letters: None,
             composites: Vec::new(),
             splits: Vec::new(),
@@ -1487,6 +1501,36 @@ mod tests {
             ("poor_low", InputValue::Toggle(true)),
             ("extend_poor", InputValue::Toggle(true)),
             ("volume_profile", InputValue::Toggle(true)),
+            ("profile_period", InputValue::Choice(2)),
+            ("profile_periods", InputValue::Length(3)),
+            ("value_area_high", InputValue::Toggle(false)),
+            ("value_area_low", InputValue::Toggle(false)),
+            ("letters_color", InputValue::Color(Color32::RED)),
+            ("poc_color", InputValue::Color(Color32::GREEN)),
+            ("volume_poc", InputValue::Toggle(true)),
+            ("volume_poc_color", InputValue::Color(Color32::BLUE)),
+            ("volume_poc_style", InputValue::Choice(1)),
+            ("volume_value_area_high", InputValue::Toggle(true)),
+            (
+                "volume_value_area_high_color",
+                InputValue::Color(Color32::KHAKI),
+            ),
+            ("volume_value_area_high_style", InputValue::Choice(2)),
+            ("volume_value_area_low", InputValue::Toggle(true)),
+            (
+                "volume_value_area_low_color",
+                InputValue::Color(Color32::BROWN),
+            ),
+            ("volume_value_area_low_style", InputValue::Choice(1)),
+            ("volume_values", InputValue::Toggle(true)),
+            ("volume_values_color", InputValue::Color(Color32::GRAY)),
+            ("volume_profile_color", InputValue::Color(Color32::DARK_RED)),
+            (
+                "volume_value_area_color",
+                InputValue::Color(Color32::DARK_BLUE),
+            ),
+            ("volume_placement", InputValue::Choice(0)),
+            ("volume_tpo_value_area", InputValue::Toggle(true)),
             ("statistics_high_low_range", InputValue::Toggle(true)),
             ("statistics_poc", InputValue::Toggle(false)),
             ("statistics_value_area_high", InputValue::Toggle(false)),
@@ -2079,16 +2123,35 @@ mod tests {
                 vec![("boxes", Toggle(true))],
                 vec![("boxes", Toggle(true)), ("name_labels", Toggle(true))],
             ),
-            // Saved before the midpoint had a setting, when every profile drew it.
+            // Saved before the midpoint had a setting, when every profile drew it, and before the
+            // volume profile had settings, when its rows were shaded by the TPO value area.
             (
                 "Time Price Opportunity",
                 vec![("display", Choice(1))],
-                vec![("display", Choice(1)), ("midpoint", Toggle(true))],
+                vec![
+                    ("display", Choice(1)),
+                    ("midpoint", Toggle(true)),
+                    ("volume_tpo_value_area", Toggle(true)),
+                ],
             ),
             (
                 "Time Price Opportunity",
                 vec![("midpoint", Toggle(false))],
-                vec![("midpoint", Toggle(false))],
+                vec![
+                    ("midpoint", Toggle(false)),
+                    ("volume_tpo_value_area", Toggle(true)),
+                ],
+            ),
+            (
+                "Time Price Opportunity",
+                vec![
+                    ("midpoint", Toggle(false)),
+                    ("volume_tpo_value_area", Toggle(false)),
+                ],
+                vec![
+                    ("midpoint", Toggle(false)),
+                    ("volume_tpo_value_area", Toggle(false)),
+                ],
             ),
             // Saved before levels could follow a period, when they were swings.
             (
