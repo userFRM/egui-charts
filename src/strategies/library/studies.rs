@@ -332,8 +332,7 @@ impl Strategy for StudyStrategy {
                 let stop = |column| value(column).map(OrderType::Stop);
                 let market = |condition: bool| condition.then_some(OrderType::Market);
                 match self.rule {
-                    // The stop at the crossed band is already passed when placed, so it
-                    // fills at the next price, as a market order does.
+                    // The crossed band is already passed, so the entry fills at the next price.
                     Rule::Bollinger | Rule::DirectedBollinger => [
                         market(crosses(&close, line(2), i)),
                         market(crosses(line(0), &close, i)),
