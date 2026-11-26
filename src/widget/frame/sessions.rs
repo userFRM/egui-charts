@@ -383,18 +383,18 @@ mod tests {
     /// to 12 span 6, 24 ticks of 0.25: 0.3 ticks per row over 80 rows, rounded up to rows of 5
     /// ticks (1.25). Bar 0 covers the rows of 5000 to 5005 and bars 1 to 12 the row of 5003.75,
     /// which holds 13 of the 17 TPOs and so is the whole value area, with 3 TPOs below and 1 above.
+    /// Bar 13, on the next day out of view, is not counted: with it, rows would be 13.75.
     #[test]
     fn automatic_tpo_rows_keep_the_profile_at_every_vertical_zoom() {
         use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe};
         let start: chrono::DateTime<chrono::Utc> = "2024-01-02T14:30:00Z".parse().unwrap();
-        let bars = (0..13)
+        let bars = (0..14)
             .map(|i| {
-                let (low, high) = if i == 0 {
-                    (5000.0, 5006.0)
-                } else {
-                    (5004.0, 5004.5)
+                let (low, high, time) = match i {
+                    0 => (5000.0, 5006.0, start),
+                    13 => (6000.0, 6100.0, start + chrono::Duration::days(1)),
+                    _ => (5004.0, 5004.5, start + chrono::Duration::minutes(30 * i)),
                 };
-                let time = start + chrono::Duration::minutes(30 * i);
                 Bar::new(time, low, high, low, high, 1.0)
             })
             .collect();
@@ -406,6 +406,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({"tpo_statistics": true})).unwrap(),
         );
         let ctx = egui::Context::default();
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 12.0));
         shapes(&ctx, &mut chart, 0.0, vec![]);
         for (low, high) in [(4999.0, 5007.0), (4990.0, 5016.0), (4950.0, 5060.0)] {
             chart.price_scale_mut().set_range(low, high);
