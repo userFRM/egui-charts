@@ -963,4 +963,53 @@ mod tests {
         assert!((ratio - fitted * f64::from(spacing / height)).abs() <= 1e-4 * ratio);
         assert!((span(chart) - fitted).abs() <= 1e-4 * fitted, "a jump");
     }
+
+    /// Joining the scales from the axis menu leaves a study whose user edits are off on its
+    /// scale, as Pin to does, and still moves an editable study (#4241).
+    #[test]
+    fn joining_scales_keeps_read_only_studies_in_place() {
+        use crate::model::SeriesScale;
+        use crate::studies::{SMA, StudyScale};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+        chart.config_mut().show_volume = false;
+        let [read_only, editable] = [5, 10].map(|period| {
+            let id = chart.add_indicator(Box::new(SMA::new(period)));
+            assert!(chart.set_indicator_scale(id, StudyScale::Shared(SeriesScale::Left)));
+            id
+        });
+        assert!(chart.set_indicator_user_edit_enabled(read_only, false));
+        // The price axis menu is taller than 600 px, which would clip the Join row.
+        let mut harness = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(Vec2::new(800.0, 1000.0))
+            .build_ui_state(
+                |ui, (chart, menus): &mut (Chart, AxisMenus)| {
+                    chart.show(ui);
+                    chart.user_action(|chart| menus.show(ui.ctx(), chart, None));
+                },
+                (chart, AxisMenus::default()),
+            );
+        harness.run();
+        let menus = &mut harness.state_mut().1;
+        menus.open = Some((false, Pos2::new(100.0, 100.0)));
+        menus.target = Some((PaneId::MAIN, PaneScale::Named(SeriesScale::Right)));
+        menus.just_opened = true;
+        harness.run();
+        harness.get_by_label("Join price scales").click();
+        harness.run();
+        harness.get_by_label("At right edge").click();
+        harness.run();
+        let scale = |id| {
+            let chart = &harness.state().0;
+            chart
+                .indicators()
+                .find(|(study, _)| *study == id)
+                .unwrap()
+                .1
+                .scale()
+        };
+        assert_eq!(scale(editable), StudyScale::Shared(SeriesScale::Right));
+        assert_eq!(scale(read_only), StudyScale::Shared(SeriesScale::Left));
+    }
 }

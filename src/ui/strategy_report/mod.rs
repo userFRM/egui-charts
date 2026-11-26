@@ -614,6 +614,34 @@ fn property(ui: &mut Ui, label: &str, value: &str) {
     ui.end_row();
 }
 
+/// The title of a drawdown or run-up chart with the largest and the latest value it plots and
+/// the summary's average phase, in the chart's units after `scale`.
+fn chart_title(
+    ui: &mut Ui,
+    title: &str,
+    values: impl Iterator<Item = f64> + Clone,
+    average: Option<f64>,
+    scale: f64,
+) {
+    let muted = ui.active_theme().ui.text_muted;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(l10n::text(ui.ctx(), title)).strong());
+        let maximum = values.clone().fold(f64::NAN, f64::max);
+        ui.label(
+            RichText::new(l10n::format_text(
+                ui.ctx(),
+                "Maximum {maximum}, average {average}, current {current}",
+                &[
+                    ("maximum", number(Some(maximum * scale))),
+                    ("average", number(average.map(|value| value * scale))),
+                    ("current", number(values.last().map(|value| value * scale))),
+                ],
+            ))
+            .color(muted),
+        );
+    });
+}
+
 fn summary(
     ui: &mut Ui,
     data: &ReportData,
@@ -652,7 +680,7 @@ fn summary(
     let cell = |value: Option<f64>, unit: SummaryUnit| match unit {
         SummaryUnit::Money => money(value, report),
         SummaryUnit::Percent => percent(value),
-        SummaryUnit::Ratio | SummaryUnit::Bars => number(value),
+        SummaryUnit::Ratio | SummaryUnit::Bars | SummaryUnit::Days => number(value),
         SummaryUnit::Count | SummaryUnit::Quantity => value
             .filter(|v| v.is_finite())
             .map_or_else(|| "N/A".into(), StrategyReport::quantity_text),
@@ -703,7 +731,7 @@ fn summary(
     ui.label(
         RichText::new(l10n::text(
             ui.ctx(),
-            "N/A means unavailable. Ratios and compound growth require at least 13 weeks of equity; holding times and buy-and-hold figures require the source bars.",
+            "N/A means unavailable. Ratios require two whole calendar months of equity and compound growth at least 13 weeks; holding times and buy-and-hold figures require the source bars.",
         ))
         .color(theme.ui.text_muted)
         .size(theme.text.small),
@@ -781,7 +809,14 @@ fn summary(
             }
         },
     );
-    ui.label(RichText::new(l10n::text(ui.ctx(), "Drawdown from peak")).strong());
+    chart_title(
+        ui,
+        "Drawdown from peak",
+        // Zero minus the plotted value: a zero drawdown stays a positive zero.
+        data.drawdown.iter().map(|point| 0.0 - point.1),
+        data.shown.average_drawdown,
+        scale,
+    );
     plot::show(
         ui,
         &data.drawdown,
@@ -792,7 +827,13 @@ fn summary(
         &[],
         |_, _| {},
     );
-    ui.label(RichText::new(l10n::text(ui.ctx(), "Run-up from trough")).strong());
+    chart_title(
+        ui,
+        "Run-up from trough",
+        data.run_up.iter().map(|point| point.1),
+        data.shown.average_run_up,
+        scale,
+    );
     plot::show(
         ui,
         &data.run_up,
