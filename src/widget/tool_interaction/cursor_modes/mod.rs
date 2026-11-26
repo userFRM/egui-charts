@@ -5,7 +5,7 @@
 //!
 //! ## Cursor Types
 //! - **Cross**: Full crosshair with vertical + horizontal lines
-//! - **Dot**: Simple dot at cursor position
+//! - **Dot**: crosshair lines with a dot at the cursor position
 //! - **Arrow**: Standard pointer, no crosshair overlay
 //! - **Demonstration** and **Magic**: fading marks of a press
 //! - **Eraser**: Click to delete drawings

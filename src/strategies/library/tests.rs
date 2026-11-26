@@ -504,6 +504,13 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             [8., 10., 8., 10.],
         ]
     };
+    let gap = || {
+        [
+            points(&[13., 12., 11., 10., 11., 10.]),
+            vec![[10., 11., 10., 11.]],
+        ]
+        .concat()
+    };
     let keltner = || {
         vec![
             [10.; 4],
@@ -526,12 +533,13 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
     };
     let cases = [
         // SMA(2) +/- 0.5 population deviations gives bands 8.5/9.5 at bars 1,2;
-        // 10.5/11.5 at bars 3,4; 8.5/9.5 at bars 5,6.
+        // 10.5/11.5 at bars 3,4; 8.5/9.5 at bars 5,6. Each entry fills at the next open, beyond
+        // the band at bars 3, 5 and 7.
         Case {
             name: "Bollinger Bands",
             prices: bb(),
             inputs: vec![("period", Length(2)), ("std_dev", Number(0.5))],
-            expected: vec![(3, Buy, 8.5), (5, Sell, 11.5), (7, Buy, 8.5)],
+            expected: vec![(3, Buy, 8.), (5, Sell, 12.), (7, Buy, 8.)],
         },
         Case {
             name: "Bollinger Bands Directed",
@@ -541,14 +549,14 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 ("std_dev", Number(0.5)),
                 ("direction", Choice(0)),
             ],
-            expected: vec![(3, Buy, 8.5), (7, Buy, 8.5)],
+            expected: vec![(3, Buy, 8.), (7, Buy, 8.)],
         },
         // Both, the default, takes the undirected strategy's entries on the same bars.
         Case {
             name: "Bollinger Bands Directed",
             prices: bb(),
             inputs: vec![("period", Length(2)), ("std_dev", Number(0.5))],
-            expected: vec![(3, Buy, 8.5), (5, Sell, 11.5), (7, Buy, 8.5)],
+            expected: vec![(3, Buy, 8.), (5, Sell, 12.), (7, Buy, 8.)],
         },
         Case {
             name: "Bollinger Bands Directed",
@@ -558,23 +566,35 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 ("std_dev", Number(0.5)),
                 ("direction", Choice(1)),
             ],
-            expected: vec![(5, Sell, 11.5)],
+            expected: vec![(5, Sell, 12.)],
         },
         // SMA(3) +/- 1 population deviation: at bar 4 the close 11 crosses back above the
-        // lower band (32 - sqrt 2) / 3 = 10.195 and stays under the upper band 11.138. Bar 5
-        // stays at 10, under the stop, and inside its bands 9.862/10.805 without a crossing;
-        // bar 6 would reach the stop.
+        // lower band (32 - sqrt 2) / 3 = 10.195. Bar 5 opens at 10, beyond the band, and never
+        // reaches it; the entry fills at that open. No later bar crosses.
         Case {
             name: "Bollinger Bands",
-            prices: [
-                points(&[13., 12., 11., 10., 11., 10.]),
-                vec![[10., 11., 10., 11.]],
-            ]
-            .concat(),
+            prices: gap(),
             inputs: vec![("period", Length(3)), ("std_dev", Number(1.))],
-            expected: vec![],
+            expected: vec![(5, Buy, 10.)],
         },
-        // The same bars mirrored around 10: bar 5 misses the short stop (28 + sqrt 2) / 3 = 9.805.
+        Case {
+            name: "Bollinger Bands Directed",
+            prices: gap(),
+            inputs: vec![("period", Length(3)), ("std_dev", Number(1.))],
+            expected: vec![(5, Buy, 10.)],
+        },
+        Case {
+            name: "Bollinger Bands Directed",
+            prices: gap(),
+            inputs: vec![
+                ("period", Length(3)),
+                ("std_dev", Number(1.)),
+                ("direction", Choice(0)),
+            ],
+            expected: vec![(5, Buy, 10.)],
+        },
+        // The same bars mirrored around 10: bar 5 opens at 10 above the short band
+        // (28 + sqrt 2) / 3 = 9.805 and fills there.
         Case {
             name: "Bollinger Bands Directed",
             prices: [
@@ -587,7 +607,7 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 ("std_dev", Number(1.)),
                 ("direction", Choice(1)),
             ],
-            expected: vec![],
+            expected: vec![(5, Sell, 10.)],
         },
         // Simple basis(2), ATR(1), multiplier 1/4: the close crosses upper[2]=9.5, lower[4]=10.5
         // and upper[6]=9.5. The stops wait one quarter increment beyond those bars, at 10.25,

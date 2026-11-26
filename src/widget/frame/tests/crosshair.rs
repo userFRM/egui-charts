@@ -2207,7 +2207,12 @@ fn hidden_pane_target_keeps_the_time_line_in_its_pane() {
         .set_range(1000.0, 2000.0);
     let time = chart.bars(SeriesId::MAIN)[50].time;
     chart.set_series_crosshair_position(ids[1], Some((time, 1375.0)));
-    for (step, visible) in [false, true].into_iter().enumerate() {
+    use crate::config::CrosshairStyle::{Dot, Full};
+    for (step, (style, visible)) in [(Full, false), (Full, true), (Dot, false), (Dot, true)]
+        .into_iter()
+        .enumerate()
+    {
+        chart.chart_options.crosshair.style = style;
         chart.set_series_visible(ids[1], visible);
         let painted = shapes(
             &ctx,
@@ -2234,7 +2239,15 @@ fn hidden_pane_target_keeps_the_time_line_in_its_pane() {
             }
             _ => false,
         });
-        assert!(time_line, "visible {visible}: missing pane time guide");
+        assert!(
+            time_line,
+            "{style:?} visible {visible}: missing pane time guide"
+        );
+        // A time alone has no price to put the Dot cursor's dot on.
+        let dot = painted.iter().any(
+            |shape| matches!(shape, Shape::Circle(circle) if circle.fill == egui::Color32::MAGENTA),
+        );
+        assert_eq!(dot, style == Dot && visible, "{style:?} visible {visible}");
         let horizontal: Vec<_> = painted
             .iter()
             .filter_map(|shape| match shape {
@@ -2246,7 +2259,7 @@ fn hidden_pane_target_keeps_the_time_line_in_its_pane() {
                 _ => None,
             })
             .collect();
-        assert_eq!(horizontal.len(), usize::from(visible));
+        assert_eq!(horizontal.len(), usize::from(visible), "{style:?}");
         if visible {
             assert!((horizontal[0][0].y - (rect.bottom() - 0.375 * rect.height())).abs() < 0.01);
         }

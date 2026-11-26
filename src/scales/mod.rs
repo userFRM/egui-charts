@@ -20,17 +20,18 @@ pub use horizontal::{
     CustomHorizontalScale, HorizontalScale, MaturityScale, PriceHorizontalScale, TickMarkLayout,
     key_time, time_key,
 };
+pub(crate) use price_formatter::TickGrid;
 #[cfg(any(feature = "widget", feature = "detectors"))]
 pub(crate) use price_formatter::decimals;
-#[cfg(feature = "ui")]
-pub(crate) use price_formatter::snap_price;
 pub use price_formatter::{
     CurrencyFormatter, CustomPriceFormatter, DefaultPriceFormatter, PercentageFormatter,
     PriceFormatter, PriceFormatterBuilder, ScientificFormatter, VolumeFormatter,
     instrument_price_precision,
 };
 #[cfg(feature = "widget")]
-pub(crate) use price_formatter::{format_decimal, group_thousands, price_decimals, to_step};
+pub(crate) use price_formatter::{format_decimal, group_thousands, price_decimals};
+#[cfg(feature = "ui")]
+pub(crate) use price_formatter::{snap_price, to_step};
 pub use pricescale::{
     PriceMap, PriceRange, PriceScale, PriceScaleId, PriceScaleMargins, PriceScaleMode,
     PriceScaleOptions, PriceTransform,

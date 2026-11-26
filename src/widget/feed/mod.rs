@@ -79,7 +79,7 @@ pub(crate) struct FeedLink {
     pending: Vec<(u64, Request, u32)>,
     retries: Vec<(f64, Request, u32)>,
     subscription: Option<SubscriptionId>,
-    instrument: Option<Instrument>,
+    pub(crate) instrument: Option<Instrument>,
     /// What the feed offers as a whole, once it has answered.
     capabilities: Option<FeedCapabilities>,
     pub(super) trades: Trades,
@@ -561,7 +561,7 @@ impl Chart {
         self.quote_action = None;
         self.session_quote = None;
         self.state.price_scale_mut().set_instrument_precision(None);
-        self.state.price_scale_mut().set_tick_size(None);
+        self.state.price_scale_mut().set_instrument_ticks(None);
         let initial_bars = previous.as_ref().map_or(1000, |link| link.initial_bars);
         self.attach_feed(feed, initial_bars);
         if let (Some(old), Some(new)) = (&mut previous, &mut self.feed_link) {
@@ -841,7 +841,7 @@ impl Chart {
             self.event_click = None;
             self.axis_hover = None;
             self.state.price_scale_mut().set_instrument_precision(None);
-            self.state.price_scale_mut().set_tick_size(None);
+            self.state.price_scale_mut().set_instrument_ticks(None);
         }
         self.symbol = symbol;
     }
