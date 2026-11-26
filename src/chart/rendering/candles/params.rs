@@ -35,6 +35,9 @@ pub struct CandleDataContext<'a> {
     /// a chart that draws such bars apart. Empty, or shorter than `visible_data`, draws the bars
     /// without an entry as bars that traded.
     pub range_phantoms: &'a [bool],
+    /// Range bars: whether the last bar of `visible_data` is the range bar in progress, drawn
+    /// in the forming colours of the Range style.
+    pub range_forming: bool,
     /// Index of the first visible bar within `full_data`.
     pub start_idx: usize,
     /// Interval and calendar of the bars, whose sessions the TPO profiles follow.

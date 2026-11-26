@@ -418,6 +418,7 @@ impl IndicatorFactory {
                 ranges: [[0.0, 10.0], [10.0, 100.0], [100.0, f64::MAX]],
             },
             OrderFlowKind::FlowSum { bars: 10 },
+            OrderFlowKind::SideVolume,
             OrderFlowKind::FilteredCvd {
                 min: 100.0,
                 max: f64::MAX,

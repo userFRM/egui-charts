@@ -86,6 +86,10 @@ pub enum OrderFlowKind {
         /// Bars in the rolling sum.
         bars: usize,
     },
+    /// Buy volume, sell volume and buy minus sell volume per bar. Executions of unknown side
+    /// count for neither side: a bar whose executions all have an unknown side reads zero on
+    /// all three, and a bar without executions has no value.
+    SideVolume,
     /// Buy minus sell volume, its highest and lowest running value including zero, per bar,
     /// counting executions whose size lies in the inclusive range, or whose aggressive order's
     /// combined size does (see [`OrderFlowInput::with_size_basis`]). A study accumulates the
@@ -191,6 +195,7 @@ impl OrderFlowKind {
                 seconds: seconds.clamp(1, 86400),
             },
             Self::Spread => Self::Spread,
+            Self::SideVolume => Self::SideVolume,
         }
     }
 }
@@ -694,6 +699,7 @@ impl OrderFlowInput {
                 OrderFlowKind::LevelsExecuted { .. }
                 | OrderFlowKind::SizeDelta { .. }
                 | OrderFlowKind::FlowSum { .. }
+                | OrderFlowKind::SideVolume
                 | OrderFlowKind::FilteredCvd { .. },
             ) => &[LiveTrades, TradeSides],
         }
@@ -1025,6 +1031,7 @@ impl OrderFlowInput {
                 | OrderFlowKind::LevelsExecuted { .. }
                 | OrderFlowKind::SizeDelta { .. }
                 | OrderFlowKind::FlowSum { .. }
+                | OrderFlowKind::SideVolume
                 | OrderFlowKind::FilteredCvd { .. }
                 | OrderFlowKind::PriceRange { .. },
             ) => {
@@ -1193,6 +1200,7 @@ impl OrderFlowInput {
                 | OrderFlowKind::LevelsExecuted { .. }
                 | OrderFlowKind::SizeDelta { .. }
                 | OrderFlowKind::FlowSum { .. }
+                | OrderFlowKind::SideVolume
                 | OrderFlowKind::FilteredCvd { .. }
                 | OrderFlowKind::PriceRange { .. },
             ) => false,
@@ -1531,6 +1539,7 @@ impl OrderFlowInput {
                 | Source::Fixed(
                     OrderFlowKind::SizeDelta { .. }
                     | OrderFlowKind::FlowSum { .. }
+                    | OrderFlowKind::SideVolume
                     | OrderFlowKind::FilteredCvd { .. },
                 ) => true,
                 Source::Fixed(
@@ -2073,6 +2082,14 @@ impl State {
             OrderFlowKind::FlowSum { .. } => {
                 let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
                 [old[0] + size, old[1] + signed_size(trade, true, size), 0.0]
+            }
+            OrderFlowKind::SideVolume => {
+                let [buy, sell, delta] = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
+                match trade.side {
+                    Some(OrderSide::Buy) => [buy + size, sell, delta + size],
+                    Some(OrderSide::Sell) => [buy, sell + size, delta - size],
+                    None => [buy, sell, delta],
+                }
             }
             OrderFlowKind::FilteredCvd { min, max } => {
                 let old = self.bars.get(&open).map_or([0.0; 3], |(v, _)| *v);
@@ -2693,7 +2710,7 @@ mod tests {
             levels: 5,
             distance: 0.0,
         };
-        let cases: [(_, &[crate::model::FeedService]); 15] = [
+        let cases: [(_, &[crate::model::FeedService]); 16] = [
             (OrderFlowInput::new(Spread), &[BestBidAsk]),
             (
                 OrderFlowInput::new(PriceRange { seconds: 60 }),
@@ -2760,6 +2777,7 @@ mod tests {
                 OrderFlowInput::new(FlowSum { bars: 10 }),
                 &[LiveTrades, TradeSides],
             ),
+            (OrderFlowInput::new(SideVolume), &[LiveTrades, TradeSides]),
             (
                 OrderFlowInput::new(FilteredCvd {
                     min: 0.0,
@@ -3215,9 +3233,9 @@ mod tests {
     /// to :06 wait in a queue of 100, of 3, which drops those of :02 and :03, or of zero, which
     /// drops them all; in the last row the host pushes a bar at :02 after the :02 buy, which
     /// restarts the stream's grouping without making a queued buy late. A volume and delta
-    /// source and a footprint source connected then, and given the buys of :07 to :09, hold
-    /// three buys in each chart bar from the oldest whose executions they all hold, and one at
-    /// :09; after a lost or regrouped queue only the :09 bar.
+    /// source, a buy and sell volume source and a footprint source connected then, and given the
+    /// buys of :07 to :09, hold three buys in each chart bar from the oldest whose executions
+    /// they all hold, and one at :09; after a lost or regrouped queue only the :09 bar.
     #[cfg(feature = "widget")]
     #[test]
     fn sources_connected_while_executions_wait_hold_the_charts_bars() {
@@ -3248,11 +3266,12 @@ mod tests {
             }
             let bars: Vec<_> = bars.into_values().collect();
             let flow = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
+            let sides = OrderFlowInput::new(OrderFlowKind::SideVolume);
             let footprint = OrderFlowInput::footprint();
             footprint.set_tick_size(Some(1.0));
             // As the chart connects new sources: rebuilt from its store along its bars, then
             // given the queue.
-            for input in [&flow, &footprint] {
+            for input in [&flow, &sides, &footprint] {
                 input.replace_trades(&clock, &held, &bars, None);
             }
             for second in 2..=6 {
@@ -3262,7 +3281,10 @@ mod tests {
                 }
                 sink.push_tick(buy(second));
             }
-            inbox.study_inputs(sink.id, vec![flow.clone(), footprint.clone()]);
+            inbox.study_inputs(
+                sink.id,
+                vec![flow.clone(), sides.clone(), footprint.clone()],
+            );
             for second in 7..=9 {
                 sink.push_tick(buy(second));
             }
@@ -3273,12 +3295,15 @@ mod tests {
             let want_flow = (whole.iter().map(|s| (at(*s), [3.0, 3.0, 0.0])))
                 .chain([(at(9), [1.0, 1.0, 0.0])])
                 .collect::<BTreeMap<_, _>>();
+            let want_sides = (whole.iter().map(|s| (at(*s), [3.0, 0.0, 3.0])))
+                .chain([(at(9), [1.0, 0.0, 1.0])])
+                .collect::<BTreeMap<_, _>>();
             let want = (whole.iter().map(|s| (at(*s), 3.0)))
                 .chain([(at(9), 1.0)])
                 .collect::<Vec<_>>();
             assert_eq!(
-                (flow.values(), got),
-                (want_flow, want),
+                (flow.values(), sides.values(), got),
+                (want_flow, want_sides, want),
                 "store {store}, queue {queue}, pushed bar {pushed}"
             );
         }
