@@ -812,8 +812,9 @@ impl Chart {
                     if !target_panel {
                         crosshair_options.horz_line_visible = false;
                         crosshair_options.horz_label_visible = false;
+                        // No price for the dot: the time line alone, as Full draws it.
                         if crosshair_options.style == crate::config::CrosshairStyle::Dot {
-                            crosshair_options.style = crate::config::CrosshairStyle::Arrow;
+                            crosshair_options.style = crate::config::CrosshairStyle::Full;
                         }
                     }
                 }
