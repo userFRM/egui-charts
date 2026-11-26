@@ -227,7 +227,10 @@ impl StudyDataCache {
                 let cut = super::replay::completed(&series.bars, &series.clock, time).len();
                 series.bars.get(cut).map(|bar| bar.time)
             });
-        study.set_replay(newest_closed, forming)
+        study.set_replay(
+            newest_closed && study.calculation_history().is_some(),
+            forming,
+        )
     }
 
     pub(super) fn data(
