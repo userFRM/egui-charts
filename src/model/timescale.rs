@@ -336,13 +336,27 @@ impl TimeScale {
 
     /// Sets the width and scales the bar spacing so a plot resized from `old_width` to
     /// `new_width` shows the same slots. The plot spans `width - 1` pixels of slots, as in
-    /// [`Self::coord_to_idx`].
+    /// [`Self::coord_to_idx`]. A view at the live edge keeps the configured right offset, so a
+    /// pixel offset keeps its pixels rather than its slots.
     #[cfg(feature = "widget")]
     pub(crate) fn keep_slots_on_resize(&mut self, old_width: f32, new_width: f32) {
         let ratio = (f64::from(new_width) - 1.0) / (f64::from(old_width) - 1.0);
+        let at_live_edge = self.is_at_live_edge();
         self.width = new_width;
         self.bar_spacing = self.clamp_spacing(self.bar_spacing * ratio);
+        if at_live_edge {
+            // A pixel right offset stays in pixels, so the view stays at the live edge.
+            self.right_offset = f64::from(self.live_edge_offset());
+        }
         self.apply_constraints();
+    }
+
+    /// Whether the right offset is where [`Self::scroll_to_realtime`] puts it, within 1e-6 bars.
+    #[cfg(feature = "widget")]
+    pub(crate) fn is_at_live_edge(&self) -> bool {
+        let mut live = self.clone();
+        live.scroll_to_realtime();
+        (self.right_offset - live.right_offset).abs() <= 1e-6
     }
 
     /// Update min bar spacing, floored at 0.000001 pixels. Non-finite values are ignored.
