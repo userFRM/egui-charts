@@ -135,6 +135,13 @@ const INDICATOR_ID_BASE: usize = usize::MAX / 2;
 /// its ordinary orders do not.
 const ORDER_TIERS: OrderSizeTiers = OrderSizeTiers::new(100.0, 250.0);
 
+/// The largest watchlist file the demo reads, far more than the 1,000 entries a list keeps.
+const MAX_WATCHLIST_BYTES: u64 = 1024 * 1024;
+
+/// A chosen watchlist file's name and bytes, `None` when the choice was cancelled, or why the
+/// file could not be read.
+type WatchlistFile = Result<Option<(String, Vec<u8>)>, String>;
+
 /// The heatmap's history of `symbol`'s book: of its individual orders when its feed sends them, so
 /// the cells mark the large ones, otherwise of the aggregate depth.
 fn depth_history(symbol: &str) -> DepthHistory {
@@ -470,8 +477,8 @@ pub struct DemoApp {
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
     quotes: Arc<feeds::DemoQuotes>,
-    // Text pasted for a watchlist import, while its window is open.
-    watchlist_import: Option<String>,
+    // The watchlist file the user is choosing, until it is read.
+    watchlist_import: Option<std::sync::mpsc::Receiver<WatchlistFile>>,
     /// Whether the wide watchlist window is open.
     watchlist_wide: bool,
     // Symbol search is open for the watchlist's add button: the pick joins the list.
@@ -2100,6 +2107,7 @@ impl eframe::App for DemoApp {
 
         // Drive replay before laying out the chart so its window is current.
         self.poll_recording(&ctx);
+        self.poll_watchlist_file();
         self.advance_replay();
         if self.replay.is_none() || self.live.loading() {
             let delay = self.live.advance(chrono::Utc::now());
@@ -2209,7 +2217,6 @@ impl eframe::App for DemoApp {
         self.show_replay_trading(&ctx);
         self.show_annotation_editor(&ctx);
         self.show_dialogs(&ctx);
-        self.show_watchlist_import(&ctx);
         self.show_wide_watchlist(&ctx);
         self.show_profile(&ctx);
 
@@ -3616,7 +3623,13 @@ impl DemoApp {
     }
 
     fn show_watchlist(&mut self, ui: &mut egui::Ui) {
-        match self.watchlist.show(ui) {
+        let action = self.watchlist.show(ui);
+        self.handle_watchlist_action(ui.ctx(), action);
+    }
+
+    /// What the compact and the wide watchlist ask of the host.
+    fn handle_watchlist_action(&mut self, ctx: &egui::Context, action: WatchlistAction) {
+        match action {
             WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
             WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
             WatchlistAction::AddSymbol => {
@@ -3624,7 +3637,8 @@ impl DemoApp {
                 self.symbol_search.open();
             }
             WatchlistAction::AdvancedView => self.watchlist_wide = true,
-            WatchlistAction::Import => self.watchlist_import = Some(String::new()),
+            WatchlistAction::CompactView => self.watchlist_wide = false,
+            WatchlistAction::Import => self.pick_watchlist_file(ctx),
             WatchlistAction::Export { text, .. } => self.save_text("watchlist.txt", &text),
             WatchlistAction::None => {}
             _ => {}
@@ -3681,35 +3695,83 @@ impl DemoApp {
             .open(&mut open)
             .default_size([900.0, 520.0])
             .show(ctx, |ui| action = self.watchlist.show_wide(ui, &details));
-        match action {
-            WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
-            WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
-            WatchlistAction::CompactView => open = false,
-            _ => {}
-        }
-        self.watchlist_wide = open;
+        self.handle_watchlist_action(ctx, action);
+        self.watchlist_wide &= open;
     }
 
-    /// The demo has no file picker for imports: the user pastes the exported text instead.
-    fn show_watchlist_import(&mut self, ctx: &egui::Context) {
-        let Some(text) = &mut self.watchlist_import else {
+    /// Asks for a `.txt` watchlist file, which [`Self::poll_watchlist_file`] imports.
+    fn pick_watchlist_file(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.watchlist_import = Some(rx);
+        let ctx = ctx.clone();
+        let too_large = |name: &str| format!("{name} exceeds the 1 MiB watchlist limit");
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let result = (|| {
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Text", &["txt"])
+                    .pick_file()
+                else {
+                    return Ok(None);
+                };
+                let name = path
+                    .file_name()
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+                let mut bytes = Vec::new();
+                std::fs::File::open(&path)
+                    .and_then(|file| file.take(MAX_WATCHLIST_BYTES + 1).read_to_end(&mut bytes))
+                    .map_err(|error| format!("Could not read {name}: {error}"))?;
+                if bytes.len() as u64 > MAX_WATCHLIST_BYTES {
+                    return Err(too_large(&name));
+                }
+                Ok(Some((name, bytes)))
+            })();
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match rfd::AsyncFileDialog::new()
+                .add_filter("Text", &["txt"])
+                .pick_file()
+                .await
+            {
+                None => Ok(None),
+                Some(file) if file.inner().size() > MAX_WATCHLIST_BYTES as f64 => {
+                    Err(too_large(&file.file_name()))
+                }
+                Some(file) => Ok(Some((file.file_name(), file.read().await))),
+            };
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Imports the chosen watchlist file as a list named after the file without its extension.
+    fn poll_watchlist_file(&mut self) {
+        let Some(rx) = self.watchlist_import.take() else {
             return;
         };
-        let mut open = true;
-        let mut import = false;
-        egui::Window::new("Import watchlist")
-            .open(&mut open)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.label("Paste symbols separated by commas; ###Title starts a section.");
-                ui.add(egui::TextEdit::multiline(text).desired_rows(6));
-                import = ui.button("Import").clicked();
-            });
-        if import {
-            self.watchlist.import("Imported", text);
-        }
-        if import || !open {
-            self.watchlist_import = None;
+        match rx.try_recv() {
+            Ok(Ok(Some((file, bytes)))) => match String::from_utf8(bytes) {
+                Ok(text) => {
+                    let name = std::path::Path::new(&file)
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(str::trim)
+                        .filter(|stem| !stem.is_empty())
+                        .unwrap_or("Imported");
+                    self.watchlist.import(name, &text);
+                }
+                Err(_) => self.notify(format!("{file} is not UTF-8 text")),
+            },
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => self.notify(error),
+            Err(std::sync::mpsc::TryRecvError::Empty) => self.watchlist_import = Some(rx),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.notify("Watchlist selection failed")
+            }
         }
     }
 
@@ -10868,6 +10930,48 @@ mod tests {
             restored.watchlist.unlisted_flags(),
             [("STOCKD".to_owned(), WatchlistFlag::Red)]
         );
+    }
+
+    /// A chosen watchlist file imports as a list named after the file without its extension, and
+    /// a file that is not UTF-8 text adds no list and says so.
+    #[test]
+    fn a_chosen_watchlist_file_imports_under_its_name_and_text_only() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        for (file, bytes, imported) in [
+            (
+                "Tech.txt",
+                b"NASDAQ:AAPL,###Chips,NASDAQ:NVDA".to_vec(),
+                true,
+            ),
+            ("Bad.txt", vec![b'N', 0xff, b'A'], false),
+        ] {
+            let before = app.watchlist.lists().len();
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.watchlist_import = Some(rx);
+            tx.send(Ok(Some((file.to_owned(), bytes)))).unwrap();
+            settle(&mut app, &ctx);
+            let lists = app.watchlist.lists();
+            if imported {
+                assert_eq!(lists.len(), before + 1, "{file}");
+                let list = lists.last().unwrap();
+                assert_eq!(list.name, "Tech");
+                assert_eq!(list.to_text(), "NASDAQ:AAPL,###Chips,NASDAQ:NVDA");
+                assert_eq!(app.watchlist.active_list(), before);
+            } else {
+                assert_eq!(lists.len(), before, "{file}");
+                assert!(
+                    app.toasts
+                        .toasts()
+                        .iter()
+                        .any(|toast| toast.message == "Bad.txt is not UTF-8 text")
+                );
+            }
+        }
     }
 
     #[test]
