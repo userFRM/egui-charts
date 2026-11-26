@@ -22,7 +22,7 @@ use crate::model::{
     Capabilities, LineStyle, Order, OrderId, OrderRequest, OrderSide, OrderType, Position,
     PositionBracket, PriceLine, TimeInForce, settled,
 };
-use crate::scales::{TimezoneMode, decimals, to_step};
+use crate::scales::{TickGrid, TimezoneMode, decimals};
 use crate::theme::{Theme, ThemeExt};
 
 /// What the user asked for on a trading line. Confirm a change with the user, then send it to
@@ -270,6 +270,10 @@ pub struct TradingLineOptions<'a> {
     pub formatter: Option<&'a dyn TradingFormatter>,
     /// The positive tick size used to round dragged prices.
     pub tick_size: f64,
+    /// Coarser ticks by price range, as
+    /// [`Instrument::tick_tiers`](crate::model::Instrument::tick_tiers): dragged prices round to
+    /// the tick of their range, and profit in ticks counts them. Empty in [`new`](Self::new).
+    pub tick_tiers: &'a [(f64, f64)],
     /// The zone in which good-till-date order labels write their expiry.
     pub timezone: TimezoneMode,
 }
@@ -314,6 +318,7 @@ impl<'a> TradingLineOptions<'a> {
             currency,
             formatter: None,
             tick_size,
+            tick_tiers: &[],
             timezone: TimezoneMode::Utc,
         }
     }
@@ -600,10 +605,11 @@ pub fn render_trading_lines<'a>(
                 } else {
                     match (appearance, options.bracket_pnl, entry) {
                         (Level::TakeProfit | Level::StopLoss, Some(unit), Some(entry)) => {
-                            let gain = (price - entry)
-                                * parent.map_or(direction(request.side), |p| p.quantity.signum());
+                            let sign =
+                                parent.map_or(direction(request.side), |p| p.quantity.signum());
+                            let gain = (price - entry) * sign;
                             let money = gain * quantity * options.point_value;
-                            pnl_text(&ctx, unit, money, gain, entry, options).0
+                            pnl_text(&ctx, unit, money, gain, entry, sign, options).0
                         }
                         _ => name.clone(),
                     }
@@ -650,9 +656,10 @@ pub fn render_trading_lines<'a>(
             };
             // What an exit dragged out of the entry's label makes if the price reaches it.
             let exit_pnl = |unit, at: f64| {
-                let gain = (at - price) * direction(request.side);
+                let sign = direction(request.side);
+                let gain = (at - price) * sign;
                 let money = gain * open * options.point_value;
-                pnl_text(&ctx, unit, money, gain, price, options).0
+                pnl_text(&ctx, unit, money, gain, price, sign, options).0
             };
             let exits = if level == Level::Entry
                 && options.order_exits
@@ -781,10 +788,19 @@ pub fn render_trading_lines<'a>(
             match (level, index) {
                 (Level::Entry, _) => {
                     if let Some(price) = price {
-                        let delta = price - entry_price(&request.order_type).unwrap_or(price);
-                        // The other levels keep their distance, written at the tick's decimals.
+                        let entry = entry_price(&request.order_type).unwrap_or(price);
+                        let delta = price - entry;
+                        // The other levels keep their distance, written at the tick's decimals,
+                        // or their count of ticks across price ranges.
                         let scale = 10f64.powi(decimals(options.tick_size) as i32);
-                        let shift = |other: f64| ((other + delta) * scale).round() / scale;
+                        let grid = TickGrid::new(options.tick_size, options.tick_tiers);
+                        let shift = |other: f64| {
+                            if grid.is_flat() {
+                                ((other + delta) * scale).round() / scale
+                            } else {
+                                grid.offset(other, grid.steps_between(entry, price))
+                            }
+                        };
                         changed.order_type = match request.order_type {
                             OrderType::Limit(_) => OrderType::Limit(price),
                             OrderType::Stop(_) => OrderType::Stop(price),
@@ -958,13 +974,15 @@ fn direction(side: OrderSide) -> f64 {
 }
 
 /// A profit or loss of `money` in the account's currency, or of `gain` in price from `entry`,
-/// written in `unit`, and the value written, whose sign colours it.
+/// written in `unit`, and the value written, whose sign colours it. `direction` is 1 when the
+/// gain is made above the entry and -1 below it, where ticks are counted.
 pub(crate) fn pnl_text(
     ctx: &egui::Context,
     unit: PnlUnit,
     money: f64,
     gain: f64,
     entry: f64,
+    direction: f64,
     options: &TradingLineOptions<'_>,
 ) -> (String, f64) {
     let round = |value: f64, decimals: i32| {
@@ -977,7 +995,12 @@ pub(crate) fn pnl_text(
             (value, format!("{:.2} {}", value.abs(), options.currency))
         }
         PnlUnit::Ticks => {
-            let value = (gain / options.tick_size).round();
+            let grid = TickGrid::new(options.tick_size, options.tick_tiers);
+            let value = if grid.is_flat() {
+                (gain / options.tick_size).round()
+            } else {
+                direction * grid.steps_between(entry, entry + direction * gain)
+            };
             (
                 value,
                 l10n::format_text(ctx, "{0} ticks", &[("0", value.abs().to_string())]),
@@ -1156,7 +1179,7 @@ impl ExitButtons<'_> {
                 .filter(|_| response.dragged() || response.drag_stopped())
                 .map(|pointer| {
                     let y = pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom());
-                    to_step(mapping.y_to_price(y), options.tick_size, f64::round)
+                    TickGrid::new(options.tick_size, options.tick_tiers).snap(mapping.y_to_price(y))
                 })
                 .filter(|price| price.is_finite() && *price != self.entry);
             let Some(price) = price else {
@@ -1341,7 +1364,7 @@ impl Label<'_> {
             {
                 let price =
                     mapping.y_to_price(pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom()));
-                value = to_step(price, options.tick_size, f64::round);
+                value = TickGrid::new(options.tick_size, options.tick_tiers).snap(price);
                 if value.is_finite() {
                     ui.ctx().data_mut(|data| data.insert_temp(key, value));
                 }
@@ -1816,8 +1839,28 @@ mod tests {
             (f64::NAN, 1.0, "-", 0.0),
         ] {
             assert_eq!(
-                pnl_text(&ctx, PnlUnit::Percent, gain, gain, entry, &options),
+                pnl_text(&ctx, PnlUnit::Percent, gain, gain, entry, 1.0, &options),
                 (expected.to_owned(), value)
+            );
+        }
+    }
+
+    /// Profit in ticks counts the ticks between the entry and the price reached: a sell from 25.00
+    /// down to 24.90 gains five 0.02 ticks, not two of the 0.05 ticks above its entry.
+    #[test]
+    fn tick_profit_counts_the_ticks_of_the_prices_passed() {
+        let ctx = egui::Context::default();
+        let mut options = TradingLineOptions::new("USD", 0.01);
+        options.tick_tiers = &[(10.0, 0.02), (25.0, 0.05)];
+        for (entry, gain, direction, expected) in [
+            (25.0, 0.1, -1.0, ("+5 ticks", 5.0)),
+            (25.0, 0.1, 1.0, ("+2 ticks", 2.0)),
+            (25.0, -0.1, 1.0, ("-5 ticks", -5.0)),
+        ] {
+            assert_eq!(
+                pnl_text(&ctx, PnlUnit::Ticks, 0.0, gain, entry, direction, &options),
+                (expected.0.to_owned(), expected.1),
+                "{entry} {gain} {direction}"
             );
         }
     }
@@ -2590,8 +2633,11 @@ mod tests {
     /// A limit equal to its stop shares its line and moves with it.
     #[test]
     fn stop_limit_orders_drag_their_stop_and_limit_apart() {
+        // Above 25 prices move in 0.05: a drop at 102.03 rounds to 102.05, and the exits keep
+        // their count of ticks from the stop.
+        const TIERS: &[(f64, f64)] = &[(10.0, 0.02), (25.0, 0.05)];
         for theme in [Theme::light(), Theme::dark()] {
-            for (label, limit, drawn, target, expected, take_profit) in [
+            for (label, limit, drawn, target, expected, take_profit, tiers) in [
                 (
                     "Limit",
                     101.5,
@@ -2602,6 +2648,7 @@ mod tests {
                         limit: 102.0,
                     },
                     103.0,
+                    &[][..],
                 ),
                 (
                     "Stop limit",
@@ -2613,6 +2660,7 @@ mod tests {
                         limit: 101.5,
                     },
                     102.5,
+                    &[],
                 ),
                 (
                     "Stop limit",
@@ -2624,6 +2672,31 @@ mod tests {
                         limit: 103.0,
                     },
                     105.0,
+                    &[],
+                ),
+                (
+                    "Limit",
+                    101.5,
+                    &[101.0, 101.5],
+                    102.03,
+                    OrderType::StopLimit {
+                        stop: 101.0,
+                        limit: 102.05,
+                    },
+                    103.0,
+                    TIERS,
+                ),
+                (
+                    "Stop limit",
+                    101.5,
+                    &[101.0, 101.5],
+                    100.53,
+                    OrderType::StopLimit {
+                        stop: 100.55,
+                        limit: 101.5,
+                    },
+                    102.55,
+                    TIERS,
                 ),
             ] {
                 let ctx = egui::Context::default();
@@ -2639,6 +2712,7 @@ mod tests {
                 let order = Order::new(OrderId::new("S"), request, OrderStatus::Working);
                 let mut options = TradingLineOptions::new("USD", 0.01);
                 options.modify = true;
+                options.tick_tiers = tiers;
                 let mut start = Pos2::ZERO;
                 let mut end = Pos2::ZERO;
                 let mut action = None;
@@ -2840,6 +2914,7 @@ mod tests {
                     currency: "USD",
                     formatter: None,
                     tick_size: 0.01,
+                    tick_tiers: &[],
                 };
                 for frame in 0..3 {
                     let mut y = 0.0;

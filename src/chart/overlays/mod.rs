@@ -16,7 +16,7 @@ pub use footprint::{
     render_footprint, render_footprint_statistics, render_footprint_statistics_rows,
 };
 pub(crate) use footprint::{
-    OPEN_INTEREST_ROWS, automatic_row_height, fixed_row_group, footprint_column_width,
+    OPEN_INTEREST_ROWS, automatic_row_height, footprint_column_width, min_row_group,
     open_interest_request, render_footprint_read, render_footprint_statistics_rows_read, row_edges,
     row_group, summary_room,
 };
