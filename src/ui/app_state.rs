@@ -73,7 +73,7 @@ pub enum Control {
     Settings,
     /// The top toolbar's fullscreen button.
     Fullscreen,
-    /// The top toolbar's snapshot button and menu.
+    /// The top toolbar's snapshot button and menu, and the layout menu's Download chart image row.
     Snapshot,
     /// Object Tree buttons and chart-menu entries.
     ObjectTree,
@@ -85,7 +85,7 @@ pub enum Control {
     ResetView,
     /// Copy-price entries in chart and series menus.
     CopyPrice,
-    /// CSV export entries in the chart menu.
+    /// CSV export entries in the chart menu, and the layout menu's Download chart data row.
     ExportData,
     /// Alert creation: the top toolbar's Alert button, the right rail's Alerts button and the
     /// add alert rows of the chart, series, study and drawing menus.

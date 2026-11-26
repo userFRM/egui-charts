@@ -42,7 +42,9 @@ pub enum CrosshairStyle {
     /// Full crosshair with vertical and horizontal lines (default)
     #[default]
     Full,
-    /// Only a dot at the intersection point
+    /// The crosshair lines of `Full`, following their visibility, colour, width and style, with a
+    /// dot where they cross, drawn over the standard pointer in the vertical line's colour. Hiding
+    /// a line removes only that line; with both hidden the dot remains.
     Dot,
     /// Standard arrow cursor and axis readouts, without crosshair lines
     Arrow,

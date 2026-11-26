@@ -1870,9 +1870,12 @@ impl ProfileStudy {
                     effective.row_size(),
                 );
                 let coverage = covered as f64 / range.len() as f64;
-                let Some(profile) = profile else {
+                let Some(mut profile) = profile else {
                     continue;
                 };
+                if covered == 0 {
+                    self.count_one_bar(&range, &mut profile);
+                }
                 let plot = StudyProfile {
                     bars: range.clone(),
                     profile: Arc::new(profile),
@@ -1916,9 +1919,10 @@ impl ProfileStudy {
                     .as_ref()
                     .and_then(|p| p.with_bar(&self.data[range.end - 1]))
                     .or_else(|| VolumeProfile::from_bars(&self.data[range.clone()], effective));
-                let Some(profile) = profile else {
+                let Some(mut profile) = profile else {
                     continue;
                 };
+                self.count_one_bar(&range, &mut profile);
                 let plot = StudyProfile {
                     bars: range.clone(),
                     profile: Arc::new(profile),
@@ -1945,6 +1949,14 @@ impl ProfileStudy {
         let excess = cache.len().saturating_sub(keep);
         cache.drain(..excess);
         profiles
+    }
+
+    /// Count a fixed range or anchored profile estimated from the single chart bar of `range` as
+    /// that bar's volume ([`VolumeProfile::count_single_bar`]), as the profile drawings do.
+    fn count_one_bar(&self, range: &Range<usize>, profile: &mut VolumeProfile) {
+        if matches!(self.kind, Kind::Fixed | Kind::Anchored) && range.len() == 1 {
+            profile.count_single_bar(&self.data[range.start]);
+        }
     }
 
     /// The levels of finished profiles that reach into `visible`, each from the bar after its
@@ -3373,6 +3385,102 @@ mod tests {
         assert_eq!(
             requested(&undated),
             [(Some(Timeframe::Min1), Some(chart[0].time))]
+        );
+    }
+
+    /// A fixed range or anchored profile estimated from one chart bar counts its volume as up
+    /// only when the bar closes above its open, as the profile drawings do, so a bar that closes
+    /// at its open is down volume. Over two bars, also once the next bar opens after the forming
+    /// bar, an unchanged close is up, and executions keep their aggressor side.
+    #[test]
+    fn one_bar_profile_counts_an_unchanged_close_as_down() {
+        use crate::model::{BarClock, OrderSide::Buy, Tick};
+        let time = |minute: i64| DateTime::from_timestamp(minute * 60, 0).unwrap();
+        // From 10 to 11 with 100 traded, opening at 10.50: 50 in each of the two rows.
+        let bar = |minute, close| Bar::new(time(minute), 10.5, 11.0, 10.0, close, 100.0);
+        let flat: Vec<_> = (0..3).map(|minute| bar(minute, 10.5)).collect();
+        let fixed = |first, last| -> Box<dyn Indicator> {
+            Box::new(VolProfileFixed::new(2).with_range(time(first), time(last)))
+        };
+        let anchored =
+            || -> Box<dyn Indicator> { Box::new(VolProfileAnchored::new(2).with_anchor(time(1))) };
+        let rising = vec![bar(0, 10.75), flat[1].clone()];
+        for (case, mut study, bars, executed, range, up, down) in [
+            (
+                "flat bar",
+                fixed(0, 0),
+                flat[..2].to_vec(),
+                false,
+                0..1,
+                [0.0, 0.0],
+                [50.0, 50.0],
+            ),
+            (
+                "rising bar",
+                fixed(0, 0),
+                rising,
+                false,
+                0..1,
+                [50.0, 50.0],
+                [0.0, 0.0],
+            ),
+            (
+                "two bars",
+                fixed(0, 1),
+                flat[..2].to_vec(),
+                false,
+                0..2,
+                [100.0, 100.0],
+                [0.0, 0.0],
+            ),
+            (
+                "forming bar",
+                anchored(),
+                flat[..2].to_vec(),
+                false,
+                1..2,
+                [0.0, 0.0],
+                [50.0, 50.0],
+            ),
+            // A buy of 5 at 10 in the first bar, in one row of one tick.
+            (
+                "executions",
+                fixed(0, 0),
+                flat[..2].to_vec(),
+                true,
+                0..1,
+                [5.0, f64::NAN],
+                [0.0, f64::NAN],
+            ),
+        ] {
+            if executed {
+                let flow = study.order_flow_inputs()[0].clone();
+                flow.set_tick_size(Some(1.0));
+                let trade = Tick::new(
+                    time(0) + chrono::Duration::seconds(10),
+                    10.0,
+                    5.0,
+                    Some(Buy),
+                );
+                flow.push_trade(&BarClock::new(Timeframe::Min1), &trade);
+            }
+            study.calculate(&bars);
+            let got = &study.volume_profiles(0..bars.len())[0];
+            assert_eq!(got.bars, range, "{case}");
+            let rows = if executed { 1 } else { 2 };
+            assert_eq!(got.profile.up(), &up[..rows], "{case}");
+            assert_eq!(got.profile.down(), &down[..rows], "{case}");
+        }
+        // The next bar extends the cached profile of the forming bar.
+        let mut study = anchored();
+        study.calculate(&flat[..2]);
+        assert_eq!(study.volume_profiles(0..2)[0].profile.down(), [50.0, 50.0]);
+        study.update(&flat, 2);
+        let got = &study.volume_profiles(0..3)[0];
+        assert_eq!(got.bars, 1..3);
+        assert_eq!(
+            (got.profile.up(), got.profile.down()),
+            (&[100.0, 100.0][..], &[0.0, 0.0][..])
         );
     }
 
