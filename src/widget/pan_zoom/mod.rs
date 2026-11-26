@@ -948,18 +948,11 @@ impl Chart {
 
         if let Some(time) = self.pending_scroll_time
             && let Some(first) = self.state.data().bars.first()
+            // A kept left edge waits until the new interval's bars replace the old ones.
+            && self.pending_left_edge.is_none_or(|edge| {
+                edge.bars != super::layout::bars_key(self) && !self.state.shown().is_empty()
+            })
         {
-            let bars = &self.state.data().bars;
-            let next = bars.partition_point(|bar| bar.time < time);
-            let index = if self.pending_scroll_next {
-                next.min(bars.len() - 1)
-            } else if next == 0 {
-                0
-            } else if next == bars.len() || time - bars[next - 1].time <= bars[next].time - time {
-                next - 1
-            } else {
-                next
-            };
             let needs_history = time < first.time
                 && !self.symbol.is_empty()
                 && !self.feed.history_complete
@@ -967,13 +960,30 @@ impl Chart {
                     .feed_link
                     .as_ref()
                     .is_some_and(|link| !link.paging_stopped);
-            let scale = self.state.time_scale_mut();
-            let half_window = ((chart_width - 1.0) / scale.bar_spacing() - 1.0) / 2.0;
-            scale.set_right_offset(
-                scale.position(index as f64) - scale.base_idx() as f64 + f64::from(half_window),
-            );
+            if let Some(edge) = self.pending_left_edge {
+                self.keep_left_edge(time, edge);
+            } else {
+                let bars = &self.state.data().bars;
+                let next = bars.partition_point(|bar| bar.time < time);
+                let index = if self.pending_scroll_next {
+                    next.min(bars.len() - 1)
+                } else if next == 0 {
+                    0
+                } else if next == bars.len() || time - bars[next - 1].time <= bars[next].time - time
+                {
+                    next - 1
+                } else {
+                    next
+                };
+                let scale = self.state.time_scale_mut();
+                let half_window = ((chart_width - 1.0) / scale.bar_spacing() - 1.0) / 2.0;
+                scale.set_right_offset(
+                    scale.position(index as f64) - scale.base_idx() as f64 + f64::from(half_window),
+                );
+            }
             if !needs_history {
                 self.pending_scroll_time = None;
+                self.pending_left_edge = None;
             }
         }
 

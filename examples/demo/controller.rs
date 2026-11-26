@@ -10817,6 +10817,93 @@ mod tests {
         assert!(!config.shade_overnight && config.shade_postmarket);
     }
 
+    /// The demo's chart settings offer the switch that keeps the left edge, and with it on an
+    /// interval change keeps the bar at the left edge of the demo chart in place.
+    #[test]
+    fn chart_settings_keep_left_edge_switch_reaches_the_demo_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.open_chart_settings_dialog();
+        let size = egui::vec2(1440.0, 900.0);
+        let show = |app: &mut DemoApp, events| {
+            ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+        };
+        // Above the fixed footer of the dialog, which the last row of the tab scrolls down to.
+        let find = |app: &mut DemoApp, label: &str| {
+            show(app, vec![])
+                .into_iter()
+                .find(|(text, rect)| text == label && (180.0..790.0).contains(&rect.center().y))
+                .map(|(_, rect)| rect.center())
+        };
+        show(&mut app, vec![]);
+        let tab = find(&mut app, "Scales and lines").expect("the Scales and lines tab");
+        ui_click(&ctx, size, tab, |ui| app.show_dialogs(ui.ctx()));
+        // The Time scale section ends the tab, below the fold.
+        let switch = (0..20)
+            .find_map(|_| {
+                for _ in 0..5 {
+                    show(&mut app, vec![]);
+                }
+                let found = find(&mut app, "Keep left edge on interval change");
+                if found.is_none() {
+                    show(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(egui::pos2(900.0, 450.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                source: egui::MouseWheelSource::Wheel,
+                                phase: egui::TouchPhase::Move,
+                                delta: egui::vec2(0.0, -100.0),
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                }
+                found
+            })
+            .expect("the switch is offered");
+        ui_click(&ctx, size, switch, |ui| app.show_dialogs(ui.ctx()));
+        let ok = show(&mut app, vec![])
+            .into_iter()
+            .find(|(text, _)| text == "Ok")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+        assert!(
+            app.chart
+                .chart_options()
+                .time_scale
+                .keep_left_edge_on_interval_change
+        );
+        // The open of the bar at the left edge and of the bar after it.
+        let left = |app: &DemoApp| {
+            let index = app.chart.visible_logical_range().unwrap().left.floor() as usize;
+            (
+                app.chart.time_at_index(index).unwrap(),
+                app.chart.time_at_index(index + 1).unwrap(),
+            )
+        };
+        let middle = (app.chart.bars(SeriesId::MAIN).len() / 2) as f32;
+        app.chart
+            .set_visible_logical_range(egui_charts::model::LogicalRange::new(
+                middle + 0.25,
+                middle + 99.25,
+            ));
+        settle(&mut app, &ctx);
+        let (kept, _) = left(&app);
+        app.switch_timeframe(Timeframe::Hour1);
+        settle(&mut app, &ctx);
+        let (open, next) = left(&app);
+        assert!(open <= kept && kept < next, "{open} {kept} {next}");
+    }
+
     /// The settings offer the futures data choices on the demo's futures contracts only;
     /// a changed choice reloads the bars, while Ok without a change keeps them.
     #[test]

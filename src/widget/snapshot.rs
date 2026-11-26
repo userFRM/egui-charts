@@ -2685,7 +2685,8 @@ mod tests {
         );
     }
 
-    /// Chosen time labels survive layouts; older layouts keep the labels they showed.
+    /// Chosen time label and left edge choices survive layouts; older layouts keep the ones they
+    /// showed.
     #[test]
     fn layouts_keep_the_time_label_choices() {
         use crate::scales::{TickMarkType, WeekdayNames};
@@ -2705,6 +2706,7 @@ mod tests {
         settings.scales_and_lines.date_format = Some(DateFormat::Pattern("%d.%m.%Y".into()));
         settings.scales_and_lines.use_24_hour = Some(false);
         settings.scales_and_lines.weekday_names = Some(WeekdayNames::Always);
+        settings.scales_and_lines.keep_left_edge_on_interval_change = Some(true);
         settings.apply_to_chart(&mut source).unwrap();
         let json = SavedLayout::new(ChartLayoutMode::Single, vec![source.snapshot().unwrap()])
             .to_json()
@@ -2717,14 +2719,29 @@ mod tests {
             labels(&restored),
             ["Wed 13.03.2024 02:30 PM", "Wed 13.03.2024", "02:30 PM"]
         );
+        let keeps = |chart: &Chart| {
+            chart
+                .chart_options()
+                .time_scale
+                .keep_left_edge_on_interval_change
+        };
+        assert!(keeps(&restored));
 
         let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
         for (group, choice) in [
             ("/charts/0/settings/scales_and_lines", "date_format"),
             ("/charts/0/settings/scales_and_lines", "use_24_hour"),
             ("/charts/0/settings/scales_and_lines", "weekday_names"),
+            (
+                "/charts/0/settings/scales_and_lines",
+                "keep_left_edge_on_interval_change",
+            ),
             ("/charts/0/options/time_scale", "use_24_hour"),
             ("/charts/0/options/time_scale", "weekday_names"),
+            (
+                "/charts/0/options/time_scale",
+                "keep_left_edge_on_interval_change",
+            ),
         ] {
             older
                 .pointer_mut(group)
@@ -2736,11 +2753,16 @@ mod tests {
         }
         let older = SavedLayout::from_json(&older.to_string()).unwrap();
         let mut restored = chart(&[100.0], &[110.0]);
+        let mut options = restored.chart_options().clone();
+        options.time_scale.keep_left_edge_on_interval_change = true;
+        restored.set_chart_options(options);
         restored.restore(&older.charts[0]).unwrap();
         assert_eq!(
             labels(&restored),
             ["Wed 13 Mar '24 14:30", "Mar 13, 2024", "14:30"]
         );
+        // An older layout restored over a chart that keeps the left edge leaves it off.
+        assert!(!keeps(&restored));
         // Older saves never stored host date patterns, so restoring one still keeps that pattern.
         restored.set_date_format(Some("%Y-%m-%d".into()));
         restored.restore(&older.charts[0]).unwrap();

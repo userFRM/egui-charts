@@ -522,6 +522,19 @@ impl SettingsDialog {
                         },
                     );
                 });
+                let keep = &mut self
+                    .settings
+                    .scales_and_lines
+                    .keep_left_edge_on_interval_change;
+                let mut on = keep.unwrap_or_default();
+                if styled_checkbox(
+                    ui,
+                    &mut on,
+                    "Keep left edge on interval change",
+                    theme.ui.text,
+                ) {
+                    *keep = Some(on);
+                }
             });
         });
     }
