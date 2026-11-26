@@ -31,10 +31,16 @@ impl Trading {
         let decimals = instrument
             .and_then(crate::scales::instrument_price_precision)
             .map_or(2, usize::from);
-        let tick = instrument
+        let valid = instrument.filter(|instrument| {
+            instrument
+                .tick_size
+                .is_some_and(|tick| tick.is_finite() && tick > 0.0)
+        });
+        let tick = valid
             .and_then(|instrument| instrument.tick_size)
-            .filter(|tick| tick.is_finite() && *tick > 0.0)
             .unwrap_or(10f64.powi(-(decimals as i32)));
+        // Price ranges refine the instrument's tick, not the decimals' step.
+        let tick_tiers = valid.map_or(&[][..], |instrument| &instrument.tick_tiers);
         let replay = chart.replay_time().is_some();
         let quote = (self.quote.as_ref())
             .filter(|(quoted, _)| quoted == symbol && !replay)
@@ -82,6 +88,7 @@ impl Trading {
                 .and_then(|book| book.best_ask().map(|level| level.price))
                 .or_else(|| quote.and_then(|quote| quote.ask)),
             tick,
+            tick_tiers,
             decimals,
             currency: self
                 .account
@@ -259,6 +266,7 @@ impl Trading {
                 .map_or("", |account| account.currency.as_str()),
             formatter: self.formatter.as_deref(),
             tick_size: tick,
+            tick_tiers: market.tick_tiers,
         };
         let mut shown_orders = self.orders.clone();
         if let Some(TradingLineAction::Modify(old, request)) = &self.pending
@@ -550,6 +558,7 @@ impl Trading {
                     .map_or("", |account| account.currency.as_str()),
                 formatter: self.formatter.as_deref(),
                 tick_size: tick,
+                tick_tiers: market.tick_tiers,
             };
             let mut order = Order::new(
                 OrderId::new("projected"),
