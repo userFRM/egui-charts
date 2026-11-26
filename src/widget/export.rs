@@ -1353,9 +1353,11 @@ mod tests {
         test_frames::frame(&ctx, &mut snapshot, 0.1, vec![]);
         let value = |chart: &Chart| {
             let (_, study) = chart.indicators().find(|(study, _)| *study == id).unwrap();
-            study.values().value(0, 80)
+            (study.values().len(), study.values().value(0, 80))
         };
-        assert!(value(&chart).is_some());
+        // The chart holds no earnings event, so its VWAP has no value; a restart at the frozen
+        // page's event on bar 70 would give bar 80 one.
+        assert_eq!(value(&chart), (100, None));
         assert_eq!(value(&snapshot), value(&chart));
     }
 

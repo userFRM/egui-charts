@@ -1806,7 +1806,7 @@ fn cell_letter_color(cell: Color32, chart: &ChartColors) -> Color32 {
     }
 }
 
-/// Steps in each half of the period palette.
+/// Steps in each half of the period palette, one per letter of A to Z and of a to z.
 const PERIOD_STEPS: usize = 26;
 
 /// One step of the first or second gradient, preserving the default palette's rounding.
@@ -1828,14 +1828,7 @@ fn entry_color(
 ) -> Color32 {
     match config.color_mode {
         TPOColorMode::ByPeriod => {
-            let last = profile.width().saturating_sub(1).max(1);
-            let steps = 2 * PERIOD_STEPS - 1;
-            let position = (period_idx as f32 / last as f32).min(1.0) * steps as f32;
-            let index = position as usize;
-            period_step(&config.period_colors, index).lerp_to_gamma(
-                period_step(&config.period_colors, (index + 1).min(steps)),
-                position.fract(),
-            )
+            period_step(&config.period_colors, period_idx % (2 * PERIOD_STEPS))
         }
         TPOColorMode::Solid => config.solid_color,
         TPOColorMode::ByValueArea => {
@@ -2043,20 +2036,20 @@ mod tests {
                         rgb(96, 25, 45),
                         rgb(96, 25, 45),
                         rgb(214, 56, 100),
-                        rgb(87, 191, 153),
+                        rgb(209, 62, 100),
                         rgb(214, 56, 100),
-                        rgb(87, 191, 153),
-                        rgb(93, 36, 245),
+                        rgb(209, 62, 100),
+                        rgb(204, 67, 100),
                         rgb(214, 56, 100),
                     ],
                     [
                         rgb(237, 165, 185),
                         rgb(237, 165, 185),
                         rgb(214, 56, 100),
-                        rgb(75, 164, 131),
+                        rgb(209, 62, 100),
                         rgb(214, 56, 100),
-                        rgb(75, 164, 131),
-                        rgb(93, 36, 245),
+                        rgb(209, 62, 100),
+                        rgb(204, 67, 100),
                         rgb(214, 56, 100),
                     ],
                 ],
@@ -2077,20 +2070,20 @@ mod tests {
                         rgb(115, 0, 0),
                         rgb(115, 0, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                     [
                         rgb(255, 140, 140),
                         rgb(255, 140, 140),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                 ],
@@ -2141,10 +2134,10 @@ mod tests {
                     rgb(255, 0, 0),
                     rgb(255, 0, 0),
                     rgb(255, 0, 0),
-                    rgb(0, 160, 0),
+                    rgb(245, 6, 0),
                     rgb(255, 0, 0),
-                    rgb(0, 160, 0),
-                    rgb(128, 128, 128),
+                    rgb(245, 6, 0),
+                    rgb(235, 13, 0),
                     rgb(255, 0, 0),
                 ]; 2],
             ),
@@ -2165,20 +2158,20 @@ mod tests {
                         rgb(0, 0, 0),
                         rgb(0, 0, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                     [
                         rgb(255, 255, 255),
                         rgb(255, 255, 255),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
+                        rgb(245, 6, 0),
                         rgb(255, 0, 0),
-                        rgb(0, 160, 0),
-                        rgb(128, 128, 128),
+                        rgb(245, 6, 0),
+                        rgb(235, 13, 0),
                         rgb(255, 0, 0),
                     ],
                 ],
@@ -2280,6 +2273,71 @@ mod tests {
                     })
                     .collect();
                 assert_eq!(fills, expected, "{name}, background {:?}", theme.chart.bg);
+            }
+        }
+    }
+
+    #[test]
+    fn period_colours_follow_the_letter_case() {
+        let red = Color32::from_rgb(255, 0, 0);
+        let green = Color32::from_rgb(0, 160, 0);
+        let config = TPOConfig {
+            tick_size: 1.0,
+            display_mode: TPODisplayMode::Blocks,
+            period_colors: [red, red, green, green],
+            show_poc: false,
+            show_initial_balance: false,
+            show_opening_range: false,
+            ..Default::default()
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            0.0,
+            400.0,
+            false,
+        );
+        // A to H, then A to Z and a to d: one row holding one block per period.
+        for (periods, uppercase) in [(8, 8), (30, 26)] {
+            let bars: Vec<_> = (0..periods)
+                .map(|i| {
+                    let time = chrono::DateTime::UNIX_EPOCH + Duration::minutes(i * 30);
+                    Bar::new(time, 100.0, 100.0, 100.0, 100.0, 1.0)
+                })
+                .collect();
+            let profile = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into()).remove(0);
+            let mut expected = vec![red; uppercase];
+            expected.resize(periods as usize, green);
+            for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.begin_pass(egui::RawInput::default());
+                draw_session_profile(
+                    &ctx.layer_painter(egui::LayerId::background()),
+                    rect,
+                    &coords,
+                    &profile,
+                    &config,
+                    &TpoRenderConfig::default(),
+                    10.25,
+                    12.0,
+                    f32::INFINITY,
+                    0.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                );
+                let mut output = ctx.end_pass();
+                output.textures_delta.clear();
+                let fills: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Rect(r) => Some(r.fill),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(fills, expected, "{periods} periods on {:?}", theme.chart.bg);
             }
         }
     }
@@ -2765,6 +2823,10 @@ mod tests {
                         // TPODisplayMode::Both: a letter on its cell, dimmed or not.
                         let cell =
                             block_color(&config, &model, period, price, &profile, &theme.chart);
+                        assert!(
+                            contrast(cell, theme.chart.bg) >= 3.0,
+                            "{name}: {mode:?}, period {period}, price {price} block"
+                        );
                         for fill in [cell, theme.chart.bg.lerp_to_gamma(cell, 0.45)] {
                             let letter = cell_letter_color(fill, &theme.chart);
                             assert!(
