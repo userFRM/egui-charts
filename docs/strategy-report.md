@@ -420,14 +420,15 @@ after the last are left out. The monthly risk-free rate is `(1 + risk_free_rate)
 Both are monthly ratios, not annualised. Sharpe divides the mean monthly return less that rate
 by the population standard deviation of the monthly returns (dividing by their number); Sortino
 divides it by the root mean square of the shortfalls below that rate over all returns. Multiply
-either by the square root of 12 for an annual figure. They need at least two monthly returns, returns that vary, positive equity at every month
-start before the last and a rate above -1; Sortino also needs a return below the rate. Equity
-100 on 1 January, 110 on 1 February and 99 on 1 March returns 10% and -10%.
+either by the square root of 12 for an annual figure. They need at least two monthly returns,
+returns that vary, positive equity at every month start before the last and a rate above -1;
+Sortino also needs a return below the rate. Equity 100 on 1 January, 110 on 1 February and 99
+on 1 March returns 10% and -10%.
 
 Migration: the ratios used the returns between consecutive equity points, annualised by the
 curve's steps per year, and needed 13 weeks of equity. They are now monthly ratios, not
-annualised. Expect other values for the same report,
-and values for runs of two whole calendar months. [`StrategyReport::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.new) and the default
+annualised. Expect other values for the same report, and values for runs of two whole calendar
+months. [`StrategyReport::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.new) and the default
 `BacktestSettings` now set a yearly risk-free rate of 0.02 instead of 0, and a report read
 without `risk_free_rate` takes 0.02; set it to 0.0 on the report or in the backtest settings for
 the former rate. Saved reports and settings keep the rate they hold. `periods_per_year` still
