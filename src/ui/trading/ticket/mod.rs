@@ -172,6 +172,15 @@ pub struct OrderPreset {
     /// The order type to select, or `None` to keep the ticket's.
     #[serde(default)]
     pub order_type: Option<Kind>,
+    /// The trailing stop's distance with its unit, saved with the
+    /// [`TrailingStop`](Kind::TrailingStop) order type, or `None` to keep the ticket's. A distance
+    /// in ticks restores its number of ticks, priced by the symbol's own tick size.
+    #[serde(default)]
+    pub trail: Option<TrailDistance>,
+    /// The price at which the trailing stop of [`trail`](Self::trail) starts to trail, or `None`
+    /// for one that trails at once. Read only with `trail`.
+    #[serde(default)]
+    pub trail_activation: Option<f64>,
     /// The time in force to select, or `None` to keep the ticket's.
     #[serde(default)]
     pub time_in_force: Option<TimeInForce>,
@@ -216,6 +225,8 @@ impl OrderPreset {
             sizing: Some(PresetSizing::Units),
             exits: true,
             order_type: None,
+            trail: None,
+            trail_activation: None,
             time_in_force: None,
         }
     }
@@ -557,12 +568,7 @@ impl OrderTicket {
                 distance,
                 activation,
             } => {
-                self.trail = match distance {
-                    TrailDistance::Price(price) => (TrailUnit::Price, price),
-                    TrailDistance::Ticks { ticks, .. } => (TrailUnit::Ticks, f64::from(ticks)),
-                    TrailDistance::Percent(percent) => (TrailUnit::Percent, percent),
-                };
-                self.activation = (activation.is_some(), activation.unwrap_or_default());
+                self.set_trail(distance, activation);
                 (Kind::TrailingStop, 0.0, 0.0)
             }
             _ => (Kind::Market, 0.0, 0.0),
@@ -600,6 +606,16 @@ impl OrderTicket {
                 target.1 = at_price(value);
             }
         }
+    }
+
+    /// Enters a trailing stop's distance with its unit, and its activation price if it has one.
+    fn set_trail(&mut self, distance: TrailDistance, activation: Option<f64>) {
+        self.trail = match distance {
+            TrailDistance::Price(price) => (TrailUnit::Price, price),
+            TrailDistance::Ticks { ticks, .. } => (TrailUnit::Ticks, f64::from(ticks)),
+            TrailDistance::Percent(percent) => (TrailUnit::Percent, percent),
+        };
+        self.activation = (activation.is_some(), activation.unwrap_or_default());
     }
 
     /// Discards price and confirmation state when the chart changes symbols.
@@ -1007,6 +1023,11 @@ impl OrderTicket {
             .filter(|kind| kind.accepted(&market.capabilities))
         {
             self.select_kind(kind, market);
+            if self.kind == Kind::TrailingStop
+                && let Some(distance) = preset.trail
+            {
+                self.set_trail(distance, preset.trail_activation);
+            }
         }
         if let Some(value) = preset
             .time_in_force
@@ -1020,6 +1041,16 @@ impl OrderTicket {
         let quantity = self
             .request(ctx, market)
             .map_or(self.quantity, |request| request.quantity);
+        // Kept as the order would send it: snapped to the tick, or nothing while it is invalid.
+        let (trail, trail_activation) = match self.trailing(market) {
+            Ok(OrderType::TrailingStop {
+                distance,
+                activation,
+            }) if self.preset_fields.order_type && self.kind == Kind::TrailingStop => {
+                (Some(distance), activation)
+            }
+            _ => (None, None),
+        };
         OrderPreset {
             name,
             quantity,
@@ -1043,6 +1074,8 @@ impl OrderTicket {
             }),
             exits: self.preset_fields.exits,
             order_type: self.preset_fields.order_type.then_some(self.kind),
+            trail,
+            trail_activation,
             time_in_force: self
                 .preset_fields
                 .time_in_force
@@ -1554,6 +1587,62 @@ mod tests {
             Kind::Stop,
             "a preset respects the working order type lock"
         );
+    }
+
+    /// A preset that keeps the order type restores a trailing stop's distance with its unit and
+    /// its activation price. Without that field, and from presets saved before it, the ticket
+    /// keeps its own trailing distance.
+    #[test]
+    fn presets_keep_a_trailing_stop_distance_and_activation() {
+        let ctx = egui::Context::default();
+        let rules = TradingRules::new("ES");
+        let mut market = market(&rules);
+        market.capabilities.trailing_stop = true;
+        let trailing = |distance, activation| OrderType::TrailingStop {
+            distance,
+            activation,
+        };
+        let own = trailing(TrailDistance::Price(1.25), None);
+        let no_kind = PresetFields {
+            order_type: false,
+            ..PresetFields::default()
+        };
+        // Literal produced by serializing OrderPreset on origin/main.
+        let old = r#"{"name":"Trail","quantity":1.0,"take_profit":null,"take_profit_levels":[],"first_level_stop_loss":null,"stop_loss":null,"sizing":"Units","exits":true,"order_type":"TrailingStop","time_in_force":"Day"}"#;
+        for (fields, legacy, expected) in [
+            // 104 is on the tick; the buy's stop starts 2.5% above it, at 106.6.
+            (
+                PresetFields::default(),
+                false,
+                trailing(TrailDistance::Percent(2.5), Some(104.0)),
+            ),
+            (no_kind, false, own),
+            (PresetFields::default(), true, own),
+        ] {
+            let saving = OrderTicket {
+                symbol: "ES".into(),
+                kind: Kind::TrailingStop,
+                trail: (TrailUnit::Percent, 2.5),
+                activation: (true, 104.0),
+                preset_fields: fields,
+                ..OrderTicket::default()
+            };
+            let saved = if legacy {
+                old.to_owned()
+            } else {
+                serde_json::to_string(&saving.preset(&ctx, "Trail".into(), &market)).unwrap()
+            };
+            let preset: OrderPreset = serde_json::from_str(&saved).unwrap();
+            let mut ticket = OrderTicket {
+                symbol: "ES".into(),
+                kind: Kind::TrailingStop,
+                trail: (TrailUnit::Price, 1.25),
+                ..OrderTicket::default()
+            };
+            ticket.apply(&preset, &market);
+            let request = ticket.request(&ctx, &market).unwrap();
+            assert_eq!(request.order_type, expected, "{saved}");
+        }
     }
 
     /// GTD needs an offered validity and an expiry; other validities never carry a stale expiry.
