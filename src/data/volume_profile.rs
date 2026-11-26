@@ -128,6 +128,12 @@ fn profile_shown() -> bool {
 fn profile_line_colors() -> [[u8; 4]; 2] {
     [ecolor::Color32::PLACEHOLDER.to_srgba_unmultiplied(); 2]
 }
+fn developing_poc_color() -> [u8; 4] {
+    [255, 152, 0, 255]
+}
+fn developing_value_area_colors() -> [[u8; 4]; 2] {
+    [[33, 150, 243, 255]; 2]
+}
 
 /// Row layout and display settings shared by volume profile studies and drawings.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -161,6 +167,20 @@ pub struct VolumeProfileConfig {
     pub value_area_line_colors: [[u8; 4]; 2],
     /// Keep a fixed range drawing growing to the last bar, past its second anchor.
     pub extend_right: bool,
+    /// Draw a volume profile drawing's developing point of control: a step line through its bars
+    /// at the point of control of the bars up to each one, in the rows the drawing draws. Volume
+    /// profile studies draw theirs as plots and ignore this. Off by default.
+    pub show_developing_poc: bool,
+    /// Draw a volume profile drawing's developing value area: step lines at the high and low of
+    /// the value area of the bars up to each one. Volume profile studies ignore this. Off by
+    /// default.
+    pub show_developing_value_area: bool,
+    /// Colour of the developing point of control line, unmultiplied RGBA; orange `#FF9800` by
+    /// default.
+    pub developing_poc_color: [u8; 4],
+    /// High and low colours of the developing value area lines, unmultiplied RGBA; blue `#2196F3`
+    /// by default.
+    pub developing_value_area_colors: [[u8; 4]; 2],
 }
 
 /// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
@@ -196,6 +216,14 @@ struct VolumeProfileFields {
     value_area_line_colors: [[u8; 4]; 2],
     #[serde(default)]
     extend_right: bool,
+    #[serde(default)]
+    show_developing_poc: bool,
+    #[serde(default)]
+    show_developing_value_area: bool,
+    #[serde(default = "developing_poc_color")]
+    developing_poc_color: [u8; 4],
+    #[serde(default = "developing_value_area_colors")]
+    developing_value_area_colors: [[u8; 4]; 2],
 }
 
 impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
@@ -216,6 +244,10 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.show_value_area_low = fields.show_value_area_low;
         config.value_area_line_colors = fields.value_area_line_colors;
         config.extend_right = fields.extend_right;
+        config.show_developing_poc = fields.show_developing_poc;
+        config.show_developing_value_area = fields.show_developing_value_area;
+        config.developing_poc_color = fields.developing_poc_color;
+        config.developing_value_area_colors = fields.developing_value_area_colors;
         config
             .with_row_size(fields.row_size)
             .ok_or("volume profile row height must be finite and positive")?
@@ -373,6 +405,10 @@ impl Default for VolumeProfileConfig {
             show_value_area_low: false,
             value_area_line_colors: profile_line_colors(),
             extend_right: false,
+            show_developing_poc: false,
+            show_developing_value_area: false,
+            developing_poc_color: developing_poc_color(),
+            developing_value_area_colors: developing_value_area_colors(),
         }
     }
 }
@@ -1046,6 +1082,22 @@ impl VolumeProfile {
         Some(())
     }
 
+    /// The sorted `finer` bars opening inside each of `bars`, up to the next chart bar's open or
+    /// `end` after the last; `None` for a chart bar without any, which keeps its estimate.
+    #[cfg(any(feature = "studies", feature = "drawings"))]
+    pub(crate) fn finer_parts<'a>(
+        bars: &'a [Bar],
+        end: chrono::DateTime<chrono::Utc>,
+        finer: &'a [Bar],
+    ) -> impl Iterator<Item = Option<&'a [Bar]>> + 'a {
+        bars.iter().enumerate().map(move |(i, bar)| {
+            let next = bars.get(i + 1).map_or(end, |next| next.time);
+            let inside = &finer[finer.partition_point(|f| f.time < bar.time)
+                ..finer.partition_point(|f| f.time < next)];
+            (!inside.is_empty()).then_some(inside)
+        })
+    }
+
     /// Replaces each of `bars` by the sorted `finer` bars opening inside it, up to the next
     /// chart bar's open or `end` after the last. Bars without finer inputs keep their estimate.
     /// Returns the profile and the number of chart bars with finer inputs.
@@ -1059,15 +1111,12 @@ impl VolumeProfile {
     ) -> (Option<Self>, usize) {
         let mut inputs = Vec::new();
         let mut covered = 0;
-        for (i, bar) in bars.iter().enumerate() {
-            let next = bars.get(i + 1).map_or(end, |next| next.time);
-            let inside = &finer[finer.partition_point(|f| f.time < bar.time)
-                ..finer.partition_point(|f| f.time < next)];
-            if inside.is_empty() {
-                inputs.push(bar.clone());
-            } else {
+        for (bar, part) in bars.iter().zip(Self::finer_parts(bars, end, finer)) {
+            if let Some(part) = part {
                 covered += 1;
-                inputs.extend_from_slice(inside);
+                inputs.extend_from_slice(part);
+            } else {
+                inputs.push(bar.clone());
             }
         }
         (Self::of(&inputs, rows, row_size), covered)
@@ -1181,6 +1230,72 @@ impl VolumeProfile {
             .max_by(|&a, &b| volume[a].total_cmp(&volume[b]).then_with(|| b.cmp(&a)))?;
         let (low, high) = value_area(volume.len(), |i| (i as i64, volume[i]), poc, total * share);
         Some((poc, (low as usize, high as usize)))
+    }
+
+    /// The point of control and value area holding `share` of the volume, in this profile's rows,
+    /// after each of `parts`, this profile's bars split by chart bar in time order and spread as
+    /// [`Self::add`] spreads them; `None` before volume trades. The last entry is this profile's
+    /// own, so a developing line ends on the levels it shows. Empty for an executed or options
+    /// profile.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn developing_estimate<'a>(
+        &self,
+        share: f64,
+        parts: impl IntoIterator<Item = &'a [Bar]>,
+    ) -> Vec<Option<(usize, (usize, usize))>> {
+        if self.executions.is_some() || self.options {
+            return Vec::new();
+        }
+        let mut running = self.clone();
+        for rows in [&mut running.volume, &mut running.up, &mut running.down] {
+            rows.fill(0.0);
+        }
+        let mut levels: Vec<_> = parts
+            .into_iter()
+            .map(|part| {
+                part.iter().for_each(|bar| running.add(bar));
+                running.poc_and_value_area(share)
+            })
+            .collect();
+        if let Some(last) = levels.last_mut() {
+            *last = self.poc_and_value_area(share);
+        }
+        levels
+    }
+
+    /// [`Self::developing_estimate`] of an executed profile: `parts` holds the executions of each
+    /// chart bar of the span, as [`FootprintView::profile`](super::FootprintView::profile) sums
+    /// them in rows of the footprint's price `step`, which this profile groups into its own rows.
+    /// Empty for a profile not built from executions.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn developing_executions(
+        &self,
+        share: f64,
+        step: f64,
+        parts: impl IntoIterator<Item = FootprintBar>,
+    ) -> Vec<Option<(usize, (usize, usize))>> {
+        let Some(e) = &self.executions else {
+            return Vec::new();
+        };
+        // The profile's rows are a whole number of steps high.
+        let group = (self.row_height / step).round();
+        if !group.is_finite() || group < 1.0 {
+            return Vec::new();
+        }
+        let row = |level: i64| (level - e.first_level) as usize;
+        let mut running = FootprintBar::empty(e.bar.time);
+        let mut levels: Vec<_> = parts
+            .into_iter()
+            .map(|part| {
+                running.absorb_grouped(&part, group as i64);
+                let (low, high) = running.value_area(share)?;
+                Some((row(running.poc()?), (row(low), row(high))))
+            })
+            .collect();
+        if let Some(last) = levels.last_mut() {
+            *last = self.poc_and_value_area(share);
+        }
+        levels
     }
 }
 
