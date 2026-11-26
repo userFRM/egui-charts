@@ -840,18 +840,15 @@ impl Chart {
     }
 
     /// The saveable drawings this chart keeps aside for each symbol it does not show that its
-    /// storage does not hold (see [`Self::stores`]), one document per symbol in symbol order, for
-    /// [`Chart::snapshot`]. Empty without storage. An anchor without the time it had on its
-    /// symbol's bars is refused, as [`Chart::save_drawings`] refuses one it cannot map.
+    /// storage does not hold (see [`Self::stores`]), all of them without storage, one document
+    /// per symbol in symbol order, for [`Chart::snapshot`]. An anchor without the time it had on
+    /// its symbol's bars is refused, as [`Chart::save_drawings`] refuses one it cannot map.
     #[cfg(feature = "ui")]
     pub(super) fn kept_aside_drawings(
         &self,
     ) -> Result<Vec<DrawingStorage>, crate::drawings::persistence::SaveError> {
         use crate::drawings::manager::sync_id;
         use crate::drawings::persistence::SaveError;
-        if self.drawing_store.is_none() {
-            return Ok(Vec::new());
-        }
         let mut symbols: Vec<_> = self.symbol_drawings.iter().collect();
         symbols.sort_by_key(|(symbol, _)| *symbol);
         let mut documents = Vec::new();
@@ -885,13 +882,10 @@ impl Chart {
 
     /// Puts aside the drawings of `documents`, a snapshot's
     /// [`other_symbol_drawings`](super::ChartSnapshot::other_symbol_drawings), for their symbols,
-    /// in place of the drawings kept aside that storage does not hold: those belong to the state
-    /// the snapshot replaces. Does nothing without storage.
+    /// in place of the drawings kept aside that storage does not hold, all of them without
+    /// storage: those belong to the state the snapshot replaces.
     #[cfg(feature = "ui")]
     pub(super) fn restore_aside_drawings(&mut self, documents: &[serde_json::Value]) {
-        if self.drawing_store.is_none() {
-            return;
-        }
         let replaced: Vec<(String, Vec<usize>)> = self
             .symbol_drawings
             .iter()
@@ -906,10 +900,14 @@ impl Chart {
             })
             .collect();
         for (symbol, ids) in replaced {
-            if let Some((manager, _)) = self.symbol_drawings.get_mut(&symbol) {
+            if let Some((manager, _)) = self.symbol_drawings.get_mut(&symbol)
+                && !ids.is_empty()
+            {
                 manager
                     .drawings
                     .retain(|drawing| !ids.contains(&drawing.id));
+                // A layout that mirrors drawings takes these for new ones, and none for deleted.
+                manager.identity = crate::model::next_revision();
             }
         }
         for document in documents {
@@ -929,6 +927,7 @@ impl Chart {
             let registry = self.drawings.registry.clone();
             let (manager, _) = self.symbol_drawings.entry(stored.symbol).or_default();
             manager.registry = registry;
+            manager.identity = crate::model::next_revision();
             for drawing in drawings {
                 // The check here accepted each when the saving chart kept it aside.
                 let _ = manager.add_synced_drawing(drawing);

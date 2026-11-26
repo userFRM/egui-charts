@@ -739,3 +739,42 @@ fn set_feed_clears_calculated_study_values_outside_replay() {
     chart.set_feed(Arc::new(Script::default()));
     assert!(chart.indicators().next().unwrap().1.values().is_empty());
 }
+
+/// Two charts on one feed, same symbol and interval, still get distinct identities, and each
+/// chart's history reply and live sink report the same one.
+#[test]
+fn history_replies_and_sinks_share_one_view_id_per_chart() {
+    let feed = Arc::new(Script::default());
+    let mut first = fed(&feed, Some("A"));
+    let mut second = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut first);
+    frames.run(&mut second);
+    for _ in 0..2 {
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    }
+    frames.run(&mut first);
+    frames.run(&mut second);
+    let replies = [feed.page(), feed.page()];
+    let history_ids = replies.each_ref().map(|reply| reply.view_id());
+    for reply in replies {
+        reply.send(page(bars(5), true));
+    }
+    for _ in 0..2 {
+        frames.run(&mut first);
+        frames.run(&mut second);
+    }
+    let sink_ids: Vec<_> = feed
+        .sinks
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|sink| sink.view_id())
+        .collect();
+    assert_eq!(
+        sink_ids, history_ids,
+        "each chart's sink follows its history"
+    );
+    assert_ne!(history_ids[0], history_ids[1], "two charts share no id");
+}
