@@ -300,23 +300,7 @@ mod tests {
             let bars = super::super::hlc_bars(&hlc);
             let mut stoch = Stochastic::new(3, 2, 2);
             stoch.calculate(&bars);
-            for (line, want) in lines.iter().enumerate() {
-                let got: Vec<_> = (0..bars.len())
-                    .map(|bar| stoch.values().value(line, bar))
-                    .collect();
-                assert_eq!(got.len(), want.len(), "{label} line {line}");
-                for (bar, (got, want)) in got.iter().zip(want).enumerate() {
-                    match (got, want) {
-                        (Some(got), Some(want)) => {
-                            assert!(
-                                (got - want).abs() < 1e-9,
-                                "{label} line {line} bar {bar}: {got}"
-                            )
-                        }
-                        _ => assert_eq!(got, want, "{label} line {line} bar {bar}"),
-                    }
-                }
-            }
+            super::super::assert_lines(label, &stoch, &lines);
             super::super::assert_replay_matches_batch(&Stochastic::new(3, 2, 2), &bars);
         }
     }
