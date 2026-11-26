@@ -994,6 +994,7 @@ impl DemoApp {
             .collect();
         settings.market_heatmap = self.market_heatmap.selection.clone();
         settings.drawing_sort = self.object_tree.state().drawing_sort.clone();
+        settings.shortcuts = self.shortcuts.clone();
         settings
     }
 
@@ -1036,6 +1037,7 @@ impl DemoApp {
         preferences.favorites = settings.indicator_favorites.into_iter().collect();
         self.indicator_dialog.set_preferences(preferences);
         self.market_heatmap.selection = settings.market_heatmap;
+        self.shortcuts = settings.shortcuts;
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);
         }
