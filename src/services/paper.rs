@@ -66,9 +66,10 @@ const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 /// across all symbols, including working orders and their commissions. Market orders that reduce
 /// exposure remain possible when funds are insufficient. Position exits only reduce the remaining
 /// position, and their quantity cannot be changed: the account sizes them when they are placed and
-/// shrinks them as the position shrinks. Every change is pushed as an [`AccountEvent`], with the most recent 1,000 finished
-/// orders, executions, closed positions, balance changes and journal entries. The history bound
-/// keeps a reconnect snapshot below the event stream's burst limit for ordinary interactive accounts.
+/// shrinks them as the position shrinks. Every change is pushed as an [`AccountEvent`], with the
+/// most recent 1,000 finished orders, executions, closed positions, balance changes and journal
+/// entries. The history bound keeps a reconnect snapshot below the event stream's burst limit for
+/// ordinary interactive accounts.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -3264,9 +3265,9 @@ mod tests {
     }
 
     /// A position exit's price can move but its quantity cannot change, so its fill never cancels
-    /// exits covering more than it closed. A regression lets a reduced stop loss fill and cancel its
-    /// take profits in full, leaving part of the position without an exit, or refuses price changes
-    /// too.
+    /// exits covering more than it closed. A regression lets a reduced stop loss fill and cancel
+    /// its take profits in full, leaving part of the position without an exit, or refuses price
+    /// changes too.
     #[test]
     fn a_position_exits_quantity_cannot_change_so_its_group_keeps_covering_the_rest() {
         let limit = |price, quantity| (OrderType::Limit(price), quantity);
