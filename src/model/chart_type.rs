@@ -1927,6 +1927,10 @@ mod tests {
                 older_expected.styles.columns.up_color,
                 older_expected.styles.columns.down_color,
             ] = placeholder;
+            [
+                older_expected.styles.range.forming_up,
+                older_expected.styles.range.forming_down,
+            ] = placeholder;
             // Flat Baseline fills: rgb(8, 153, 129) and rgb(242, 54, 69) at alpha 30.
             let baseline = &mut older_expected.styles.baseline;
             baseline.above_fill = egui::Color32::from_rgba_premultiplied(1, 18, 15, 30);
