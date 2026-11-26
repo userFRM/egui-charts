@@ -12775,8 +12775,8 @@ mod tests {
             (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
-            (Tool::FixedRangeVolumeProfile, "Developing POC"),
-            (Tool::AnchoredVolumeProfile, "Developing POC"),
+            (Tool::FixedRangeVolumeProfile, "Box"),
+            (Tool::AnchoredVolumeProfile, "Box"),
             (Tool::RegressionTrend, "Upper deviation"),
             (Tool::BarsPattern, "Mirrored"),
         ] {
