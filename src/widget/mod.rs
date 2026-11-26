@@ -603,6 +603,10 @@ pub struct Chart {
     /// Set by the context menus while one is open, so the next frame draws no crosshair or
     /// tooltip under it. Cleared by every frame.
     pub(crate) menu_open: bool,
+    /// Whether this frame painted a marker in a plot under the pointer that stands in for the
+    /// hidden system pointer: the Dot crosshair's dot or the Magic cursor's wand. Cleared by
+    /// every frame.
+    pub(crate) pointer_dot: bool,
     /// Set by the context menus while they would answer a touch held on the price pane with
     /// a limit order, so the next frame's hold asks for one in place of its values. Cleared by
     /// every frame.

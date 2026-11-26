@@ -2075,20 +2075,37 @@ mod tests {
     }
 
     /// Axes show their drag direction when both scale permissions allow it, otherwise the
-    /// plot's cursor for the crosshair style. The plot keeps its style cursor.
+    /// plot's cursor for the crosshair style. The plots keep their style cursor: Dot hides the
+    /// pointer under its painted dot and Magic under its wand, and an axis, which paints neither,
+    /// shows the arrow.
     #[test]
     fn axis_cursors_follow_axis_drag_permissions() {
         use crate::config::CrosshairStyle;
         use egui::CursorIcon;
 
         let key = crate::model::SeriesScale::Separate(1);
-        for (style, plot) in [
-            (CrosshairStyle::Full, CursorIcon::Crosshair),
-            (CrosshairStyle::Dot, CursorIcon::Default),
+        for (style, plot, axis) in [
+            (
+                CrosshairStyle::Full,
+                CursorIcon::Crosshair,
+                CursorIcon::Crosshair,
+            ),
+            (CrosshairStyle::Dot, CursorIcon::None, CursorIcon::Default),
+            // Without the drawings there is no wand, so the pointer stays.
+            (
+                CrosshairStyle::Magic,
+                if cfg!(feature = "drawings") {
+                    CursorIcon::None
+                } else {
+                    CursorIcon::Default
+                },
+                CursorIcon::Default,
+            ),
         ] {
             for (enabled, drag) in [(true, true), (false, true), (true, false)] {
                 for (target, resize) in [
                     ("plot", plot),
+                    ("pane plot", plot),
                     ("time", CursorIcon::ResizeHorizontal),
                     ("price", CursorIcon::ResizeVertical),
                     ("pane", CursorIcon::ResizeVertical),
@@ -2096,7 +2113,7 @@ mod tests {
                 ] {
                     let ctx = egui::Context::default();
                     let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
-                    if target == "pane" {
+                    if target.starts_with("pane") {
                         chart.add_indicator(Box::new(
                             crate::studies::CustomIndicator::new("Pane", |bars| {
                                 vec![crate::studies::IndicatorValue::Single(50.0); bars.len()]
@@ -2133,6 +2150,7 @@ mod tests {
                         ),
                         "price" => Pos2::new(rect.right() + 10.0, rect.center().y),
                         "series" => Pos2::new(rect.left() - 10.0, rect.center().y),
+                        "pane plot" => chart.get_rendered_indicator_panes()[0].chart_rect.center(),
                         _ => {
                             let pane = &chart.get_rendered_indicator_panes()[0];
                             Pos2::new(pane.chart_rect.right() + 10.0, pane.panel_rect.center().y)
@@ -2141,7 +2159,13 @@ mod tests {
                     // Hover is hit-tested against the widgets of the previous frame.
                     frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(pos)]);
                     let cursor = frame(&ctx, &mut chart, 1.1, vec![Event::PointerMoved(pos)]);
-                    let expected = if enabled && drag { resize } else { plot };
+                    let expected = if target.ends_with("plot") {
+                        plot
+                    } else if enabled && drag {
+                        resize
+                    } else {
+                        axis
+                    };
                     assert_eq!(
                         cursor, expected,
                         "{style:?}, enabled={enabled}, drag={drag}, {target}"

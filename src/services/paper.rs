@@ -65,9 +65,11 @@ const MAX_TAKE_PROFIT_LEVELS: usize = 4;
 /// its quantity, booked as one balance change. Placement and modification reserve buying power
 /// across all symbols, including working orders and their commissions. Market orders that reduce
 /// exposure remain possible when funds are insufficient. Position exits only reduce the remaining
-/// position. Every change is pushed as an [`AccountEvent`], with the most recent 1,000 finished
-/// orders, executions, closed positions, balance changes and journal entries. The history bound
-/// keeps a reconnect snapshot below the event stream's burst limit for ordinary interactive accounts.
+/// position, and their quantity cannot be changed: the account sizes them when they are placed and
+/// shrinks them as the position shrinks. Every change is pushed as an [`AccountEvent`], with the
+/// most recent 1,000 finished orders, executions, closed positions, balance changes and journal
+/// entries. The history bound keeps a reconnect snapshot below the event stream's burst limit for
+/// ordinary interactive accounts.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -1553,6 +1555,12 @@ impl Broker for PaperAccount {
         }
         if order.time_in_force != TimeInForce::GoodTillCancelled {
             return reply.send(Err(FeedError::NotSupported));
+        }
+        // A stop loss that closed less than its take profits would cancel them in full on filling.
+        if order.position_bracket.is_some() && order.quantity != working.request.quantity {
+            return reply.send(Err(FeedError::Other(
+                "a position exit's quantity cannot change".into(),
+            )));
         }
         if (state.exits.contains_key(&id) || order.position_bracket.is_some())
             && (state.positions.get(&order.symbol).is_none_or(|position| {
@@ -3253,6 +3261,129 @@ mod tests {
                 // An order that filled is no longer working.
                 assert!(cancel(entry).is_err(), "restored {restored}");
             }
+        }
+    }
+
+    /// A position exit's price can move but its quantity cannot change, so its fill never cancels
+    /// exits covering more than it closed. A regression lets a reduced stop loss fill and cancel
+    /// its take profits in full, leaving part of the position without an exit, or refuses price
+    /// changes too.
+    #[test]
+    fn a_position_exits_quantity_cannot_change_so_its_group_keeps_covering_the_rest() {
+        let limit = |price, quantity| (OrderType::Limit(price), quantity);
+        let stop = |price, quantity| (OrderType::Stop(price), quantity);
+        let bracket = |entry: &mut OrderRequest| {
+            entry.take_profit = Some(110.0);
+            entry.stop_loss = Some(95.0);
+        };
+        let level_stop = |entry: &mut OrderRequest| {
+            entry.take_profit_levels = vec![
+                TakeProfitLevel::new(105.0, 1.0),
+                TakeProfitLevel::new(110.0, 2.0),
+            ];
+            entry.take_profit_levels[1].stop_loss = Some(97.0);
+            entry.stop_loss = Some(95.0);
+        };
+        // (entry's exits, exits working, exit changed, its moved price, fill price, position left,
+        // exits left working)
+        type Row = (
+            fn(&mut OrderRequest),
+            Vec<(OrderType, f64)>,
+            (OrderType, f64),
+            f64,
+            f64,
+            f64,
+            Vec<(OrderType, f64)>,
+        );
+        let rows: [Row; 3] = [
+            (
+                bracket,
+                vec![limit(110.0, 3.0), stop(95.0, 3.0)],
+                stop(95.0, 3.0),
+                96.0,
+                94.0,
+                0.0,
+                vec![],
+            ),
+            (
+                level_stop,
+                vec![
+                    limit(105.0, 1.0),
+                    limit(110.0, 2.0),
+                    stop(97.0, 2.0),
+                    stop(95.0, 1.0),
+                ],
+                stop(97.0, 2.0),
+                98.0,
+                96.0,
+                1.0,
+                vec![limit(105.0, 1.0), stop(95.0, 1.0)],
+            ),
+            (
+                |_| {},
+                vec![stop(95.0, 3.0)],
+                stop(95.0, 3.0),
+                96.0,
+                94.0,
+                0.0,
+                vec![],
+            ),
+        ];
+        for (exits_of, entered, changed, moved, fill, position, left) in rows {
+            let paper = PaperAccount::new("USD", 10_000.0);
+            paper.set_price("SYM", 100.0);
+            let mut entry = OrderRequest::new("SYM", OrderSide::Buy, 3.0, OrderType::Market);
+            exits_of(&mut entry);
+            place(&paper, entry.clone()).unwrap();
+            // An entry without exits gets a stop loss placed on its position.
+            if entry.stop_loss.is_none() {
+                let mut exit =
+                    OrderRequest::new("SYM", OrderSide::Sell, 3.0, OrderType::Stop(95.0));
+                exit.position_bracket = Some(PositionBracket::StopLoss);
+                place(&paper, exit).unwrap();
+            }
+            let exits = || {
+                let state = paper.lock();
+                (state.working.iter())
+                    .map(|order| (order.request.order_type, order.request.quantity))
+                    .collect::<Vec<_>>()
+            };
+            let request_of = |exit: (OrderType, f64)| {
+                let state = paper.lock();
+                let order = (state.working.iter())
+                    .find(|order| (order.request.order_type, order.request.quantity) == exit);
+                let order = order.unwrap();
+                (order.id.clone(), order.request.clone())
+            };
+            let modify = |id, request| {
+                let inbox = Arc::new(Inbox::default());
+                paper.modify(id, request, inbox.reply(0));
+                *inbox
+                    .drain()
+                    .answers
+                    .pop()
+                    .unwrap()
+                    .1
+                    .downcast::<Result<(), FeedError>>()
+                    .unwrap()
+            };
+            assert_eq!(exits(), entered, "{entered:?}");
+            let (id, mut request) = request_of(changed);
+            request.order_type = OrderType::Stop(moved);
+            assert_eq!(modify(id.clone(), request.clone()), Ok(()), "{entered:?}");
+            let before = snapshot(&paper);
+            request.quantity = 1.0;
+            let refused = Err(FeedError::Other(
+                "a position exit's quantity cannot change".into(),
+            ));
+            assert_eq!(modify(id, request), refused, "{entered:?}");
+            assert_eq!(snapshot(&paper), before, "{entered:?}");
+            paper.set_price("SYM", fill);
+            let state = paper.lock();
+            let quantity = state.positions.get("SYM").map_or(0.0, |p| p.quantity);
+            assert_eq!(quantity, position, "{entered:?}");
+            drop(state);
+            assert_eq!(exits(), left, "{entered:?}");
         }
     }
 
