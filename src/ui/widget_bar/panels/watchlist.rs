@@ -104,6 +104,10 @@ pub enum WatchlistAction {
     None,
     /// Show this symbol on the chart. The panel already marks it selected.
     SelectSymbol(String),
+    /// Write a note on this symbol, such as with
+    /// [`SymbolDetailsPanel::focus_notes`](crate::ui::widget_bar::SymbolDetailsPanel::focus_notes).
+    /// Offered after [`WatchlistPanel::set_add_note_visible`].
+    AddNote(String),
     /// Let the user pick a symbol, such as with symbol search, and pass it to
     /// [`WatchlistPanel::add_symbol`].
     AddSymbol,
@@ -277,6 +281,8 @@ pub struct WatchlistPanel {
     section: WatchlistSection,
     grouping: WatchlistGrouping,
     summary: bool,
+    /// Offers Add note in a row's menu.
+    add_note: bool,
     groups: HashMap<String, InstrumentGroups>,
     host_columns: Vec<HostColumn>,
     /// Whether the last draw was the wide view.
@@ -376,6 +382,7 @@ impl WatchlistPanel {
             section: WatchlistSection::default(),
             grouping: WatchlistGrouping::default(),
             summary: false,
+            add_note: false,
             groups: HashMap::new(),
             host_columns: Vec::new(),
             wide: false,
@@ -559,6 +566,12 @@ impl WatchlistPanel {
     /// symbol, including those under collapsed headings. Missing values are left out.
     pub fn set_summary(&mut self, summary: bool) {
         self.summary = summary;
+    }
+
+    /// Offers Add note in a row's menu, off by default. The choice returns as
+    /// [`WatchlistAction::AddNote`] with the row's symbol.
+    pub fn set_add_note_visible(&mut self, visible: bool) {
+        self.add_note = visible;
     }
 
     /// Adds a numeric column to the wide view after the quote columns. It sorts and resizes
@@ -856,6 +869,7 @@ impl WatchlistPanel {
         self.wide = wide.is_some();
         let mut action = WatchlistAction::None;
         let shown_symbols: Vec<String> = self.symbols().map(str::to_owned).collect();
+        let add_note = self.add_note;
         let Self {
             lists,
             share,
@@ -1886,6 +1900,11 @@ impl WatchlistPanel {
                                         }
                                     }
                                 });
+                                if add_note && ui.button(l10n::text(ui.ctx(), "Add note")).clicked()
+                                {
+                                    action = WatchlistAction::AddNote(symbol.clone());
+                                    ui.close();
+                                }
                                 if ui
                                     .add_enabled(
                                         reorderable,
