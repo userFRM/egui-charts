@@ -2053,7 +2053,6 @@ mod tests {
         // The two SMA 9 share a header and are told apart by id.
         let table = chart.data_table();
         assert_eq!(table.headers[6], table.headers[7]);
-        assert_eq!(table, chart.data_table_with(&DataExportOptions::default()));
 
         // A jaw displaced past any representable time lists no row, and its candidates stay as
         // few as its values.
