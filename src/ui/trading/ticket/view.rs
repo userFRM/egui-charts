@@ -893,6 +893,7 @@ mod tests {
                     decimals: 2,
                     currency: "USD",
                     balance: None,
+                    available_funds: None,
                     rules: &rules,
                     rules_ready: true,
                     offline: None,
@@ -1021,6 +1022,7 @@ mod tests {
             decimals: 2,
             currency: "USD",
             balance: None,
+            available_funds: None,
             capabilities,
             rules: &rules,
             rules_ready: true,
@@ -1309,6 +1311,7 @@ mod tests {
                 decimals: 2,
                 currency: "USD",
                 balance: None,
+                available_funds: None,
                 capabilities: Capabilities {
                     market: true,
                     limit: true,
