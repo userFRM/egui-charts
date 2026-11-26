@@ -59,7 +59,9 @@ pub struct TimeScaleOptions {
     /// period, takes its place at the same bar spacing, once the new interval's bars replace the
     /// old ones. With a feed, older history is requested until that bar is loaded. Panning,
     /// zooming or another scroll before then cancels it, and tracking mode keeps following the
-    /// latest bar instead. Layouts saved without this field leave it off.
+    /// latest bar instead. In a `ChartLayout` that synchronizes the time axis, the charts that
+    /// follow this chart's scrolling take its kept view, and a chart that follows another one
+    /// takes that chart's range. Layouts saved without this field leave it off.
     /// Default: false
     #[serde(default)]
     pub keep_left_edge_on_interval_change: bool,

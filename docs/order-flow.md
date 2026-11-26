@@ -540,12 +540,14 @@ without an alert, even when that live event closes it; a bar receiving live exec
 
 Footprint conditions read the same bars. [`FootprintRule`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html) marks a closed bar with a buy or sell
 imbalance, or a stack of the rule's number of adjacent ones, using the rule's ratio, comparison
-and minimum volume on rows of one tick whatever grouping the chart displays;
-[`FootprintRule::follow_chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html#method.follow_chart) copies these from the chart's settings, as the demo does for its
-active chart. A buy or sell zone rejection fires on a closed bar that trades into an active
+and minimum volume on rows of the rule's `row_ticks` instrument ticks, one by default;
+[`FootprintRule::follow_chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.FootprintRule.html#method.follow_chart) copies these from the chart's settings, with the ticks per row from
+[`Chart::footprint_row_ticks`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.footprint_row_ticks) (the fixed or average true range size, coarser instrument ticks and
+zoom grouping), as the demo does for its active chart. A buy or sell zone rejection fires on a closed bar that trades into an active
 stacked imbalance zone of an earlier bar without closing beyond its far edge, below a buy
 zone's lowest row or above a sell zone's highest row; the first bar closing beyond it ends the
-zone without firing. Detector zones use one-tick rows, retaining the newest 1,000 zones. A closed
+zone without firing. Zones cover the full ticks of their rows and keep these prices when the rows
+change; the newest 1,000 are retained. A closed
 bar skipped because conditions are disabled or its retained footprint is incomplete or missing
 ends all active detector zones. Disabling and enabling inside a bar keeps them if its close is
 read. A buy volume, sell volume or delta level fires on the execution that takes the
