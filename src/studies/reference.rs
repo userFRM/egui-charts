@@ -840,6 +840,20 @@ fn staple_studies_match_published_definitions() {
         .enumerate()
         .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
         .collect();
+    // RSI(2) is 50, 250/3 and 62.5 on bars 2 to 4, and 62.5 over the equal closes after. The
+    // stochastic(3) is 0.375 on bar 4 and 0 on bar 5; from bar 6 the RSI window has no range and
+    // keeps 0.
+    let rsi_flat: Vec<_> = [1.0, 2.0, 1.0, 3.0, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5]
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
+        .collect();
+    // Without a loss the RSI stays at 100, so no stochastic window has a range.
+    let rising: Vec<_> = (1..=60)
+        .map(f64::from)
+        .zip(&bars)
+        .map(|(c, b)| Bar::new(b.time, c, c, c, c, 1.0))
+        .collect();
     let doubling: Vec<_> = [1.0, 2.0, 4.0, 2.0, 4.0, 8.0]
         .into_iter()
         .enumerate()
@@ -1060,6 +1074,16 @@ fn staple_studies_match_published_definitions() {
             "StochRSI-hand",
             Box::new(StochasticRSI::new(2, 2, 2, 2)) as Box<dyn Indicator>,
             rsi_short[..6].to_vec(),
+        ),
+        (
+            "StochRSI-flat-hand",
+            Box::new(StochasticRSI::new(2, 3, 2, 2)),
+            rsi_flat,
+        ),
+        (
+            "StochRSI-rising",
+            Box::new(StochasticRSI::default()),
+            rising,
         ),
         (
             "StochRSI@31",
