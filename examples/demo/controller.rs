@@ -1011,6 +1011,12 @@ impl DemoApp {
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.storage.clone());
+        if let Some(hidden) = cc
+            .storage
+            .and_then(|storage| eframe::get_value::<Vec<String>>(storage, "symbol_details_hidden"))
+        {
+            app.symbol_details.set_hidden_sections(hidden);
+        }
         app.top_toolbar.layout_menu.set_storage(app.storage.clone());
         app.top_toolbar.layout_menu.set_sharing(sharing);
         app.highlights.set_feed(app.live.clone());
@@ -1924,6 +1930,11 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "event_visibility", self.chart.event_visibility());
         eframe::set_value(storage, "open_panel", &self.open_panel);
         eframe::set_value(storage, "depth_panel", &self.depth);
+        eframe::set_value(
+            storage,
+            "symbol_details_hidden",
+            &self.symbol_details.hidden_sections(),
+        );
         eframe::set_value(
             storage,
             "drawing_defaults",
@@ -5575,7 +5586,8 @@ mod tests {
     }
 
     /// The watchlist's details use the chart's bars and feed, open headline links and honour
-    /// the three section choices through the demo's menus and action handler.
+    /// the three section choices through the demo's menus and action handler, and the sections
+    /// hidden there stay hidden after a restart on the same storage.
     #[test]
     fn watchlist_details_sections_reach_the_demo() {
         use eframe::App as _;
@@ -5718,6 +5730,31 @@ mod tests {
                 "{title}: {shown:?}"
             );
         }
+
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut app = DemoApp::new_at(&cc, chrono::Utc::now(), true);
+        assert!(app.open_panel == Some(SidePanel::Watchlist));
+        settle(&mut app, &ctx);
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        assert!(shown.iter().any(|text| text == "Volume"), "{shown:?}");
+        for title in ["Technicals", "Upcoming events", "News"] {
+            assert!(
+                !shown.iter().any(|text| text == title),
+                "{title}: {shown:?}"
+            );
+        }
+        assert_eq!(
+            app.symbol_details.hidden_sections(),
+            ["Technicals", "Upcoming events", "News"]
+        );
     }
 
     /// One frame of the demo's dialogs with `events`, returning its AccessKit nodes.
