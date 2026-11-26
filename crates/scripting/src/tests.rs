@@ -1963,23 +1963,24 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     // A label of 9,000 bytes on every bar, kept by the study once its bar is done.
     let drawn = "plot(\"x\", close);\nlet t = \"x\"; t.pad(9000, \"y\");\n\
                  label(\"x\", bar_index, close, t);";
-    for (script, fixture, mib, line) in [
-        (source.as_str(), &fixture[..], 16, 1),
-        (windows, &fixture[..1000], 1, 2),
-        (kept, &fixture[..1000], 1, 1),
-        (room, &fixture[..300], 64, 1),
-        (bar, &fixture[..1], 16, 2),
-        (cut, &fixture[..1], 2, 2),
-        (levels, &fixture[..1], 8, 5),
-        (studies, &fixture[..1000], 1, 2),
-        (drawn, &fixture[..1000], 8, 3),
+    // The time limits are about 20 times what a row takes in a debug build, so a busy machine
+    // stays clear of them and a row whose memory limit stops working fails in seconds.
+    for (script, fixture, mib, line, full) in [
+        (source.as_str(), &fixture[..], 16, 1, 10),
+        (windows, &fixture[..1000], 1, 2, 10),
+        (kept, &fixture[..1000], 1, 1, 10),
+        (room, &fixture[..300], 64, 1, 10),
+        (bar, &fixture[..1], 16, 2, 10),
+        (cut, &fixture[..1], 2, 2, 10),
+        (levels, &fixture[..1], 8, 5, 10),
+        (studies, &fixture[..1000], 1, 2, 10),
+        (drawn, &fixture[..1000], 8, 3, 25),
     ] {
-        // No time limit a slow or busy machine could reach before the memory limit.
         let mut capped = limited(
             script,
             Limits {
-                bar: Duration::from_secs(3600),
-                full: Duration::from_secs(3600),
+                bar: Duration::from_secs(10),
+                full: Duration::from_secs(full),
                 memory: mib << 20,
             },
         )
@@ -1990,11 +1991,12 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
             format!("memory limit of {mib} MiB reached at line {line}")
         );
     }
-    // The default memory limit, and no time limit a slow or busy machine could reach.
+    // The default memory limit; 64 series on 100,000 bars take one to three minutes in a debug
+    // build on a busy machine, past the default limit for a full recompute.
     let mut study = limited(
         &source,
         Limits {
-            full: Duration::from_secs(3600),
+            full: Duration::from_secs(600),
             ..Limits::default()
         },
     )
