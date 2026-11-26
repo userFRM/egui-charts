@@ -925,10 +925,11 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         }
     }
 
-    /// The Modify order dialog shows a position exit's quantity without letting it change, checks
-    /// no quantity rule against it and offers no exits of its own, so moving its price still saves.
-    /// A regression lets the user resize an exit the broker refuses to resize, or blocks the price
-    /// change with a quantity problem the user cannot fix.
+    /// The Modify order dialog shows a position exit's quantity without letting it change, says
+    /// why, checks no quantity rule against it and offers no exits of its own, so moving its price
+    /// still saves. A regression lets the user resize an exit the broker refuses to resize, leaves
+    /// the greyed-out quantity unexplained, or blocks the price change with a quantity problem the
+    /// user cannot fix.
     #[test]
     fn the_modify_order_dialog_keeps_a_position_exits_quantity() {
         use crate::model::{PositionBracket, TradingRules};
@@ -969,6 +970,9 @@ SYM,Long,3,110.00,125.00,+45.00 USD,2024-01-01 00:00:00,2024-01-01 00:00:20".int
         harness.run();
         let quantity = harness.get_by_role_and_label(egui::Role::SpinButton, "[Quantity]");
         assert!(quantity.accesskit_node().is_disabled());
+        harness.get_by_label(
+            "[A position exit keeps its quantity. Cancel it and place a new exit to change it.]",
+        );
         for absent in [
             "[Take profit]",
             "[Stop loss]",

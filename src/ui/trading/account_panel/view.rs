@@ -1124,6 +1124,11 @@ impl Trading {
             };
             let valid = rules_ready && problem.is_none() && request != &order.request;
             let theme = ui.active_theme();
+            if request.position_bracket.is_some() {
+                let key = "A position exit keeps its quantity. Cancel it and place a new exit \
+                    to change it.";
+                ui.colored_label(theme.ui.text_muted, l10n::text(ctx, key));
+            }
             if !rules_ready {
                 let waiting = l10n::text(ctx, "Waiting for the symbol's trading rules");
                 ui.colored_label(theme.ui.text_muted, waiting);
