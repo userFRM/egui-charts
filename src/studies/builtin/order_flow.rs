@@ -3,23 +3,59 @@
 use super::anchor_period::AnchorPeriod;
 use super::trade_delta::CvdMarkers;
 use crate::data::{OrderFilter, OrderFlowInput, OrderFlowKind, SizeBasis};
-use crate::model::{Bar, BarClock};
+use crate::model::{Bar, BarClock, Timeframe};
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, PlotType, StudyCandle, StudyInput,
 };
-use chrono::TimeDelta;
+use chrono::{DateTime, TimeDelta, Utc};
 use egui::Color32;
 
-const ANCHORS: [Option<AnchorPeriod>; 8] = [
-    None,
-    Some(AnchorPeriod::Session),
-    Some(AnchorPeriod::Week),
-    Some(AnchorPeriod::Month),
-    Some(AnchorPeriod::Quarter),
-    Some(AnchorPeriod::Year),
-    Some(AnchorPeriod::Decade),
-    Some(AnchorPeriod::Century),
+/// When the running total of Cumulative Execution Delta and Size-Filtered CVD returns to zero.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Reset {
+    /// Never.
+    Continuous,
+    /// On the first bar of each calendar period of exchange trading days.
+    Period(AnchorPeriod),
+    /// On the first bar of each interval of the study's reset minutes, aligned as the chart's
+    /// clock aligns bars of that length: from each session open, or from midnight in the
+    /// clock's time zone without a session. A whole day follows the trading day, as Session does.
+    Interval,
+}
+
+/// The Reset period choices in their saved order: new choices go at the end.
+const RESETS: [Reset; 9] = [
+    Reset::Continuous,
+    Reset::Period(AnchorPeriod::Session),
+    Reset::Period(AnchorPeriod::Week),
+    Reset::Period(AnchorPeriod::Month),
+    Reset::Period(AnchorPeriod::Quarter),
+    Reset::Period(AnchorPeriod::Year),
+    Reset::Period(AnchorPeriod::Decade),
+    Reset::Period(AnchorPeriod::Century),
+    Reset::Interval,
 ];
+
+/// The reset period of a bar opening at `time`: a bar continues the running total of an earlier
+/// bar only when their keys are equal. Always `None` for [`Reset::Continuous`].
+fn reset_key(
+    reset: Reset,
+    minutes: usize,
+    clock: &BarClock,
+) -> impl Fn(DateTime<Utc>) -> Option<i64> {
+    let sessions = clock.sessions();
+    // A whole day resets with the trading day, as Session does.
+    let interval = (reset == Reset::Interval && minutes < 1440).then(|| {
+        let seconds = std::num::NonZeroU64::new(minutes as u64 * 60).expect("at least one minute");
+        clock.for_timeframe(Timeframe::Custom(seconds))
+    });
+    move |time| match (reset, &interval) {
+        (Reset::Continuous, _) => None,
+        (Reset::Interval, Some(clock)) => Some(clock.bar_open(time).timestamp_millis()),
+        (Reset::Period(period), _) => Some(period.index(sessions.trading_date(time))),
+        (Reset::Interval, None) => Some(AnchorPeriod::Session.index(sessions.trading_date(time))),
+    }
+}
 
 /// An order-flow study in a separate pane. Use the factory titles or [`Self::new`].
 ///
@@ -46,7 +82,9 @@ pub struct OrderFlowStudy {
     delta: Option<bool>,
     candle_style: bool,
     candles: Vec<StudyCandle>,
-    anchor: Option<AnchorPeriod>,
+    reset: Reset,
+    /// Length of a [`Reset::Interval`] period, 1 to 1440.
+    reset_minutes: usize,
     volume_precision: Option<usize>,
     markers: CvdMarkers,
     /// Earlier bars used to rank each execution range.
@@ -95,7 +133,8 @@ impl OrderFlowStudy {
             delta: None,
             candle_style: false,
             candles: Vec::new(),
-            anchor: None,
+            reset: Reset::Continuous,
+            reset_minutes: 60,
             volume_precision: None,
             markers: CvdMarkers::default(),
             lookback: 100,
@@ -106,8 +145,9 @@ impl OrderFlowStudy {
     }
 
     /// Exact execution delta in a separate pane, as candles by default. With `cumulative`,
-    /// candles carry the total until the selected anchor period changes (each exchange trading
-    /// day by default); otherwise every candle opens at zero. Inputs select an inclusive size
+    /// candles carry the total until the selected reset period changes (each exchange trading
+    /// day by default, or each interval of 1 to 1440 minutes, aligned as the chart's clock aligns
+    /// bars of that length); otherwise every candle opens at zero. Inputs select an inclusive size
     /// range, whether it measures each fill or its aggressive order, and candles or a cumulative
     /// line / per-bar histogram. The histogram draws a bar whose delta is above zero in the Up
     /// colour and any other in the Down colour, as the candles do. No volume is inferred from
@@ -127,7 +167,11 @@ impl OrderFlowStudy {
         Self {
             delta: Some(cumulative),
             candle_style: true,
-            anchor: cumulative.then_some(AnchorPeriod::Session),
+            reset: if cumulative {
+                Reset::Period(AnchorPeriod::Session)
+            } else {
+                Reset::Continuous
+            },
             colors: vec![
                 crate::studies::palette::BLUE,
                 crate::studies::palette::UP,
@@ -187,9 +231,8 @@ impl OrderFlowStudy {
                 }
             }
             OrderFlowKind::FilteredCvd { .. } => {
-                let sessions = self.clock.sessions();
-                let period =
-                    |bar: &Bar| self.anchor.map(|a| a.key(sessions.trading_date(bar.time)));
+                let key = reset_key(self.reset, self.reset_minutes, &self.clock);
+                let period = |bar: &Bar| key(bar.time);
                 let mut last = self
                     .values
                     .line(0)
@@ -280,11 +323,8 @@ impl OrderFlowStudy {
         if self.delta == Some(true) && self.markers.enabled() {
             let start = self.markers.start(data.len(), from);
             let rows = self.rows(data, start);
-            let sessions = self.clock.sessions();
-            let period = |at: usize| {
-                self.anchor
-                    .map(|a| a.key(sessions.trading_date(data[at].time)))
-            };
+            let key = reset_key(self.reset, self.reset_minutes, &self.clock);
+            let period = |at: usize| key(data[at].time);
             self.markers
                 .refresh(data, start, &rows, &mut self.values, |at| {
                     at > 0 && period(at) != period(at - 1)
@@ -484,17 +524,30 @@ impl OrderFlowStudy {
                         "anchor",
                         "Reset period",
                         InputValue::Choice(
-                            ANCHORS.iter().position(|a| *a == self.anchor).unwrap_or(0),
+                            RESETS.iter().position(|r| *r == self.reset).unwrap_or(0),
                         ),
                         InputKind::Choice(
-                            ANCHORS
+                            RESETS
                                 .iter()
-                                .map(|a| {
-                                    a.map_or_else(|| "Continuous".to_owned(), |a| format!("{a:?}"))
+                                .map(|r| match r {
+                                    Reset::Continuous => "Continuous",
+                                    Reset::Period(period) => period.label(),
+                                    Reset::Interval => "Interval",
                                 })
+                                .map(str::to_owned)
                                 .collect(),
                         ),
                     ));
+                    inputs.push(
+                        length(
+                            "reset_minutes",
+                            "Reset interval (minutes)",
+                            self.reset_minutes,
+                            1,
+                            1440,
+                        )
+                        .shown_when("anchor", [RESETS.len() - 1]),
+                    );
                 }
                 if self.delta.is_some() {
                     inputs.push(StudyInput::new(
@@ -884,6 +937,7 @@ impl Indicator for OrderFlowStudy {
             ("exhaustion", InputValue::Toggle(on)) => self.markers.exhaustion = *on,
             ("swing_bars", InputValue::Length(n)) => self.markers.swing_bars = *n,
             ("exhaustion_bars", InputValue::Length(n)) => self.markers.exhaustion_bars = *n,
+            ("reset_minutes", InputValue::Length(n)) => self.reset_minutes = *n,
             _ => {}
         }
         if matches!(
@@ -892,6 +946,7 @@ impl Indicator for OrderFlowStudy {
                 | "exhaustion"
                 | "swing_bars"
                 | "exhaustion_bars"
+                | "reset_minutes"
                 | "lookback"
                 | "lower"
                 | "upper"
@@ -904,7 +959,7 @@ impl Indicator for OrderFlowStudy {
         let before = self.kind;
         if let InputValue::Choice(at) = &value {
             match id {
-                "anchor" => self.anchor = ANCHORS[*at],
+                "anchor" => self.reset = RESETS[*at],
                 "representation" => self.candle_style = *at == 0,
                 _ => return Err(crate::studies::StudyError::invalid_input(id)),
             }
@@ -1757,6 +1812,10 @@ mod tests {
                 );
             }
         }
+        // Only the Interval choice reads it: a whole day resets as Session does, not at midnight.
+        study
+            .set_input("reset_minutes", InputValue::Length(1440))
+            .unwrap();
         for (anchor, want) in [
             (0, [4.0, NAN, 7.0, 12.0, 19.0, 30.0, 43.0]),
             (1, [4.0, NAN, 3.0, 5.0, 7.0, 11.0, 13.0]),
@@ -1766,6 +1825,7 @@ mod tests {
             (5, [4.0, NAN, 3.0, 8.0, 15.0, 26.0, 39.0]),
             (6, [4.0, NAN, 7.0, 12.0, 19.0, 30.0, 43.0]),
             (7, [4.0, NAN, 7.0, 12.0, 19.0, 30.0, 43.0]),
+            (8, [4.0, NAN, 3.0, 5.0, 7.0, 11.0, 13.0]),
         ] {
             study
                 .set_input("anchor", InputValue::Choice(anchor))
@@ -1783,6 +1843,92 @@ mod tests {
             assert_eq!(
                 format!("{:?}", lines(&study)),
                 format!("{:?}", lines(&full))
+            );
+        }
+    }
+
+    /// Ten 5-minute bars from 10:20 UTC on Monday 5 January 2026, bar `i` with one buy of
+    /// `i + 1`. An interval resets on the first bar of each interval the chart's clock opens:
+    /// clock hours without a session, hours from the 09:30 open with one, and every bar when
+    /// the interval is shorter than the chart's (#4260).
+    #[test]
+    fn cumulative_delta_candles_reset_on_each_interval_of_the_chart_clock() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday};
+
+        let open: DateTime<Utc> = "2026-01-05T10:20:00Z".parse().unwrap();
+        let data: Vec<_> = (0..10)
+            .map(|i| {
+                Bar::new(
+                    open + TimeDelta::minutes(5 * i),
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    0.0,
+                )
+            })
+            .collect();
+        let utc = BarClock::new(Timeframe::Min5);
+        let session = utc.clone().with_session(
+            TimezoneId::utc(),
+            Session::new([SessionWindow::new(
+                [
+                    Weekday::Mon,
+                    Weekday::Tue,
+                    Weekday::Wed,
+                    Weekday::Thu,
+                    Weekday::Fri,
+                ],
+                NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+                NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+            )]),
+            false,
+        );
+        for (clock, minutes, opens) in [
+            (
+                &utc,
+                60,
+                [0.0, 1.0, 3.0, 6.0, 10.0, 15.0, 21.0, 28.0, 0.0, 9.0],
+            ),
+            (
+                &session,
+                60,
+                [0.0, 1.0, 0.0, 3.0, 7.0, 12.0, 18.0, 25.0, 33.0, 42.0],
+            ),
+            (
+                &utc,
+                30,
+                [0.0, 1.0, 0.0, 3.0, 7.0, 12.0, 18.0, 25.0, 0.0, 9.0],
+            ),
+            (&utc, 3, [0.0; 10]),
+        ] {
+            let mut study = OrderFlowStudy::execution_delta(true);
+            study.set_bar_clock(clock);
+            study.set_input("anchor", InputValue::Choice(8)).unwrap();
+            study
+                .set_input("reset_minutes", InputValue::Length(minutes))
+                .unwrap();
+            for (i, bar) in data.iter().enumerate() {
+                study.order_flow_inputs()[0].push_trade(
+                    clock,
+                    &Tick::new(
+                        bar.time + TimeDelta::seconds(1),
+                        100.0,
+                        i as f64 + 1.0,
+                        Some(OrderSide::Buy),
+                    ),
+                );
+            }
+            // The 11:00 bar resumes from the 10:55 bar's total and key.
+            study.calculate(&data[..8]);
+            study.update(&data, 8);
+            let got: Vec<_> = study.candles().iter().map(|c| c.bar.open).collect();
+            assert_eq!(
+                got,
+                opens,
+                "{minutes} minutes, session {}",
+                clock.has_session()
             );
         }
     }

@@ -159,6 +159,7 @@ pub use snapshot::{
 mod volume;
 pub use layout::{
     ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
+    ChartTabRequest, TabSplit, TabSplitSide,
 };
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
@@ -283,6 +284,8 @@ pub struct Chart {
     pub(crate) pending_scroll_time: Option<DateTime<Utc>>,
     /// Whether local navigation centres the first bar at or after the pending time.
     pub(crate) pending_scroll_next: bool,
+    /// Puts the bar for `pending_scroll_time` at the left edge instead of the centre.
+    pending_left_edge: Option<sync::LeftEdge>,
     /// A range set before the first layout and the bar spacing, right offset and tracking mode
     /// its last fit left, fitted again at the plot width until the first laid-out frame is shown.
     pending_visible_range: Option<(time_scale::PendingRange, (f32, f64, bool))>,
