@@ -15,7 +15,7 @@ use crate::model::{
     Capabilities, Order, OrderBook, OrderId, OrderPreview, OrderRequest, OrderSide, OrderType,
     Position, TakeProfitLevel, Tick, TimeInForce, TradingRules, TrailDistance,
 };
-use crate::scales::{decimals, to_step};
+use crate::scales::{TickGrid, decimals, to_step};
 
 /// How a take-profit or stop-loss distance is entered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,7 +98,7 @@ impl Bracket {
         &self,
         side: OrderSide,
         entry: f64,
-        tick: f64,
+        grid: TickGrid<'_>,
         per_point: f64,
         balance: Option<f64>,
         profit: bool,
@@ -106,7 +106,7 @@ impl Bracket {
         let sign = Self::sign(side, profit);
         match self.mode {
             BracketMode::Price => self.value,
-            BracketMode::Ticks => entry + sign * self.value * tick,
+            BracketMode::Ticks => grid.offset(entry, sign * self.value),
             BracketMode::Percent => entry * (1.0 + sign * self.value / 100.0),
             BracketMode::Money => entry + sign * self.value / per_point,
             BracketMode::BalancePercent => balance.map_or(f64::NAN, |balance| {
@@ -121,7 +121,7 @@ impl Bracket {
         price: f64,
         side: OrderSide,
         entry: f64,
-        tick: f64,
+        grid: TickGrid<'_>,
         per_point: f64,
         balance: Option<f64>,
         profit: bool,
@@ -129,7 +129,7 @@ impl Bracket {
         let distance = Self::sign(side, profit) * (price - entry);
         let value = match mode {
             BracketMode::Price => price,
-            BracketMode::Ticks => (distance / tick).round(),
+            BracketMode::Ticks => Self::sign(side, profit) * grid.steps_between(entry, price),
             BracketMode::Percent => distance / entry * 100.0,
             BracketMode::Money => distance * per_point,
             BracketMode::BalancePercent => {
@@ -360,6 +360,9 @@ pub(crate) struct Market<'a> {
     pub ask: Option<f64>,
     /// The symbol's tick size.
     pub tick: f64,
+    /// The symbol's coarser ticks by price range, as
+    /// [`Instrument::tick_tiers`](crate::model::Instrument::tick_tiers).
+    pub tick_tiers: &'a [(f64, f64)],
     /// Decimals of prices.
     pub decimals: usize,
     /// The account's currency.
@@ -415,6 +418,11 @@ impl<'a> Market<'a> {
     pub fn positive_balance(&self) -> Option<f64> {
         self.balance
             .filter(|balance| balance.is_finite() && *balance > 0.0)
+    }
+
+    /// The symbol's valid prices.
+    pub(crate) fn grid(&self) -> TickGrid<'a> {
+        TickGrid::new(self.tick, self.tick_tiers)
     }
 }
 
@@ -653,7 +661,9 @@ impl OrderTicket {
                 } else {
                     0
                 },
-                tick_size: market.tick,
+                tick_size: market
+                    .grid()
+                    .tick_at(self.touch(market).or(market.last).unwrap_or(f64::NAN)),
             },
             TrailUnit::Percent => TrailDistance::Percent(value),
         };
@@ -661,7 +671,7 @@ impl OrderTicket {
             return Err("Enter a trailing distance above 0, and below 100%");
         }
         let activation = if self.activation.0 {
-            let price = to_step(self.activation.1, market.tick, f64::round);
+            let price = market.grid().snap(self.activation.1);
             if !(price.is_finite() && price > 0.0) {
                 return Err("Enter a positive activation price");
             }
@@ -801,7 +811,7 @@ impl OrderTicket {
             .or(market.last),
             OrderType::TrailingStop { .. } => None,
         }
-        .map(|price| to_step(price, market.tick, f64::round))
+        .map(|price| market.grid().snap(price))
         .filter(|price| price.is_finite() && *price > 0.0)
         .ok_or("Enter a positive price")?;
         order.stop_loss = self.exit(market, order.side, entry, Some(order.quantity), false)?;
@@ -831,7 +841,7 @@ impl OrderTicket {
         if !self.kind.accepted(&market.capabilities) {
             return Err("The account does not accept this order type".into());
         }
-        let snap = |value| to_step(value, market.tick, f64::round);
+        let snap = |value| market.grid().snap(value);
         // Built first so that its own message wins over the entry's.
         let trailing = if self.kind == Kind::TrailingStop {
             Some(self.trailing(market)?)
@@ -923,9 +933,7 @@ impl OrderTicket {
             .as_ref()
             .map_or(self.quantity, |request| request.quantity);
         let per_point = quantity * market.rules.point_value;
-        let entry = self
-            .entry(market)
-            .map(|price| to_step(price, market.tick, f64::round));
+        let entry = self.entry(market).map(|price| market.grid().snap(price));
         let value = entry.map(|entry| entry * per_point);
         let risk = request
             .as_ref()
@@ -1072,11 +1080,8 @@ fn exit_price(
     if bracket.mode == BracketMode::BalancePercent && balance.is_none() {
         return Err("An exit in % of the balance needs the account's balance".into());
     }
-    let price = to_step(
-        bracket.price(side, entry, market.tick, per_point, balance, profit),
-        market.tick,
-        f64::round,
-    );
+    let grid = market.grid();
+    let price = grid.snap(bracket.price(side, entry, grid, per_point, balance, profit));
     // A buy exits above its entry for a profit and below it for a loss; a sell the other way.
     let above = (price > entry) == (side == OrderSide::Buy);
     if !price.is_finite() || price <= 0.0 || price == entry || above != profit {
@@ -1326,6 +1331,7 @@ mod tests {
             bid: None,
             ask: None,
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(10_000.0),
@@ -1779,6 +1785,7 @@ mod tests {
             bid: None,
             ask: None,
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(10_000.0),
@@ -1922,6 +1929,7 @@ mod tests {
             bid: Some(99.75),
             ask: Some(100.25),
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(10_000.0),
@@ -2067,6 +2075,7 @@ mod tests {
             bid: None,
             ask: None,
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(100_000.0),
@@ -2270,7 +2279,7 @@ mod tests {
                         price,
                         side,
                         4_000.0,
-                        0.25,
+                        TickGrid::new(0.25, &[]),
                         per_point,
                         market.balance,
                         profit,
@@ -2656,6 +2665,50 @@ mod tests {
             let request = ticket.request(&egui::Context::default(), &market).unwrap();
             assert_eq!(request.quantity, expected, "amount from {quantity}");
         }
+        // Ticks walk the price ranges: 24.98 to 25.00 is one 0.02 tick, then 0.05 ticks.
+        let tiers = [(10.0, 0.02), (25.0, 0.05)];
+        let market = Market {
+            tick: 0.01,
+            tick_tiers: &tiers,
+            last: Some(24.98),
+            ..market
+        };
+        let ticket = OrderTicket {
+            symbol: "BTC".into(),
+            sizing: Sizing::Units,
+            quantity: 1.0,
+            amount: 1.0,
+            take_profit: (true, ticks(3.0)),
+            stop_loss: (true, ticks(3.0)),
+            ..OrderTicket::default()
+        };
+        let request = ticket.request(&egui::Context::default(), &market).unwrap();
+        assert_eq!(
+            (request.quantity, request.take_profit, request.stop_loss),
+            (1.0, Some(25.1), Some(24.92))
+        );
+        let at = Bracket::at(
+            BracketMode::Ticks,
+            25.1,
+            OrderSide::Buy,
+            24.98,
+            market.grid(),
+            1.0,
+            None,
+            true,
+        );
+        assert_eq!(at.value, 3.0);
+        let limit = OrderTicket {
+            symbol: "BTC".into(),
+            kind: Kind::Limit,
+            price: 30.03,
+            sizing: Sizing::Units,
+            quantity: 1.0,
+            amount: 1.0,
+            ..OrderTicket::default()
+        };
+        let request = limit.request(&egui::Context::default(), &market).unwrap();
+        assert_eq!(request.order_type, OrderType::Limit(30.05));
     }
     /// The symbol fixture uses half-unit steps and a point value of 50.
     fn level_market(rules: &TradingRules) -> Market<'_> {
@@ -2667,6 +2720,7 @@ mod tests {
             bid: None,
             ask: None,
             tick: 0.25,
+            tick_tiers: &[],
             decimals: 2,
             currency: "USD",
             balance: Some(100_000.0),
@@ -3055,6 +3109,7 @@ mod tests {
                 bid: None,
                 ask: None,
                 tick: 0.00001,
+                tick_tiers: &[],
                 decimals: 5,
                 currency: "USD",
                 balance: None,

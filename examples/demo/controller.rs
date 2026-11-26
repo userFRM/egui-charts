@@ -2612,7 +2612,10 @@ impl DemoApp {
             }
             TopToolbarAction::Undo | TopToolbarAction::Redo => {}
             TopToolbarAction::AddIndicator(name) => {
-                if let Some(study) = self.indicator_dialog.factory().create(&name) {
+                // A study with symbols to choose opens the dialog's prompt and arrives from `show`.
+                if let Some(IndicatorDialogAction::AddIndicator(study)) =
+                    self.indicator_dialog.add(&name)
+                {
                     self.chart.begin_user_action();
                     self.chart.add_indicator(study);
                     self.chart.end_user_action();

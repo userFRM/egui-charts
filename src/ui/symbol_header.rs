@@ -135,7 +135,10 @@ impl SymbolHeaderConfig {
 /// Symbol Header Widget
 #[derive(Debug)]
 pub struct SymbolHeader {
-    /// Instrument whose quote is shown.
+    /// Instrument whose quote is shown. The header writes its prices in the instrument's
+    /// [`price_fraction`](Instrument::price_fraction), else at its
+    /// [`price_decimals`](Instrument::price_decimals) or the decimals of its
+    /// [`tick_size`](Instrument::tick_size), else at two decimals.
     pub instrument: Instrument,
     /// Chart interval label.
     pub timeframe: String,
@@ -255,10 +258,10 @@ impl SymbolHeader {
                 };
 
                 let change_text = format!(
-                    "{:.2} {}{:.2} ({}{:.2}%)",
-                    self.ohlc.close,
+                    "{} {}{} ({}{:.2}%)",
+                    self.price_text(self.ohlc.close),
                     if self.ohlc.change >= 0.0 { "+" } else { "" },
-                    self.ohlc.change,
+                    self.price_text(self.ohlc.change),
                     if self.ohlc.change_percent >= 0.0 {
                         "+"
                     } else {
@@ -402,6 +405,23 @@ impl SymbolHeader {
         );
     }
 
+    /// `price` in the instrument's price format: its fraction, else its decimals or those of its
+    /// tick size, else two decimals.
+    fn price_text(&self, price: f64) -> String {
+        use crate::scales::PriceFormatter as _;
+        match self.instrument.price_fraction {
+            Some(fraction) => crate::model::SeriesDisplayFormat {
+                kind: crate::model::SeriesFormat::Fraction(fraction),
+                ..Default::default()
+            }
+            .format(price),
+            None => crate::scales::format_decimal(
+                price,
+                crate::scales::instrument_price_precision(&self.instrument).map_or(2, usize::from),
+            ),
+        }
+    }
+
     fn draw_quote_box(
         &self,
         painter: &egui::Painter,
@@ -411,7 +431,11 @@ impl SymbolHeader {
         label: &str,
         bg_color: Color32,
     ) -> Rect {
-        let text = format!("{price:.2} {}", l10n::text(painter.ctx(), label));
+        let text = format!(
+            "{} {}",
+            self.price_text(price),
+            l10n::text(painter.ctx(), label)
+        );
         let galley = painter.layout_no_wrap(
             text,
             egui::FontId::proportional(painter.ctx().active_theme().text.small),
@@ -446,6 +470,7 @@ impl SymbolHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::PriceFraction;
 
     #[test]
     fn quote_buttons_remain_clickable_in_narrow_headers() {
@@ -547,22 +572,90 @@ mod tests {
             let mut instrument = Instrument::new("FLOW");
             instrument.volume_decimals = decimals;
             let header = SymbolHeader::new(instrument, "1m").with_ohlc(data);
-            let output = egui::Context::default().run_ui(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 100.0))),
-                    ..Default::default()
-                },
-                |ui| {
-                    header.show(ui);
-                },
+            assert!(
+                painted_texts(&header).iter().any(|text| text == label),
+                "volume decimals {decimals:?}: {label}"
             );
-            let painted = output.shapes.iter().any(|shape| {
-                matches!(
-                    &shape.shape, egui::Shape::Text(text) if text.galley.text() == label
-                )
-            });
-            output.drop_without_applying_deltas();
-            assert!(painted, "volume decimals {decimals:?}: {label}");
         }
+    }
+
+    #[test]
+    fn prices_follow_the_instrument_price_format() {
+        // Instrument, open, close, bid, ask, and the painted readout, Sell and Buy texts.
+        for (instrument, open, close, bid, ask, expected) in [
+            (
+                Instrument::new("EURUSD").with_price_decimals(5),
+                1.083,
+                1.08345,
+                1.08345,
+                1.08352,
+                ["1.08345 +0.00045 (+0.04%)", "1.08345 SELL", "1.08352 BUY"],
+            ),
+            (
+                Instrument::new("ZB")
+                    .with_price_decimals(4)
+                    .with_price_fraction(PriceFraction::ThirtySeconds),
+                118.0,
+                117.5,
+                117.5,
+                117.53125,
+                ["117'16 -0'16 (-0.42%)", "117'16 SELL", "117'17 BUY"],
+            ),
+            (
+                Instrument::new("PENNY").with_tick_size(0.0001),
+                0.004,
+                0.0042,
+                0.0042,
+                0.0043,
+                ["0.0042 +0.0002 (+5.00%)", "0.0042 SELL", "0.0043 BUY"],
+            ),
+            (
+                Instrument::new("SYM"),
+                1.25,
+                1.5,
+                1.5,
+                1.75,
+                ["1.50 +0.25 (+20.00%)", "1.50 SELL", "1.75 BUY"],
+            ),
+        ] {
+            let symbol = instrument.symbol.clone();
+            let header = SymbolHeader::new(instrument, "1D")
+                .with_ohlc(OhlcData::new(
+                    open,
+                    open.max(close),
+                    open.min(close),
+                    close,
+                    0.0,
+                ))
+                .with_quote(Quote::new(close, open, Default::default()).with_bid_ask(bid, ask));
+            let texts = painted_texts(&header);
+            for expected in expected {
+                assert!(
+                    texts.iter().any(|text| text == expected),
+                    "{symbol}: {expected} in {texts:?}"
+                );
+            }
+        }
+    }
+
+    /// The texts one frame of `header` paints, 1440 points wide.
+    fn painted_texts(header: &SymbolHeader) -> Vec<String> {
+        let output = egui::Context::default().run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 100.0))),
+                ..Default::default()
+            },
+            |ui| {
+                header.show(ui);
+            },
+        );
+        let texts = (output.shapes.iter())
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        texts
     }
 }
