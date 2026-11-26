@@ -1363,10 +1363,17 @@ mod tests {
                 full.values.value(line, 259)
             );
         }
-        // Only VWMA reads volume: a missing volume removes its vote, while the other 25
-        // components retain their price history. With no volume at all VWMA is the SMA.
-        for volume in [f64::NAN, f64::INFINITY] {
-            let mut missing_volume = bars.clone();
+        // Only VWMA reads volume: a missing volume, or none in its window, removes its vote,
+        // while the other 25 components retain their price history.
+        let mut no_volume = bars.clone();
+        for bar in &mut no_volume {
+            bar.volume = 0.0;
+        }
+        for (volume, mut missing_volume) in [
+            (f64::NAN, bars.clone()),
+            (f64::INFINITY, bars.clone()),
+            (0.0, no_volume),
+        ] {
             missing_volume[259].volume = volume;
             let mut study = TechnicalRatings::new();
             study.calculate(&missing_volume);
@@ -1389,17 +1396,6 @@ mod tests {
                 (5, 25.0 / 26.0),
             ] {
                 assert!((study.values.value(line, 259).unwrap() - value).abs() < 1e-12);
-            }
-        }
-        let mut no_volume = bars.clone();
-        for bar in &mut no_volume {
-            bar.volume = 0.0;
-        }
-        let mut study = TechnicalRatings::new();
-        study.calculate(&no_volume);
-        for line in 0..6 {
-            for at in 0..bars.len() {
-                assert_eq!(study.values.value(line, at), full.values.value(line, at));
             }
         }
         let n = f64::NAN;
