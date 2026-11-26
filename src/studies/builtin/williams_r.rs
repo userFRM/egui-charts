@@ -7,9 +7,10 @@
 //! - Readings from -20 to 0: Overbought
 //! - Readings from -100 to -80: Oversold
 //!
-//! The pane draws both levels, dashed and muted, with the band between them filled in the study's
-//! colour at a tenth of full opacity. The pane fits its values and visible levels, so a source from
-//! another study that reads outside -100 to 0 stays in view.
+//! The pane draws dashed, muted levels at -20 and -80 with the band between them filled in the
+//! study's colour at a tenth of full opacity, and a dotted middle level at -50 in the same grey.
+//! Readings have two decimals and no percent sign. The pane fits its values and visible levels, so
+//! a source from another study that reads outside -100 to 0 stays in view.
 //!
 //! # Calculation
 //! %R = (Highest High - Source) / (Highest High - Lowest Low) * -100
@@ -103,10 +104,6 @@ impl Indicator for WilliamsR {
         smoothing_deviation: number("Band deviation", 0.0, f64::MAX)
             if smoothing in SmoothingType::WITH_BANDS
     ; {});
-
-    fn value_format(&self) -> crate::scales::StudyFormat {
-        crate::scales::StudyFormat::Percent
-    }
 
     fn name(&self) -> &str {
         "Williams %R"
@@ -203,6 +200,20 @@ impl Indicator for WilliamsR {
         self.color.gamma_multiply_u8(26)
     }
 
+    /// The band between the overbought and oversold levels, whatever the middle level's value.
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
+    /// The middle level is dotted, the bands dashed.
+    fn level_style(&self, value: f64) -> crate::model::LineStyle {
+        if value == -50.0 {
+            crate::model::LineStyle::Dotted
+        } else {
+            crate::model::LineStyle::Dashed
+        }
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             height: None,
@@ -210,6 +221,7 @@ impl Indicator for WilliamsR {
             levels: vec![
                 (-20.0, palette::MUTED, "Overbought"),
                 (-80.0, palette::MUTED, "Oversold"),
+                (-50.0, palette::MUTED, "Middle"),
             ],
             fill_between_levels: true,
         }
@@ -331,7 +343,8 @@ mod tests {
         assert_eq!(study.values().value(0, 2).map(f64::abs), Some(0.0));
     }
 
-    /// The study opens with dashed one-pixel bands at -20 and -80, filled in its colour at a tenth
+    /// The study opens with dashed one-pixel bands at -20 and -80 and a dotted middle level at
+    /// -50, all in the bands' grey, the band between the outer two filled in its colour at a tenth
     /// of full opacity, and a closing-price source.
     #[test]
     fn opens_with_its_bands_fill_and_source() {
@@ -342,19 +355,51 @@ mod tests {
             [
                 (-20.0, palette::MUTED, "Overbought"),
                 (-80.0, palette::MUTED, "Oversold"),
+                (-50.0, palette::MUTED, "Middle"),
             ]
         );
-        for level in &settings.levels {
-            assert_eq!(
-                (level.pattern, level.width, level.visible),
-                (LineStyle::Dashed, 1.0, true)
-            );
-        }
+        let styles: Vec<_> = settings
+            .levels
+            .iter()
+            .map(|level| (level.pattern, level.width, level.visible))
+            .collect();
+        assert_eq!(
+            styles,
+            [
+                (LineStyle::Dashed, 1.0, true),
+                (LineStyle::Dashed, 1.0, true),
+                (LineStyle::Dotted, 1.0, true),
+            ]
+        );
+        // The band spans the levels at indices 0 and 1, -20 and -80.
+        assert_eq!(study.level_fill_indices(), Some([0, 1]));
         assert!(settings.fill_between_levels);
         assert_eq!(
             settings.level_fill_color,
             Color32::from_rgba_unmultiplied(126, 87, 194, 26)
         );
         assert_eq!(study.source(), Some(StudySource::Price(PriceSource::Close)));
+    }
+
+    /// A reading of -45.678 has two decimals and no percent sign: "-45.68" on a new study and on
+    /// one saved without a precision, "-46" and "-45.6780" with 0 and 4 chosen in the style.
+    #[test]
+    fn readings_have_two_decimals_and_no_percent_sign() {
+        let mut study = ConfiguredStudy::new(Box::new(WilliamsR::default()));
+        let mut rows = vec![(study.settings().precision, "-45.68")];
+        rows.extend([(None, "-45.68"), (Some(0), "-46"), (Some(4), "-45.6780")]);
+        for (precision, text) in rows {
+            let mut settings = study.settings();
+            settings.precision = precision;
+            study.apply_settings(&[], settings).unwrap();
+            assert_eq!(
+                [
+                    study.format_value(-45.678),
+                    study.format_plot_value(0, -45.678)
+                ],
+                [text, text],
+                "{precision:?}"
+            );
+        }
     }
 }

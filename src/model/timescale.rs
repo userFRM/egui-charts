@@ -352,7 +352,6 @@ impl TimeScale {
     }
 
     /// Whether the right offset is where [`Self::scroll_to_realtime`] puts it, within 1e-6 bars.
-    #[cfg(feature = "widget")]
     pub(crate) fn is_at_live_edge(&self) -> bool {
         let mut live = self.clone();
         live.scroll_to_realtime();
@@ -566,13 +565,17 @@ impl TimeScale {
     /// Zoom at a specific point
     ///
     /// IMPORTANT: rect_width must be the actual width of the chart rect being zoomed.
-    /// Non-finite deltas, anchors and widths are ignored.
+    /// Non-finite deltas, anchors and widths are ignored. A zoom about the last pixel of a view
+    /// at the live edge keeps it there with the configured right offset at the new spacing.
     pub fn zoom(&mut self, delta: f32, anchor_x: f32, _rect_min_x: f32, rect_width: f32) {
         if !delta.is_finite() || !anchor_x.is_finite() || !rect_width.is_finite() {
             return;
         }
         let old_spacing = self.bar_spacing;
         let anchor_distance = f64::from(rect_width) - f64::from(anchor_x) - 1.0;
+        // A zoom about the last pixel keeps a view at the live edge there, so that a pixel
+        // right offset keeps its pixels rather than its bars.
+        let keep_live_edge = anchor_distance == 0.0 && self.is_at_live_edge();
 
         // Calculate new bar spacing
         let zoom_scale = delta as f64;
@@ -581,8 +584,11 @@ impl TimeScale {
         self.bar_spacing = self.clamp_spacing(new_spacing);
 
         // The absolute bar index cancels: only the change in distance from the right matters.
-        let right_offset = self.right_offset
-            + (anchor_distance / self.bar_spacing - anchor_distance / old_spacing);
+        let right_offset = if keep_live_edge {
+            f64::from(self.live_edge_offset())
+        } else {
+            self.right_offset + (anchor_distance / self.bar_spacing - anchor_distance / old_spacing)
+        };
 
         // Debug logging - check for width mismatch
         if (rect_width - self.width).abs() > 0.1 {
