@@ -119,4 +119,9 @@ impl Indicator for AnalystPriceForecast {
     fn line_names(&self) -> Vec<String> {
         vec!["Positive".to_string(), "Negative".to_string()]
     }
+
+    // The chart draws the targets dotted at a fixed width, whatever the plot style.
+    fn plot_color_only(&self, _line: usize) -> bool {
+        true
+    }
 }
