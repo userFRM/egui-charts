@@ -346,9 +346,10 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 
     /// Whether plot `line` holds per-bar values. Return false for a plot that only styles the
-    /// study's [`zones`](Self::zones): their edges are lines whatever the plot type, and a plot
-    /// without values puts no tag on the price scale and draws no latest value line, so the
-    /// settings dialog offers such a plot only its visibility, colour, width and line pattern.
+    /// study's [`zones`](Self::zones) or drawings, which the chart strokes as lines whatever the
+    /// plot type: a plot without values puts no tag on the price scale and draws no latest value
+    /// line, so the settings dialog offers such a plot only its visibility, colour, width and
+    /// line pattern.
     /// True by default.
     fn plot_holds_values(&self, line: usize) -> bool {
         let _ = line;

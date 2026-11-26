@@ -64,6 +64,9 @@ pub struct StudyInput {
     /// The choice or toggle input this one applies with and its accepted values (0/1 for a
     /// toggle). An editor hides it under other values and keeps its value. `None` always shows it.
     pub shown_when: Option<(String, Vec<usize>)>,
+    /// Asked for by the indicator browser before it adds the study. Studies restored from a
+    /// layout, a template or the clipboard, or created through the API, keep their values.
+    pub confirm: bool,
 }
 
 impl StudyInput {
@@ -82,6 +85,7 @@ impl StudyInput {
             kind,
             style: false,
             shown_when: None,
+            confirm: false,
         }
     }
 
@@ -100,6 +104,14 @@ impl StudyInput {
     /// Show this input while `id` holds one of `choices`, with toggles counted as 0 or 1.
     pub fn shown_when(mut self, id: impl Into<String>, choices: impl Into<Vec<usize>>) -> Self {
         self.shown_when = Some((id.into(), choices.into()));
+        self
+    }
+
+    /// Ask for this input when the study is added from the indicator browser. A
+    /// [`Symbol`](InputKind::Symbol) input left empty there reads the chart symbol; the browser
+    /// adds the study once one of its confirmed symbol inputs names a symbol.
+    pub fn confirmed(mut self) -> Self {
+        self.confirm = true;
         self
     }
 

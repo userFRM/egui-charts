@@ -8,6 +8,7 @@ use crate::localization as l10n;
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, ShareKind, Sharing, Storage, StoreKind};
 use crate::theme::ThemeExt;
+use crate::ui::Control;
 use crate::ui::dialogs::keyboard_shortcuts::shortcut_key_labels;
 use crate::ui::share_controls::ShareControls;
 use crate::ui::top_toolbar::toolbar::DOWNLOAD_ICON;
@@ -15,7 +16,7 @@ use crate::ui_kit::buttons::{ButtonSize, IconButton};
 use crate::ui_kit::list_item::{ContentContext, ListItem, ListItemContent};
 use crate::widget::SavedLayout;
 use egui::{Rect, Role, Ui, WidgetInfo, pos2, vec2};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -151,6 +152,8 @@ pub struct LayoutMenu {
     /// The context of the last poll, to translate errors of calls between frames.
     ctx: Option<egui::Context>,
     share: ShareControls,
+    /// Controls the host hid; see [`set_control_visible`](Self::set_control_visible).
+    hidden: HashSet<Control>,
 }
 
 impl std::fmt::Debug for LayoutMenu {
@@ -173,6 +176,7 @@ impl std::fmt::Debug for LayoutMenu {
             .field("changed", &self.changed)
             .field("error", &self.error)
             .field("ctx", &self.ctx)
+            .field("hidden", &self.hidden)
             .finish_non_exhaustive()
     }
 }
@@ -217,6 +221,7 @@ impl LayoutMenu {
             error: None,
             ctx: None,
             share: ShareControls::default(),
+            hidden: HashSet::new(),
         }
     }
 
@@ -248,6 +253,14 @@ impl LayoutMenu {
     /// deleted; see [`rename`](Self::rename).
     pub fn set_sharing(&mut self, sharing: Arc<dyn Sharing>) {
         self.share.set_service(sharing);
+    }
+
+    /// Shows or hides `control`: ExportData (the Download chart data row) and Snapshot (the
+    /// Download chart image row). A hidden row is not drawn and emits nothing. The menu
+    /// ignores the other controls. [`TopToolbar`](crate::ui::top_toolbar::TopToolbar) passes
+    /// its controls on to its `layout_menu`.
+    pub fn set_control_visible(&mut self, control: Control, visible: bool) {
+        crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
     }
 
     fn request(&mut self, request: Request) {
@@ -963,20 +976,23 @@ impl LayoutMenu {
             ui.close();
         }
         let mut create = false;
-        for (icon, label, value) in [
+        let data = !self.hidden.contains(&Control::ExportData);
+        for (icon, label, value, shown) in [
             (
                 &DOWNLOAD_ICON,
                 "Download chart data",
                 Some(LayoutAction::DownloadData),
+                data,
             ),
-            (&icons::PLUS, "Create new layout", None),
+            (&icons::PLUS, "Create new layout", None, true),
             (
                 &icons::FOLDER_OPEN,
                 "Open layout",
                 Some(LayoutAction::OpenLayout),
+                true,
             ),
         ] {
-            if menu_row(ui, Some(icon), label, None, None).clicked() {
+            if shown && menu_row(ui, Some(icon), label, None, None).clicked() {
                 match value {
                     Some(value) => {
                         action = value;
@@ -1004,8 +1020,9 @@ impl LayoutMenu {
             self.new_name.clear();
         }
         ui.separator();
-        let image = menu_row(ui, Some(&icons::CAMERA), "Download chart image", None, None);
-        if image.clicked() {
+        if !self.hidden.contains(&Control::Snapshot)
+            && menu_row(ui, Some(&icons::CAMERA), "Download chart image", None, None).clicked()
+        {
             action = LayoutAction::DownloadImage;
             ui.close();
         }
