@@ -23,6 +23,8 @@ use crate::theme::Theme;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui_kit::EmptyState;
+use crate::ui_kit::FormGrid;
+use crate::ui_kit::dialog::DialogFooter;
 use crate::ui_kit::filter::FilterWidget;
 use crate::ui_kit::modal::Modal;
 use crate::ui_kit::sidebar_layout::{SidebarLayout, SidebarTab};
@@ -86,6 +88,17 @@ pub struct IndicatorDialog {
     indicators: Vec<IndicatorInfo>,
     /// Configuration
     config: IndicatorDialogConfig,
+    /// The study chosen last, while the dialog asks for its confirmed inputs
+    pending: Option<Pending>,
+}
+
+/// A study chosen in the browser that waits for its confirmed inputs.
+struct Pending {
+    study: Box<dyn Indicator>,
+    /// The study's confirmed inputs, as edited in the prompt.
+    inputs: Vec<StudyInput>,
+    /// The dialog opened for the prompt and closes when it ends.
+    close: bool,
 }
 
 impl std::fmt::Debug for IndicatorDialog {
@@ -225,6 +238,7 @@ impl IndicatorDialog {
             source_error: None,
             full: false,
             config: IndicatorDialogConfig::default(),
+            pending: None,
         }
     }
 
@@ -464,6 +478,7 @@ impl IndicatorDialog {
         }
         self.source = None;
         self.source_error = None;
+        self.pending = None;
         self.active_tab = tab;
         self.is_open = true;
         self.search.clear();
@@ -479,6 +494,7 @@ impl IndicatorDialog {
     /// Close the dialog
     pub fn close(&mut self) {
         self.source = None;
+        self.pending = None;
         self.is_open = false;
     }
 
@@ -497,8 +513,16 @@ impl IndicatorDialog {
         self.poll_options(ctx);
         let config = self.config.resolved(theme);
 
-        // Escape clears a search before it closes the dialog.
-        if !self.search.is_empty() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        // Escape leaves a prompt, then clears a search, before it closes the dialog.
+        if self.pending.is_some() {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                self.cancel_prompt();
+                if !self.is_open {
+                    return IndicatorDialogAction::None;
+                }
+            }
+        } else if !self.search.is_empty()
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
         {
             self.search.clear();
         }
@@ -552,6 +576,9 @@ impl IndicatorDialog {
                 theme.ui.error,
                 l10n::text(ui.ctx(), "The chart has reached its study limit"),
             );
+        }
+        if self.pending.is_some() {
+            return self.draw_prompt(ui, theme);
         }
 
         let search = ui
@@ -1010,9 +1037,12 @@ impl IndicatorDialog {
         None
     }
 
-    /// The study registered as `id` with its default inputs and the requested source. A
-    /// source the study rejects is reported in the dialog and adds nothing.
-    fn add(&mut self, id: &str) -> Option<IndicatorDialogAction> {
+    /// Add the study registered as `id`, as choosing its row does: with its default inputs and
+    /// the requested source, or `None` when the chart is full, the source is refused or `id` is
+    /// unknown. A study with [confirmed](StudyInput::confirmed) inputs is not returned yet: the
+    /// dialog opens on a prompt for them, and [`show`](Self::show) returns the study as
+    /// [`IndicatorDialogAction::AddIndicator`] once they are confirmed. Cancelling adds nothing.
+    pub fn add(&mut self, id: &str) -> Option<IndicatorDialogAction> {
         self.source_error = None;
         if self.full {
             return None;
@@ -1027,7 +1057,86 @@ impl IndicatorDialog {
                 return None;
             }
         }
+        let inputs: Vec<_> = study
+            .inputs()
+            .into_iter()
+            .filter(|input| input.confirm)
+            .collect();
+        if !inputs.is_empty() {
+            self.pending = Some(Pending {
+                study,
+                inputs,
+                // A prompt replaced by another keeps closing a dialog it opened.
+                close: !self.is_open || self.pending.as_ref().is_some_and(|pending| pending.close),
+            });
+            self.is_open = true;
+            return None;
+        }
         Some(IndicatorDialogAction::AddIndicator(study))
+    }
+
+    /// Leave the prompt for the chosen study's inputs without adding it.
+    fn cancel_prompt(&mut self) {
+        self.source_error = None;
+        if self.pending.take().is_some_and(|pending| pending.close) {
+            self.close();
+        }
+    }
+
+    /// The prompt for the chosen study's confirmed inputs, in place of the list. Add is offered
+    /// once every confirmed symbol input that is left empty can read the chart, that is once one
+    /// of them names a symbol.
+    fn draw_prompt(&mut self, ui: &mut Ui, theme: &Theme) -> IndicatorDialogAction {
+        let Some(pending) = &mut self.pending else {
+            return IndicatorDialogAction::None;
+        };
+        ui.label(RichText::new(l10n::text(ui.ctx(), pending.study.name())).strong());
+        ui.add_space(theme.spacing.lg);
+        let zones = crate::ui::timeframe_toolbar::default_time_zones();
+        FormGrid::new("confirm_inputs").show(ui, |ui| {
+            for input in &mut pending.inputs {
+                crate::ui::strategy_report::inputs::show_input(ui, input, &[], &zones);
+            }
+        });
+        let mut symbols = pending
+            .inputs
+            .iter()
+            .filter_map(|input| match &input.value {
+                InputValue::Symbol(symbol) => Some(symbol),
+                _ => None,
+            })
+            .peekable();
+        let named = symbols.peek().is_none() || symbols.any(|symbol| !symbol.trim().is_empty());
+        let (add, cancel) = DialogFooter::new("Add")
+            .secondary("Cancel")
+            .primary_enabled(!self.full && named)
+            .show(ui);
+        if cancel {
+            self.cancel_prompt();
+            return IndicatorDialogAction::None;
+        }
+        if !add || self.full || !named {
+            return IndicatorDialogAction::None;
+        }
+        for input in &pending.inputs {
+            let value = match &input.value {
+                InputValue::Symbol(symbol) => InputValue::Symbol(symbol.trim().to_owned()),
+                InputValue::Text(text) => InputValue::Text(text.trim().to_owned()),
+                value => value.clone(),
+            };
+            if let Err(error) = pending.study.set_input(&input.id, value) {
+                self.source_error = Some(error);
+                return IndicatorDialogAction::None;
+            }
+        }
+        self.source_error = None;
+        let Some(Pending { study, close, .. }) = self.pending.take() else {
+            return IndicatorDialogAction::None;
+        };
+        if close {
+            self.close();
+        }
+        IndicatorDialogAction::AddIndicator(study)
     }
 }
 
@@ -2263,8 +2372,15 @@ mod tests {
         let mut dialog = IndicatorDialog::new();
         let mut differ = Vec::new();
         for info in dialog.indicators.clone() {
-            let Some(IndicatorDialogAction::AddIndicator(mut added)) = dialog.add(&info.id) else {
-                panic!("{} is added", info.id);
+            let mut added = match dialog.add(&info.id) {
+                Some(IndicatorDialogAction::AddIndicator(added)) => added,
+                // The pair studies ask for their symbols first; the prompt holds their defaults.
+                _ => {
+                    let pending = dialog.pending.take();
+                    pending
+                        .unwrap_or_else(|| panic!("{} is added", info.id))
+                        .study
+                }
             };
             let mut default = factory.create(&info.id).unwrap();
             added.calculate(&bars);
@@ -2286,6 +2402,114 @@ mod tests {
             assert_eq!(info.map(|info| info.name.as_str()), Some(title), "{id}");
             assert_eq!(factory.create(id).unwrap().line_names(), lines, "{id}");
         }
+    }
+
+    /// Choosing a pair study asks for its symbols and adds it once one is named, with the
+    /// symbols trimmed and their histories requested; cancelling adds nothing and closes a
+    /// dialog that opened for the prompt.
+    #[test]
+    fn pair_studies_ask_for_their_symbols_before_they_are_added() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        // (study, fields asked for, (field, text typed), symbols requested)
+        type Row = (
+            &'static str,
+            &'static [&'static str],
+            &'static [(&'static str, &'static str)],
+            &'static [&'static str],
+        );
+        let cases: &[Row] = &[
+            (
+                "Correlation Coefficient",
+                &["Second symbol"],
+                &[("Second symbol", "MSFT")],
+                &["MSFT"],
+            ),
+            (
+                "Correlation - Log",
+                &["First symbol", "Second symbol"],
+                &[("First symbol", "AAPL"), ("Second symbol", "MSFT")],
+                &["AAPL", "MSFT"],
+            ),
+            (
+                "Ratio",
+                &["First symbol", "Second symbol"],
+                &[("First symbol", "AAPL"), ("Second symbol", "MSFT")],
+                &["AAPL", "MSFT"],
+            ),
+            (
+                "Spread",
+                &["First symbol", "Second symbol"],
+                &[("Second symbol", " MSFT ")],
+                &["MSFT"],
+            ),
+        ];
+        let theme = Theme::light();
+        let style = theme.clone();
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(640.0, 640.0))
+            .with_context_setup(move |ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &style);
+            })
+            .build_ui_state(
+                |ui, (dialog, added): &mut (IndicatorDialog, Vec<(String, Vec<String>)>)| {
+                    if let IndicatorDialogAction::AddIndicator(study) =
+                        dialog.show(ui.ctx(), &theme)
+                    {
+                        let symbols = study.data_requests().into_iter().map(|r| r.symbol);
+                        added.push((study.name().to_owned(), symbols.collect()));
+                    }
+                },
+                (IndicatorDialog::new(), Vec::new()),
+            );
+        for &(id, fields, typed, symbols) in cases {
+            let (dialog, _) = harness.state_mut();
+            dialog.open();
+            assert!(dialog.add(id).is_none(), "{id} asks first");
+            harness.run();
+            for field in fields {
+                harness.get_by_role_and_label(Role::TextInput, field);
+            }
+            if fields.len() == 1 {
+                let first = harness.query_by_role_and_label(Role::TextInput, "First symbol");
+                assert!(first.is_none(), "{id} reads the chart as its first symbol");
+            }
+            harness.get_by_role_and_label(Role::Button, "Add").click();
+            harness.run();
+            assert!(harness.state().1.is_empty(), "{id} needs a symbol");
+            for (field, text) in typed {
+                harness
+                    .get_by_role_and_label(Role::TextInput, field)
+                    .focus();
+                harness.run();
+                harness
+                    .get_by_role_and_label(Role::TextInput, field)
+                    .type_text(text);
+                harness.run();
+            }
+            harness.get_by_role_and_label(Role::Button, "Add").click();
+            harness.run();
+            let (dialog, added) = harness.state_mut();
+            let symbols = symbols.iter().map(|symbol| symbol.to_string()).collect();
+            let name = dialog.factory().create(id).unwrap().name().to_owned();
+            assert_eq!(std::mem::take(added), [(name, symbols)], "{id}");
+            assert!(dialog.is_open(), "{id} leaves the browser open");
+            harness.run();
+            let prompt = harness.query_by_role_and_label(Role::TextInput, "Second symbol");
+            assert!(prompt.is_none(), "{id} leaves the prompt");
+        }
+        // A pair study added with the dialog closed opens it, and Cancel closes it again.
+        let (dialog, _) = harness.state_mut();
+        dialog.close();
+        assert!(dialog.add("Ratio").is_none());
+        assert!(dialog.is_open());
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::Button, "Cancel")
+            .click();
+        harness.run();
+        let (dialog, added) = harness.state();
+        assert!(added.is_empty() && !dialog.is_open(), "Cancel adds nothing");
     }
 
     /// The light chooser has distinct hint inks; other palettes keep their supplied roles.
