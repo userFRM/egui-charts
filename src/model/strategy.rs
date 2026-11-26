@@ -375,8 +375,9 @@ pub struct StrategyPerformance {
     /// 365.25 days; -1 when the curve ends at 0. `None` unless the usable curve spans at least
     /// 13 weeks, when its first point is not positive, or when its last point is negative.
     pub compound_annual_growth: Option<f64>,
-    /// Annualised Sharpe ratio of the monthly returns: their mean less the monthly risk-free
-    /// rate, over their sample standard deviation, times the square root of 12. A monthly return
+    /// Monthly Sharpe ratio, not annualised: the mean of the monthly returns less the monthly
+    /// risk-free rate, over their population standard deviation (dividing by the number of
+    /// returns); times the square root of 12 gives an annual figure. A monthly return
     /// compares the equity at two successive month starts, 00:00 UTC on the 1st, from the first
     /// month start at or after the curve's first point to the last at or before its last point.
     /// The equity at a month start is the last usable point at or before it, so a month without
@@ -386,9 +387,10 @@ pub struct StrategyPerformance {
     /// equity at a month start before the last is not positive, or when the risk-free rate is
     /// not finite or not above -1.
     pub sharpe_ratio: Option<f64>,
-    /// Annualised Sortino ratio: as `sharpe_ratio`, over the downside deviation instead, the root
-    /// mean square of the shortfalls of the monthly returns below the monthly risk-free rate,
-    /// taken over all returns. `None` when `sharpe_ratio` is, or when no return falls short.
+    /// Monthly Sortino ratio, not annualised: as `sharpe_ratio`, over the downside deviation
+    /// instead, the root mean square of the shortfalls of the monthly returns below the monthly
+    /// risk-free rate, taken over all returns; times the square root of 12 gives an annual
+    /// figure. `None` when `sharpe_ratio` is, or when no return falls short.
     pub sortino_ratio: Option<f64>,
     /// Steps of the usable curve per year: the number of returns over the span from the first to the
     /// last point, in years of 365.25 days. Counting the bars a run actually contains follows the
@@ -773,8 +775,8 @@ fn curve_phases(curve: &[(DateTime<Utc>, f64)]) -> Phases {
     phases
 }
 
-/// Annualised Sharpe and Sortino ratios of the monthly returns of a usable equity curve, as
-/// [`StrategyPerformance::sharpe_ratio`] defines them, at the yearly risk-free `rate`.
+/// Monthly Sharpe and Sortino ratios, not annualised, of the monthly returns of a usable equity
+/// curve, as [`StrategyPerformance::sharpe_ratio`] defines them, at the yearly risk-free `rate`.
 fn monthly_ratios(curve: &[(DateTime<Utc>, f64)], rate: f64) -> (Option<f64>, Option<f64>) {
     let (Some(&(start, _)), Some(&(end, _))) = (curve.first(), curve.last()) else {
         return (None, None);
@@ -800,7 +802,7 @@ fn monthly_ratios(curve: &[(DateTime<Utc>, f64)], rate: f64) -> (Option<f64>, Op
     let returns: Vec<f64> = values.windows(2).map(|w| w[1] / w[0] - 1.0).collect();
     let n = months as f64;
     let mean = returns.iter().sum::<f64>() / n;
-    let deviation = (returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
+    let deviation = (returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n).sqrt();
     let monthly_rate = (1.0 + rate).powf(1.0 / 12.0) - 1.0;
     let downside = (returns
         .iter()
@@ -810,7 +812,7 @@ fn monthly_ratios(curve: &[(DateTime<Utc>, f64)], rate: f64) -> (Option<f64>, Op
         .sqrt();
     // Returns that are equal up to rounding do not vary.
     if deviation > 16.0 * f64::EPSILON {
-        let excess = (mean - monthly_rate) * 12f64.sqrt();
+        let excess = mean - monthly_rate;
         (finite(excess / deviation), finite(excess / downside))
     } else {
         (None, None)
@@ -2876,8 +2878,10 @@ mod tests {
                         average_drawdown_days: Some(57.0),
                         average_run_up: Some(210.0),
                         average_run_up_days: Some(12.5),
-                        sharpe_ratio: Some(-0.7042209222250093),
-                        sortino_ratio: Some(-1.093937972676382),
+                        // Starts 1000, 1050, 960: (mean - (1.02^(1/12) - 1)) / population dev.
+                        sharpe_ratio: Some(-0.2874969876072451),
+                        // Same excess over sqrt((960 / 1050 - 1 - rf)^2 / 2), one shortfall.
+                        sortino_ratio: Some(-0.31579269150073136),
                         ..curve_from(
                             (340.0, 340.0 / 1300.0, Some(120.0 / 340.0)),
                             (-40.0, 300.0, 1000.0),
@@ -3106,7 +3110,8 @@ mod tests {
                     average_run_up_days: Some(0.15616531165311653),
                     compound_annual_growth: Some(6.5726938646276025),
                     periods_per_year: Some(8766.0),
-                    sharpe_ratio: Some(44.29779289168512),
+                    // e(720) 12237, e(1416) 14322, e(2160) 16509: (mean - rf) / population dev.
+                    sharpe_ratio: Some(18.084498219352717),
                     ..Default::default()
                 },
             ),
@@ -3129,8 +3134,11 @@ mod tests {
                     average_run_up_days: Some(5.239130434782608),
                     compound_annual_growth: Some(0.0819914006635325),
                     periods_per_year: Some(261.74591280653954),
-                    sharpe_ratio: Some(5.48019216794915),
-                    sortino_ratio: Some(104.17107483111391),
+                    // e(i) at 1sts Feb..Jan: 10072 10205 10237 10309 10381 10413 10525 10557
+                    // 10629 10741 10733 10845; mean / population deviation of the 11 returns.
+                    sharpe_ratio: Some(1.6592105757813547),
+                    // Mean over sqrt((10733 / 10741 - 1)^2 / 11), the one negative return.
+                    sortino_ratio: Some(30.071599047758134),
                     ..Default::default()
                 },
             ),
@@ -3342,8 +3350,10 @@ mod tests {
                     average_run_up_days: Some(15.7),
                     compound_annual_growth: Some(0.11845411439096676),
                     periods_per_year: Some(24.029605263157894),
-                    sharpe_ratio: Some(1.5939455747630757),
-                    sortino_ratio: Some(3.8233863147038796),
+                    // 16 month starts, 15 returns: (mean - (1.02^(1/12) - 1)) / population dev.
+                    sharpe_ratio: Some(0.47628233816969556),
+                    // Same excess over the root mean square of the shortfalls below that rate.
+                    sortino_ratio: Some(1.1037165590051081),
                     ..Default::default()
                 },
             ),
@@ -3768,8 +3778,10 @@ mod tests {
             return_over_max_drawdown: Some(0.6),
             compound_annual_growth: Some(0.1),
             periods_per_year: Some(1.0),
-            sharpe_ratio: Some(-0.9966964115962125),
-            sortino_ratio: Some(-0.977667787494181),
+            // m = -0.1/23 (one -0.1 in 23), rf = 1.02^(1/12) - 1: (m - rf) / sqrt(0.01/23 - m^2)
+            sharpe_ratio: Some(-0.2941879291940629),
+            // (m - rf) / sqrt((22 rf^2 + (0.1 + rf)^2) / 23).
+            sortino_ratio: Some(-0.2822283801438955),
             ..Default::default()
         };
         let mut overlap = report(1_000.0);
