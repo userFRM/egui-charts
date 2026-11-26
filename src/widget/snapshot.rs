@@ -196,10 +196,13 @@ pub struct ChartSnapshot {
     /// With drawing storage, [`Chart::restore`] shows the stored drawings and brings back only
     /// some of these (see there).
     pub drawings: Option<serde_json::Value>,
-    /// With drawing storage, the drawings the chart keeps aside for each other symbol it showed
-    /// that storage does not hold, those in a top-level folder kept on the chart or in the layout,
-    /// as one drawings document per symbol. Empty without drawing storage and in layouts saved
-    /// before it was recorded.
+    /// The drawings the chart keeps aside for each other symbol it showed, as one drawings
+    /// document per symbol in symbol order: all its saveable drawings of those symbols without
+    /// drawing storage, and with storage those it does not hold, the ones in a top-level folder
+    /// kept on the chart or in the layout. [`Chart::restore`] puts them back for their symbols,
+    /// in place of those the chart keeps aside, and they show when the chart shows their symbol
+    /// again. Empty in layouts saved before it was recorded, and in those saved without storage
+    /// before it was recorded there too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub other_symbol_drawings: Vec<serde_json::Value>,
     /// The chart that took the snapshot, by an identifier no other chart has, also in another
@@ -471,6 +474,10 @@ impl Chart {
     /// snapshot's drawings are kept, and stored but for those in such a folder. The drawings in
     /// such a folder that the chart keeps aside for other symbols are replaced by those of
     /// [`ChartSnapshot::other_symbol_drawings`], which show when the chart shows their symbol.
+    ///
+    /// Without drawing storage, the drawings the chart keeps aside for every other symbol are
+    /// replaced by those of [`ChartSnapshot::other_symbol_drawings`], which show when the chart
+    /// shows their symbol again.
     ///
     /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
     /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].
@@ -1233,6 +1240,52 @@ mod tests {
                 .any(|action| matches!(action, DrawingSyncAction::Delete(_))),
             "{queued:?}"
         );
+    }
+
+    /// A chart without drawing storage saves the drawings it keeps for another symbol in its
+    /// layout, and a chart restored from it shows them on that symbol again, in place of the
+    /// drawings it kept aside itself.
+    #[test]
+    fn a_layout_saved_without_storage_keeps_other_symbols_drawings() {
+        fn line(chart: &mut Chart, price: f64) {
+            let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+            line.chart_points = vec![ChartPoint::new(50.0, price)];
+            chart.drawings_mut().add_drawing(line).unwrap();
+        }
+        fn prices(chart: &Chart) -> Vec<f64> {
+            let mut prices: Vec<f64> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|drawing| drawing.chart_points[0].price)
+                .collect();
+            prices.sort_by(f64::total_cmp);
+            prices
+        }
+        let mut original = crate::widget::test_frames::chart(&[10.0], &[11.0]);
+        original.set_symbol("A");
+        line(&mut original, 104.0);
+        original.set_symbol("B");
+        line(&mut original, 99.0);
+        let saved: ChartSnapshot =
+            serde_json::from_str(&serde_json::to_string(&original.snapshot().unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(saved.other_symbol_drawings.len(), 1);
+        assert_eq!(saved.other_symbol_drawings[0]["symbol"], "A");
+
+        let mut restored = crate::widget::test_frames::chart(&[10.0], &[11.0]);
+        restored.set_symbol("Z");
+        line(&mut restored, 1.0);
+        restored.restore(&saved).unwrap();
+        assert_eq!(restored.symbol(), "B");
+        assert_eq!(prices(&restored), [99.0]);
+        restored.set_symbol("A");
+        assert_eq!(prices(&restored), [104.0]);
+        restored.set_symbol("Z");
+        assert_eq!(prices(&restored), [] as [f64; 0]);
+
+        original.set_symbol("A");
+        assert_eq!(prices(&original), [104.0]);
     }
 
     /// Studies created under host names retain edited inputs, styles and source links through

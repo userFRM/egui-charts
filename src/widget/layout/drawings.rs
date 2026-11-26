@@ -102,6 +102,9 @@ pub(super) struct DrawingLinks {
     /// or put aside, by slot and symbol: drawings a load or a restore put in their place are new
     /// to the layout, also under the same ids.
     managers: HashMap<(usize, String), u64>,
+    /// The symbols, by slot, whose drawings a load or a restore put aside in place of those the
+    /// chart kept aside, which the next frame links to the equal drawings on show.
+    restored_aside: Vec<(usize, String)>,
 }
 
 impl DrawingLinks {
@@ -146,6 +149,9 @@ impl DrawingLinks {
             .drain()
             .map(|slot| moved((slot, 0)).0)
             .collect();
+        for (slot, _) in &mut self.restored_aside {
+            *slot = moved((*slot, 0)).0;
+        }
     }
 
     /// Forgets the drawings that the layout-wide switch mirrors, as when it is first turned on.
@@ -212,6 +218,15 @@ impl DrawingLinks {
             .collect();
         self.forget(slot, |symbol| !kept.contains(symbol));
         self.arriving.insert(slot);
+        for symbol in chart.symbol_drawings.keys() {
+            let entry = (slot, symbol.clone());
+            if !kept.contains(symbol)
+                && *symbol != chart.symbol()
+                && !self.restored_aside.contains(&entry)
+            {
+                self.restored_aside.push(entry);
+            }
+        }
     }
 
     /// Gives each link that `gone` picks by name and symbol the name of one of its drawings on
@@ -300,16 +315,51 @@ impl DrawingLinks {
         linked
     }
 
-    /// The drawings on other charts of the symbol and group of `key` that are not linked to a
-    /// drawing of its chart and equal `drawing` in content and pane, one per chart: what a
-    /// restored original and its restored copy are. A drawing in a study pane equals one in the
-    /// linked pane of the other chart (see [`Chart::linked_pane`]).
+    /// Links each mirrored drawing that a load or a restore put aside to the equal drawings on
+    /// show of its symbol, as a restored drawing on show is linked at once: the chart then takes
+    /// the changes made to them meanwhile when it returns to the symbol, instead of mirroring its
+    /// own older version as a new drawing.
+    fn link_restored_aside(
+        &mut self,
+        charts: &[&mut Chart],
+        count: usize,
+        groups: &[Option<String>; MAX_CHARTS],
+        layout_wide: bool,
+    ) {
+        for (slot, symbol) in std::mem::take(&mut self.restored_aside) {
+            if slot >= count || charts[slot].symbol() == symbol {
+                continue;
+            }
+            let Some((manager, _)) = charts[slot].symbol_drawings.get(&symbol) else {
+                continue;
+            };
+            for drawing in &manager.drawings {
+                if !mirrored(drawing.folder_sync_mode(), layout_wide) {
+                    continue;
+                }
+                let key = (slot, drawing.id);
+                let partners =
+                    self.equal_drawings(charts, count, groups, key, &symbol, drawing, layout_wide);
+                if !partners.is_empty() {
+                    self.aside
+                        .insert((slot, symbol.clone(), drawing.id), (self.frame, partners));
+                }
+            }
+        }
+    }
+
+    /// The drawings on show on other charts of `symbol` and the group of `key` that are not
+    /// linked to a drawing of its chart and equal `drawing`, a drawing of `symbol` on show or put
+    /// aside, in content and pane, one per chart: what a restored original and its restored copy
+    /// are. A drawing in a study pane equals one in the linked pane of the other chart (see
+    /// [`Chart::linked_pane`]).
     fn equal_drawings(
         &self,
         charts: &[&mut Chart],
         count: usize,
         groups: &[Option<String>; MAX_CHARTS],
         key: Key,
+        symbol: &str,
         drawing: &Drawing,
         layout_wide: bool,
     ) -> Vec<Key> {
@@ -318,9 +368,9 @@ impl DrawingLinks {
             .filter(|&slot| {
                 slot != key.0
                     && groups[slot] == groups[key.0]
-                    && charts[slot].symbol() == charts[key.0].symbol()
+                    && charts[slot].symbol() == symbol
                     // Charts on one storage read each other's stored drawings from it.
-                    && !(charts[key.0].stores(charts[key.0].symbol(), drawing)
+                    && !(charts[key.0].stores(symbol, drawing)
                         && charts[slot].shares_stored_drawings(charts[key.0]))
             })
             .filter_map(|slot| {
@@ -381,9 +431,12 @@ impl DrawingLinks {
         for (slot, symbol) in replaced {
             if charts[slot].symbol() == symbol {
                 self.arriving.insert(slot);
+            } else if !self.restored_aside.contains(&(slot, symbol.clone())) {
+                self.restored_aside.push((slot, symbol.clone()));
             }
             self.forget(slot, |shown| shown == symbol);
         }
+        self.link_restored_aside(charts, count, groups, layout_wide);
         self.shown.resize(count, None);
         for (slot, chart) in charts.iter().take(count).enumerate() {
             let before = self.shown[slot].replace(chart.symbol().to_owned());
@@ -885,7 +938,8 @@ impl DrawingLinks {
                 .filter(|&(slot, id)| charts[slot].drawings().drawings.iter().any(|d| d.id == id));
             let mut linked = self.join(charts, *key, kept.collect());
             if linked.is_empty() {
-                let equal = self.equal_drawings(charts, count, groups, *key, drawing, layout_wide);
+                let equal =
+                    self.equal_drawings(charts, count, groups, *key, &symbol, drawing, layout_wide);
                 linked = self.join(charts, *key, equal);
             }
             if linked.is_empty() {
@@ -1060,8 +1114,15 @@ impl DrawingLinks {
                     {
                         continue;
                     }
-                    let equal =
-                        self.equal_drawings(charts, count, groups, key, drawing, layout_wide);
+                    let equal = self.equal_drawings(
+                        charts,
+                        count,
+                        groups,
+                        key,
+                        charts[source].symbol(),
+                        drawing,
+                        layout_wide,
+                    );
                     let equal: Vec<Key> =
                         equal.into_iter().filter(|other| other.0 == slot).collect();
                     if self.join(charts, key, equal).is_empty() {
@@ -4347,8 +4408,9 @@ mod tests {
 
     /// Charts saved as snapshots and restored into a new layout show each mirrored drawing once,
     /// in the price pane or a linked study pane, still linked, however often that happens. A
-    /// restore or a load replaces only the drawings of the symbol it shows: those a chart put
-    /// aside on other symbols stay linked, and a chart new to a slot starts without links.
+    /// restore or a load deletes no drawing of the other charts: without storage a restore
+    /// replaces the copies a chart put aside on other symbols, and the chart takes the mirrored
+    /// drawings again when it returns to them. A chart new to a slot starts without links.
     #[cfg(feature = "ui")]
     #[test]
     fn mirrored_drawings_restored_from_snapshots_stay_single_and_linked() {
@@ -4419,8 +4481,8 @@ mod tests {
             );
         }
 
-        // Restored from a snapshot of a third symbol, away or on show: the copy put aside on the
-        // symbol stays linked and takes the move made meanwhile.
+        // Restored from a snapshot of a third symbol, away or on show: the other chart keeps its
+        // line, and the restored chart takes it with the move made meanwhile when it returns.
         let third = {
             let mut chart = bars(60);
             chart.set_symbol("THIRD");
@@ -4445,6 +4507,43 @@ mod tests {
                 prices(&charts),
                 [vec![95.0], vec![95.0]],
                 "third symbol, away {away}"
+            );
+        }
+
+        // Restored while away from the symbol, alone from its own snapshot or with the other
+        // chart into a new layout: the copy put aside on the symbol stays linked and takes the
+        // move made meanwhile when the chart returns.
+        for both in [false, true] {
+            let (mut layout, mut charts) = mirrored_pair(false);
+            charts[1].set_symbol("OTHER");
+            frames(&mut layout, &mut charts);
+            let saved = charts.each_ref().map(|chart| chart.snapshot().unwrap());
+            if both {
+                charts = [bars(60), bars(60)];
+                layout = ChartLayout {
+                    mode: super::super::ChartLayoutMode::TwoHorizontal,
+                    ..Default::default()
+                };
+                layout.sync.sync_drawings = true;
+                for (chart, saved) in charts.iter_mut().zip(&saved) {
+                    let data = chart.bars(SeriesId::MAIN).to_vec();
+                    chart.restore(saved).unwrap();
+                    chart.set_data(SeriesId::MAIN, data);
+                }
+            } else {
+                let data = charts[1].bars(SeriesId::MAIN).to_vec();
+                charts[1].restore(&saved[1]).unwrap();
+                charts[1].set_data(SeriesId::MAIN, data);
+            }
+            frames(&mut layout, &mut charts);
+            move_first(&mut charts[0], 95.0);
+            frames(&mut layout, &mut charts);
+            charts[1].set_symbol("SAMPLE");
+            frames(&mut layout, &mut charts);
+            assert_eq!(
+                prices(&charts),
+                [vec![95.0], vec![95.0]],
+                "restored away, both charts {both}"
             );
         }
 
