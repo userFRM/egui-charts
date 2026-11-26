@@ -5853,6 +5853,95 @@ mod tests {
         }
     }
 
+    /// The demo's series and study settings switch on extensions of TPO levels, which the alert
+    /// dialog then offers as sources, and switching them off withdraws them.
+    #[test]
+    fn tpo_level_extensions_reach_the_demo_alert_dialog() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        use egui_charts::model::{AlertSource, ChartType, TPOLevel};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T17:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        let click = |app: &mut DemoApp, label: &str| {
+            let nodes = draw(&ctx, app, vec![]);
+            let target_node = control(&nodes, label).0;
+            draw(
+                &ctx,
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: None,
+                })],
+            );
+        };
+        // The TPO levels the alert dialog offers, closing it again.
+        let offered = |app: &mut DemoApp| {
+            app.open_alert(None);
+            let levels: Vec<_> = (app.alert_dialog.sources.iter())
+                .filter_map(|(source, name)| match source {
+                    AlertSource::TPOLevel(level) => Some((level.level, name.to_string())),
+                    _ => None,
+                })
+                .collect();
+            app.alert_dialog.close();
+            levels
+        };
+        app.chart.set_chart_type(ChartType::TimePriceOpportunity);
+        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in ["Extend point of control until touched", "Ok"] {
+            click(&mut app, label);
+        }
+        assert!(!app.series_settings.is_open);
+        assert!(app.chart.chart_type_params().tpo_extend_poc);
+        let levels = offered(&mut app);
+        assert!(
+            !levels.is_empty()
+                && levels.iter().all(|(level, name)| {
+                    *level == TPOLevel::PointOfControl && name.starts_with("TPO ")
+                }),
+            "{levels:?}"
+        );
+
+        let study = IndicatorFactory::new()
+            .create("Time Price Opportunity")
+            .unwrap();
+        let id = app.chart.add_indicator(study);
+        app.open_indicator_settings(id);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in ["Extend value area high until touched", "Apply"] {
+            click(&mut app, label);
+        }
+        assert!(!app.indicator_settings.is_open());
+        let levels = offered(&mut app);
+        assert!(
+            levels.iter().any(|(level, name)| {
+                *level == TPOLevel::ValueAreaHigh && name.starts_with("Time Price Opportunity ")
+            }),
+            "{levels:?}"
+        );
+
+        let mut params = app.chart.chart_type_params().clone();
+        params.tpo_extend_poc = false;
+        app.chart.set_chart_type_params(params);
+        (app.chart.indicator_mut(id).unwrap())
+            .set_input("extend_vah", InputValue::Toggle(false))
+            .unwrap();
+        let levels = offered(&mut app);
+        assert!(levels.is_empty(), "{levels:?}");
+    }
+
     /// Study settings use the own-data chart's zones and apply the edited session clock.
     #[test]
     fn study_settings_edit_session_time_and_offer_the_own_data_zone() {

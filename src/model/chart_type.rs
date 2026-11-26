@@ -1303,6 +1303,15 @@ pub struct ChartTypeParams {
     pub tpo_poor_low: bool,
     /// TPO: extend poor highs and lows until a later bar trades through them. Off by default.
     pub tpo_extend_poor: bool,
+    /// TPO: extend the point of control of completed profiles until a later bar reaches it. Off
+    /// by default.
+    pub tpo_extend_poc: bool,
+    /// TPO: extend the value area high likewise. Off by default.
+    pub tpo_extend_vah: bool,
+    /// TPO: extend the value area low likewise. Off by default.
+    pub tpo_extend_val: bool,
+    /// TPO: extend the lowest and highest row of each single-print run likewise. Off by default.
+    pub tpo_extend_single_prints: bool,
     /// TPO: draw one and two initial balance ranges above its high and below its low.
     pub tpo_initial_balance_extensions: bool,
     /// TPO: instrument ticks per price row. Zero, or an instrument without a tick size, fits
@@ -1470,6 +1479,10 @@ impl Default for ChartTypeParams {
             tpo_poor_high: false,
             tpo_poor_low: false,
             tpo_extend_poor: false,
+            tpo_extend_poc: false,
+            tpo_extend_vah: false,
+            tpo_extend_val: false,
+            tpo_extend_single_prints: false,
             tpo_initial_balance_extensions: false,
             tpo_row_ticks: 0,
             tpo_value_area: 70.0,
@@ -1527,6 +1540,10 @@ impl ChartTypeParams {
             show_poor_high: self.tpo_poor_high || self.tpo_poor_highs_lows,
             show_poor_low: self.tpo_poor_low || self.tpo_poor_highs_lows,
             extend_poor_extremes: self.tpo_extend_poor,
+            extend_poc: self.tpo_extend_poc,
+            extend_value_area_high: self.tpo_extend_vah,
+            extend_value_area_low: self.tpo_extend_val,
+            extend_single_prints: self.tpo_extend_single_prints,
             show_initial_balance_extensions: self.tpo_initial_balance_extensions,
             value_area_pct: self.tpo_value_area / 100.0,
             // As the study pairs them: the segment choice also splits the trading day.
@@ -2048,6 +2065,14 @@ mod tests {
             assert_eq!(legacy["tpo_poor_high"], false);
             assert_eq!(legacy["tpo_poor_low"], false);
             assert_eq!(legacy["tpo_extend_poor"], false);
+            for extension in [
+                "tpo_extend_poc",
+                "tpo_extend_vah",
+                "tpo_extend_val",
+                "tpo_extend_single_prints",
+            ] {
+                assert_eq!(legacy[extension], false, "{extension}");
+            }
             assert_eq!(legacy["tpo_volume_profile"], false);
             assert_eq!(
                 legacy["tpo_labels"],

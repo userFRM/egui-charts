@@ -65,6 +65,8 @@ pub struct TPOProfile {
     pub price_tpo_count: HashMap<i64, usize>,
     /// Volume at each row; empty unless built with [`TPOConfig::show_volume_profile`].
     pub(crate) row_volume: HashMap<i64, f64>,
+    /// Open time of the profile's last bar.
+    pub(crate) last_time: DateTime<Utc>,
     /// Point of control: the price (lowest tick) of the row with the most TPOs. A tie takes the
     /// lower price.
     pub poc_price: f64,
@@ -148,8 +150,22 @@ pub struct TPOConfig {
     /// Mark the lowest row when it holds more than one TPO.
     pub show_poor_low: bool,
     /// Extend marked extremes of completed profiles until a later bar trades strictly through
-    /// their price, or to the plot's right edge while no shown bar has.
+    /// their price, or to the plot's right edge while no shown bar has. Each extended extreme no
+    /// later bar has traded through is an alert source; see `Chart::alert_sources`.
     pub extend_poor_extremes: bool,
+    /// Extend the point of control of completed profiles until a later bar's range reaches its
+    /// price, or to the plot's right edge while no shown bar has. Needs `show_poc`. Each extended
+    /// level no later bar has reached is an alert source; see `Chart::alert_sources`.
+    pub extend_poc: bool,
+    /// Extend the value area high of completed profiles, as for `extend_poc`. Needs
+    /// `show_value_area`.
+    pub extend_value_area_high: bool,
+    /// Extend the value area low of completed profiles, as for `extend_poc`. Needs
+    /// `show_value_area`.
+    pub extend_value_area_low: bool,
+    /// Extend the lowest and the highest row of each run of single prints of completed
+    /// profiles, each as for `extend_poc`. Needs `show_single_prints`.
+    pub extend_single_prints: bool,
     /// Show single prints
     pub show_single_prints: bool,
     /// Show the session statistics table below the profile, with the rows of `statistics_rows`.
@@ -228,6 +244,10 @@ impl Default for TPOConfig {
             show_poor_high: false,
             show_poor_low: false,
             extend_poor_extremes: false,
+            extend_poc: false,
+            extend_value_area_high: false,
+            extend_value_area_low: false,
+            extend_single_prints: false,
             show_single_prints: false,
             show_statistics: false,
             statistics_rows: TPOStatisticsRows::default(),
@@ -314,6 +334,55 @@ impl Default for TPOLabels {
             poor_low: false,
             single_prints: false,
             prices: false,
+        }
+    }
+}
+
+/// A level of a completed TPO profile that can extend right of the profile, and that an alert
+/// can watch while no later bar has reached it; see [`TPOConfig::extend_poc`] and
+/// [`TPOLevelSource`](super::TPOLevelSource).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum TPOLevel {
+    /// The point of control, at [`TPOProfile::poc_price`].
+    PointOfControl,
+    /// The value area high, at [`TPOProfile::value_area_high`].
+    ValueAreaHigh,
+    /// The value area low, at [`TPOProfile::value_area_low`].
+    ValueAreaLow,
+    /// A poor high, at [`TPOProfile::profile_high`].
+    PoorHigh,
+    /// A poor low, at [`TPOProfile::profile_low`].
+    PoorLow,
+    /// The lowest or the highest row of a run of adjacent single prints; a run of one row
+    /// has one level.
+    SinglePrints,
+}
+
+impl TPOLevel {
+    /// English name, translated where shown.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::PointOfControl => "Point of control",
+            Self::ValueAreaHigh => "Value area high",
+            Self::ValueAreaLow => "Value area low",
+            Self::PoorHigh => "Poor high",
+            Self::PoorLow => "Poor low",
+            Self::SinglePrints => "Single prints",
+        }
+    }
+
+    /// Whether `bar` ends this level's extension at `price`. A poor high ends at a bar trading
+    /// strictly above it and a poor low at one trading strictly below it. Every other level ends
+    /// at the first bar whose low-to-high range reaches the price, inclusive. A comparison with a
+    /// NaN price fails.
+    #[cfg(feature = "widget")]
+    pub(crate) fn ended_by(self, price: f64, bar: &Bar) -> bool {
+        match self {
+            Self::PoorHigh => bar.high > price,
+            Self::PoorLow => bar.low < price,
+            _ => bar.low <= price && price <= bar.high,
         }
     }
 }
@@ -520,6 +589,15 @@ impl TPOConfig {
             || (labels.single_prints && self.show_single_prints)
     }
 
+    /// Whether these settings extend a level they show.
+    #[cfg(feature = "widget")]
+    pub(crate) fn extends_levels(&self) -> bool {
+        (self.extend_poc && self.show_poc)
+            || (self.show_value_area && (self.extend_value_area_high || self.extend_value_area_low))
+            || (self.extend_poor_extremes && (self.show_poor_high || self.show_poor_low))
+            || (self.extend_single_prints && self.show_single_prints)
+    }
+
     /// Only session profiles split at transitions between regular, extended and overnight hours.
     pub(crate) fn split_hours(&self) -> bool {
         self.split_sessions && self.profile_period == TPOProfilePeriod::Session
@@ -584,6 +662,7 @@ impl TPOProfile {
             letters: Vec::new(),
             price_tpo_count: HashMap::new(),
             row_volume: HashMap::new(),
+            last_time: session_date,
             poc_price: 0.0,
             value_area_high: 0.0,
             value_area_low: 0.0,
@@ -668,6 +747,7 @@ impl TPOProfile {
         }
         self.letters.extend(later.letters);
         self.closing_price = later.closing_price;
+        self.last_time = self.last_time.max(later.last_time);
         self.total_volume += later.total_volume;
         self.profile_high = self.profile_high.max(later.profile_high);
         self.profile_low = self.profile_low.min(later.profile_low);
@@ -680,6 +760,66 @@ impl TPOProfile {
             .iter()
             .filter(|l| self.key(l.price) == price_key)
             .collect()
+    }
+
+    /// The runs of adjacent single-print rows, one `tick_size` apart, from the lowest.
+    #[cfg(feature = "widget")]
+    pub(crate) fn single_print_runs(&self) -> impl Iterator<Item = &[f64]> {
+        let tick = self.tick_size;
+        self.single_prints
+            .chunk_by(move |a, b| (b - a - tick).abs() < tick * 0.5)
+    }
+
+    /// The levels `config` extends right of this profile, with the price each extension holds,
+    /// in [`TPOLevel`] order. Single-print runs are those [`Self::single_print_runs`] gives, from
+    /// the lowest run: its lowest row, then its highest row when the run has two or more. An empty
+    /// profile, a level the settings hide, a missing poor extreme and a non-finite price give none.
+    #[cfg(feature = "widget")]
+    pub(crate) fn extensions(&self, config: &TPOConfig) -> Vec<(TPOLevel, f64)> {
+        if self.price_tpo_count.is_empty() {
+            return Vec::new();
+        }
+        let mut levels: Vec<_> = [
+            (
+                TPOLevel::PointOfControl,
+                config.show_poc && config.extend_poc,
+                self.poc_price,
+            ),
+            (
+                TPOLevel::ValueAreaHigh,
+                config.show_value_area && config.extend_value_area_high,
+                self.value_area_high,
+            ),
+            (
+                TPOLevel::ValueAreaLow,
+                config.show_value_area && config.extend_value_area_low,
+                self.value_area_low,
+            ),
+            (
+                TPOLevel::PoorHigh,
+                config.show_poor_high && config.extend_poor_extremes && self.has_poor_high,
+                self.profile_high,
+            ),
+            (
+                TPOLevel::PoorLow,
+                config.show_poor_low && config.extend_poor_extremes && self.has_poor_low,
+                self.profile_low,
+            ),
+        ]
+        .into_iter()
+        .filter(|(_, extended, _)| *extended)
+        .map(|(level, _, price)| (level, price))
+        .collect();
+        if config.show_single_prints && config.extend_single_prints {
+            for run in self.single_print_runs() {
+                levels.push((TPOLevel::SinglePrints, run[0]));
+                if run.len() > 1 {
+                    levels.push((TPOLevel::SinglePrints, run[run.len() - 1]));
+                }
+            }
+        }
+        levels.retain(|(_, price)| price.is_finite());
+        levels
     }
 }
 
@@ -1089,6 +1229,7 @@ fn profiles_for_parts(
                 }
             }
             profile.closing_price = bar.close;
+            profile.last_time = bar.time;
             // Update profile high/low
             profile.profile_high = profile.profile_high.max(bar.high);
             profile.profile_low = profile.profile_low.min(bar.low);

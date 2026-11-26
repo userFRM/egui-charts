@@ -440,7 +440,8 @@ impl AlertEngine {
     /// Updates active conditions of `symbol` on `timeframe` against the newest of `bars`, oldest
     /// first, at the time `now`. Feed every interval in [`Alert::timeframes`]. `value` resolves a
     /// study or drawing source at a bar index of `bars`, for instance with `Chart::alert_value`;
-    /// price and volume come from `bars`. `exchange` is the exchange of `symbol` for the
+    /// price and volume come from `bars`, and a [`TPOLevel`](AlertSource::TPOLevel) is the price
+    /// it keeps. `exchange` is the exchange of `symbol` for the
     /// `{{exchange}}` placeholder, as [`Alert::expand_message`] takes it. Call it each frame with
     /// the bars of every live chart, but not with a chart in replay.
     pub fn update(
@@ -1161,6 +1162,7 @@ fn observe(
         let found = match source {
             AlertSource::Price => bars.get(at)?.close,
             AlertSource::Volume => bars.get(at)?.volume,
+            AlertSource::TPOLevel(level) => level.price,
             _ => value(source, at)?,
         };
         found.is_finite().then_some(found)
@@ -1679,13 +1681,13 @@ fn condition_holds(
             bars: back,
         } => lookback(*back)
             .is_some_and(|p| p != 0.0 && reaches(100.0 * (value - p) / p.abs(), *percent)),
-        // A drawing's level does not follow the price, so the range traded meets it.
+        // A drawing's level or a TPO level does not follow the price, so the range traded meets it.
         AlertCondition::Compare {
             other: partner,
             comparison,
         } => {
             let traded = match partner {
-                AlertSource::Drawing(_) => traded,
+                AlertSource::Drawing(_) | AlertSource::TPOLevel(_) => traded,
                 _ => [value, value],
             };
             other[0]
