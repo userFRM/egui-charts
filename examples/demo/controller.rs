@@ -1016,6 +1016,12 @@ impl DemoApp {
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.storage.clone());
+        if let Some(hidden) = cc
+            .storage
+            .and_then(|storage| eframe::get_value::<Vec<String>>(storage, "symbol_details_hidden"))
+        {
+            app.symbol_details.set_hidden_sections(hidden);
+        }
         app.top_toolbar.layout_menu.set_storage(app.storage.clone());
         app.top_toolbar.layout_menu.set_sharing(sharing);
         app.highlights.set_feed(app.live.clone());
@@ -1854,7 +1860,7 @@ impl DemoApp {
         let target = match config.format {
             ExportFormat::Png => ScreenshotTarget::File(save_path),
             ExportFormat::Clipboard => ScreenshotTarget::Clipboard,
-            ExportFormat::Csv => return self.export_csv(save_path),
+            ExportFormat::Csv => return self.export_csv(&config.data, save_path),
             ExportFormat::Svg => {
                 return self.export_svg(ctx, &config.image, config.scope, save_path);
             }
@@ -1863,8 +1869,12 @@ impl DemoApp {
         ctx.request_repaint();
     }
 
-    fn export_csv(&mut self, save_path: Option<std::path::PathBuf>) {
-        let out = match self.chart.export_csv() {
+    fn export_csv(
+        &mut self,
+        options: &egui_charts::widget::DataExportOptions,
+        save_path: Option<std::path::PathBuf>,
+    ) {
+        let out = match self.chart.export_csv_with(options) {
             Ok(csv) => csv,
             Err(error) => return self.export_failed(save_path.is_some(), error.to_string()),
         };
@@ -1929,6 +1939,11 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "event_visibility", self.chart.event_visibility());
         eframe::set_value(storage, "open_panel", &self.open_panel);
         eframe::set_value(storage, "depth_panel", &self.depth);
+        eframe::set_value(
+            storage,
+            "symbol_details_hidden",
+            &self.symbol_details.hidden_sections(),
+        );
         eframe::set_value(
             storage,
             "drawing_defaults",
@@ -4451,7 +4466,7 @@ impl DemoApp {
             }
             ContextMenuAction::ResetChart => self.chart.reset_chart_view(),
             ContextMenuAction::OpenDataTable => self.data_table.open(),
-            ContextMenuAction::ExportCsv => self.export_csv(None),
+            ContextMenuAction::ExportCsv => self.export_csv(&Default::default(), None),
             ContextMenuAction::Order(request) => self.trading.open_ticket(request),
             _ => {}
         }
@@ -5584,7 +5599,8 @@ mod tests {
     }
 
     /// The watchlist's details use the chart's bars and feed, open headline links and honour
-    /// the three section choices through the demo's menus and action handler.
+    /// the three section choices through the demo's menus and action handler, and the sections
+    /// hidden there stay hidden after a restart on the same storage.
     #[test]
     fn watchlist_details_sections_reach_the_demo() {
         use eframe::App as _;
@@ -5727,6 +5743,31 @@ mod tests {
                 "{title}: {shown:?}"
             );
         }
+
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut app = DemoApp::new_at(&cc, chrono::Utc::now(), true);
+        assert!(app.open_panel == Some(SidePanel::Watchlist));
+        settle(&mut app, &ctx);
+        for _ in 0..3 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        let output = frame(&mut app, vec![]);
+        let shown = painted(&output);
+        output.drop_without_applying_deltas();
+        assert!(shown.iter().any(|text| text == "Volume"), "{shown:?}");
+        for title in ["Technicals", "Upcoming events", "News"] {
+            assert!(
+                !shown.iter().any(|text| text == title),
+                "{title}: {shown:?}"
+            );
+        }
+        assert_eq!(
+            app.symbol_details.hidden_sections(),
+            ["Technicals", "Upcoming events", "News"]
+        );
     }
 
     /// One frame of the demo's dialogs with `events`, returning its AccessKit nodes.
@@ -11254,6 +11295,33 @@ mod tests {
                 assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, before + 1);
             }
         }
+    }
+
+    /// The dialog's CSV choices reach the file the demo writes.
+    #[test]
+    fn csv_export_follows_the_dialog_data_options() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let path = std::env::temp_dir().join(format!(
+            "egui-charts-export-test-{}.csv",
+            std::process::id()
+        ));
+        let mut data = egui_charts::widget::DataExportOptions::default();
+        data.include_main_series = false;
+        app.run_export(
+            &ctx,
+            egui_charts::ui::export::ExportConfig {
+                format: ExportFormat::Csv,
+                data,
+                ..Default::default()
+            },
+            Some(path.clone()),
+        );
+        let csv = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let header = csv.lines().next().unwrap();
+        assert!(header.starts_with("time"), "{header}");
+        assert!(!header.contains("open"), "{header}");
     }
 
     #[test]
