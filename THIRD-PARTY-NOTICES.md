@@ -92,6 +92,10 @@ Some interface icons under `assets/icons/` are taken from [Lucide](https://githu
 | `ui/zoom-in.svg` | `zoom-in.svg` |
 | `ui/zoom-out.svg` | `zoom-out.svg` |
 
+## Noto Color Emoji
+
+`assets/emoji/Noto-COLRv1.ttf` is a COLRv1 colour font built by `tools/emoji-font.sh` from the emoji images of [googlefonts/noto-emoji](https://github.com/googlefonts/noto-emoji) at commit `e20cbc2bbec1926686be9f9bee7d1d2cfa1fea0e` (tag `v2026-09-24-unicode18_0`): the SVG images in `2D/svg`, licensed under the Apache License 2.0, and the region flags in `third_party/region-flags/waved-svg`, which are in the public domain or otherwise exempt from copyright. The `color-emoji` feature embeds it to draw emoji in colour. The licence text and the flags' notice are in [`assets/emoji/LICENSE-noto-emoji.txt`](assets/emoji/LICENSE-noto-emoji.txt). `scripts/emoji-set.py` builds the list of names and categories in `src/drawings/emoji_set.rs` from the Unicode emoji test data, version 18.0 (Unicode License v3).
+
 ## Roboto
 
 `assets/fonts/Roboto-Latin.ttf` is Roboto 3.015 from the [upstream release](https://github.com/googlefonts/roboto-3-classic/releases/tag/v3.015), embedded by the chart widget. It is limited to weights 400 to 600 at normal width and subset to Latin, with punctuation, currency, arrows, math and interface markers. Roboto is licensed under the SIL Open Font License 1.1; the full text is in [`assets/fonts/LICENSE-roboto.txt`](assets/fonts/LICENSE-roboto.txt).
@@ -100,7 +104,7 @@ The source is `web/split/Roboto[wdth,wght].ttf` in `Roboto_v3.015.zip` (SHA-256 
 
 ## Fonts in the web demo
 
-The library embeds Roboto. The web demo under `examples/demo` also enables egui's `default_fonts` feature through `eframe`, so its WebAssembly module contains egui's default fonts: Hack Regular (MIT License and Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0) and egui-icons, a five-glyph subset of emoji-icon-font (MIT License). The demo also enables egui's `monochrome_emoji_fonts` feature for the drawing bar's icon and emoji menu, which adds Noto Emoji Regular (SIL Open Font License 1.1) and the full emoji-icon-font (MIT License). Their notices and licences are in [`examples/demo/LICENSE-fonts.txt`](examples/demo/LICENSE-fonts.txt). The demo's build publishes that file and the Lucide licence next to the demo page.
+The library embeds Roboto. The web demo under `examples/demo` also enables egui's `default_fonts` feature through `eframe`, so its WebAssembly module contains egui's default fonts: Hack Regular (MIT License and Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0) and egui-icons, a five-glyph subset of emoji-icon-font (MIT License). The demo also enables egui's `monochrome_emoji_fonts` feature for the drawing bar's icon and emoji menu, which adds Noto Emoji Regular (SIL Open Font License 1.1) and the full emoji-icon-font (MIT License). Their notices and licences are in [`examples/demo/LICENSE-fonts.txt`](examples/demo/LICENSE-fonts.txt). The demo's build publishes that file and the Lucide licence next to the demo page. The demo also enables this crate's `color-emoji` feature, which embeds the Noto Color Emoji images (Apache License 2.0, flags in the public domain); their licence is published next to the demo page as `LICENSE-noto-emoji.txt`.
 
 The guide examples under `examples/docs` embed Roboto and the same default fonts. Their build also publishes `LICENSE-fonts.txt` next to the example page at `/egui-charts/docs/examples/widget/`.
 

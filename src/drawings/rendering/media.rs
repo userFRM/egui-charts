@@ -505,7 +505,7 @@ impl Drawing {
 
         let galley = painter.layout_no_wrap(
             icon.to_owned(),
-            egui::FontId::proportional(icon_size),
+            crate::drawings::glyphs::font_id(painter.ctx(), icon, icon_size),
             color,
         );
         if !galley.is_empty() {

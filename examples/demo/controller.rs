@@ -8346,6 +8346,131 @@ mod tests {
         );
     }
 
+    /// The drawing bar's picker places a colour flag, which restarts with an emoji saved before the full set.
+    #[test]
+    fn emoji_picker_places_colour_emoji_that_survive_a_restart() {
+        use egui::accesskit::Role;
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let at = "2026-11-10T19:29:50Z".parse().unwrap();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new_at(&cc, at, true);
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()),
+            )
+        };
+        let press = |app: &mut DemoApp, pos| {
+            frame(app, vec![egui::Event::PointerMoved(pos)]).drop_without_applying_deltas();
+            for pressed in [true, false] {
+                let button = egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame(app, vec![button]).drop_without_applying_deltas();
+            }
+        };
+        // The control `role` labelled or, for a text field, hinted `label`.
+        let click = |app: &mut DemoApp, role, label: &str| {
+            let output = frame(app, vec![]);
+            let bounds = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|(_, node)| {
+                    node.role() == role
+                        && (node.label() == Some(label) || node.placeholder() == Some(label))
+                })
+                .and_then(|(_, node)| node.bounds())
+                .unwrap_or_else(|| panic!("missing control: {label}"));
+            output.drop_without_applying_deltas();
+            let center = egui::pos2(
+                (bounds.x0 + bounds.x1) as f32 * 0.5,
+                (bounds.y0 + bounds.y1) as f32 * 0.5,
+            );
+            press(app, center);
+        };
+        let emoji = |app: &DemoApp| -> Vec<Option<String>> {
+            app.chart
+                .drawings()
+                .drawings
+                .iter()
+                .filter(|drawing| drawing.tool_type == DrawingToolType::FontIcon)
+                .map(|drawing| drawing.text.clone())
+                .collect()
+        };
+        let flag = "\u{1f1eb}\u{1f1f7}";
+        let mut legacy = Drawing::new(900, DrawingToolType::FontIcon);
+        legacy.text = Some("✈".into());
+        legacy.completed = true;
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let price = bars[bars.len() - 10].close;
+        legacy.chart_points = vec![ChartPoint::new(bars.len() as f32 - 10.0, price)];
+        app.chart.drawings_mut().drawings.push(legacy);
+
+        click(&mut app, Role::Button, "Icons/Emojis");
+        click(
+            &mut app,
+            Role::TextInput,
+            "Search icons, emoji and stickers",
+        );
+        frame(&mut app, vec![egui::Event::Text("flag: france".into())])
+            .drop_without_applying_deltas();
+        click(&mut app, Role::Button, "Flag: France");
+        // Past the double click interval.
+        for _ in 0..30 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        let rect = app.chart.get_rendered_price_rect();
+        press(
+            &mut app,
+            rect.left_center() + egui::vec2(rect.width() / 4.0, 0.0),
+        );
+        assert_eq!(emoji(&app), [Some("✈".into()), Some(flag.into())]);
+
+        assert!(app.chart.flush_stored_drawings());
+        let mut storage = AppStorage::default();
+        eframe::App::save(&mut *app, &mut storage);
+        drop(app);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut app = DemoApp::new_at(&cc, at, true);
+        app.live.set_paused(true);
+        app.poll_storage(&ctx);
+        settle(&mut app, &ctx);
+        assert_eq!(emoji(&app), [Some("✈".into()), Some(flag.into())]);
+        frame(&mut app, vec![]).drop_without_applying_deltas();
+        let output = frame(&mut app, vec![]);
+        for text in ["✈", flag] {
+            assert!(
+                output
+                    .shapes
+                    .iter()
+                    .any(|shape| matches!(&shape.shape, egui::Shape::Text(t)
+                    if t.galley.job.text == text
+                        && t.galley.rows.iter().any(|r| r.glyphs.iter().any(|g| g.is_color)))),
+                "{text:?} is not drawn in colour after the restart"
+            );
+        }
+        output.drop_without_applying_deltas();
+    }
+
     #[test]
     fn replay_bar_sits_below_the_time_axis() {
         let ctx = egui::Context::default();
