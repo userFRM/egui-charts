@@ -4039,11 +4039,11 @@ impl Chart {
                     if config.show_poc {
                         labels.push(("POC", profile.poc_price));
                     }
-                    if config.show_value_area {
-                        labels.extend([
-                            ("VAH", profile.value_area_high),
-                            ("VAL", profile.value_area_low),
-                        ]);
+                    if config.show_value_area && config.show_value_area_high {
+                        labels.push(("VAH", profile.value_area_high));
+                    }
+                    if config.show_value_area && config.show_value_area_low {
+                        labels.push(("VAL", profile.value_area_low));
                     }
                     let widest = rendering::candles::tpo::profile_columns(profile, config);
                     self.paint_profile_context(

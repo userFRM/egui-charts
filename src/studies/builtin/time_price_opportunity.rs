@@ -1,8 +1,8 @@
 //! Market Profile letters of each session drawn beside the session's bars.
 
 use crate::model::{
-    Bar, CustomProfileSession, CustomProfileSessions, Instrument, ProfileSession, SessionOverlap,
-    TPOColorMode, TPOConfig, TPODisplayMode, TimezoneId,
+    Bar, CustomProfileSession, CustomProfileSessions, Instrument, LineStyle, ProfileSession,
+    SessionOverlap, TPOColorMode, TPOConfig, TPODisplayMode, TPOProfilePeriod, TimezoneId,
 };
 use crate::studies::{Indicator, IndicatorValues, InputKind, InputValue, StudyInput};
 use chrono::{DateTime, NaiveTime, SecondsFormat, Utc};
@@ -21,9 +21,36 @@ fn display_choice(mode: TPODisplayMode) -> InputValue {
     InputValue::Choice(DISPLAYS.iter().position(|d| *d == mode).unwrap())
 }
 
+/// Profile period choices of the study, in input order.
+const PERIODS: [TPOProfilePeriod; 3] = [
+    TPOProfilePeriod::Session,
+    TPOProfilePeriod::Week,
+    TPOProfilePeriod::Month,
+];
+
+/// Styles of the volume profile's level lines, in input order.
+const LINE_STYLES: [LineStyle; 3] = [LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted];
+
+/// Index of `style` among [`LINE_STYLES`].
+fn line_style_choice(style: LineStyle) -> InputValue {
+    InputValue::Choice(LINE_STYLES.iter().position(|s| *s == style).unwrap_or(0))
+}
+
+/// A colour input that reads [`Color32::PLACEHOLDER`] while the colour follows the theme or
+/// the profile.
+fn color_input(color: Option<Color32>) -> InputValue {
+    InputValue::Color(color.unwrap_or(Color32::PLACEHOLDER))
+}
+
+/// The colour a colour input picked, or `None` for [`Color32::PLACEHOLDER`].
+fn picked(color: Color32) -> Option<Color32> {
+    (color != Color32::PLACEHOLDER).then_some(color)
+}
+
 /// A merge or split list as its input holds it, after the period length and row size it was
-/// made for. The profiles take it only while both still match. `None` is a list saved before
-/// the two were recorded, which applies whatever they are.
+/// made for. The profiles take it only while the period length still matches: a merge joins
+/// whole sessions and a split falls at a period's start, whatever the rows. `None` is a list
+/// saved before the two were recorded, which applies whatever they are.
 type ProfileEdits<T> = (Option<(usize, usize)>, Vec<T>);
 
 /// Each session's TPO profile on the price pane, starting at the session's first bar, with its
@@ -38,7 +65,8 @@ type ProfileEdits<T> = (Option<(usize, usize)>, Vec<T>);
 /// Its Hours input keeps each profile to the trading day, the regular hours, custom hours, or the
 /// pre-market or post-market alone, counting only the bars of those hours, and custom hours keep
 /// whole periods on the period grid. Split extended hours divides the trading day into its
-/// pre-market, regular and post-market profiles.
+/// pre-market, regular and post-market profiles. Profiles longer than one day keep the trading
+/// day, whatever Hours says.
 ///
 /// Ticks per row 0 sizes rows automatically: from the price range of the latest 300 bars up to
 /// the last visible bar, aiming at about 80 rows, with the ticks per row rounded up to a multiple
@@ -158,10 +186,10 @@ impl TimePriceOpportunity {
             .collect()
     }
 
-    /// Hands the profiles the edits made for the current period length and row size.
+    /// Hands the profiles the edits made for the current period length.
     fn update_edits(&mut self) {
-        let now = (self.config.period_minutes as usize, self.row_ticks);
-        let live = |made_for: Option<(usize, usize)>| made_for.is_none_or(|made| made == now);
+        let now = self.config.period_minutes as usize;
+        let live = |made_for: Option<(usize, usize)>| made_for.is_none_or(|made| made.0 == now);
         self.config.composites = if live(self.composites.0) {
             self.composites.1.clone()
         } else {
@@ -185,6 +213,7 @@ impl TimePriceOpportunity {
     /// when Split extended hours divides it.
     fn update_session(&mut self) {
         self.config.session = match self.hours {
+            _ if self.config.joins_sessions() => ProfileSession::Chart,
             0 if self.config.split_sessions => ProfileSession::Segments,
             1 => ProfileSession::Regular,
             2 => ProfileSession::Custom(self.custom_sessions()),
@@ -192,6 +221,158 @@ impl TimePriceOpportunity {
             4 => ProfileSession::PostMarket,
             _ => ProfileSession::Chart,
         };
+    }
+}
+
+impl TimePriceOpportunity {
+    /// The volume profile's inputs, shown while it is drawn. Saved choices are indices, so new
+    /// ones go last.
+    fn volume_inputs(&self) -> Vec<StudyInput> {
+        let volume = &self.config.volume_profile;
+        let toggle = |id: &str, label: &str, on: bool, parent: &str| {
+            StudyInput::new(id, label, InputValue::Toggle(on), InputKind::Toggle)
+                .with_default(InputValue::Toggle(false))
+                .shown_when(parent, [1])
+        };
+        let color = |id: &str, label: &str, color: Option<Color32>, parent: &str| {
+            StudyInput::new(id, label, color_input(color), InputKind::Color)
+                .with_default(InputValue::Color(Color32::PLACEHOLDER))
+                .shown_when(parent, [1])
+                .in_style_tab()
+        };
+        let style = |id: &str, label: &str, style: LineStyle, parent: &str| {
+            StudyInput::new(
+                id,
+                label,
+                line_style_choice(style),
+                InputKind::Choice(vec!["Solid".into(), "Dashed".into(), "Dotted".into()]),
+            )
+            .with_default(InputValue::Choice(0))
+            .shown_when(parent, [1])
+            .in_style_tab()
+        };
+        let mut inputs = Vec::new();
+        for (id, label, on, line_color, line_style) in [
+            (
+                "volume_poc",
+                "Volume point of control",
+                volume.poc,
+                volume.poc_color,
+                volume.poc_style,
+            ),
+            (
+                "volume_value_area_high",
+                "Volume value area high",
+                volume.value_area_high,
+                volume.value_area_high_color,
+                volume.value_area_high_style,
+            ),
+            (
+                "volume_value_area_low",
+                "Volume value area low",
+                volume.value_area_low,
+                volume.value_area_low_color,
+                volume.value_area_low_style,
+            ),
+        ] {
+            inputs.extend([
+                toggle(id, label, on, "volume_profile"),
+                color(
+                    &format!("{id}_color"),
+                    &format!("{label} colour"),
+                    line_color,
+                    id,
+                ),
+                style(
+                    &format!("{id}_style"),
+                    &format!("{label} style"),
+                    line_style,
+                    id,
+                ),
+            ]);
+        }
+        inputs.extend([
+            toggle(
+                "volume_values",
+                "Volume values",
+                volume.values,
+                "volume_profile",
+            ),
+            color(
+                "volume_values_color",
+                "Volume values colour",
+                volume.values_color,
+                "volume_values",
+            ),
+            color(
+                "volume_profile_color",
+                "Volume colour",
+                volume.color,
+                "volume_profile",
+            ),
+            color(
+                "volume_value_area_color",
+                "Volume value area colour",
+                volume.value_area_color,
+                "volume_profile",
+            ),
+            StudyInput::new(
+                "volume_placement",
+                "Volume placement",
+                InputValue::Choice(usize::from(!volume.left)),
+                InputKind::Choice(vec!["Left".into(), "Right".into()]),
+            )
+            .with_default(InputValue::Choice(1))
+            .shown_when("volume_profile", [1]),
+            // Saved studies from before these inputs shade rows by the TPO value area.
+            StudyInput::new(
+                "volume_tpo_value_area",
+                "Volume rows by TPO value area",
+                InputValue::Toggle(volume.tpo_value_area_rows),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false))
+            .shown_when("display", Vec::new()),
+        ]);
+        inputs
+    }
+
+    /// Sets one of [`Self::volume_inputs`], or returns `false` for another id or value.
+    fn set_volume_input(&mut self, id: &str, value: InputValue) -> bool {
+        let volume = &mut self.config.volume_profile;
+        match (id, value) {
+            ("volume_poc", InputValue::Toggle(on)) => volume.poc = on,
+            ("volume_poc_color", InputValue::Color(color)) => volume.poc_color = picked(color),
+            ("volume_poc_style", InputValue::Choice(choice @ 0..=2)) => {
+                volume.poc_style = LINE_STYLES[choice]
+            }
+            ("volume_value_area_high", InputValue::Toggle(on)) => volume.value_area_high = on,
+            ("volume_value_area_high_color", InputValue::Color(color)) => {
+                volume.value_area_high_color = picked(color)
+            }
+            ("volume_value_area_high_style", InputValue::Choice(choice @ 0..=2)) => {
+                volume.value_area_high_style = LINE_STYLES[choice]
+            }
+            ("volume_value_area_low", InputValue::Toggle(on)) => volume.value_area_low = on,
+            ("volume_value_area_low_color", InputValue::Color(color)) => {
+                volume.value_area_low_color = picked(color)
+            }
+            ("volume_value_area_low_style", InputValue::Choice(choice @ 0..=2)) => {
+                volume.value_area_low_style = LINE_STYLES[choice]
+            }
+            ("volume_values", InputValue::Toggle(on)) => volume.values = on,
+            ("volume_values_color", InputValue::Color(color)) => {
+                volume.values_color = picked(color)
+            }
+            ("volume_profile_color", InputValue::Color(color)) => volume.color = picked(color),
+            ("volume_value_area_color", InputValue::Color(color)) => {
+                volume.value_area_color = picked(color)
+            }
+            ("volume_placement", InputValue::Choice(choice @ 0..=1)) => volume.left = choice == 0,
+            ("volume_tpo_value_area", InputValue::Toggle(on)) => volume.tpo_value_area_rows = on,
+            _ => return false,
+        }
+        true
     }
 }
 
@@ -219,6 +400,25 @@ impl Indicator for TimePriceOpportunity {
                 InputKind::Length(1, 1440),
             )
             .with_default(InputValue::Length(30)),
+            StudyInput::new(
+                "profile_period",
+                "Profile period",
+                InputValue::Choice(
+                    PERIODS
+                        .iter()
+                        .position(|period| *period == self.config.profile_period)
+                        .unwrap_or(0),
+                ),
+                InputKind::Choice(vec!["Days".into(), "Weeks".into(), "Months".into()]),
+            )
+            .with_default(InputValue::Choice(0)),
+            StudyInput::new(
+                "profile_periods",
+                "Profile length",
+                InputValue::Length(self.config.profile_periods as usize),
+                InputKind::Length(1, 100),
+            )
+            .with_default(InputValue::Length(1)),
             StudyInput::new(
                 "row_ticks",
                 "Ticks per row (0 for auto)",
@@ -311,6 +511,15 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(display_choice(defaults.display_mode)),
             StudyInput::new(
+                "letters_color",
+                "Letter colour",
+                color_input(self.config.letter_color),
+                InputKind::Color,
+            )
+            .with_default(InputValue::Color(Color32::PLACEHOLDER))
+            .shown_when("display", [0, 2])
+            .in_style_tab(),
+            StudyInput::new(
                 "sessions",
                 "Sessions",
                 InputValue::Choice(usize::from(self.config.latest_session_only)),
@@ -390,12 +599,37 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Toggle(defaults.show_poc)),
             StudyInput::new(
+                "poc_color",
+                "Point of control colour",
+                color_input(self.config.poc_color),
+                InputKind::Color,
+            )
+            .with_default(InputValue::Color(Color32::PLACEHOLDER))
+            .shown_when("poc", [1])
+            .in_style_tab(),
+            StudyInput::new(
                 "value_area_levels",
-                "Value area high and low",
+                "Value area",
                 InputValue::Toggle(self.config.show_value_area),
                 InputKind::Toggle,
             )
             .with_default(InputValue::Toggle(defaults.show_value_area)),
+            StudyInput::new(
+                "value_area_high",
+                "Value area high",
+                InputValue::Toggle(self.config.show_value_area_high),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.show_value_area_high))
+            .shown_when("value_area_levels", [1]),
+            StudyInput::new(
+                "value_area_low",
+                "Value area low",
+                InputValue::Toggle(self.config.show_value_area_low),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.show_value_area_low))
+            .shown_when("value_area_levels", [1]),
             StudyInput::new(
                 "initial_balance",
                 "Initial balance",
@@ -488,6 +722,7 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Toggle(defaults.show_volume_profile)),
         ];
+        inputs.extend(self.volume_inputs());
         let mut custom_inputs = vec![
             StudyInput::new(
                 "custom_sessions",
@@ -703,7 +938,19 @@ impl Indicator for TimePriceOpportunity {
             ("period_color_3", InputValue::Color(color)) => self.config.period_colors[2] = color,
             ("period_color_4", InputValue::Color(color)) => self.config.period_colors[3] = color,
             ("poc", InputValue::Toggle(show)) => self.config.show_poc = show,
+            ("poc_color", InputValue::Color(color)) => self.config.poc_color = picked(color),
             ("value_area_levels", InputValue::Toggle(show)) => self.config.show_value_area = show,
+            ("value_area_high", InputValue::Toggle(show)) => {
+                self.config.show_value_area_high = show
+            }
+            ("value_area_low", InputValue::Toggle(show)) => self.config.show_value_area_low = show,
+            ("profile_period", InputValue::Choice(choice @ 0..=2)) => {
+                self.config.profile_period = PERIODS[choice]
+            }
+            ("profile_periods", InputValue::Length(count @ 1..=100)) => {
+                self.config.profile_periods = count as u32
+            }
+            ("letters_color", InputValue::Color(color)) => self.config.letter_color = picked(color),
             ("initial_balance", InputValue::Toggle(show)) => {
                 self.config.show_initial_balance = show
             }
@@ -722,6 +969,11 @@ impl Indicator for TimePriceOpportunity {
                 self.config.extend_single_prints = show
             }
             ("volume_profile", InputValue::Toggle(show)) => self.config.show_volume_profile = show,
+            (volume, value) if volume.starts_with("volume_") => {
+                if !self.set_volume_input(volume, value) {
+                    return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
+                }
+            }
             ("composites" | "splits", InputValue::Text(text)) => {
                 let rejected = || crate::studies::StudyError::rejected(&self.inputs(), id);
                 let (made_for, text) = match text.split_once('|') {
