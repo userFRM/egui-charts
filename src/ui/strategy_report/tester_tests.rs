@@ -812,8 +812,10 @@ fn selecting_a_strategy_applies_its_declared_order_size() {
 
 #[test]
 fn equity_order_sizes_are_shown_and_typed_in_percent() {
-    let mut tester = StrategyTester::default();
-    tester.tab = Tab::Properties;
+    let tester = StrategyTester {
+        tab: Tab::Properties,
+        ..StrategyTester::default()
+    };
     let mut h = Harness::builder()
         .with_size(Vec2::new(1440.0, 900.0))
         .build_ui_state(
