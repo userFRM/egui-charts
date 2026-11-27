@@ -32,6 +32,16 @@ pub struct StrategyFill {
     pub alert_message: Option<String>,
 }
 
+impl StrategyFill {
+    /// [`price`](Self::price) as a fill alert's default message writes it: with at least
+    /// [`price_decimals`](Self::price_decimals), up to 12, and more where the price has them,
+    /// without binary rounding digits, such as `100.12` for an open of 100.1 with two increments
+    /// of 0.01 of slippage.
+    pub fn price_text(&self) -> String {
+        StrategyReport::price_text_with(self.price, self.price_decimals)
+    }
+}
+
 /// An alert a strategy raised through [`StrategyContext::alert`] in a live run.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -1099,14 +1109,16 @@ mod tests {
         let mut run = Backtest::new("Run", "SYM", Timeframe::Min1, 10_000.0);
         run.settings.slippage = Slippage::Increments(2);
         run.settings.order_size = OrderSize::Cash(1000.0);
+        run.settings.liquidation_increment = 1e-6;
         let mut fills = Vec::new();
         for count in 1..=bars.len() {
             fills.extend(run.update(&mut Turns, &bars[..count], &[]));
         }
-        // 100.1 + 0.02 and 1000 / (100.08 + 0.02) as binary arithmetic gives them.
+        // 100.1 + 0.02, and 1000 / (100.08 + 0.02) in steps of 1e-6, as binary arithmetic gives
+        // them.
         assert_eq!(fills.len(), 4);
         assert_eq!(fills[0].price, 100.11999999999999);
-        assert_eq!(fills[3].quantity, 9.990009990009991);
+        assert_eq!(fills[3].quantity, 9.990008999999999);
         let raised = StrategyAlert {
             sequence: 1,
             time: bars[1].time,
@@ -1120,7 +1132,7 @@ mod tests {
                     "Buy 1 at 100.12, position 1",
                     "Sell 2 at 100.98, position -1",
                     "Buy 1 at 99.02, position 0",
-                    "Buy 9.99000999 at 100.10, position 9.99000999",
+                    "Buy 9.990009 at 100.10, position 9.990009",
                     "Filled",
                 ],
             ),
@@ -1135,7 +1147,7 @@ mod tests {
                     "flat 0 to long 1",
                     "long 1 to short 1",
                     "short 1 to flat 0",
-                    "flat 0 to long 9.99000999",
+                    "flat 0 to long 9.990009",
                     "  to  ",
                 ],
             ),
