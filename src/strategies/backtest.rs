@@ -190,6 +190,15 @@ fn currency_code(code: Option<&str>) -> Option<&str> {
 }
 
 impl BacktestSettings {
+    /// Decimals of [`price_increment`](Self::price_increment) by the rule of
+    /// `scales::instrument_price_precision`, such as 2 for 0.01, or `None` when it is not positive
+    /// and finite.
+    pub(crate) fn price_decimals(&self) -> Option<u8> {
+        let mut instrument = crate::model::Instrument::new("");
+        instrument.tick_size = Some(self.price_increment);
+        crate::scales::instrument_price_precision(&instrument)
+    }
+
     fn side_funding(&self, side: OrderSide) -> Option<f64> {
         match side {
             OrderSide::Buy => self.long_funding,
@@ -1185,9 +1194,7 @@ impl Backtest {
             settings.initial_capital,
         );
         report.currency = self.account_currency().map(str::to_owned);
-        let mut instrument = crate::model::Instrument::new(&self.symbol);
-        instrument.tick_size = Some(settings.price_increment);
-        report.price_decimals = crate::scales::instrument_price_precision(&instrument);
+        report.price_decimals = settings.price_decimals();
         report.risk_free_rate = settings.risk_free_rate;
         let size = match settings.order_size {
             OrderSize::Fixed(value) => format!("Fixed units: {value}"),
@@ -2360,6 +2367,7 @@ impl<'a> Run<'a> {
                 order_id,
                 side,
                 price,
+                price_decimals: self.settings.price_decimals(),
                 quantity: filled_quantity,
                 position,
                 comment,

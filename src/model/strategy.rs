@@ -1059,10 +1059,24 @@ impl StrategyReport {
     /// `price` as the list of trades and the trade markers write it: with at least
     /// [`price_decimals`](Self::price_decimals), up to 12, and more where the price has them.
     pub(crate) fn price_text(&self, price: f64) -> String {
-        let least = self
-            .price_decimals
-            .map_or(0, |decimals| usize::from(decimals.min(12)));
+        Self::price_text_with(price, self.price_decimals)
+    }
+
+    /// `price` as [`price_text`](Self::price_text) writes it for a report with `decimals` as its
+    /// price decimals, as strategy fill alerts write their fills.
+    pub(crate) fn price_text_with(price: f64, decimals: Option<u8>) -> String {
+        let least = decimals.map_or(0, |decimals| usize::from(decimals.min(12)));
         fill_text(price, least, usize::MAX)
+    }
+
+    /// `value` at 15 significant digits, which drops binary rounding digits such as those of
+    /// 100.1 + 0.02, or `value` itself where the rounded value would not be finite.
+    pub(crate) fn without_rounding_digits(value: f64) -> f64 {
+        format!("{value:.14e}")
+            .parse::<f64>()
+            .ok()
+            .filter(|rounded| rounded.is_finite())
+            .unwrap_or(value)
     }
 
     /// `quantity` with its own decimals, up to eight, as the account tables write quantities.
@@ -1908,9 +1922,10 @@ impl StrategyReport {
 }
 
 /// `value` with `least` decimals or its own, whichever is more, up to `most`. Its own decimals
-/// are those of its shortest form at 15 significant digits, which drops binary rounding digits.
+/// are those of its shortest form at 15 significant digits, see
+/// [`StrategyReport::without_rounding_digits`].
 fn fill_text(value: f64, least: usize, most: usize) -> String {
-    let rounded = format!("{value:.14e}").parse::<f64>().unwrap_or(value);
+    let rounded = StrategyReport::without_rounding_digits(value);
     let own = rounded
         .to_string()
         .split_once('.')
