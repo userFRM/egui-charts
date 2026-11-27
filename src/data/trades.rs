@@ -204,6 +204,7 @@ impl OrderSizes {
 }
 
 /// Trades in arrival order, at most `capacity` of them: the oldest go first.
+#[derive(Clone)]
 pub(crate) struct Trades {
     trades: VecDeque<Tick>,
     capacity: usize,
@@ -441,6 +442,11 @@ impl Trades {
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Tick> {
         self.trades.iter()
+    }
+
+    /// Trades held.
+    pub(crate) fn len(&self) -> usize {
+        self.trades.len()
     }
 
     /// Earliest paged instant without proof of the preceding history. An actual eviction
