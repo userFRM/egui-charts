@@ -1231,6 +1231,26 @@ impl DemoApp {
         self.checkpoint_replay();
     }
 
+    /// The active feed's recorded events and its executions as bars of `clock`.
+    fn recorded_trades(&self, clock: BarClock) -> (Vec<ReplayEvent>, Vec<Bar>) {
+        let mut merged = Vec::new();
+        self.live.read_recording(&mut merged);
+        let trades: Vec<_> = merged
+            .iter()
+            .filter_map(|event| match &event.event {
+                MarketEvent::Trade(trade) => Some(trade.clone()),
+                _ => None,
+            })
+            .collect();
+        let bars = egui_charts::data::aggregate_trades_with_tick_size(
+            &trades,
+            clock,
+            self.live.instrument().tick_size,
+        )
+        .expect("recorded demo executions");
+        (merged, bars)
+    }
+
     pub(super) fn set_replay_interval(&mut self, interval: Timeframe) {
         if self.replay.is_none() || self.recording_files.opened {
             return;
@@ -1246,21 +1266,8 @@ impl DemoApp {
         }
         let market_driver = if interval.is_trade_based() {
             let instrument = self.live.instrument();
-            let mut merged = Vec::new();
-            self.live.read_recording(&mut merged);
-            let trades: Vec<_> = merged
-                .iter()
-                .filter_map(|event| match &event.event {
-                    MarketEvent::Trade(trade) => Some(trade.clone()),
-                    _ => None,
-                })
-                .collect();
-            bars = egui_charts::data::aggregate_trades_with_tick_size(
-                &trades,
-                clock.clone(),
-                instrument.tick_size,
-            )
-            .expect("recorded demo executions");
+            let (mut merged, recorded) = self.recorded_trades(clock.clone());
+            bars = recorded;
             if let Some(driver) = self.chart.replay_driver().cloned() {
                 Some(driver)
             } else {
@@ -1445,17 +1452,24 @@ impl DemoApp {
                         self.switch_symbol(&session.symbol);
                     }
                     let clock = source_clock(&self.chart, interval);
-                    let bars = self
-                        .live
-                        .snapshot(interval, clock, self.chart.extended_hours());
+                    // Execution replay needs the recording that holds the saved execution;
+                    // validate it before starting or pausing any live feed.
+                    let bars = if interval.is_trade_based() {
+                        self.recorded_trades(clock).1
+                    } else {
+                        self.live
+                            .snapshot(interval, clock, self.chart.extended_hours())
+                    };
                     let mut replay = ReplayController::new(bars, Vec::new())
                         .with_symbol(self.state.symbol.clone());
                     if !replay.restore_session(&session) {
                         self.replay_session = Some((session, interval));
                         self.cancel_replay_selection();
-                        self.notify(
-                            "Saved replay needs source history that is no longer available",
-                        );
+                        self.notify(if interval.is_trade_based() {
+                            "Saved replay needs its market recording, which is no longer available"
+                        } else {
+                            "Saved replay needs source history that is no longer available"
+                        });
                         return;
                     }
                     self.replay_scope = replay.state.scope;
@@ -3315,6 +3329,83 @@ mod tests {
                 [app.live.paused(), app.extra_charts[0].live.paused()],
                 pauses
             );
+        }
+    }
+
+    /// Resume validates execution sessions against their recording before starting anything,
+    /// keeping the saved execution and its next step or reporting the missing recording.
+    #[test]
+    fn resuming_a_trade_replay_needs_its_recording() {
+        use super::super::tests::{AppStorage, settle};
+        let ctx = egui::Context::default();
+        let start = "2026-11-12T15:00:00Z".parse().unwrap();
+        let until = start + chrono::TimeDelta::seconds(90);
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            start,
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.advance_sample_to(until);
+        settle(&mut app, &ctx);
+        app.start_replay();
+        let interval = Timeframe::Ticks(NonZeroU64::MIN);
+        app.set_replay_interval(interval);
+        settle(&mut app, &ctx);
+        assert!(app.chart.replay_driver().is_some());
+        app.handle_replay_control(ReplayControlAction::PreviousBar);
+        app.handle_replay_control(ReplayControlAction::PreviousBar);
+        let saved = app.chart.replay_time();
+        app.handle_replay_control(ReplayControlAction::NextBar);
+        settle(&mut app, &ctx);
+        let next = (
+            app.chart.replay_time(),
+            app.chart.bars(SeriesId::MAIN).to_vec(),
+        );
+        app.handle_replay_control(ReplayControlAction::PreviousBar);
+        assert_eq!(app.chart.replay_time(), saved);
+        app.stop_replay();
+        let session = app.replay_session.clone();
+        let mut storage = AppStorage::default();
+        eframe::App::save(&mut *app, &mut storage);
+        for recorded in [true, false] {
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut restored = DemoApp::new_at(&cc, start, true);
+            settle(&mut restored, &ctx);
+            if recorded {
+                restored.advance_sample_to(until);
+                settle(&mut restored, &ctx);
+            }
+            assert_eq!(restored.replay_session, session);
+            restored.apply_replay_start(ReplayStartAction::Resume);
+            if recorded {
+                assert!(restored.chart.replay_driver().is_some());
+                assert_eq!(restored.replay_interval, interval);
+                assert_eq!(restored.chart.replay_time(), saved);
+                let state = &restored.replay.as_ref().unwrap().state;
+                let saved_session = &session.as_ref().unwrap().0;
+                assert!(!state.is_playing());
+                assert_eq!(state.speed.multiplier(), saved_session.speed);
+                assert_eq!(state.scope, saved_session.scope);
+                restored.handle_replay_control(ReplayControlAction::NextBar);
+                settle(&mut restored, &ctx);
+                assert_eq!(
+                    (
+                        restored.chart.replay_time(),
+                        restored.chart.bars(SeriesId::MAIN).to_vec()
+                    ),
+                    next
+                );
+            } else {
+                assert!(restored.replay.is_none());
+                assert!(restored.chart.replay_time().is_none());
+                assert!(restored.chart.replay_driver().is_none());
+                assert_eq!(restored.replay_session, session);
+                assert!(frames(&mut restored, &ctx).iter().any(|text| {
+                    text == "Saved replay needs its market recording, which is no longer available"
+                }));
+            }
         }
     }
 
