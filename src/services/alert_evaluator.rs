@@ -676,6 +676,13 @@ mod tests {
 
     impl Datafeed for Feed {
         fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            if request.symbol == "TURN" {
+                self.requests.lock().unwrap().push(request);
+                return reply.send(Ok(HistoryPage::new(
+                    vec![bar(-2, 300.0), bar(-1, 200.0), bar(0, 301.0)],
+                    true,
+                )));
+            }
             if request.symbol == "NO_CANDLES" && request.timeframe == Timeframe::Min1 {
                 return reply.send(Err(FeedError::NotSupported));
             }
@@ -1025,7 +1032,7 @@ mod tests {
     #[test]
     fn a_saved_study_condition_rebuilds_its_study_and_fires() {
         use crate::model::{AlertCondition, AlertStudy, InputValue};
-        let mut alert = Alert::new("SYM", AlertCondition::Holds);
+        let mut alert = Alert::new("TURN", AlertCondition::Holds);
         alert.source = AlertSource::StudyCondition {
             id: "3".into(),
             condition: 0,
@@ -1045,7 +1052,7 @@ mod tests {
         }));
         assert_eq!(
             fired_messages(Arc::new(Feed::default()), &IndicatorFactory::new(), alert),
-            ["300 1"]
+            ["301 1"]
         );
     }
 

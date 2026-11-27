@@ -86,6 +86,7 @@
 //! their mean; a Chandelier Exit value needs a full lookback window.
 //! The Rank Correlation Index starts on the bar after its first full window; the RCI Ribbon
 //! starts on the full window itself.
+//! SuperTrend has no value on the first bar.
 
 use crate::model::Bar;
 use crate::studies::{
@@ -552,9 +553,11 @@ fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
 #[test]
 fn warm_ups_show_each_value_on_a_series_ending_at_its_bar() {
     let bars = fixture();
-    let studies: [(&str, fn() -> Box<dyn Indicator>); 2] = [
+    let studies: [(&str, fn() -> Box<dyn Indicator>); 4] = [
         ("Chop(14)", || Box::new(ChoppinessIndex::default())),
         ("Mass(9,25)", || Box::new(MassIndex::default())),
+        ("SuperTrend(10,3)", || Box::new(SuperTrend::default())),
+        ("SuperTrend(10,1)", || Box::new(SuperTrend::new(10, 1.0))),
     ];
     let mut failures = Vec::new();
     for (name, create) in studies {

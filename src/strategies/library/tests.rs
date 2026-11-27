@@ -756,13 +756,12 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             ],
             expected: vec![(3, Buy, 90.), (6, Sell, 10.)],
         },
-        // ATR(1), multiplier 1: the active lines at 0..=5 are down10,up10,down12,up8,down14,up7.
+        // ATR(1), multiplier 1: lines at 1..=6 are up10,down12,up8,down14,up7,up15; bar 0 has none.
         Case {
             name: "SuperTrend",
             prices: points(&[10., 12., 8., 14., 7., 15., 15.]),
             inputs: vec![("atr_period", Length(1)), ("multiplier", Number(1.))],
             expected: vec![
-                (2, Buy, 8.),
                 (3, Sell, 14.),
                 (4, Buy, 7.),
                 (5, Sell, 15.),
