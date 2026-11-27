@@ -28,6 +28,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] TPO single-print highlights and the midpoint caption and marker are off by default and switch on from the chart's settings or the study's inputs. Charts and studies saved before the midpoint had a setting restore with it shown.
 - [x] The TPO study keeps its profiles to the trading day, the regular hours, the pre-market or post-market alone, or custom daily hours in any zone, counting only the bars inside them and keeping custom hours' periods whole on the period grid, and its extended-hours split profiles each segment of the day from the bars of its hours.
 - [x] TPO profiles can caption the initial balance high and low, the opening and closing prices, poor highs and lows and single-print runs besides the point of control, value area and midpoint, each with its own switch, write each caption's price at the instrument's precision and tag the newest profile's captioned levels on the price scale. The Close caption follows the closing mark at its exact price in its direction colour and starts off. Charts saved before these settings keep their captions.
+- [x] TPO profiles extend their point of control, value area edges and single-print runs until a later bar reaches them, as poor extremes extend until one trades through them, each with its own switch on the chart type and the study, and alerts watch each extended level of a completed profile at the price it had when chosen.
 
 ### Pan, Zoom and Cursor
 
