@@ -338,7 +338,10 @@ impl Chart {
             CrosshairStyle::Full => egui::CursorIcon::Crosshair,
             // The painted dot is the pointer; where none is painted the frame shows the arrow.
             CrosshairStyle::Dot => egui::CursorIcon::None,
-            // The arrow and the trails draw their own marker over the default pointer.
+            // So is the Magic cursor's wand, which the drawings feature paints.
+            CrosshairStyle::Magic if cfg!(feature = "drawings") => egui::CursorIcon::None,
+            // The arrow and the marks draw their own marker over the default pointer; without
+            // the drawings feature the Magic cursor has no wand.
             CrosshairStyle::Arrow
             | CrosshairStyle::Demonstration
             | CrosshairStyle::Magic

@@ -396,6 +396,9 @@ impl Chart {
         let mut pending_pane_maximize = (self.price_plot_double_click
             && (maximized.is_some() || panes.len() > 1))
             .then_some(main_pane);
+        // A study pane click under the Magic cursor, thrown once the studies are no longer borrowed.
+        #[cfg(feature = "drawings")]
+        let mut pending_confetti = None;
         let current_selection = self.selection.selected_id();
         // The price frame decided this frame's mark; on a study pane it owns the gesture too.
         #[cfg(feature = "drawings")]
@@ -1271,6 +1274,10 @@ impl Chart {
                         if hit.is_some() || pending_pane_selection.is_none() {
                             pending_pane_selection = Some(hit);
                         }
+                        #[cfg(feature = "drawings")]
+                        {
+                            pending_confetti = Some((chart_rect, click_pos));
+                        }
                     }
                     if !collapsed
                         && self.host_events.annotation_target.borrow().is_some()
@@ -1552,8 +1559,6 @@ impl Chart {
                     drawing_tool_active
                         || eraser_mode
                         || marking
-                        || self.chart_options.crosshair.style
-                            == crate::config::CrosshairStyle::Magic
                         || self.drawings.curr_drawing.is_some()
                         || self.drawings.dragging_handle.is_some()
                         || self.drawings.text_editor.is_some(),
@@ -1789,6 +1794,13 @@ impl Chart {
                 Some(id) => self.selection.select(id, None),
                 None => self.selection.deselect(),
             }
+        }
+        #[cfg(feature = "drawings")]
+        if let Some((plot, pos)) = pending_confetti
+            && self.throws_confetti(plot, pos)
+        {
+            let now = ui.input(|input| input.time);
+            self.cursor_modes.throw(plot, pos, now);
         }
 
         for response in host_clicks {
