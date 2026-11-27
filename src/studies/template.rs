@@ -894,6 +894,13 @@ impl StudyTemplate {
                         .plot_style(2),
                 );
             }
+            // SuperTrend drew no background before it had a body middle; hidden, the bands keep
+            // the colours they take once shown.
+            "SuperTrend" if self.settings.plots.len() == 2 => {
+                let declared = crate::studies::SuperTrend::default();
+                template.settings.plots.push(declared.plot_style(2));
+                template.settings.fills = hidden_fills(&declared);
+            }
             // The unused navy plot colour in older saves still drew rising columns green.
             "Accelerator Oscillator"
                 if self.settings.plot_variants.iter().all(Vec::is_empty)
