@@ -667,6 +667,22 @@ pub fn render_live_tpo(
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
+    // Bars longer than a period cannot be divided into it; name the interval it needs.
+    if !base_config.fits_periods(clock.timeframe()) {
+        let theme = painter.ctx().active_theme();
+        painter.text(
+            price_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            l10n::format_text(
+                painter.ctx(),
+                "The {minutes} min TPO period needs a chart interval of {minutes} min or shorter",
+                &[("minutes", base_config.period_minutes.max(1).to_string())],
+            ),
+            FontId::proportional(theme.text.title),
+            theme.ui.text,
+        );
+        return;
+    }
     let render_config = TpoRenderConfig {
         poc_color: base_config
             .poc_color

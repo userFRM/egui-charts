@@ -1290,7 +1290,8 @@ pub struct ChartTypeParams {
     /// Columns: the price the columns rise above or fall below; `None` draws them up from the
     /// pane bottom.
     pub columns_base: Option<f64>,
-    /// TPO: minutes per period, raised to the bar interval when shorter.
+    /// TPO: minutes per period. Bars longer than a period draw no profiles; the chart asks for
+    /// a shorter interval.
     pub tpo_period_minutes: u32,
     /// TPO: minutes from the session open included in the initial balance, 60 by default.
     pub tpo_initial_balance_minutes: u32,

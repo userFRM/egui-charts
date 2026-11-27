@@ -104,7 +104,8 @@ impl TimePriceOpportunity {
         }
     }
 
-    /// Profiles of `period_minutes` periods, raised to the bar interval when shorter.
+    /// Profiles of `period_minutes` periods, at least one minute. On bars longer than a period
+    /// the chart draws no profiles and says so.
     pub fn new(period_minutes: u32) -> Self {
         Self {
             row_ticks: 0,

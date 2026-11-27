@@ -852,7 +852,16 @@ mod tests {
                 .shapes
                 .iter()
                 .filter_map(|s| match &s.shape {
-                    Shape::Text(t) if ["POC", "VAH", "VAL", "Mid"].contains(&t.galley.text()) => {
+                    Shape::Text(t)
+                        if [
+                            "POC",
+                            "VAH",
+                            "VAL",
+                            "Mid",
+                            "The 15 min TPO period needs a chart interval of 15 min or shorter",
+                        ]
+                        .contains(&t.galley.text()) =>
+                    {
                         Some(t.galley.text().to_owned())
                     }
                     _ => None,
@@ -927,6 +936,20 @@ mod tests {
             ..saved
         });
         assert_eq!(statistics.3, (1, 1));
+        assert_eq!(
+            draw(ChartTypeParams {
+                tpo_period_minutes: 15,
+                ..Default::default()
+            }),
+            (
+                String::new(),
+                vec![
+                    "The 15 min TPO period needs a chart interval of 15 min or shorter".to_owned()
+                ],
+                0,
+                (0, 0)
+            )
+        );
     }
 
     /// Segments start at x 0, 10, 40 and 50. A gradient leaves the bar of its own colour as it
