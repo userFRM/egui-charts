@@ -14,6 +14,16 @@ pub(crate) enum QuotePrices {
     Last(f64),
 }
 
+/// The order presets the quote buttons offer, set by trading with the order quantity.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(not(feature = "ui"), allow(dead_code))]
+pub(crate) struct QuotePresets {
+    /// Each saved preset's name and summary, in list order.
+    pub presets: Vec<(String, String)>,
+    /// The index of the preset Buy and Sell use.
+    pub applied: Option<usize>,
+}
+
 impl QuotePrices {
     pub(super) fn magnitude(self) -> f64 {
         match self {
@@ -37,7 +47,8 @@ pub(crate) fn quote_prices(quote: Option<&Level1Quote>, last: Option<f64>) -> Op
 
 /// The Sell and Buy buttons with the spread between them and, under it, `quantity` in a box.
 /// Prices and the spread use `formatter`, else `precision` decimals grouped by `thousands_sep`.
-/// Returns the button clicked and the quantity box, when clicked.
+/// With `presets`, offers a preset menu after the ticket button.
+/// Returns the button clicked, the quantity box when clicked, and the preset chosen.
 pub(super) fn paint_quotes(
     ui: &mut Ui,
     layout: &mut Layout<'_>,
@@ -46,8 +57,9 @@ pub(super) fn paint_quotes(
     thousands_sep: Option<char>,
     formatter: Option<&dyn crate::scales::PriceFormatter>,
     quantity: Option<(f64, Option<String>)>,
+    presets: Option<&QuotePresets>,
     id: egui::Id,
-) -> (Option<QuoteSide>, Option<Rect>) {
+) -> (Option<QuoteSide>, Option<Rect>, Option<Option<String>>) {
     let text = |price: f64| {
         formatter.map_or_else(
             || crate::scales::group_thousands(format!("{price:.precision$}"), thousands_sep),
@@ -83,6 +95,8 @@ pub(super) fn paint_quotes(
     let gap = (spread_galley.size().x + 12.0)
         .max(36.0)
         .max(quantity.as_ref().map_or(0.0, |text| text.size().x + 18.0));
+    let applied =
+        presets.and_then(|presets| presets.applied.and_then(|index| presets.presets.get(index)));
     let quote = |side: QuoteSide, price: f64, color: Color32| {
         let price = layout
             .painter
@@ -90,18 +104,26 @@ pub(super) fn paint_quotes(
                 text(price),
                 semibold(FontId::proportional(theme.text.ohlc), color),
             ));
-        let label = layout.painter.layout_no_wrap(
-            l10n::text(
-                ui.ctx(),
-                if side == QuoteSide::Sell {
-                    "SELL"
-                } else {
-                    "BUY"
-                },
-            ),
-            FontId::proportional(theme.text.small),
-            color,
+        let side = l10n::text(
+            ui.ctx(),
+            if side == QuoteSide::Sell {
+                "SELL"
+            } else {
+                "BUY"
+            },
         );
+        let label = applied.map_or(side.clone(), |(name, _)| {
+            let short = if name.chars().count() > 12 {
+                format!("{}…", name.chars().take(11).collect::<String>())
+            } else {
+                name.clone()
+            };
+            format!("{side} · {short}")
+        });
+        let label =
+            layout
+                .painter
+                .layout_no_wrap(label, FontId::proportional(theme.text.small), color);
         (price, label)
     };
     let sell = quote(QuoteSide::Sell, bid, theme.chart.candle_down);
@@ -109,6 +131,27 @@ pub(super) fn paint_quotes(
     let width = 59.0_f32
         .max(sell.0.size().x + 12.0)
         .max(buy.0.size().x + 12.0);
+    let width = if applied.is_some() {
+        width.max(sell.1.size().x + 12.0).max(buy.1.size().x + 12.0)
+    } else {
+        width
+    };
+    let names = |action: &str| {
+        let action = l10n::text(ui.ctx(), action);
+        applied.map_or((action.clone(), action.clone()), |(name, summary)| {
+            let preset = l10n::format_text(ui.ctx(), "Preset {name}", &[("name", name.as_str())]);
+            (
+                format!("{action}\n{preset}\n{summary}"),
+                l10n::format_text(
+                    ui.ctx(),
+                    "{action} with the preset {name}",
+                    &[("action", action.as_str()), ("name", name.as_str())],
+                ),
+            )
+        })
+    };
+    let (sell_hover, sell_label) = names(sell_name);
+    let (buy_hover, buy_label) = names(buy_name);
     let size = Vec2::new(width, 34.0);
     let sell_rect = layout.reserve(size);
     let sell_response = quote_box(
@@ -117,7 +160,8 @@ pub(super) fn paint_quotes(
         sell_rect,
         sell,
         theme.chart.candle_down,
-        &l10n::text(ui.ctx(), sell_name),
+        &sell_hover,
+        &sell_label,
         id.with("sell"),
     );
     let spread_rect = Rect::from_min_size(
@@ -171,7 +215,8 @@ pub(super) fn paint_quotes(
         buy_rect,
         buy,
         theme.ui.accent,
-        &l10n::text(ui.ctx(), buy_name),
+        &buy_hover,
+        &buy_label,
         id.with("buy"),
     );
     layout.pos.x = buy_rect.right() + 8.0;
@@ -202,6 +247,52 @@ pub(super) fn paint_quotes(
         .on_hover_text(l10n::text(ui.ctx(), "Order ticket"));
     let label = l10n::text(ui.ctx(), "Order ticket");
     dropdown.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    let mut preset = None;
+    if let Some(presets) = presets.filter(|presets| !presets.presets.is_empty()) {
+        layout.pos.x = dropdown.rect.right() + 4.0;
+        let rect = layout.reserve(Vec2::new(28.0, size.y));
+        layout.painter.rect(
+            rect,
+            4.0,
+            theme.chart.bg,
+            Stroke::new(1.0, theme.ui.border),
+            egui::StrokeKind::Inside,
+        );
+        for offset in [-4.0, 0.0, 4.0] {
+            let center = rect.center() + egui::vec2(0.0, offset);
+            layout.painter.line_segment(
+                [center - egui::vec2(5.0, 0.0), center + egui::vec2(5.0, 0.0)],
+                Stroke::new(1.5, theme.ui.text),
+            );
+        }
+        let label = l10n::text(ui.ctx(), "Order presets");
+        let response = ui
+            .interact(
+                rect.intersect(layout.painter.clip_rect()),
+                id.with("presets"),
+                Sense::click(),
+            )
+            .on_hover_text(&label);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+        egui::Popup::menu(&response).show(|ui| {
+            if ui
+                .selectable_label(presets.applied.is_none(), l10n::text(ui.ctx(), "No preset"))
+                .clicked()
+            {
+                preset = Some(None);
+            }
+            for (index, (name, summary)) in presets.presets.iter().enumerate() {
+                if ui
+                    .selectable_label(presets.applied == Some(index), name)
+                    .on_hover_text(summary)
+                    .clicked()
+                {
+                    preset = Some(Some(name.clone()));
+                }
+            }
+        });
+        layout.pos.x = rect.right() + 8.0;
+    }
     let action = if dropdown.clicked() {
         Some(QuoteSide::Ticket)
     } else if sell_response.clicked() {
@@ -212,7 +303,7 @@ pub(super) fn paint_quotes(
         None
     };
     let clicked = quantity.and_then(|(rect, clicked)| clicked.then_some(rect));
-    (action, clicked)
+    (action, clicked, preset)
 }
 
 /// What the user did with the quote panel this frame.
@@ -220,6 +311,8 @@ pub(crate) struct QuotePanelResponse {
     pub action: Option<QuoteSide>,
     /// The quantity box, when clicked.
     pub quantity: Option<Rect>,
+    /// The preset chosen this frame: `Some(None)` for none.
+    pub preset: Option<Option<String>>,
     /// The new place while the grip is dragged.
     pub moved: Option<[f32; 2]>,
     /// The grip was released this frame.
@@ -294,7 +387,7 @@ impl Legend<'_> {
             &chart_background,
             &[],
         );
-        let (action, quantity) = paint_quotes(
+        let (action, quantity, preset) = paint_quotes(
             ui,
             &mut layout,
             prices,
@@ -302,6 +395,7 @@ impl Legend<'_> {
             self.thousands_sep,
             self.formatters.price,
             self.quantity.clone(),
+            self.presets.as_ref(),
             id,
         );
         let measured = egui::vec2(layout.pos.x - 8.0 + 4.0 - at.x, 42.0);
@@ -338,6 +432,7 @@ impl Legend<'_> {
         QuotePanelResponse {
             action,
             quantity,
+            preset,
             moved,
             released: response.drag_stopped(),
         }
@@ -350,12 +445,13 @@ fn quote_box(
     rect: Rect,
     (price, label): (Arc<egui::Galley>, Arc<egui::Galley>),
     color: Color32,
+    hover: &str,
     name: &str,
     id: egui::Id,
 ) -> Response {
     let response = ui
         .interact(rect.intersect(painter.clip_rect()), id, Sense::click())
-        .on_hover_text(name);
+        .on_hover_text(hover);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
     painter.rect(
         rect,
