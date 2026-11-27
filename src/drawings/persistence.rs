@@ -1707,6 +1707,7 @@ mod tests {
                 config.developing_value_area_colors = [[35, 36, 37, 38], [39, 40, 41, 42]];
                 config.poc_color = Some([43, 44, 45, 46]);
                 config.values_color = Some([47, 48, 49, 50]);
+                config.value_area_values_color = Some([71, 72, 73, 74]);
                 config.show_box = false;
                 config.box_color = Some([51, 52, 53, 54]);
                 config.show_values = true;
@@ -1914,8 +1915,13 @@ mod tests {
                         ([255, 152, 0, 255], [[33, 150, 243, 255]; 2])
                     );
                     assert_eq!(
-                        (config.poc_color, config.values_color, config.box_color),
-                        (None, None, None)
+                        (
+                            config.poc_color,
+                            config.values_color,
+                            config.value_area_values_color,
+                            config.box_color,
+                        ),
+                        (None, None, None, None)
                     );
                     assert!(config.show_box && config.show_poc && !config.show_values);
                 }
