@@ -62,37 +62,90 @@ pub(crate) fn is_color_emoji(text: &str) -> bool {
         .contains(&key(text))
 }
 
+/// The family of the bundled colour emoji font, or `None` until egui has it. The first call in a pass asks egui to
+/// install it, and egui applies it at the start of the next pass.
+#[cfg(feature = "color-emoji")]
+fn emoji_family(ctx: &egui::Context) -> Option<egui::FontFamily> {
+    let family = egui::FontFamily::Name(EMOJI_FONT.into());
+    if ctx.fonts(|f| f.definitions().families.contains_key(&family)) {
+        return Some(family);
+    }
+    // One request per pass: many emoji are drawn in a pass, and a host's `set_fonts` may drop the font later.
+    let requested = egui::Id::unique("egui_charts::emoji_font_requested");
+    let pass = ctx.cumulative_pass_nr();
+    let previous = ctx.data(|d| d.get_temp::<u64>(requested));
+    if previous != Some(pass) {
+        ctx.data_mut(|d| d.insert_temp(requested, pass));
+        ctx.add_font(egui::FontInsert::new(
+            EMOJI_FONT,
+            egui::FontData::from_static(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/emoji/Noto-COLRv1.ttf"
+            ))),
+            vec![egui::InsertFontFamily {
+                family,
+                priority: egui::FontPriority::Highest,
+            }],
+        ));
+        // egui applies the font at the next pass, which an idle application would not run.
+        if previous.is_none() {
+            ctx.request_repaint();
+        }
+    }
+    None
+}
+
 /// The font for drawing `text` at `size`: the bundled colour emoji font when `text` is one emoji of the colour set,
 /// the proportional font otherwise. Installs the colour font on first use; until egui applies it (the next pass),
 /// the application's fonts draw the emoji.
 pub(crate) fn font_id(ctx: &egui::Context, text: &str, size: f32) -> egui::FontId {
     #[cfg(feature = "color-emoji")]
-    if is_color_emoji(text) {
-        let family = egui::FontFamily::Name(EMOJI_FONT.into());
-        if ctx.fonts(|f| f.definitions().families.contains_key(&family)) {
-            return egui::FontId::new(size, family);
-        }
-        // One request per pass: many emoji are drawn in a pass, and a host's `set_fonts` may drop the font later.
-        let requested = egui::Id::unique("egui_charts::emoji_font_requested");
-        let pass = ctx.cumulative_pass_nr();
-        if ctx.data(|d| d.get_temp::<u64>(requested)) != Some(pass) {
-            ctx.data_mut(|d| d.insert_temp(requested, pass));
-            ctx.add_font(egui::FontInsert::new(
-                EMOJI_FONT,
-                egui::FontData::from_static(include_bytes!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/assets/emoji/Noto-COLRv1.ttf"
-                ))),
-                vec![egui::InsertFontFamily {
-                    family,
-                    priority: egui::FontPriority::Highest,
-                }],
-            ));
-        }
+    if is_color_emoji(text)
+        && let Some(family) = emoji_family(ctx)
+    {
+        return egui::FontId::new(size, family);
     }
     #[cfg(not(feature = "color-emoji"))]
     let _ = (ctx, text);
     egui::FontId::proportional(size)
+}
+
+/// Appends `text` to `job` in `format`. With `color-emoji`, each grapheme cluster with emoji presentation takes the
+/// bundled colour emoji font at the format's size, once egui has it (the pass after the first request). Letters,
+/// digits, `#`, `*` and symbols shown as text, such as `©` or `❤` without U+FE0F, keep `format`, so text without
+/// emoji is one section, as [`egui::text::LayoutJob::append`] makes it.
+pub(crate) fn append_text(
+    ctx: &egui::Context,
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    format: egui::TextFormat,
+) {
+    #[cfg(feature = "color-emoji")]
+    if !text.is_ascii() {
+        use egui::epaint::text::has_emoji_presentation;
+        use unicode_segmentation::UnicodeSegmentation as _;
+        if text.graphemes(true).any(has_emoji_presentation)
+            && let Some(family) = emoji_family(ctx)
+        {
+            let emoji = egui::TextFormat {
+                font_id: egui::FontId::new(format.font_id.size, family),
+                ..format.clone()
+            };
+            // Clusters are split as egui splits them; `append` joins neighbours of one format.
+            for cluster in text.graphemes(true) {
+                let format = if has_emoji_presentation(cluster) {
+                    &emoji
+                } else {
+                    &format
+                };
+                job.append(cluster, 0.0, format.clone());
+            }
+            return;
+        }
+    }
+    #[cfg(not(feature = "color-emoji"))]
+    let _ = ctx;
+    job.append(text, 0.0, format);
 }
 
 /// Draws original vector glyphs on a 24-unit grid, with no font or image-loader dependency.
