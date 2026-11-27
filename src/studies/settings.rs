@@ -353,6 +353,16 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             .iter()
             .map(|level| level.0)
             .eq([-20.0, -80.0, -50.0]);
+    // The built-in Trend Strength Index, saved with its zero guide alone (or none) before it
+    // drew guides at 1 and -1, shading and two decimals.
+    let older_tsi = study.name() == "Trend Strength Index"
+        && study
+            .pane()
+            .levels
+            .iter()
+            .map(|level| level.0)
+            .eq([0.0, 1.0, -1.0])
+        && settings.levels.len() < 2;
     // The built-in Choppiness Index, saved with its two bands before its middle line.
     let chop = study.name() == "CHOP"
         && study
@@ -410,6 +420,21 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             },
         ];
         settings.fill_between_levels = false;
+    } else if older_tsi {
+        // Keep the saved zero style, add the band guides hidden and keep reading three decimals.
+        let zero = settings.levels.first().copied().unwrap_or(levels[0]);
+        settings.levels = vec![
+            zero,
+            LevelStyle {
+                visible: false,
+                ..levels[1]
+            },
+            LevelStyle {
+                visible: false,
+                ..levels[2]
+            },
+        ];
+        settings.precision.get_or_insert(3);
     } else if settings.levels.is_empty() && guides_since(study) {
         // Older saves drew no guides or band; showing them later uses the declared styles.
         settings.levels = levels
@@ -461,7 +486,8 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         .gradients
         .extend(gradients[saved..].iter().map(|fill| GradientStyle {
             colors: fill.colors,
-            visible: true,
+            // Older Trend Strength Index saves drew no shading.
+            visible: !older_tsi,
         }));
     let fills = study.fills();
     let saved = settings.fills.len().min(fills.len());
@@ -2986,6 +3012,14 @@ mod tests {
             (Box::new(super::super::Stochastic::default()), Some(2)),
             (Box::new(super::super::OnBalanceVolume::default()), None),
             (
+                Box::new(super::super::DirectionalMovement::default()),
+                Some(4),
+            ),
+            (
+                Box::new(super::super::TrendStrengthIndex::default()),
+                Some(2),
+            ),
+            (
                 Box::new(
                     super::super::CustomIndicator::new("Small", |_| Vec::new())
                         .with_value_format(crate::scales::StudyFormat::Fixed(4)),
@@ -4885,7 +4919,8 @@ mod tests {
     }
 
     /// The Aroon Oscillator, Bollinger Bands %b, CCI, Money Flow Index, Volume Delta, Cumulative
-    /// Volume Delta, PVO and Choppiness Index open with their usual guides and bands. Older saves keep their guide styles and leave new guides and fills hidden;
+    /// Volume Delta, PVO, Choppiness Index and Trend Strength Index open with their usual guides
+    /// and bands. Older saves keep their guide styles and leave new guides and fills hidden;
     /// a guide shown since keeps its style through a template. Awesome Oscillator opens as
     /// columns and keeps a saved histogram; Balance of Power keeps its saved smoothing.
     #[test]
@@ -4904,7 +4939,7 @@ mod tests {
         let (gray, faint) = (palette::MUTED, palette::MUTED.gamma_multiply_u8(128));
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 26);
         let (dashed, solid) = (LineStyle::Dashed, LineStyle::Solid);
-        let rows: [Row; 8] = [
+        let rows: [Row; 9] = [
             (
                 "Aroon Oscillator",
                 vec![
@@ -5024,6 +5059,19 @@ mod tests {
                 Color32::from_rgba_unmultiplied(33, 150, 243, 26),
                 vec![],
             ),
+            (
+                "Trend Strength Index",
+                vec![
+                    (0.0, palette::GRAY.gamma_multiply_u8(128), "Zero", dashed),
+                    (1.0, palette::UP, "Bullish Band", dashed),
+                    (-1.0, palette::DOWN, "Bearish Band", dashed),
+                ],
+                false,
+                None,
+                Some((-1.0, 1.0)),
+                Color32::TRANSPARENT,
+                vec![],
+            ),
         ];
         let hidden = |level: LevelStyle| LevelStyle {
             visible: false,
@@ -5088,9 +5136,26 @@ mod tests {
                     "{name}"
                 );
             }
-            // The Aroon Oscillator drew its zero guide before; the others drew none.
+            // The Aroon Oscillator and Trend Strength Index drew their zero guide before, the
+            // Choppiness Index its outer bands; the others drew none.
             let declared = defaults.levels.clone();
-            let older: Vec<(Vec<LevelStyle>, Vec<LevelStyle>)> = if name == "Aroon Oscillator" {
+            let older: Vec<(Vec<LevelStyle>, Vec<LevelStyle>)> = if name == "Trend Strength Index" {
+                let moved = LevelStyle {
+                    value: Some(0.25),
+                    width: 2.0,
+                    ..declared[0]
+                };
+                vec![
+                    (
+                        vec![moved],
+                        vec![moved, hidden(declared[1]), hidden(declared[2])],
+                    ),
+                    (
+                        Vec::new(),
+                        vec![declared[0], hidden(declared[1]), hidden(declared[2])],
+                    ),
+                ]
+            } else if name == "Aroon Oscillator" {
                 let moved = LevelStyle {
                     value: Some(5.0),
                     width: 2.0,
