@@ -5,7 +5,9 @@ use egui_charts::model::{
     Alert, AlertCondition, AlertFrequency, AlertId, AlertStatus, CustomAlertEvent, OrderSide,
     OrderType,
 };
-use egui_charts::strategies::{Backtest, BacktestSettings, OrderTag, Strategy, StrategyContext};
+use egui_charts::strategies::{
+    Backtest, BacktestSettings, OrderTag, Strategy, StrategyAlertFrequency, StrategyContext,
+};
 use egui_charts::studies::InputValue;
 
 /// Ends the id of a run in the name of its custom event source, which raises an alert call each
@@ -32,6 +34,13 @@ impl Strategy for Momentum {
                 .with_comment("Down close")
                 .with_alert_message("Momentum sells after a down close");
             context.entry(tag, OrderSide::Sell, None, OrderType::Market);
+        } else if bar.close == previous.close {
+            // At the close only, so a forming bar touching the previous close cannot alert on
+            // every tick.
+            context.alert(
+                format!("Momentum paused at {}", bar.close),
+                StrategyAlertFrequency::OncePerBarClose,
+            );
         }
     }
 }
@@ -255,6 +264,14 @@ impl DemoApp {
         let now = chrono::Utc::now();
         let engine = self.alert_host.engine();
         engine.strategy_fills(id, &run.symbol, exchange, run.timeframe, &fills, now);
+        engine.strategy_alerts(
+            id,
+            &run.symbol,
+            exchange,
+            run.timeframe,
+            run.new_alerts(),
+            now,
+        );
         let turns: Vec<_> = fills
             .iter()
             .filter_map(|fill| {
@@ -512,7 +529,9 @@ mod tests {
             let bars = snapshot(&app);
             let source = &bars
                 [bars.partition_point(|bar| bar.time < reference.settings.start_time.unwrap())..];
-            expected += reference.update(&mut Momentum, source, &[]).len();
+            // The fill alert also receives the alerts the run raises beside its fills.
+            let fills = reference.update(&mut Momentum, source, &[]).len();
+            expected += fills + reference.new_alerts().len();
             app.chart.set_data(SeriesId::MAIN, bars);
             app.update_live_strategy();
             app.update_live_strategy();
@@ -578,5 +597,48 @@ mod tests {
         assert!(restored.toasts.toasts().iter().any(|toast| toast.message
             == "2 strategy alerts were stopped: their live runs ended when the demo closed. \
                 Add them again from the strategy tester."));
+    }
+
+    /// The live momentum run names its entries in its fill alert and raises an alert of its
+    /// own when a bar closes unchanged.
+    #[test]
+    fn demo_live_momentum_alerts_carry_its_texts_and_a_paused_close() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T19:29:50Z".parse().unwrap(),
+            true,
+        );
+        app.switch_timeframe(Timeframe::Min1);
+        let mut settings = app.strategy_report.settings().clone();
+        settings.recalculate_on_every_update = false;
+        app.strategy_report.set_settings(settings).unwrap();
+        app.chart.set_feed_paused(true);
+        let open: chrono::DateTime<chrono::Utc> = "2026-10-27T19:00:00Z".parse().unwrap();
+        let bars: Vec<_> = [100.0, 101.0, 103.0, 103.0, 104.0]
+            .into_iter()
+            .enumerate()
+            .map(|(minute, close)| {
+                let time = open + chrono::TimeDelta::minutes(minute as i64);
+                Bar::new(time, close, close + 1.0, close - 1.0, close, 1.0)
+            })
+            .collect();
+        // The second bar rises, so priming places the long entry without notifying.
+        app.chart.set_data(SeriesId::MAIN, bars[..3].to_vec());
+        app.start_live_strategy();
+        let id = app.live_strategy.as_ref().unwrap().id.clone();
+        // The entry fills as the third bar opens, and the fourth closes where the third did.
+        app.chart.set_data(SeriesId::MAIN, bars.clone());
+        app.update_live_strategy();
+        app.alerts.poll(&ctx, &mut app.toasts);
+        let mut messages: Vec<_> = (app.alerts.log().iter())
+            .filter(|trigger| trigger.id.0 == id)
+            .map(|trigger| trigger.message.as_str())
+            .collect();
+        messages.sort_unstable();
+        assert_eq!(
+            messages,
+            ["Momentum buys after an up close", "Momentum paused at 103"]
+        );
     }
 }

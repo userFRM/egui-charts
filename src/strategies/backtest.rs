@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 
 #[path = "live.rs"]
 mod live;
-pub use live::StrategyFill;
 #[cfg(feature = "ui")]
 pub(crate) use live::same_bars;
+pub use live::{StrategyAlert, StrategyFill};
 
 use crate::data::StudyDataRequest;
 use crate::model::range_bar::price_path;
@@ -440,7 +440,9 @@ pub trait Strategy {
 ///
 /// ```
 /// use egui_charts::model::{Bar, OrderSide, OrderType, Timeframe};
-/// use egui_charts::strategies::{Backtest, OrderTag, Strategy, StrategyContext};
+/// use egui_charts::strategies::{
+///     Backtest, OrderTag, Strategy, StrategyAlertFrequency, StrategyContext,
+/// };
 ///
 /// struct Breakout;
 ///
@@ -451,6 +453,8 @@ pub trait Strategy {
 ///                 .with_comment("Breakout")
 ///                 .with_alert_message("Bought the breakout");
 ///             context.entry(tag, OrderSide::Buy, 1.0, OrderType::Market);
+///         } else {
+///             context.alert("Holding the breakout", StrategyAlertFrequency::OncePerBar);
 ///         }
 ///     }
 /// }
@@ -464,6 +468,8 @@ pub trait Strategy {
 /// let fills = run.update(&mut Breakout, &bars, &[]);
 /// assert_eq!(fills[0].comment.as_deref(), Some("Breakout"));
 /// assert_eq!(fills[0].alert_message.as_deref(), Some("Bought the breakout"));
+/// assert_eq!(run.new_alerts()[0].message, "Holding the breakout");
+/// assert_eq!(run.new_alerts()[0].time, bars[1].time);
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -517,6 +523,17 @@ impl From<&String> for OrderTag {
     }
 }
 
+/// How often [`StrategyContext::alert`] notifies on one bar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StrategyAlertFrequency {
+    /// On any decision of the bar, forming or closed, and after its fills.
+    #[default]
+    OncePerBar,
+    /// Only on the decision of the closed bar, never on a forming bar or after a fill.
+    OncePerBarClose,
+}
+
 /// What a [`Strategy`] sees at a decision: the bars up to it and the open position. It places
 /// and cancels working orders by id.
 ///
@@ -530,6 +547,8 @@ pub struct StrategyContext<'a> {
     bars: &'a [Bar],
     position: f64,
     orders: &'a mut Vec<Working>,
+    /// The alert requests of this decision.
+    alerts: &'a mut Vec<(String, StrategyAlertFrequency)>,
     price: f64,
     equity: f64,
     after_fill: bool,
@@ -715,6 +734,18 @@ impl StrategyContext<'_> {
                 },
             );
         }
+    }
+
+    /// Raises an alert with `message` in a live run, also on a bar where the strategy places no
+    /// order. [`Backtest::new_alerts`] returns it after the update, and
+    /// `services::AlertEngine::strategy_alerts` delivers it to the run's strategy-fill alerts. A
+    /// message notifies at most once per bar, however many decisions of the bar raise it: with
+    /// [`StrategyAlertFrequency::OncePerBar`] the first decision that raises it notifies, with
+    /// [`StrategyAlertFrequency::OncePerBarClose`] only the decision of the closed bar. Alerts are
+    /// ignored before [`BacktestSettings::start_time`], with an empty message, in [`Backtest::run`]
+    /// and the other historical runs, and when no bar precedes the decision.
+    pub fn alert(&mut self, message: impl Into<String>, frequency: StrategyAlertFrequency) {
+        self.alerts.push((message.into(), frequency));
     }
 
     fn place(&mut self, tag: OrderTag, quantity: Option<f64>, kind: Kind) {
@@ -1028,6 +1059,9 @@ impl Backtest {
             tick: 0,
             open_tick: 0,
             fills: None,
+            alerts: None,
+            raised: Vec::new(),
+            requested: Vec::new(),
             forming: false,
             margin_calls: Vec::new(),
             peak_margin: 0.0,
@@ -1368,6 +1402,13 @@ struct Run<'a> {
     /// The tick of the last bar open, which tells a gap from a price reached during the bar.
     open_tick: u64,
     fills: Option<&'a mut Vec<StrategyFill>>,
+    /// Alerts of a live run, collected like `fills`; `None` in historical runs.
+    alerts: Option<&'a mut Vec<StrategyAlert>>,
+    /// The bar time and message of each alert raised on the two newest bars, so a message
+    /// notifies once per bar across decisions and live updates.
+    raised: Vec<(DateTime<Utc>, String)>,
+    /// The alert requests of the current decision.
+    requested: Vec<(String, StrategyAlertFrequency)>,
     forming: bool,
     /// Time and quantity of each filled margin call.
     margin_calls: Vec<(DateTime<Utc>, f64)>,
@@ -1680,6 +1721,7 @@ impl<'a> Run<'a> {
             bars: &self.history,
             position,
             orders: &mut self.orders,
+            alerts: &mut self.requested,
             price,
             equity,
             after_fill,
@@ -1690,6 +1732,33 @@ impl<'a> Run<'a> {
             price_increment: self.settings.price_increment,
             bar_clock: self.bar_clock,
         });
+        let at_close = !after_fill && !self.forming;
+        match (self.alerts.as_deref_mut(), self.history.last()) {
+            (Some(alerts), Some(bar)) if self.trading => {
+                let time = bar.time;
+                // Only the bar before the newest can still be decided again, by a fill callback.
+                let keep = (self.history.len().checked_sub(2))
+                    .map_or(time, |before| self.history[before].time);
+                self.raised.retain(|(raised, _)| *raised >= keep);
+                for (message, frequency) in self.requested.drain(..) {
+                    if message.is_empty()
+                        || (frequency == StrategyAlertFrequency::OncePerBarClose && !at_close)
+                        || (self.raised.iter())
+                            .any(|(raised, text)| *raised == time && *text == message)
+                    {
+                        continue;
+                    }
+                    self.raised.push((time, message.clone()));
+                    alerts.push(StrategyAlert {
+                        sequence: 0,
+                        time,
+                        price,
+                        message,
+                    });
+                }
+            }
+            _ => self.requested.clear(),
+        }
         // A strategy that stopped deciding leaves no order working, so nothing of it fills later.
         if self.strategy.failure().is_some() {
             self.orders.clear();

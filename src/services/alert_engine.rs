@@ -231,6 +231,8 @@ struct Run {
     done: bool,
     /// The sequence of the newest strategy fill or custom event received.
     last_sequence: u64,
+    /// The sequence of the newest strategy alert received.
+    last_alert: u64,
     /// The detector signals that fired, with their anchor times.
     signals: Vec<(crate::model::SignalId, DateTime<Utc>)>,
     /// The latest time before which detector signals are history.
@@ -728,6 +730,50 @@ impl AlertEngine {
                                     fill.quantity, fill.position
                                 )
                             }),
+                    })
+                })
+                .collect()
+        });
+    }
+
+    /// Delivers each new alert of `run`, raised through `StrategyContext::alert` and read from
+    /// `Backtest::new_alerts` after each update, to the strategy-fill alerts of that run, as
+    /// [`strategy_fills`](Self::strategy_fills) delivers its fills. Alerts numbered at or below
+    /// one already received are ignored, counted apart from fills. A trigger reports the alert's
+    /// bar time and finite price, and the strategy's message when the alert has none; custom
+    /// messages expand as for `strategy_fills`, with `{{alert_message}}` the strategy's message
+    /// and `{{order_id}}`, `{{side}}`, `{{quantity}}`, `{{position}}` and `{{comment}}` empty.
+    #[cfg(feature = "strategies")]
+    pub fn strategy_alerts(
+        &self,
+        run: &str,
+        symbol: &str,
+        exchange: Option<&str>,
+        timeframe: Timeframe,
+        alerts: &[crate::strategies::StrategyAlert],
+        now: DateTime<Utc>,
+    ) {
+        let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
+        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
+            alerts
+                .iter()
+                .filter_map(|alert| {
+                    if alert.sequence <= seen.last_alert {
+                        return None;
+                    }
+                    seen.last_alert = alert.sequence;
+                    Some(Occurrence {
+                        time: alert.time,
+                        price: Some(alert.price).filter(|price| price.is_finite()),
+                        message: alert.message.clone(),
+                        fields: vec![
+                            ("order_id", String::new()),
+                            ("side", String::new()),
+                            ("quantity", String::new()),
+                            ("position", String::new()),
+                            ("comment", String::new()),
+                            ("alert_message", alert.message.clone()),
+                        ],
                     })
                 })
                 .collect()
