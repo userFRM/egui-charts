@@ -1664,6 +1664,7 @@ mod tests {
             });
             drawing.channel_midline = true;
             drawing.closed = true;
+            drawing.smoothing = 9;
             drawing.elliott_degree = ElliottDegree::Submicro;
             drawing.elliott_show_wave = false;
             drawing.selectable = false;
@@ -2035,15 +2036,19 @@ mod tests {
             ElliottDegree::Minor
         );
 
-        // A version 10 sticker saved before glyph angles still loads upright.
-        let mut value: serde_json::Value =
-            serde_json::from_str(include_str!("fixtures/storage_v10_channels.json")).unwrap();
-        let records = value["drawings"].as_array_mut().unwrap();
-        records.truncate(1);
-        records[0]["drawing"]["tool_type"] = "Sticker".into();
-        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
-        assert!(skipped.is_empty(), "{skipped:?}");
-        assert_eq!(loaded.drawings[0].drawing.glyph_angle, 0.0);
+        // A version 10 sticker saved before glyph angles still loads upright, and a highlighter
+        // saved before smoothing still draws through every sample.
+        for tool in ["Sticker", "Highlighter"] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v10_channels.json")).unwrap();
+            let records = value["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            records[0]["drawing"]["tool_type"] = tool.into();
+            let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool}: {skipped:?}");
+            let drawing = &loaded.drawings[0].drawing;
+            assert_eq!((drawing.glyph_angle, drawing.smoothing), (0.0, 0), "{tool}");
+        }
 
         let (v2, skipped) =
             DrawingStorage::from_json(include_str!("fixtures/storage_v2.json")).unwrap();

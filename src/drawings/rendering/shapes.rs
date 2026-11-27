@@ -459,13 +459,31 @@ fn bezier_points(controls: [Pos2; 4], clip: Rect, ppp: f32) -> Vec<Pos2> {
 
 impl Drawing {
     /// The samples a brush or highlighter stroke passes through: the recorded points without
-    /// repeats. Empty when a point is not finite.
+    /// repeats, a highlighter's evened out over its [`smoothing`](Self::smoothing). Empty when a
+    /// point is not finite.
     pub(super) fn brush_samples(&self) -> Vec<Pos2> {
         if self.points.iter().any(|p| !p.is_finite()) {
             return Vec::new();
         }
         let mut samples = self.points.clone();
         samples.dedup();
+        let reach = usize::from(self.smoothing / 2);
+        if self.tool_type == DrawingToolType::Highlighter && reach > 0 && samples.len() > 2 {
+            let last = samples.len() - 1;
+            samples = (0..=last)
+                .map(|i| {
+                    // A centred window, narrower towards the ends, which stay where they are.
+                    let r = reach.min(i).min(last - i);
+                    let window = &samples[i - r..=i + r];
+                    let sum = window
+                        .iter()
+                        .fold(egui::Vec2::ZERO, |sum, p| sum + p.to_vec2());
+                    (sum / window.len() as f32).to_pos2()
+                })
+                .collect();
+            // Averaging can bring neighbours together, which would give a span no length.
+            samples.dedup();
+        }
         samples
     }
 
@@ -788,6 +806,70 @@ mod tests {
                     tip.distance(want_tip.into()) < 1e-3
                         && (direction - egui::Vec2::from(want_direction)).length() < 1e-4,
                     "{tool:?} {left} {right}: {tip:?} {direction:?}"
+                );
+            }
+        }
+    }
+
+    /// A highlighter's smoothing moves each sample to the mean of itself and the samples within
+    /// half the smoothing on either side, fewer near the ends, which stay where they are: 5
+    /// averages five samples where it can and 255 all seven at the middle. 0 and 1 draw through
+    /// every sample, as a brush does whatever its smoothing.
+    #[test]
+    fn highlighter_smoothing_evens_the_stroke_and_keeps_its_ends() {
+        use DrawingToolType as T;
+        // The third of seven samples stands 30 above the others' line.
+        let samples = [
+            (100.0, 100.0),
+            (110.0, 100.0),
+            (120.0, 130.0),
+            (130.0, 100.0),
+            (140.0, 100.0),
+            (150.0, 100.0),
+            (160.0, 100.0),
+        ];
+        let recorded = vec![(110.0, 100.0), (120.0, 130.0), (130.0, 100.0)];
+        // Means of the three or five samples about each: y = 330 / 3, then 530 / 5 three times.
+        let five = vec![
+            (110.0, 110.0),
+            (120.0, 106.0),
+            (130.0, 106.0),
+            (140.0, 106.0),
+            (150.0, 100.0),
+        ];
+        // The middle sample is the mean of all seven, y = 730 / 7.
+        let mut all = five.clone();
+        all[2] = (130.0, 104.28571);
+        for (tool, smoothing, on_path) in [
+            (T::Highlighter, 5, five),
+            (T::Highlighter, 255, all),
+            (T::Highlighter, 0, recorded.clone()),
+            (T::Highlighter, 1, recorded.clone()),
+            (T::Brush, 5, recorded),
+        ] {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = samples.map(Pos2::from).to_vec();
+            drawing.completed = true;
+            drawing.smoothing = smoothing;
+            // The stored colour, not its shade on the default dark theme.
+            drawing.theme_shade = false;
+            let stroke = egui::epaint::ColorMode::Solid(drawing.stroke().color);
+            let path = super::super::tests::paint(&drawing)
+                .into_iter()
+                .find_map(|shape| match shape {
+                    Shape::Path(path) if !path.closed && path.stroke.color == stroke => Some(path),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                (path.points[0], *path.points.last().unwrap()),
+                (Pos2::new(100.0, 100.0), Pos2::new(160.0, 100.0)),
+                "{tool:?} {smoothing}: ends"
+            );
+            for point in on_path.into_iter().map(Pos2::from) {
+                assert!(
+                    path.points.iter().any(|p| p.distance(point) < 1e-3),
+                    "{tool:?} {smoothing}: {point:?}"
                 );
             }
         }

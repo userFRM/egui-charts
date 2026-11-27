@@ -1872,6 +1872,8 @@ mod tests {
                 drawing.points = anchors.iter().copied().map(Pos2::from).collect();
                 drawing.completed = true;
                 drawing.fill_color = None;
+                // Unsmoothed, so that the highlighter passes through its samples as a brush does.
+                drawing.smoothing = 0;
                 if matches!(tool, T::FibonacciCircles | T::FibonacciSpeedResistanceArcs) {
                     drawing.fib_config = Some(crate::drawings::FibonacciConfig {
                         levels: vec![crate::drawings::FibonacciLevel::new(1.0, "", [255; 4])],

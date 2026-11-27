@@ -397,6 +397,13 @@ pub struct Drawing {
     /// while placing a polyline closes it; older saved drawings are open.
     #[serde(default)]
     pub closed: bool,
+    /// How many recorded samples a highlighter stroke is evened out over: each sample moves to
+    /// the mean of itself and the `smoothing / 2` samples on either side, fewer near the ends, so
+    /// the first and last samples stay where they were recorded. 0 and 1 draw through every
+    /// sample. New highlighters start at 5; highlighters saved before this setting load with 0
+    /// and draw as they did. Other tools ignore it.
+    #[serde(default)]
+    pub smoothing: u8,
     /// Level lines and band fill of the pitchfork tools.
     #[serde(default)]
     pub pitchfork: Option<PitchforkConfig>,
@@ -862,6 +869,11 @@ impl Drawing {
             table: None,
             glyph_angle: 0.0,
             closed: false,
+            smoothing: if tool_type == DrawingToolType::Highlighter {
+                5
+            } else {
+                0
+            },
             gann: matches!(
                 tool_type,
                 DrawingToolType::GannBox
@@ -1637,6 +1649,7 @@ mod tests {
     /// parallel channel, flat top/bottom or disjoint channel starts its text at the left end of
     /// its first line, and one saved without line measurements keeps it in the middle. The
     /// triangle, ellipse and double curve keep the styles they shared before.
+    /// A highlighter evens its stroke over five samples, and a brush draws through every one.
     #[test]
     fn new_drawings_start_in_their_tool_style() {
         use DrawingToolType as T;
@@ -1804,6 +1817,13 @@ mod tests {
                 "{tool:?}"
             );
         }
+        assert_eq!(
+            (
+                Drawing::new(1, T::Highlighter).smoothing,
+                Drawing::new(1, T::Brush).smoothing
+            ),
+            (5, 0)
+        );
         assert_eq!(Drawing::new(1, T::PriceLabel).font_weight, FontWeight::Bold);
         let placed = Drawing::new(1, T::DateAndPriceRange);
         assert_eq!(

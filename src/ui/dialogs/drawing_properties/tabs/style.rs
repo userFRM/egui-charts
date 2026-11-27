@@ -541,6 +541,19 @@ impl StyleTab {
                 ui.end_row();
             }
             if let Some(template) = &mut props.tool_settings
+                && template.settings.tool_type == DrawingToolType::Highlighter
+            {
+                let label = ui.label(l10n::text(ui.ctx(), "Smoothing"));
+                // Up to 20 here; a larger value a host stored stays until edited.
+                ui.add(
+                    egui::DragValue::new(&mut template.settings.smoothing)
+                        .range(0..=20)
+                        .clamp_existing_to_range(false),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+            }
+            if let Some(template) = &mut props.tool_settings
                 && matches!(
                     template.settings.tool_type,
                     DrawingToolType::DateRange | DrawingToolType::DateAndPriceRange
