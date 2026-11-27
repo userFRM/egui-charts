@@ -1252,6 +1252,9 @@ impl Indicator for ConfiguredStudy {
     fn source(&self) -> Option<super::StudySource> {
         self.source.or_else(|| self.study.source())
     }
+    fn offset_range(&self) -> std::ops::RangeInclusive<i32> {
+        self.study.offset_range()
+    }
     fn inputs(&self) -> Vec<super::StudyInput> {
         let mut inputs = self.study.inputs();
         if let Some(default) = self.study.source() {
@@ -1281,15 +1284,16 @@ impl Indicator for ConfiguredStudy {
         }
         use super::{InputKind, StudyInput};
         if self.offers_offset() {
-            inputs.push(
+            let range = self.study.offset_range();
+            inputs.push(super::inputs::holding(
                 StudyInput::new(
                     "plot_offset",
                     "Offset",
                     InputValue::Integer(self.offset),
-                    InputKind::Integer(i32::MIN, i32::MAX),
+                    InputKind::Integer(*range.start(), *range.end()),
                 )
                 .with_default(InputValue::Integer(0)),
-            );
+            ));
         }
         if self.runs_on_other_symbol(&inputs) {
             inputs.push(
@@ -1339,6 +1343,13 @@ impl Indicator for ConfiguredStudy {
             let InputValue::Integer(offset) = value else {
                 return Err(crate::studies::StudyError::invalid_input(id));
             };
+            // Only edits are bounded: the current offset and one restored as saved stay.
+            if offset != self.offset
+                && !self.study.offset_range().contains(&offset)
+                && !super::inputs::restores(id, &InputValue::Integer(offset))
+            {
+                return Err(crate::studies::StudyError::invalid_input(id));
+            }
             self.offset = offset;
             self.aligned = None;
             self.kept = None;

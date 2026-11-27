@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 
 use super::DetectionKind;
-use crate::data::Footprint;
-use crate::model::{ChartTypeParams, Direction, Signal, SignalId, SignalShape};
+use crate::data::{Footprint, FootprintBar};
+use crate::model::{ChartTypeParams, Direction, FootprintCondition, Signal, SignalId, SignalShape};
 use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
@@ -136,19 +136,18 @@ pub(super) struct Zone {
 /// oldest go first.
 const ZONES: usize = 1_000;
 
-/// Pushes the imbalance and zone rejection conditions of `rule` that the closed bar of `flow`
-/// opened at `at` and closed at `close` meets, then ends the `zones` it broke and adds its own.
-pub(super) fn closed(
-    flow: &Footprint,
-    at: DateTime<Utc>,
-    close: f64,
-    rule: &FootprintRule,
-    zones: &mut Vec<Zone>,
-    out: &mut Vec<SignalEvent>,
-) {
-    let Some(bar) = flow.bar_at(at) else {
-        return;
-    };
+/// A footprint condition met by a live bar, before its symbol and interval are known.
+pub(super) struct Met {
+    pub(super) condition: FootprintCondition,
+    pub(super) bar: DateTime<Utc>,
+    pub(super) closed: bool,
+    pub(super) time: DateTime<Utc>,
+    pub(super) price: f64,
+    pub(super) message: String,
+}
+
+/// Imbalanced row counts, longest adjacent runs (sell then buy), and stacked zones.
+fn imbalances(bar: &FootprintBar, rule: &FootprintRule) -> ([usize; 2], [usize; 2], Vec<Zone>) {
     // The rows the chart shows: `row_ticks` one-tick rows summed into the row keyed by their
     // quotient, as `Footprint` groups them.
     let group = i64::from(rule.row_ticks.clamp(1, 1_000_000));
@@ -215,43 +214,67 @@ pub(super) fn closed(
             });
         }
     }
-    for (met, key, label, up, count, preposition) in [
+    (rows, longest, stacks)
+}
+
+/// Messages of the conditions `bar` meets, in `FootprintCondition::ALL` order, independent of
+/// the detector's switches.
+pub(super) fn met(bar: &FootprintBar, rule: &FootprintRule) -> [Option<String>; 4] {
+    let (rows, longest, _) = imbalances(bar, rule);
+    [
+        (rows[1] > 0, "Buy imbalance", "on", rows[1]),
+        (rows[0] > 0, "Sell imbalance", "on", rows[0]),
         (
-            rule.buy_imbalance && rows[1] > 0,
-            "buy-imbalance",
-            "Buy imbalance",
-            true,
-            rows[1],
-            "on",
-        ),
-        (
-            rule.sell_imbalance && rows[0] > 0,
-            "sell-imbalance",
-            "Sell imbalance",
-            false,
-            rows[0],
-            "on",
-        ),
-        (
-            rule.stacked_buy_imbalance && longest[1] >= stack,
-            "stacked-buy",
+            longest[1] >= rule.stack.max(1),
             "Stacked buy imbalance",
-            true,
-            longest[1],
             "of",
+            longest[1],
         ),
         (
-            rule.stacked_sell_imbalance && longest[0] >= stack,
-            "stacked-sell",
+            longest[0] >= rule.stack.max(1),
             "Stacked sell imbalance",
-            false,
-            longest[0],
             "of",
+            longest[0],
         ),
-    ] {
-        if met {
+    ]
+    .map(|(met, label, preposition, count)| {
+        met.then(|| {
             let unit = if count == 1 { "row" } else { "rows" };
-            let tooltip = format!("{label} {preposition} {count} {unit}");
+            format!("{label} {preposition} {count} {unit}")
+        })
+    })
+}
+
+/// Pushes the imbalance and zone rejection conditions of `rule` that the closed bar of `flow`
+/// opened at `at` and closed at `close` meets, then ends the `zones` it broke and adds its own.
+pub(super) fn closed(
+    flow: &Footprint,
+    at: DateTime<Utc>,
+    close: f64,
+    rule: &FootprintRule,
+    zones: &mut Vec<Zone>,
+    out: &mut Vec<SignalEvent>,
+) {
+    let Some(bar) = flow.bar_at(at) else {
+        return;
+    };
+    let (_, _, mut stacks) = imbalances(bar, rule);
+    for ((message, enabled), (key, label, up)) in met(bar, rule)
+        .into_iter()
+        .zip([
+            rule.buy_imbalance,
+            rule.sell_imbalance,
+            rule.stacked_buy_imbalance,
+            rule.stacked_sell_imbalance,
+        ])
+        .zip([
+            ("buy-imbalance", "Buy imbalance", true),
+            ("sell-imbalance", "Sell imbalance", false),
+            ("stacked-buy", "Stacked buy imbalance", true),
+            ("stacked-sell", "Stacked sell imbalance", false),
+        ])
+    {
+        if enabled && let Some(tooltip) = message {
             out.push(signal(key, at, close, up, label, tooltip));
         }
     }
@@ -259,7 +282,15 @@ pub(super) fn closed(
     let row = flow.level_of(close);
     let traded = (bar.levels.keys().next())
         .zip(bar.levels.keys().next_back())
-        .map(|(&low, &high)| ticks(low, high));
+        .map(|(&low, &high)| {
+            let group = i64::from(rule.row_ticks.clamp(1, 1_000_000));
+            (
+                low.div_euclid(group).saturating_mul(group),
+                high.div_euclid(group)
+                    .saturating_mul(group)
+                    .saturating_add(group - 1),
+            )
+        });
     let decimals = crate::scales::decimals(flow.tick_size());
     let price = |key: i64| format!("{:.decimals$}", key as f64 * flow.tick_size());
     let mut rejected: [Vec<String>; 2] = Default::default();

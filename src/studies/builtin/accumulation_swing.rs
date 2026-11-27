@@ -28,11 +28,11 @@ struct State {
 }
 
 impl AccumulationSwingIndex {
-    /// `limit_move` is clamped into `f64::EPSILON` to `f64::MAX`, NaN to `f64::EPSILON`; a
-    /// smaller limit move only scales the index up.
+    /// `limit_move` is clamped into 0.1 to 100000, NaN to 0.1; a smaller limit move
+    /// only scales the index up.
     pub fn new(limit_move: f64) -> Self {
         Self {
-            limit_move: clamp_param(limit_move, f64::EPSILON, f64::MAX),
+            limit_move: clamp_param(limit_move, 0.1, 100_000.0),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: palette::LIGHT_BLUE, // Teal
@@ -79,13 +79,13 @@ impl AccumulationSwingIndex {
 
 impl Default for AccumulationSwingIndex {
     fn default() -> Self {
-        Self::new(1000.0)
+        Self::new(10.0)
     }
 }
 
 impl Indicator for AccumulationSwingIndex {
     crate::studies::inputs::study_inputs!(self;
-        limit_move: number("Limit move", f64::EPSILON, f64::MAX)
+        limit_move: number("Limit move", 0.1, 100_000.0)
     ; {});
 
     fn name(&self) -> &str {

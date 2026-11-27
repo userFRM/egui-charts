@@ -532,11 +532,11 @@ mod tests {
         colors
     }
 
-    /// Kagi lines and Point and Figure columns take the colours accepted for them and leave the
+    /// Kagi lines, Point and Figure columns and Range bars take their own colours and leave the
     /// candle colours alone, also when their type is chosen again. A layout or template saved
     /// before they had colours draws them in its candle body colours, as it was drawn.
     #[test]
-    fn series_settings_colours_reach_kagi_lines_and_point_and_figure_columns() {
+    fn series_settings_colours_reach_kagi_point_and_figure_and_range_bars() {
         let candles = [
             egui::Color32::from_rgb(8, 153, 129),
             egui::Color32::from_rgb(242, 54, 69),
@@ -550,12 +550,17 @@ mod tests {
             egui::Color32::from_rgb(101, 2, 3),
         ];
         // The thin Kagi line takes the falling colour, the X column the rising one.
-        for (kind, side) in [(ChartType::Kagi, 1), (ChartType::PointAndFigure, 0)] {
+        for (kind, side) in [
+            (ChartType::Kagi, 1),
+            (ChartType::PointAndFigure, 0),
+            (ChartType::Range, 0),
+        ] {
             let mut chart = price_based_chart(kind, candles);
             let mut settings = chart.series_settings();
             let styles = &mut settings.chart_type_params.styles;
             [styles.kagi.up_color, styles.kagi.down_color] = own;
             [styles.point_figure.up_color, styles.point_figure.down_color] = own;
+            [styles.range.up_color, styles.range.down_color] = own;
             chart.apply_series_settings(&settings);
             assert!(painted_strokes(&mut chart).contains(&own[side]), "{kind:?}");
             chart.set_chart_type(ChartType::Candles);
@@ -565,6 +570,10 @@ mod tests {
             assert!(bodies.is_empty(), "{kind:?}: {bodies:?}");
             chart.set_chart_type(kind);
             assert!(painted_strokes(&mut chart).contains(&own[side]), "{kind:?}");
+
+            if kind == ChartType::Range {
+                continue;
+            }
 
             // The Kagi entry as saved before its colours, and no Point and Figure entry.
             let former: serde_json::Value =
@@ -605,7 +614,8 @@ mod tests {
 
     /// With the default range of 1, the closes 100, 102 and 101.5 complete the rising bars 100 to
     /// 101 and 101 to 102, and 101.5 reaches neither 103 nor 101: the bar from 102 falling to
-    /// 101.5 is in progress and takes the light red forming colour of new charts. A layout or
+    /// 101.5 is in progress and takes the light red forming colour of new charts. New charts
+    /// draw thin OHLC bars; older styles keep their blocks and candle colours. A layout or
     /// template saved before the forming bar colours, with its Range entry as then saved, without
     /// one, or without chart type styles, draws it in its falling body colour, as it was drawn.
     #[test]
@@ -625,10 +635,13 @@ mod tests {
         let forming_down = egui::Color32::from_rgb(245, 166, 174);
         let mut chart = price_based_chart(ChartType::Range, candles);
         let known = [candles[0], candles[1], forming_down];
-        assert_eq!(
-            fills(&mut chart, &known),
-            [candles[0], candles[0], forming_down]
+        assert!(
+            fills(&mut chart, &known).is_empty(),
+            "new charts draw thin OHLC bars"
         );
+        let strokes = painted_strokes(&mut chart);
+        assert!(strokes.contains(&crate::model::RangeStyle::default().up_color));
+        assert!(strokes.contains(&forming_down));
 
         let former: serde_json::Value =
             serde_json::from_str(r#"{"thin_bars":false,"phantom_bars":false}"#).unwrap();
@@ -678,23 +691,35 @@ mod tests {
     }
 
     /// The Symbol tab of a Range chart edits the rising and falling colours of the bar in
-    /// progress in the draft, and Ok applies the colour picked for each.
+    /// progress and completed bars in the draft. Ok applies each colour and leaves candles alone.
     #[test]
-    fn range_forming_bar_colours_apply_on_ok() {
+    fn range_bar_colours_apply_on_ok_and_leave_the_candles() {
         use egui::Color32;
         use egui::accesskit::Role;
         use egui_kittest::{Harness, kittest::Queryable};
         let picked = Color32::from_rgb(49, 27, 146);
         // Colour wells are found by their seeded colour.
-        let seeded = [Color32::from_rgb(10, 20, 30), Color32::from_rgb(40, 50, 60)];
-        for (well, expected) in [
-            ("#0A141E", [picked, seeded[1]]),
-            ("#28323C", [seeded[0], picked]),
-        ] {
+        let seeded = [
+            Color32::from_rgb(10, 20, 30),
+            Color32::from_rgb(40, 50, 60),
+            Color32::from_rgb(70, 80, 90),
+            Color32::from_rgb(100, 110, 120),
+        ];
+        for (index, well) in ["#0A141E", "#28323C", "#46505A", "#646E78"]
+            .into_iter()
+            .enumerate()
+        {
+            let mut expected = seeded;
+            expected[index] = picked;
             let mut chart = price_based_chart(ChartType::Range, [Color32::GREEN, Color32::RED]);
             let mut params = chart.chart_type_params().clone();
             let style = &mut params.styles.range;
-            [style.forming_up, style.forming_down] = seeded;
+            [
+                style.up_color,
+                style.down_color,
+                style.forming_up,
+                style.forming_down,
+            ] = seeded;
             chart.set_chart_type_params(params);
             let mut dialog = SeriesSettingsDialog::new();
             dialog.open(SeriesId::MAIN, chart.series_settings());
@@ -725,12 +750,75 @@ mod tests {
             harness.run();
             let forming = |chart: &crate::Chart| {
                 let style = &chart.chart_type_params().styles.range;
-                [style.forming_up, style.forming_down]
+                [
+                    style.up_color,
+                    style.down_color,
+                    style.forming_up,
+                    style.forming_down,
+                ]
             };
             assert_eq!(forming(&harness.state().1), seeded, "{well}: draft only");
             harness.get_by_label("Ok").click();
             harness.run();
-            assert_eq!(forming(&harness.state().1), expected, "{well}");
+            let chart = &mut harness.state_mut().1;
+            assert_eq!(forming(chart), expected, "{well}");
+            assert_eq!(
+                [chart.config().bullish_color, chart.config().bearish_color],
+                [Color32::GREEN, Color32::RED]
+            );
+            let strokes = painted_strokes(chart);
+            assert!(
+                strokes.contains(&expected[0]),
+                "{well}: completed rising bars"
+            );
+            assert!(
+                strokes.contains(&expected[3]),
+                "{well}: forming falling bar"
+            );
+        }
+    }
+
+    /// A saved block style stays until Thin bars changes: once draws thin OHLC bars, twice bold.
+    #[test]
+    fn range_thin_bars_switch_ends_the_saved_block_look() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        for (clicks, thin_bars, blocks) in [(0, false, true), (1, true, false), (2, false, false)] {
+            let mut chart =
+                price_based_chart(ChartType::Range, [egui::Color32::GREEN, egui::Color32::RED]);
+            let mut params = chart.chart_type_params().clone();
+            params.styles.range.thin_bars = false;
+            params.styles.range.blocks = true;
+            chart.set_chart_type_params(params);
+            let mut dialog = SeriesSettingsDialog::new();
+            dialog.open(SeriesId::MAIN, chart.series_settings());
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(1440.0, 900.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                })
+                .build_ui_state(
+                    |ui, (dialog, chart): &mut (SeriesSettingsDialog, crate::Chart)| {
+                        if let SeriesSettingsAction::Apply(_, settings) = dialog.show(ui.ctx()) {
+                            chart.apply_series_settings(&settings);
+                        }
+                    },
+                    (dialog, chart),
+                );
+            h.run();
+            for _ in 0..clicks {
+                h.get_by_role_and_label(Role::CheckBox, "Thin bars").click();
+                h.run();
+            }
+            h.get_by_label("Ok").click();
+            h.run();
+            let style = &h.state().1.chart_type_params().styles.range;
+            assert_eq!(
+                (style.thin_bars, style.blocks),
+                (thin_bars, blocks),
+                "{clicks} changes"
+            );
         }
     }
 
@@ -751,7 +839,10 @@ mod tests {
         [styles.kagi.up_color, styles.kagi.down_color] = [color(10), color(11)].map(Option::unwrap);
         let point_figure = [color(12), color(13)].map(Option::unwrap);
         [styles.point_figure.up_color, styles.point_figure.down_color] = point_figure;
-        styles.range.thin_bars = true;
+        styles.range.thin_bars = false;
+        styles.range.blocks = false;
+        [styles.range.up_color, styles.range.down_color] =
+            [color(22), color(23)].map(Option::unwrap);
         styles.range.phantom_bars = true;
         [styles.range.forming_up, styles.range.forming_down] =
             [color(20), color(21)].map(Option::unwrap);

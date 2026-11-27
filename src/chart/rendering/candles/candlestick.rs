@@ -175,8 +175,8 @@ pub(super) fn render_hollow_candles(
 }
 
 /// Columns: one solid column per bar from the pane bottom, or from `base` when set, to the `source`
-/// price, coloured by the close versus the previous close whatever the source. Columns are at least
-/// one pixel tall.
+/// price, coloured by the close against the previous close, or against the column's own open while
+/// `by_previous_close` is off, whatever the source. Columns are at least one pixel tall.
 pub(super) fn render_columns(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
@@ -195,6 +195,7 @@ pub(super) fn render_columns(
     bearish_color: Color32,
     base: Option<f64>,
     source: PriceSource,
+    by_previous_close: bool,
 ) {
     let bottom = price_ctx.rect.max.y;
     let base_y = base.map(|price| price_scale.price_to_y(price));
@@ -204,13 +205,20 @@ pub(super) fn render_columns(
         }
         let g = start_idx + i;
         let x = idx_to_coord(g, chart_rect_min_x);
-        let color = bar.colors.as_ref().and_then(|own| own.color).unwrap_or(
-            if bar.close >= prev_close(full_data, g) {
-                bullish_color
-            } else {
-                bearish_color
-            },
-        );
+        let reference = if by_previous_close {
+            prev_close(full_data, g)
+        } else {
+            bar.open
+        };
+        let color =
+            bar.colors
+                .as_ref()
+                .and_then(|own| own.color)
+                .unwrap_or(if bar.close >= reference {
+                    bullish_color
+                } else {
+                    bearish_color
+                });
         let value = source.compute(bar.open, bar.high, bar.low, bar.close);
         let value = price_scale.price_to_y(value);
         let (top, bottom) = match base_y {
@@ -384,6 +392,7 @@ mod tests {
                     Color32::RED,
                     base,
                     PriceSource::Close,
+                    true,
                 );
             });
             let columns: Vec<_> = output
@@ -396,6 +405,76 @@ mod tests {
                 .collect();
             output.drop_without_applying_deltas();
             assert_eq!(columns, spans);
+        }
+    }
+
+    /// A close of 105 after 110 falls against the previous close but rises against its open of
+    /// 100. Equality rises under either rule, including the first column with no prior close.
+    #[test]
+    fn columns_compare_their_close_with_the_previous_close_or_their_open() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(150.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(90.0, 120.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let bars = [
+            Bar::new(time, 100.0, 112.0, 98.0, 110.0, 0.0),
+            Bar::new(time, 100.0, 106.0, 99.0, 105.0, 0.0),
+            Bar::new(time, 105.0, 107.0, 101.0, 105.0, 0.0),
+        ];
+        let colors = StyleColors {
+            bullish: Color32::GREEN,
+            bearish: Color32::RED,
+            text: Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        for (by_previous_close, expected) in [
+            (true, [Color32::GREEN, Color32::RED, Color32::GREEN]),
+            (false, [Color32::GREEN; 3]),
+        ] {
+            let ctx = Context::default();
+            let output = ctx.run_ui(Default::default(), |_| {
+                let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+                let context = RenderContext::new(&painter, rect);
+                render_columns(
+                    &context,
+                    &context,
+                    &map,
+                    &colors,
+                    &bars,
+                    &bars,
+                    0,
+                    10.0,
+                    false,
+                    0.0,
+                    0.0,
+                    0.0,
+                    |i, _| 25.0 + i as f32 * 50.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                    None,
+                    PriceSource::Close,
+                    by_previous_close,
+                );
+            });
+            let fills: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Rect(column) => Some(column.fill),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            assert_eq!(fills, expected, "previous close {by_previous_close}");
         }
     }
 
