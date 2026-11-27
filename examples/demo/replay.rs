@@ -481,7 +481,7 @@ impl DemoApp {
         self.open_replay_account();
         self.replay_interval = Timeframe::Ticks(NonZeroU64::MIN);
         self.recording_files.opened = true;
-        loaded.driver.seek(loaded.bars[0].time);
+        loaded.driver.seek_execution(loaded.bars[0].time);
         self.chart.set_conversion(None);
         self.chart.set_market_replay(Some(loaded.driver));
         self.chart.set_instrument(Some(loaded.instrument));
@@ -1110,7 +1110,7 @@ impl DemoApp {
                 .and_then(|replay| replay.visible_bars().first())
                 && driver.time() < first.time
             {
-                driver.seek(first.time);
+                driver.seek_execution(first.time);
             }
             self.apply_replay_window(driver.time() + chrono::TimeDelta::nanoseconds(1));
         }
@@ -1309,7 +1309,7 @@ impl DemoApp {
         self.chart.set_replay_source(bars, clock);
         if let Some(driver) = market_driver {
             if let Some(time) = self.chart.replay_time() {
-                driver.seek(time - chrono::TimeDelta::nanoseconds(1));
+                driver.seek_execution(time - chrono::TimeDelta::nanoseconds(1));
             }
             if self.chart.replay_driver().is_none() {
                 self.chart.set_conversion(None);
@@ -1572,7 +1572,7 @@ impl DemoApp {
             return;
         };
         let time = time.clamp(first.time, last);
-        driver.seek(time);
+        driver.seek_execution(time);
         replay.handle_action(ReplayAction::Pause);
         replay.seek_cutoff(time + chrono::TimeDelta::nanoseconds(1), &clock);
         self.replay_start.is_open = false;

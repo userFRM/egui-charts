@@ -218,10 +218,11 @@ impl Chart {
     /// Sizes whose parameters were set during the session, and all of them once its main history
     /// was replaced, resolve from the restored history instead. Hosts own source data and
     /// session storage.
-    /// With a market driver attached this dispatches a seek; call outside egui context locks,
-    /// as with [`ReplayDriver::seek`]. The rebuilt bars arrive on the next frame, and the view
-    /// follows them as it follows playback: near the live edge it follows the cursor, and a view
-    /// scrolled back keeps the bars it shows in place.
+    /// With a market driver attached this dispatches [`ReplayDriver::seek_execution`]: a cutoff
+    /// one nanosecond after a one-trade bar shows its execution and those before it, even when
+    /// they share a timestamp. Call outside egui context locks. The rebuilt bars arrive on the
+    /// next frame, and the view follows them as it follows playback: near the live edge it
+    /// follows the cursor, and a view scrolled back keeps the bars it shows in place.
     pub fn set_replay_time(&mut self, time: Option<DateTime<Utc>>) {
         if let Some(replay) = &self.market_replay {
             if let Some(time) = time {
@@ -229,7 +230,7 @@ impl Chart {
                     .checked_sub_signed(chrono::TimeDelta::nanoseconds(1))
                     .unwrap_or(DateTime::<Utc>::MIN_UTC);
                 if replay.driver.time() != inclusive {
-                    replay.driver.seek(inclusive);
+                    replay.driver.seek_execution(inclusive);
                 }
                 self.apply_replay_window();
             } else {
@@ -1409,6 +1410,190 @@ mod tests {
             }
             chart.remove_oldest_bars(SeriesId::MAIN, evict);
             assert_eq!(shown(&chart), expected[expected.len() - 1..], "{zone:?}");
+        }
+    }
+
+    /// Each one-trade cutoff reveals only its execution prefix, including across symbols,
+    /// backward seeks and a saved cursor. A's equal-time sizes sum to 1, 3 and 7, then 15.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn market_replay_seeks_stop_inside_an_equal_time_group() {
+        use crate::data::{MarketEvent, ReplayEvent, aggregate_trades};
+        use crate::model::{ChartType, Instrument, OrderSide, Tick};
+        use crate::ui::replay::{ReplayAction, ReplayController};
+        let ns = chrono::TimeDelta::nanoseconds;
+        let ticks: Vec<_> = [
+            (time(0), 10.0, 1.0),
+            (time(0), 11.0, 2.0),
+            (time(0), 12.0, 4.0),
+            (time(1), 13.0, 8.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (at, price, size))| {
+            Tick::new(at, price, size, Some(OrderSide::Buy)).with_id(i as u64 + 1)
+        })
+        .collect();
+        let mut events: Vec<_> = ticks
+            .iter()
+            .enumerate()
+            .map(|(i, tick)| {
+                ReplayEvent::new("A", tick.ts, i as u64 + 1, MarketEvent::Trade(tick.clone()))
+            })
+            .collect();
+        events.push(ReplayEvent::new(
+            "B",
+            time(0),
+            4,
+            MarketEvent::Trade(Tick::new(time(0), 50.0, 16.0, Some(OrderSide::Buy)).with_id(5)),
+        ));
+        let load = || {
+            Arc::new(
+                ReplayDriver::new(
+                    events.clone(),
+                    vec![
+                        Instrument::new("A").with_tick_size(1.0),
+                        Instrument::new("B").with_tick_size(1.0),
+                    ],
+                )
+                .unwrap(),
+            )
+        };
+        let live = load();
+        live.seek(time(1));
+        let chart = |symbol| {
+            super::super::ChartBuilder::new()
+                .with_feed(live.clone())
+                .with_symbol(symbol)
+                .with_timeframe(Timeframe::Min1)
+                .build()
+        };
+        let (mut a, mut b) = (chart("A"), chart("B"));
+        a.set_chart_type(ChartType::VolumeFootprint);
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            a.pump(&ctx);
+            b.pump(&ctx);
+        }
+        let replay = load();
+        replay.set_speed(0.0).unwrap();
+        replay.seek(time(1));
+        a.set_market_replay(Some(replay.clone()));
+        b.set_market_replay(Some(replay));
+        let one_trade = BarClock::new("1t".parse::<Timeframe>().unwrap());
+        let source = aggregate_trades(&ticks, one_trade.clone()).unwrap();
+        let controller = || ReplayController::new(source.clone(), vec![]).with_symbol("A");
+        let mut cursor = controller();
+        let first = bar(0, [10.0, 10.0, 10.0, 10.0, 1.0]);
+        let second = bar(0, [10.0, 11.0, 10.0, 11.0, 3.0]);
+        let third = bar(0, [10.0, 12.0, 10.0, 12.0, 7.0]);
+        // The shared prefix contains 1, 2, 4, 5, 2, 1 and 4 events. B follows A's third.
+        for (action, cutoff, bars, prices, volume, has_b) in [
+            (
+                ReplayAction::None,
+                time(0) + ns(1),
+                vec![first.clone()],
+                vec![10.0],
+                1.0,
+                false,
+            ),
+            (
+                ReplayAction::StepForward,
+                time(0) + ns(2),
+                vec![second.clone()],
+                vec![10.0, 11.0],
+                3.0,
+                false,
+            ),
+            (
+                ReplayAction::StepForward,
+                time(0) + ns(3),
+                vec![third.clone()],
+                vec![10.0, 11.0, 12.0],
+                7.0,
+                true,
+            ),
+            (
+                ReplayAction::StepForward,
+                time(1) + ns(1),
+                vec![third.clone(), bar(1, [13.0, 13.0, 13.0, 13.0, 8.0])],
+                vec![10.0, 11.0, 12.0, 13.0],
+                15.0,
+                true,
+            ),
+            (
+                ReplayAction::JumpToBar(1),
+                time(0) + ns(2),
+                vec![second],
+                vec![10.0, 11.0],
+                3.0,
+                false,
+            ),
+            (
+                ReplayAction::StepBackward,
+                time(0) + ns(1),
+                vec![first],
+                vec![10.0],
+                1.0,
+                false,
+            ),
+            (
+                ReplayAction::JumpToBar(2),
+                time(0) + ns(3),
+                vec![third],
+                vec![10.0, 11.0, 12.0],
+                7.0,
+                true,
+            ),
+        ] {
+            cursor.handle_action(action);
+            let session = cursor.session().unwrap();
+            let mut restored = controller();
+            assert!(restored.restore_session(&session));
+            assert_eq!(restored.cutoff(&one_trade), Some(cutoff));
+            ChartLayout::default().set_replay_time(
+                &mut [&mut b, &mut a],
+                1,
+                ReplayScope::AllCharts,
+                Some(cutoff),
+            );
+            for _ in 0..4 {
+                a.pump(&ctx);
+                b.pump(&ctx);
+            }
+            assert_eq!(
+                (a.replay_time(), b.replay_time()),
+                (Some(cutoff), Some(cutoff))
+            );
+            assert_eq!(a.bars(SeriesId::MAIN), bars, "{cutoff}");
+            assert_eq!(
+                a.trades(SeriesId::MAIN)
+                    .map(|tick| tick.price)
+                    .collect::<Vec<_>>(),
+                prices
+            );
+            let ask: f64 = a
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .unwrap()
+                .owned()
+                .unwrap()
+                .bars()
+                .values()
+                .map(|bar| bar.ask)
+                .sum();
+            assert_eq!(ask, volume);
+            if has_b {
+                assert_eq!(
+                    b.bars(SeriesId::MAIN).first(),
+                    Some(&bar(0, [50.0, 50.0, 50.0, 50.0, 16.0]))
+                );
+            } else {
+                assert!(b.bars(SeriesId::MAIN).is_empty());
+            }
         }
     }
 

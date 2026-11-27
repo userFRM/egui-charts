@@ -102,6 +102,18 @@ impl ReplayEvent {
         }
     }
 
+    /// An execution a subscription folds into bars, including an order's fill.
+    fn execution(&self) -> bool {
+        matches!(
+            &self.event,
+            MarketEvent::Trade(_)
+                | MarketEvent::Order {
+                    event: OrderEvent::Execute { trade: Some(_), .. },
+                    ..
+                }
+        )
+    }
+
     fn book_event(&self) -> bool {
         matches!(
             self.event,
@@ -138,6 +150,9 @@ impl ReplayEvent {
 #[derive(Clone, Debug)]
 pub struct ReplayClock {
     events: Arc<[ReplayEvent]>,
+    /// Latest time or one-trade stamp through each event, with a symbol's executions stamped
+    /// at least one nanosecond apart as one-trade bars are.
+    due: Arc<[DateTime<Utc>]>,
     cursor: usize,
     time: DateTime<Utc>,
     speed: f64,
@@ -166,9 +181,29 @@ impl ReplayClock {
                 event.symbol, event.time, event.sequence
             )));
         }
+        let due: Arc<[DateTime<Utc>]> = {
+            let mut stamps = HashMap::<&str, DateTime<Utc>>::new();
+            let mut latest = DateTime::<Utc>::MIN_UTC;
+            events
+                .iter()
+                .map(|event| {
+                    let mut at = event.time;
+                    if event.execution() {
+                        if let Some(last) = stamps.get(event.symbol.as_str()) {
+                            let next = last.checked_add_signed(TimeDelta::nanoseconds(1));
+                            at = at.max(next.unwrap_or(DateTime::<Utc>::MAX_UTC));
+                        }
+                        stamps.insert(event.symbol.as_str(), at);
+                    }
+                    latest = latest.max(at);
+                    latest
+                })
+                .collect()
+        };
         let time = events.first().map_or(DateTime::default(), |e| e.time);
         Ok(Self {
             events: events.into(),
+            due,
             cursor: 0,
             time,
             speed: 1.0,
@@ -227,6 +262,20 @@ impl ReplayClock {
         self.time = time;
         self.fractional_nanos = 0.0;
         self.cursor = self.events.partition_point(|event| event.time <= time);
+    }
+
+    /// Stops before the first event or execution stamp after `time`, keeping replay order.
+    fn position_execution(&mut self, time: DateTime<Utc>) {
+        self.time = time;
+        self.fractional_nanos = 0.0;
+        self.cursor = self.due.partition_point(|due| *due <= time);
+    }
+
+    /// Keeps subscriptions from opening candles past an execution held back inside an instant.
+    fn market_time(&self) -> DateTime<Utc> {
+        self.events
+            .get(self.cursor)
+            .map_or(self.time, |next| next.time.min(self.time))
     }
 
     /// Seeks inclusively to `time`. Before pushing these events, call `Sink::reset_replay` on
@@ -474,7 +523,7 @@ impl ReplayDriver {
                 Arc::clone(&state.clock.events),
                 end - count,
                 end,
-                time,
+                state.clock.market_time(),
                 count > 0 || time != before,
                 state.routes(),
             )
@@ -503,20 +552,45 @@ impl ReplayDriver {
     /// the pending bar limit however long the recording. Call outside egui context locks, as
     /// with live pushes.
     pub fn seek(&self, time: DateTime<Utc>) {
+        self.reposition(time, false);
+    }
+
+    /// Seeks as [`seek`](Self::seek) does, counting executions as one-trade bars stamp them.
+    /// [`aggregate_trades`](super::aggregate_trades) stamps a symbol's executions at least one
+    /// nanosecond apart. This seek stops before the first execution of any symbol stamped after
+    /// `time`, and before every event recorded after it. Seeking to a one-trade bar's time thus
+    /// reveals its execution and none of the later ones at the same instant, on every
+    /// subscription. Where no execution stamps move past `time`, it equals `seek`.
+    /// [`time`](Self::time) reports `time`; subscriptions see the first held-back event's time
+    /// when earlier, so no candle opens past it. Playback continues by recorded time: the next
+    /// advance at a positive speed delivers the held executions. Stamps count every recorded
+    /// execution of a symbol, whatever hours a subscription selects and without deduplicating
+    /// trade ids; a source that filters these can have different stamps inside an equal-time
+    /// chain. Call outside egui context locks, as with `seek`.
+    pub fn seek_execution(&self, time: DateTime<Utc>) {
+        self.reposition(time, true);
+    }
+
+    fn reposition(&self, time: DateTime<Utc>, executions: bool) {
         let mut store = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
-        let (events, end, routes) = {
+        let (events, end, market, routes) = {
             let mut state = self.state();
-            state.clock.position(time);
+            if executions {
+                state.clock.position_execution(time);
+            } else {
+                state.clock.position(time);
+            }
             (
                 Arc::clone(&state.clock.events),
                 state.clock.cursor,
+                state.clock.market_time(),
                 state.routes(),
             )
         };
         store.prune(&routes);
         let (mut pushed, mut resumed) = (0, 0);
         for route in routes.iter() {
-            let (count, from_point) = route.rebuild(&events[..end], time, &mut store);
+            let (count, from_point) = route.rebuild(&events[..end], market, &mut store);
             pushed += count;
             resumed += usize::from(from_point);
         }
@@ -652,14 +726,7 @@ impl Route {
     /// Pushes `event`, as a live feed of the selected hours would: an execution outside them
     /// reaches neither bars nor the trade store, and an order execution still fills the book.
     fn deliver(&self, event: &ReplayEvent) {
-        let execution = match &event.event {
-            MarketEvent::Trade(_) => true,
-            MarketEvent::Order {
-                event: OrderEvent::Execute { trade, .. },
-                ..
-            } => trade.is_some(),
-            _ => false,
-        };
+        let execution = event.execution();
         if !execution {
             event.push_to(&self.sink);
         } else if self.hours.as_ref().is_none_or(|hours| {
@@ -780,7 +847,7 @@ impl Datafeed for ReplayDriver {
                     route,
                     Arc::clone(&state.clock.events),
                     state.clock.cursor,
-                    state.clock.time(),
+                    state.clock.market_time(),
                 )
             })
         };
@@ -816,7 +883,7 @@ impl Datafeed for ReplayDriver {
         }
         let (events, end, time) = {
             let state = self.state();
-            let time = state.clock.time();
+            let time = state.clock.market_time();
             let horizon = request
                 .before
                 .and_then(|before| before.checked_add_signed(request.config.cadence))
