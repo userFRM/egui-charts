@@ -2,7 +2,7 @@
 
 use crate::Chart;
 use crate::chart::series::SeriesId;
-use crate::model::{AlertSource, AlertSourceName};
+use crate::model::{AlertSource, AlertSourceName, ChartType, TPOLevelSource};
 use crate::scales::PriceScaleMode;
 
 impl Chart {
@@ -132,7 +132,8 @@ impl Chart {
     /// does not at that bar, and the value of the drawing's level at that bar, on the scale of
     /// the pane that paints the drawing, an anchored VWAP counting the executions the chart holds, for a
     /// [`Drawing`](AlertSource::Drawing) named as
-    /// [`Drawing::alert_source`] does.
+    /// [`Drawing::alert_source`] does, and the price a [`TPOLevel`](AlertSource::TPOLevel)
+    /// keeps.
     ///
     /// `None` for an unknown study, output or drawing, a bar the series does not have, and a value
     /// that is not finite.
@@ -173,6 +174,7 @@ impl Chart {
                 .find(|(index, ..)| *index == level)
                 .map(|(.., price)| price)
             })?,
+            AlertSource::TPOLevel(level) => level.price,
         };
         value.is_finite().then_some(value)
     }
@@ -184,7 +186,11 @@ impl Chart {
     /// the study's name, the drawing's number and a fork or fan level's value as given and
     /// translates the study output, the drawing tool and the level when shown. A level in a study
     /// pane is named after the study first in its pane, as in `RSI: Horizontal Line 7`.
-    /// A study offers the outputs [`Indicator::alert_outputs`] lists.
+    /// A study offers the outputs [`Indicator::alert_outputs`] lists. Then, for the TPO chart type
+    /// and each visible TPO study, come the extended levels it draws of completed profiles that no
+    /// later bar has reached, at their current prices, named `TPO {session}: {level} {price}` or
+    /// after the study, the session written as [`Self::format_time`] writes it; see
+    /// [`TPOLevelSource`].
     ///
     /// [`Indicator::alert_outputs`]: crate::studies::Indicator::alert_outputs
     pub fn alert_sources(&self) -> Vec<(AlertSource, AlertSourceName)> {
@@ -268,7 +274,45 @@ impl Chart {
                     (d.alert_source(level), name)
                 })
             });
-        studies.chain(drawings).collect()
+        let (start, end) = self.state.visible_range();
+        let chart_type = (self.chart_type == ChartType::TimePriceOpportunity
+            && self.main_series_visible)
+            .then(|| (self.tpo_chart_division(), None));
+        let tpo_studies = self
+            .indicators()
+            .filter(|(_, study)| self.shows_study(*study) && !self.chart_type.is_time_independent())
+            .filter_map(|(_, study)| Some((self.tpo_division(study.tpo()?), Some(study.name()))));
+        let mut tpo: Vec<(AlertSource, AlertSourceName)> = Vec::new();
+        for ((clock, config), study) in chart_type.into_iter().chain(tpo_studies) {
+            let levels = crate::chart::rendering::candles::tpo::open_levels(
+                &self.state.data().bars,
+                start..end,
+                self.state.revision(),
+                (&config, self.instrument().and_then(|i| i.tick_size)),
+                &clock,
+            );
+            for (profile, level, price, text) in levels {
+                let source = AlertSource::TPOLevel(TPOLevelSource::new(profile, level, price));
+                if tpo.iter().any(|(offered, _)| *offered == source) {
+                    continue;
+                }
+                let session = self.format_time(profile);
+                let values = [("session", session.as_str()), ("price", text.as_str())];
+                let labels = [("level", level.label())];
+                let name = match study {
+                    Some(study) => AlertSourceName::new(
+                        "{study} {session}: {level} {price}",
+                        &[&values[..], &[("study", study)]].concat(),
+                        &labels,
+                    ),
+                    None => {
+                        AlertSourceName::new("TPO {session}: {level} {price}", &values, &labels)
+                    }
+                };
+                tpo.push((source, name));
+            }
+        }
+        studies.chain(drawings).chain(tpo).collect()
     }
 
     /// The scale mode the levels of drawing `id` resolve with, what they mark and the study that
@@ -1074,6 +1118,230 @@ mod tests {
             |source, bar| chart.alert_value(source, bar),
         );
         assert_eq!(*fired.lock().unwrap(), ["dPOC"]);
+    }
+
+    /// A chart of `bars`, taken from `tpo_level_bars`, of 30-minute bars of an instrument
+    /// ticking by 1.0, drawn as TPO profiles of one-tick rows that show poor lows and single
+    /// prints, with `edit` applied to those settings.
+    fn tpo_chart(bars: &[Bar], edit: impl FnOnce(&mut crate::model::ChartTypeParams)) -> Chart {
+        let mut chart = Chart::new(BarData::from_bars(bars.to_vec()));
+        chart.set_symbol("SYM");
+        chart.set_timeframe(Timeframe::Min30);
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("SYM").with_tick_size(1.0),
+        ));
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        let mut params = chart.chart_type_params().clone();
+        params.tpo_row_ticks = 1;
+        params.tpo_poor_low = true;
+        params.tpo_single_prints = true;
+        edit(&mut params);
+        chart.set_chart_type_params(params);
+        chart
+    }
+
+    /// The TPO levels `chart` offers alerts, as (profile open, level, price).
+    fn tpo_sources(chart: &Chart) -> Vec<(DateTime<Utc>, crate::model::TPOLevel, f64)> {
+        chart
+            .alert_sources()
+            .into_iter()
+            .filter_map(|(source, _)| match source {
+                AlertSource::TPOLevel(level) => Some((level.profile, level.level, level.price)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Guards #4265: the TPO chart type and a TPO study offer the extended levels of completed
+    /// profiles that no later bar has reached, each once its switch is on, also for profiles
+    /// before or after the view, and none of the forming profile. The levels are hand-calculated
+    /// on `tpo_level_bars`; the last bar here, bar 8, forms the third profile.
+    #[test]
+    fn tpo_extensions_offer_completed_levels_no_later_bar_reached() {
+        use crate::model::{ChartTypeParams, LogicalRange, TPOLevel::*};
+        let bars = crate::chart::rendering::candles::tpo::tpo_level_bars();
+        let bars = &bars[..9];
+        let [d0, d1] = [bars[0].time, bars[4].time];
+        type Row = (
+            fn(&mut ChartTypeParams),
+            Vec<(DateTime<Utc>, crate::model::TPOLevel, f64)>,
+        );
+        let rows: [Row; 7] = [
+            (|_| {}, vec![]),
+            (
+                |p| p.tpo_extend_poc = true,
+                vec![(d0, PointOfControl, 102.0), (d1, PointOfControl, 112.0)],
+            ),
+            (
+                |p| p.tpo_extend_vah = true,
+                vec![(d0, ValueAreaHigh, 104.0), (d1, ValueAreaHigh, 114.0)],
+            ),
+            (
+                |p| p.tpo_extend_val = true,
+                vec![(d0, ValueAreaLow, 101.0), (d1, ValueAreaLow, 111.0)],
+            ),
+            // Bar 8 trades down to 107, through the second profile's poor low of 110.
+            (|p| p.tpo_extend_poor = true, vec![(d0, PoorLow, 100.0)]),
+            (
+                |p| p.tpo_extend_single_prints = true,
+                vec![
+                    (d0, SinglePrints, 105.0),
+                    (d0, SinglePrints, 106.0),
+                    (d1, SinglePrints, 115.0),
+                    (d1, SinglePrints, 116.0),
+                ],
+            ),
+            (
+                |p| {
+                    p.tpo_extend_poc = true;
+                    p.tpo_poc = false;
+                },
+                vec![],
+            ),
+        ];
+        for (row, (edit, expected)) in rows.into_iter().enumerate() {
+            assert_eq!(tpo_sources(&tpo_chart(bars, edit)), expected, "row {row}");
+        }
+
+        let mut chart = tpo_chart(bars, |p| p.tpo_extend_poc = true);
+        let name = chart
+            .alert_sources()
+            .into_iter()
+            .find(|(source, _)| {
+                *source == AlertSource::TPOLevel(TPOLevelSource::new(d1, PointOfControl, 112.0))
+            })
+            .map(|(_, name)| name.to_string());
+        assert_eq!(
+            name,
+            Some(format!(
+                "TPO {}: Point of control 112",
+                chart.format_time(d1)
+            ))
+        );
+        // The first profile ends before the view.
+        assert!(chart.set_visible_logical_range(LogicalRange::new(4.5, 12.5)));
+        assert_eq!(chart.state.visible_range().0, 4);
+        assert_eq!(
+            tpo_sources(&chart),
+            [(d0, PointOfControl, 102.0), (d1, PointOfControl, 112.0)]
+        );
+        // The second profile starts after the view.
+        assert!(chart.set_visible_logical_range(LogicalRange::new(-0.5, 2.5)));
+        assert!(chart.state.visible_range().1 <= 4);
+        assert_eq!(
+            tpo_sources(&chart),
+            [(d0, PointOfControl, 102.0), (d1, PointOfControl, 112.0)]
+        );
+
+        let mut chart = Chart::new(BarData::from_bars(bars.to_vec()));
+        chart.set_timeframe(Timeframe::Min30);
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("SYM").with_tick_size(1.0),
+        ));
+        let mut study = crate::studies::TimePriceOpportunity::new(30);
+        study.set_input("row_ticks", InputValue::Length(1)).unwrap();
+        study
+            .set_input("extend_poc", InputValue::Toggle(true))
+            .unwrap();
+        chart.add_indicator(Box::new(study));
+        let names: Vec<_> = chart
+            .alert_sources()
+            .into_iter()
+            .filter(|(source, _)| matches!(source, AlertSource::TPOLevel(_)))
+            .map(|(_, name)| name.to_string())
+            .collect();
+        assert_eq!(
+            tpo_sources(&chart),
+            [(d0, PointOfControl, 102.0), (d1, PointOfControl, 112.0)]
+        );
+        assert_eq!(
+            names[0],
+            format!(
+                "Time Price Opportunity {}: Point of control 102",
+                chart.format_time(d0)
+            )
+        );
+    }
+
+    /// Guards #4265: an alert crossing the extended point of control of a completed profile
+    /// keeps the price the level had when chosen. It fires after the profiles are merged, when
+    /// the chart draws no such level, after a restart with no chart to resolve it, and on a bar
+    /// whose range reaches the level but closes back below it.
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn a_tpo_level_alert_fires_at_its_kept_price() {
+        use crate::model::{Alert, AlertComparison, AlertCondition, TPOLevel};
+        use crate::services::{AlertEngine, AlertEvent};
+        use std::sync::{Arc, Mutex};
+        let bars = crate::chart::rendering::candles::tpo::tpo_level_bars();
+        let [d0, d1] = [bars[0].time, bars[4].time];
+        let source =
+            AlertSource::TPOLevel(TPOLevelSource::new(d1, TPOLevel::PointOfControl, 112.0));
+        // Bar 8 closes at 108, below the point of control of 112, and bar 9 trades up to 113.
+        for (merge, restart, close) in [
+            (false, false, 113.0),
+            (true, false, 113.0),
+            (false, true, 113.0),
+            (false, false, 108.0),
+        ] {
+            let mut chart = tpo_chart(&bars[..9], |p| p.tpo_extend_poc = true);
+            assert!(chart.alert_sources().iter().any(|(s, _)| *s == source));
+            if merge {
+                let mut params = chart.chart_type_params().clone();
+                params.tpo_composites = vec![d0..=d1];
+                chart.set_chart_type_params(params);
+                assert!(!chart.alert_sources().iter().any(|(s, _)| *s == source));
+                assert_eq!(chart.alert_value(&source, 8), Some(112.0));
+            }
+            let mut alert = Alert::new(
+                "SYM",
+                AlertCondition::Compare {
+                    other: source.clone(),
+                    comparison: AlertComparison::Crossing,
+                },
+            );
+            alert.timeframe = Some(Timeframe::Min30);
+            if restart {
+                alert = serde_json::from_str(&serde_json::to_string(&alert).unwrap()).unwrap();
+            }
+            let fired = Arc::new(Mutex::new(Vec::new()));
+            let log = fired.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert])
+                .on_trigger(move |_, event| {
+                    if let AlertEvent::TriggeredForSymbol { price, .. } = event {
+                        log.lock().unwrap().push(*price);
+                    }
+                });
+            let feed = |chart: &Chart| {
+                let shown = chart.bars(SeriesId::MAIN);
+                engine.update(
+                    "SYM",
+                    None,
+                    Timeframe::Min30,
+                    shown,
+                    shown[shown.len() - 1].time,
+                    |source, bar| {
+                        if restart {
+                            None
+                        } else {
+                            chart.alert_value(source, bar)
+                        }
+                    },
+                );
+            };
+            feed(&chart);
+            chart.update(
+                SeriesId::MAIN,
+                Bar::new(bars[9].time, 108.0, 113.0, 108.0, close, 1.0),
+            );
+            feed(&chart);
+            assert_eq!(
+                *fired.lock().unwrap(),
+                [Some(close)],
+                "merge {merge}, restart {restart}, close {close}"
+            );
+        }
     }
 
     /// Fork medians and tines use anchor construction, and regression fits the source prices of

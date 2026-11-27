@@ -775,8 +775,8 @@ fn degenerate_lengths_and_hostile_bars_are_survivable() {
             }
         }
     }
-    // Counted per bar: SuperTrend and PSAR split one series over two lines by trend,
-    // and the trend may differ at 0.0.
+    // Counted per bar: SuperTrend splits one series over two lines by trend, and the trend
+    // may differ at 0.0.
     let finite = |v: &IndicatorValue| match v {
         IndicatorValue::Single(x) => usize::from(x.is_finite()),
         IndicatorValue::Multiple(xs) => xs.iter().filter(|x| x.is_finite()).count(),

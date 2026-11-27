@@ -1061,6 +1061,28 @@ impl StudyTemplate {
                     template.settings.help_url = declared.help_url;
                 }
             }
+            // A Parabolic SAR drew its uptrend and downtrend bars as two plots, Up Trend and Down
+            // Trend, before it drew one. The plot carries over the one that was shown, or both
+            // when both or neither were: their style, Up Trend's of two, and a latest value line
+            // or a price scale tag if one of them had it.
+            "PSAR" if self.settings.plots.len() == 2 => {
+                let settings = &mut template.settings;
+                let shown: &[usize] = match (settings.plots[0].visible, settings.plots[1].visible) {
+                    (true, false) => &[0],
+                    (false, true) => &[1],
+                    _ => &[0, 1],
+                };
+                let line = shown
+                    .iter()
+                    .any(|plot| settings.price_line_plots.contains(plot));
+                let tag = !shown
+                    .iter()
+                    .all(|plot| settings.untagged_plots.contains(plot));
+                settings.plots = vec![settings.plots[shown[0]]];
+                settings.plot_variants.truncate(1);
+                settings.price_line_plots = if line { vec![0] } else { Vec::new() };
+                settings.untagged_plots = if tag { Vec::new() } else { vec![0] };
+            }
             // An earlier key migrates only when it still resolves to the renamed built-in.
             now if IndicatorFactory::renamed(&self.name) == Some(now) => {
                 template.name = now.to_owned();
@@ -1203,6 +1225,17 @@ impl StudyTemplate {
             }
         }
         changed.then_some(template)
+    }
+
+    /// The output of `parent` that a saved study input on its output `plot` reads. Parabolic
+    /// SAR's former Down Trend output reads its one plot, which draws the downtrend bars too.
+    #[cfg(feature = "widget")]
+    pub(crate) fn upgraded_output(parent: &dyn Indicator, plot: usize) -> usize {
+        if plot == 1 && parent.line_count() == 1 && parent.name() == "PSAR" {
+            0
+        } else {
+            plot
+        }
     }
 }
 
@@ -1447,6 +1480,10 @@ mod tests {
             show_poor_high: false,
             show_poor_low: false,
             extend_poor_extremes: false,
+            extend_poc: false,
+            extend_value_area_high: false,
+            extend_value_area_low: false,
+            extend_single_prints: false,
             show_single_prints: false,
             show_statistics: false,
             statistics_rows: crate::model::TPOStatisticsRows::default(),
@@ -1487,6 +1524,10 @@ mod tests {
             ("poor_high", InputValue::Toggle(true)),
             ("poor_low", InputValue::Toggle(true)),
             ("extend_poor", InputValue::Toggle(true)),
+            ("extend_poc", InputValue::Toggle(true)),
+            ("extend_vah", InputValue::Toggle(true)),
+            ("extend_val", InputValue::Toggle(true)),
+            ("extend_single_prints", InputValue::Toggle(true)),
             ("volume_profile", InputValue::Toggle(true)),
             ("statistics_high_low_range", InputValue::Toggle(true)),
             ("statistics_poc", InputValue::Toggle(false)),
@@ -1713,7 +1754,7 @@ mod tests {
 
     /// Main templates without Symbol or Offset keep every saved input, style and value.
     /// ZigZag and Trading Sessions, whose labels cannot follow another symbol or interval,
-    /// restore without those inputs.
+    /// restore without those inputs, and Parabolic SAR, saved with two identical plots, with one.
     #[test]
     fn templates_saved_before_symbol_and_offset_restore_unchanged() {
         let factory = IndicatorFactory::new();
@@ -1817,7 +1858,12 @@ mod tests {
             if let Some(offset) = inputs.iter().find(|input| input.id == "plot_offset") {
                 assert_eq!(offset.value, InputValue::Integer(0), "{}", saved.name);
             }
-            assert_eq!(restored.settings(), saved.settings, "{}", saved.name);
+            let mut expected = saved.settings.clone();
+            if saved.name == "PSAR" {
+                expected.plots.truncate(1);
+                expected.plot_variants.truncate(1);
+            }
+            assert_eq!(restored.settings(), expected, "{}", saved.name);
             assert_eq!(restored.is_visible(), saved.visible, "{}", saved.name);
             assert_eq!(Some(restored.scale()), saved.scale, "{}", saved.name);
             let mut fresh = ConfiguredStudy::new(factory.create(&saved.name).unwrap());
@@ -2653,7 +2699,8 @@ mod tests {
     /// the colours and widths they drew before every state had its own style control. Renamed
     /// input labels retain the ids, values and styles of the saved studies. Booker Reversal and
     /// Ziv Ghost Pivots saved before their marks changed keep their colours and crosses, and
-    /// Booker levels saved as whole numbers restore as the same decimals.
+    /// Booker levels saved as whole numbers restore as the same decimals. A Parabolic SAR saved
+    /// with its two trend plots restores one, as the chart showed it.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
@@ -3310,6 +3357,22 @@ mod tests {
             levels(restored.as_ref()),
             [72.0, 25.0].map(|level| Some(InputValue::Number(level)))
         );
+
+        // A Parabolic SAR saved with two plots, Up Trend hidden in red at 2 px, and Down Trend
+        // shown in teal at 3 px with a latest value line and without a price scale tag, restores
+        // its one plot as the chart showed it: teal at 3 px, with that line and without a tag.
+        // Saved on origin/main 869cd7c7d.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"PSAR","inputs":[["initial_af",{"Number":0.02}],["af_step",{"Number":0.02}],["max_af",{"Number":0.2}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ParabolicSAR.html","plots":[{"color":[242,54,69,255],"width":2.0,"pattern":"Solid","plot_type":"Crosses","visible":false},{"color":[8,153,129,255],"width":3.0,"pattern":"Solid","plot_type":"Crosses","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[1],"price_line_plots":[1],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let restored = saved.create().unwrap();
+        let mut expected = saved.settings.clone();
+        expected.plots = vec![saved.settings.plots[1]];
+        expected.plot_variants.truncate(1);
+        expected.price_line_plots = vec![0];
+        expected.untagged_plots = vec![0];
+        assert_eq!(restored.settings(), expected);
     }
 
     /// A Connors RSI saved with guides at 70, 50 and 30 and a Correlation Coefficient saved with

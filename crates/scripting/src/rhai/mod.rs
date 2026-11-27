@@ -213,6 +213,7 @@ impl Program for Compiled {
 
     fn bar(&self, scope: &mut Scope<'static>) -> Result<(), BarError> {
         let prefix = scope.len();
+        runtime::with(|run| run.count_bar(address(scope), prefix));
         let result = self.engine.run_ast_with_scope(scope, &self.ast);
         scope.rewind(prefix);
         let mut kept = Vec::with_capacity(self.spec.states.len());
@@ -245,33 +246,45 @@ impl Program for Compiled {
     }
 }
 
-/// The count inside a bar, made on the first variable read after each clock read: the values of
-/// the scope running, the script's top level or the function being run, held to the size limits
-/// and counted against the memory limit with the last counts of the callers' scopes. Rhai checks
-/// a value's size where a function returns it or an operator assigns it, not where an index
-/// assigns into it or a variable copies it.
+/// The count inside a bar, made at a variable read, of the values in the scope running there, the
+/// script's top level's or a function call's, which a call written `f!()` shares with its caller:
+/// all of them on the first read after each clock read and on the first read of a call with a
+/// scope of its own, and on any other read those bound since the scope's last count. They are held
+/// to the size limits and counted against the memory limit with the last counts of the callers'
+/// scopes. Rhai checks a value's size where a function returns it or an operator assigns it, not
+/// where an index assigns into it or a variable copies it.
 pub(crate) fn count(context: &EvalContext) -> Result<(), Box<EvalAltResult>> {
-    let level = context.call_level();
-    let Some(states) =
-        runtime::with(|run| run.count_due(level).then(|| state_slots(&run.spec))).flatten()
-    else {
-        return Ok(());
-    };
-    let states = if level == 0 { states } else { 0..0 };
-    let (mut bytes, mut outside) = (0, 0);
-    let values = context.scope().iter_raw().map(|(_, _, value)| value);
-    for (at, value) in values.chain(context.this_ptr()).enumerate() {
-        context.engine().ensure_data_size_within_limits(value)?;
-        let held = held(value);
-        bytes += held;
-        if !states.contains(&at) {
-            outside += held;
+    let scope = context.scope();
+    let len = scope.len();
+    let stopped = runtime::with(|run| -> Result<bool, Box<EvalAltResult>> {
+        let Some((from, clock, top)) = run.count_due(context.call_level(), address(scope), len)
+        else {
+            return Ok(false);
+        };
+        let states = if top { state_slots(&run.spec) } else { 0..0 };
+        // A method call's receiver counts with the variables its call starts with.
+        let this = context.this_ptr().filter(|_| from == 0);
+        // Rhai lists the variables of a scope from the last one bound.
+        let values = || scope.iter_raw().take(len - from).map(|(_, _, value)| value);
+        for value in values().chain(this) {
+            context.engine().ensure_data_size_within_limits(value)?;
         }
+        let variables = (from..len)
+            .rev()
+            .zip(values())
+            .map(|(at, value)| (held(value), !states.contains(&at)));
+        Ok(run.count(variables, this.map_or(0, held), clock))
+    });
+    match stopped {
+        Some(Err(error)) => Err(error),
+        Some(Ok(true)) => Err(EvalAltResult::ErrorTerminated(Dynamic::UNIT, Position::NONE).into()),
+        _ => Ok(()),
     }
-    if runtime::with(|run| run.count(level, bytes, outside)).unwrap_or(false) {
-        return Err(EvalAltResult::ErrorTerminated(Dynamic::UNIT, Position::NONE).into());
-    }
-    Ok(())
+}
+
+/// The address of `scope`, which names it while its call runs.
+fn address(scope: &Scope) -> usize {
+    std::ptr::from_ref(scope).addr()
 }
 
 /// Where the states are in the scope of [`scope`], after `na`, the prices, the inputs, the
