@@ -411,11 +411,11 @@ mod tests {
                 vec![30., 60., 50., 80.],
                 vec![
                     (
-                        "MACD: Crosses above signal line",
-                        vec![None, Some(0.), Some(0.), Some(1.)],
+                        "MACD: Falling to rising",
+                        vec![None, Some(1.), Some(0.), Some(1.)],
                     ),
                     (
-                        "MACD: Crosses below signal line",
+                        "MACD: Rising to falling",
                         vec![None, Some(0.), Some(1.), Some(0.)],
                     ),
                 ],
