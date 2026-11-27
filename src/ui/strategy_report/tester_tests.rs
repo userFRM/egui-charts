@@ -77,7 +77,7 @@ fn a_run_continues_on_new_bars_and_rebuilds_after_corrections() {
     assert_eq!(report.trades[0].entry_time, source[4].time);
     assert_eq!(report.trades[0].entry_price, 103.0);
     assert!(report.trades[0].exit.is_none());
-    assert_eq!(report.equity.last().unwrap().1, 9_997.0);
+    assert_eq!(report.equity.last().unwrap().1, 999_997.0);
     let signals = |actions: &[StrategyTesterAction]| match actions.last().unwrap() {
         StrategyTesterAction::Signals { signals, .. } => signals.len(),
         _ => panic!("missing fill replacement"),
@@ -118,7 +118,7 @@ fn a_run_continues_on_new_bars_and_rebuilds_after_corrections() {
     h.run();
     let tester = &h.state().0;
     assert_eq!(tester.report(), Some(&fresh(tester, &source, &[])));
-    assert_eq!(tester.report().unwrap().equity.last().unwrap().1, 9_997.0);
+    assert_eq!(tester.report().unwrap().equity.last().unwrap().1, 999_997.0);
     assert_eq!(tester.report.tab, super::super::Tab::Trades);
     assert_eq!(tester.report.selected, Some(1));
     assert!(tester.report.compare);
@@ -139,7 +139,7 @@ fn a_run_continues_on_new_bars_and_rebuilds_after_corrections() {
             .find(|(t, _)| *t == source[50].time)
             .unwrap()
             .1,
-        10_007.0
+        1_000_007.0
     );
     let before = tester.report().unwrap().clone();
     h.state_mut().1.truncate(99);

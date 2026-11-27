@@ -28,7 +28,7 @@ use profile::{Lines, Profile};
 use program::{ScriptSpec, Span};
 use series::Columns;
 use state::Snapshot;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -112,7 +112,8 @@ pub(crate) struct Run {
     /// The studies called so far, whose lines are in the columns. One reads only those before it.
     instances: Vec<Instance>,
     pub clock: Clock,
-    /// The operations run so far.
+    /// The operations run so far; while the run is installed, its thread holds the count
+    /// ([`operation`]).
     operations: u64,
     /// Whether the values of the running scope are due to be counted whole, once per clock read.
     due: bool,
@@ -165,25 +166,49 @@ impl Run {
         *count - 1
     }
 
-    /// The check of an operation, callbacks' included: every
+    /// The check at operation `done`, callbacks' included: every
     /// [`OPERATIONS_PER_CHECK`](limits::OPERATIONS_PER_CHECK) operations against the time
     /// limits and whether the study was dropped meanwhile.
-    pub fn operation(&mut self) -> bool {
-        self.operations += 1;
-        if self.stop.is_none() && self.operations.is_multiple_of(limits::OPERATIONS_PER_CHECK) {
+    fn operation(&mut self, done: u64) -> bool {
+        self.operations = done;
+        if self.stop.is_none() && done.is_multiple_of(limits::OPERATIONS_PER_CHECK) {
             self.due = !self.check_time();
+            self.settle();
         }
+        self.schedule();
         self.stop.is_some()
+    }
+
+    /// Publish the operation count and the next check of this run to its thread.
+    fn schedule(&self) {
+        let every = limits::OPERATIONS_PER_CHECK;
+        let next = match self.stop {
+            Some(_) => 0,
+            None => (self.operations / every + 1) * every,
+        };
+        OPERATIONS.set((self.operations, next));
+    }
+
+    /// Publish the read whose count is up to date to the thread of this run.
+    fn settle(&self) {
+        SETTLED.set(if self.due { Self::NO_READ } else { self.read });
+    }
+
+    /// Stop the run at `limit`; every later operation of the bar ends it.
+    fn halt(&mut self, limit: Stop) {
+        self.stop = Some(limit);
+        // The thread's count stands, as the run's own is stale while it is installed.
+        OPERATIONS.set((OPERATIONS.get().0, 0));
     }
 
     /// The check inside a bar against the time limits and for a dropped study, keeping a stop
     /// already reached.
     fn check_time(&mut self) -> bool {
         if self.stop.is_none() {
-            self.stop = self
-                .clock
-                .check()
-                .or_else(|| self.cancelled().then_some(Stop::Cancelled));
+            let limit = self.clock.check();
+            if let Some(limit) = limit.or_else(|| self.cancelled().then_some(Stop::Cancelled)) {
+                self.halt(limit);
+            }
         }
         self.stop.is_some()
     }
@@ -196,6 +221,7 @@ impl Run {
         self.scopes.clear();
         self.slots.clear();
         self.read = Self::NO_READ;
+        self.settle();
         self.scopes.push(ScopeCount {
             level: 0,
             scope,
@@ -226,7 +252,9 @@ impl Run {
             return None;
         }
         self.read = (level, scope, len);
-        self.count_scope(level, scope, len)
+        let due = self.count_scope(level, scope, len);
+        self.settle();
+        due
     }
 
     /// [`count_due`](Self::count_due) for a read whose scope may have changed since the last.
@@ -311,7 +339,7 @@ impl Run {
         if self.stop.is_none() && (clock || added > 0) {
             let values = self.scopes.iter().map(|counted| counted.bytes).sum();
             if self.holding(values) > self.clock.limits.memory {
-                self.stop = Some(Stop::Memory);
+                self.halt(Stop::Memory);
                 self.running = self.scopes.iter().map(|counted| counted.outside).sum();
             }
         }
@@ -348,6 +376,7 @@ impl Run {
         self.scopes.clear();
         self.slots.clear();
         self.read = Self::NO_READ;
+        self.settle();
         self.clock.next_bar();
         for column in &mut self.columns.declared {
             column.push(f64::NAN);
@@ -370,7 +399,7 @@ impl Run {
         }
         self.drawn.push(drawn);
         if self.stop.is_none() && self.bytes() > self.clock.limits.memory {
-            self.stop = Some(Stop::Memory);
+            self.halt(Stop::Memory);
         }
         self.stop.is_some()
     }
@@ -434,7 +463,7 @@ impl Run {
         if self.sites.len() > self.sites_counted {
             self.sites_counted = self.sites.len();
             if self.bytes() > self.clock.limits.memory {
-                self.stop = Some(Stop::Memory);
+                self.halt(Stop::Memory);
                 return Err(String::new());
             }
         }
@@ -444,6 +473,13 @@ impl Run {
 
 thread_local! {
     static RUN: RefCell<Option<Run>> = const { RefCell::new(None) };
+    /// The operations of the run installed on this thread, and the operation at which it is next
+    /// checked: the next multiple of [`OPERATIONS_PER_CHECK`](limits::OPERATIONS_PER_CHECK), or 0
+    /// once it has stopped, so that every later operation reaches it.
+    static OPERATIONS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+    /// The read of the run installed on this thread whose count is up to date: [`Run::read`]
+    /// while no clock read is due, and otherwise one that matches no read.
+    static SETTLED: Cell<(usize, usize, usize)> = const { Cell::new(Run::NO_READ) };
 }
 
 /// Call `f` with the run installed on this thread, `None` outside a bar loop.
@@ -451,11 +487,29 @@ pub(crate) fn with<R>(f: impl FnOnce(&mut Run) -> R) -> Option<R> {
     RUN.with(|run| run.try_borrow_mut().ok()?.as_mut().map(f))
 }
 
+/// The check of an operation of the run installed on this thread, callbacks' included: whether
+/// the run has stopped. Most operations only count; the run itself is reached at a check and
+/// after a stop.
+pub(crate) fn operation() -> bool {
+    let (done, next) = OPERATIONS.get();
+    let done = done + 1;
+    OPERATIONS.set((done, next));
+    done >= next && with(|run| run.operation(done)).unwrap_or(false)
+}
+
+/// Whether a variable read at call level `level` in the scope at address `scope` holding `len`
+/// variables leaves the counts as they are, as [`Run::count_due`] would find without the run.
+pub(crate) fn settled(level: usize, scope: usize, len: usize) -> bool {
+    SETTLED.get() == (level, scope, len)
+}
+
 /// Installs a run on this thread and takes it back on every exit path, a panic included.
 struct Installed<'a>(&'a mut Run);
 
 impl<'a> Installed<'a> {
     fn new(run: &'a mut Run) -> Self {
+        run.schedule();
+        run.settle();
         RUN.with(|slot| *slot.borrow_mut() = Some(std::mem::replace(run, Run::empty())));
         Self(run)
     }
@@ -463,7 +517,8 @@ impl<'a> Installed<'a> {
 
 impl Drop for Installed<'_> {
     fn drop(&mut self) {
-        if let Some(run) = RUN.with(|slot| slot.borrow_mut().take()) {
+        if let Some(mut run) = RUN.with(|slot| slot.borrow_mut().take()) {
+            run.operations = OPERATIONS.get().0;
             *self.0 = run;
         }
     }
