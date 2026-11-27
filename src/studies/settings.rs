@@ -892,6 +892,12 @@ impl std::fmt::Debug for ConfiguredStudy {
 }
 
 impl ConfiguredStudy {
+    /// The study's schema before the wrapper adds chart controls and default overrides.
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    pub(crate) fn declared_inputs(&self) -> Vec<super::StudyInput> {
+        self.study.inputs()
+    }
+
     /// Only main-bar calculations can be regenerated from a trade checkpoint. In particular,
     /// an evicted prefix may have contributed to kept values that no longer follow from the
     /// retained bars alone.

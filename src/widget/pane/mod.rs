@@ -72,13 +72,17 @@ fn stored_value(value: &crate::model::InputValue) -> serde_json::Value {
 #[cfg(feature = "studies")]
 fn upgraded_study(
     (name, stored): &PaneStudy,
-    study: &dyn crate::studies::Indicator,
+    study: &(dyn crate::studies::Indicator + 'static),
     declared: &[crate::studies::StudyInput],
 ) -> Option<PaneStudy> {
     let inputs = stored
         .iter()
         .map(|(id, value)| Some((id.clone(), serde_json::from_value(value.clone()).ok()?)))
         .collect::<Option<_>>()?;
+    // Match construction's schema before the wrapper adds a built-in's Source input.
+    let own = study
+        .concrete::<crate::studies::ConfiguredStudy>()
+        .map(crate::studies::ConfiguredStudy::declared_inputs);
     let template = crate::studies::StudyTemplate {
         name: name.clone(),
         inputs,
@@ -88,7 +92,7 @@ fn upgraded_study(
         scale: None,
         metric: None,
     }
-    .upgraded(name, declared)?;
+    .upgraded(name, own.as_deref().unwrap_or(declared))?;
     // A listed input the study lacks fails the match as stored too, so only `declared` counts.
     let takes = template
         .inputs
@@ -724,7 +728,10 @@ impl Chart {
         let shown: Vec<_> = self
             .pane_series(pane)
             .into_iter()
-            .filter_map(|id| self.indicators().find(|(study, _)| *study == id))
+            .filter_map(|id| {
+                let at = self.study_ids.iter().position(|study| *study == id)?;
+                Some((id, self.studies.indicators()[at].as_ref()))
+            })
             .collect();
         shown.len() == studies.len()
             && shown.iter().zip(studies).all(|((_, study), stored)| {

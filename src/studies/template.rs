@@ -809,7 +809,7 @@ impl StudyTemplate {
                     .push(("smoothing".to_owned(), InputValue::Choice(0)));
             }
             // A Woodies CCI read the close before it opened on the typical price.
-            "Woodies CCI" if !has("source") => {
+            "Woodies CCI" if !has("source") && !declares("source") => {
                 template.inputs.push((
                     "source".to_owned(),
                     InputValue::Source(crate::studies::StudySource::Price(
@@ -3849,6 +3849,57 @@ mod tests {
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!((restored.name(), restored.line_count()), (name, lines));
+            #[cfg(feature = "widget")]
+            if name == "Woodies CCI" {
+                let mut builtin = StudyTemplate::from_study(&crate::studies::WoodiesCCI::default());
+                builtin.inputs.retain(|(id, _)| id != "source");
+                for mut study in [restored.clone_box(), builtin.create().unwrap()] {
+                    // Missing sources mean the host's default or the older built-in's Close.
+                    let source = study.source();
+                    let legacy_inputs = study
+                        .inputs()
+                        .into_iter()
+                        .filter(|input| {
+                            input.id != "source"
+                                && !crate::studies::settings::CHART_INPUT_IDS
+                                    .contains(&input.id.as_str())
+                        })
+                        .collect();
+                    let legacy = CustomIndicator::new(name, |_| Vec::new())
+                        .with_overlay(false)
+                        .with_inputs(legacy_inputs, |_, _, _, _| Vec::new())
+                        .unwrap();
+                    let mut older = crate::widget::Chart::new(crate::model::BarData::new());
+                    let old_id = older.add_indicator(Box::new(legacy));
+                    let old_pane = older.series_pane(old_id).unwrap();
+                    let mut current = crate::widget::Chart::new(crate::model::BarData::new());
+                    study.set_overlay(false);
+                    let current_id = current.add_indicator(study);
+                    let current_pane = current.series_pane(current_id).unwrap();
+                    assert_eq!(
+                        older.linked_pane(old_pane, &current),
+                        Some(current_pane),
+                        "{source:?}"
+                    );
+                    #[cfg(feature = "drawings")]
+                    assert_eq!(
+                        current.stored_pane_owner(&older.stored_pane(old_pane).unwrap()),
+                        Some(current_id.0),
+                        "{source:?}"
+                    );
+                    current
+                        .indicator_mut(current_id)
+                        .unwrap()
+                        .set_input(
+                            "source",
+                            InputValue::Source(crate::studies::StudySource::Price(
+                                PriceSource::HLC3,
+                            )),
+                        )
+                        .unwrap();
+                    assert_eq!(older.linked_pane(old_pane, &current), None, "{source:?}");
+                }
+            }
             if name == "Echo" {
                 assert_eq!(restored.settings(), saved.settings);
                 assert_eq!(
