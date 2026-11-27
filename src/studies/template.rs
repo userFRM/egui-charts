@@ -1226,6 +1226,17 @@ impl StudyTemplate {
         }
         changed.then_some(template)
     }
+
+    /// The output of `parent` that a saved study input on its output `plot` reads. Parabolic
+    /// SAR's former Down Trend output reads its one plot, which draws the downtrend bars too.
+    #[cfg(feature = "widget")]
+    pub(crate) fn upgraded_output(parent: &dyn Indicator, plot: usize) -> usize {
+        if plot == 1 && parent.line_count() == 1 && parent.name() == "PSAR" {
+            0
+        } else {
+            plot
+        }
+    }
 }
 
 #[cfg(test)]
