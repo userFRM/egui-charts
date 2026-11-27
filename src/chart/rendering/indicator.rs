@@ -15,6 +15,16 @@ use egui::{Color32, Pos2, Stroke};
 /// Renders indicator lines overlay on the chart
 pub struct IndicatorRenderer;
 
+/// The part of a study one render call paints. The price chart paints every study's backgrounds
+/// beneath its series, then each study's foreground in the pane's visual order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlotLayer {
+    /// The study's tint and its background colour plots.
+    Backgrounds,
+    /// Everything else the study paints.
+    Foreground,
+}
+
 /// Paint one study plot through `points`: one uninterrupted run for a type with breaks, the
 /// defined values across gaps for a joined type.
 pub(crate) fn paint_study_plot(
@@ -343,6 +353,7 @@ fn paint_fills(
 }
 
 impl IndicatorRenderer {
+    #[cfg(test)]
     pub fn render(
         context: &RenderContext,
         indicators: &[Box<dyn Indicator>],
@@ -350,45 +361,70 @@ impl IndicatorRenderer {
         price_scale: &PriceMap,
         coords: &ChartMapping,
     ) {
-        for indicator in indicators {
-            if !indicator.is_visible() {
-                continue;
+        for layer in [PlotLayer::Backgrounds, PlotLayer::Foreground] {
+            for indicator in indicators {
+                Self::render_overlay(
+                    context,
+                    indicator.as_ref(),
+                    bars,
+                    price_scale,
+                    coords,
+                    layer,
+                );
             }
-
-            // Only render overlay indicators
-            if !indicator.is_overlay()
-                || (indicator.is_volume()
-                    && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)))
-            {
-                continue;
-            }
-
-            let mapping = super::study_mapping(
-                indicator.as_ref(),
-                &ChartMapping {
-                    price: *price_scale,
-                    ..coords.clone()
-                },
-            );
-            if let Some(color) = indicator.background() {
-                context
-                    .painter
-                    .with_clip_rect(context.rect)
-                    .rect_filled(context.rect, 0.0, color);
-            }
-            Self::render_study(
-                context,
-                indicator.as_ref(),
-                bars,
-                coords.start_idx,
-                &mapping.price,
-                &mapping,
-            );
         }
     }
 
+    /// One overlay study's plots in `layer`, on the price scale it is drawn against.
+    pub(crate) fn render_overlay(
+        context: &RenderContext,
+        indicator: &dyn Indicator,
+        bars: &[Bar],
+        price_scale: &PriceMap,
+        coords: &ChartMapping,
+        layer: PlotLayer,
+    ) {
+        if !indicator.is_visible() {
+            return;
+        }
+
+        // Only render overlay indicators
+        if !indicator.is_overlay()
+            || (indicator.is_volume()
+                && !matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)))
+        {
+            return;
+        }
+
+        let mapping = super::study_mapping(
+            indicator,
+            &ChartMapping {
+                price: *price_scale,
+                ..coords.clone()
+            },
+        );
+        if layer == PlotLayer::Backgrounds
+            && let Some(color) = indicator.background()
+        {
+            context
+                .painter
+                .with_clip_rect(context.rect)
+                .rect_filled(context.rect, 0.0, color);
+        }
+        Self::render_study_layer(
+            context,
+            indicator,
+            bars,
+            coords.start_idx,
+            &mapping.price,
+            &mapping,
+            layer,
+        );
+    }
+
     /// Shared study geometry for overlays and indicator panes. Each paints the study's tint first,
-    /// beneath what else it paints there.
+    /// beneath what else it paints there. Its background colour plots paint first, beneath what
+    /// else it paints there.
     pub(crate) fn render_study(
         context: &RenderContext,
         indicator: &dyn Indicator,
@@ -397,54 +433,63 @@ impl IndicatorRenderer {
         price_scale: &PriceMap,
         coords: &ChartMapping,
     ) {
-        let painter = context.painter.with_clip_rect(context.rect);
-        if indicator.is_overlay() {
-            crate::chart::indicators::plots::paint_overlay_levels(&painter, indicator, price_scale);
-        }
-        #[cfg(feature = "drawings")]
-        if !indicator.drawings().is_empty() {
-            crate::chart::indicators::plots::paint_drawings(
+        for layer in [PlotLayer::Backgrounds, PlotLayer::Foreground] {
+            Self::render_study_layer(
                 context,
                 indicator,
+                bars,
+                bars_start,
                 price_scale,
                 coords,
+                layer,
             );
+        }
+    }
+
+    /// Shared study geometry for one part of its painting order.
+    pub(crate) fn render_study_layer(
+        context: &RenderContext,
+        indicator: &dyn Indicator,
+        bars: &[Bar],
+        bars_start: usize,
+        price_scale: &PriceMap,
+        coords: &ChartMapping,
+        layer: PlotLayer,
+    ) {
+        let painter = context.painter.with_clip_rect(context.rect);
+        if layer == PlotLayer::Foreground {
+            if indicator.is_overlay() {
+                crate::chart::indicators::plots::paint_overlay_levels(
+                    &painter,
+                    indicator,
+                    price_scale,
+                );
+            }
+            #[cfg(feature = "drawings")]
+            if !indicator.drawings().is_empty() {
+                crate::chart::indicators::plots::paint_drawings(
+                    context,
+                    indicator,
+                    price_scale,
+                    coords,
+                );
+            }
         }
         if !indicator.candles().is_empty() {
-            crate::chart::indicators::plots::paint_candles(context, indicator, price_scale, coords);
-            crate::chart::indicators::plots::paint_price_lines(&painter, indicator, price_scale);
+            if layer == PlotLayer::Foreground {
+                crate::chart::indicators::plots::paint_candles(
+                    context,
+                    indicator,
+                    price_scale,
+                    coords,
+                );
+                crate::chart::indicators::plots::paint_price_lines(
+                    &painter,
+                    indicator,
+                    price_scale,
+                );
+            }
             return;
-        }
-        let visible = crate::chart::rendering::volume_profile::profile_range(coords);
-        for plot in indicator.volume_profiles(visible.clone()) {
-            crate::painting::volume_profile::paint_profile(
-                &context.painter.with_clip_rect(context.rect),
-                &plot.profile,
-                plot.config,
-                plot.color,
-                crate::chart::rendering::volume_profile::profile_span(&plot, coords),
-                crate::painting::volume_profile::ProfileStyle::Study {
-                    right_aligned: plot.right_aligned,
-                    strip: plot.strip.is_some(),
-                    walls_visible: if plot.profile.walls.is_some() {
-                        [3, 4].map(|line| indicator.plot_style(line).visible)
-                    } else {
-                        [true; 2]
-                    },
-                    width: plot.width,
-                    volume_decimals: plot.volume_decimals,
-                },
-                &|price| price_scale.price_to_y(price),
-            );
-        }
-        // Levels lie over every profile they cross.
-        for level in indicator.profile_levels(visible) {
-            crate::painting::volume_profile::paint_level(
-                &painter,
-                &level,
-                crate::chart::rendering::volume_profile::level_span(&level, coords),
-                &|price| price_scale.price_to_y(price),
-            );
         }
         let values = indicator.values();
         let painter = context.painter.with_clip_rect(context.rect);
@@ -452,22 +497,55 @@ impl IndicatorRenderer {
             .start_idx
             .min(coords.x_to_idx(context.rect.left()).saturating_sub(1));
         let display_end = coords.x_to_idx(context.rect.right()).saturating_add(2);
-        paint_fills(
-            &painter,
-            indicator,
-            display_start..display_end,
-            price_scale,
-            coords,
-        );
-        gradient::paint(
-            &painter,
-            indicator,
-            display_start..display_end,
-            price_scale,
-            coords,
-        );
-        crate::chart::indicators::plots::paint_zones(&painter, indicator, price_scale, coords);
-        crate::chart::indicators::projection::paint(&painter, indicator, coords, price_scale);
+        if layer == PlotLayer::Foreground {
+            let visible = crate::chart::rendering::volume_profile::profile_range(coords);
+            for plot in indicator.volume_profiles(visible.clone()) {
+                crate::painting::volume_profile::paint_profile(
+                    &context.painter.with_clip_rect(context.rect),
+                    &plot.profile,
+                    plot.config,
+                    plot.color,
+                    crate::chart::rendering::volume_profile::profile_span(&plot, coords),
+                    crate::painting::volume_profile::ProfileStyle::Study {
+                        right_aligned: plot.right_aligned,
+                        strip: plot.strip.is_some(),
+                        walls_visible: if plot.profile.walls.is_some() {
+                            [3, 4].map(|line| indicator.plot_style(line).visible)
+                        } else {
+                            [true; 2]
+                        },
+                        width: plot.width,
+                        volume_decimals: plot.volume_decimals,
+                    },
+                    &|price| price_scale.price_to_y(price),
+                );
+            }
+            // Levels lie over every profile they cross.
+            for level in indicator.profile_levels(visible) {
+                crate::painting::volume_profile::paint_level(
+                    &painter,
+                    &level,
+                    crate::chart::rendering::volume_profile::level_span(&level, coords),
+                    &|price| price_scale.price_to_y(price),
+                );
+            }
+            paint_fills(
+                &painter,
+                indicator,
+                display_start..display_end,
+                price_scale,
+                coords,
+            );
+            gradient::paint(
+                &painter,
+                indicator,
+                display_start..display_end,
+                price_scale,
+                coords,
+            );
+            crate::chart::indicators::plots::paint_zones(&painter, indicator, price_scale, coords);
+            crate::chart::indicators::projection::paint(&painter, indicator, coords, price_scale);
+        }
 
         // Handle multi-line indicators
         let line_count = indicator.line_count();
@@ -489,6 +567,9 @@ impl IndicatorRenderer {
                 continue;
             }
             let mut plot = indicator.plot_style(line_idx);
+            if (plot.plot_type == PlotType::BackgroundColor) != (layer == PlotLayer::Backgrounds) {
+                continue;
+            }
             if matches!(
                 plot.plot_type,
                 PlotType::Columns | PlotType::BackgroundColor
@@ -868,6 +949,9 @@ impl IndicatorRenderer {
                     }
                 }
             }
+        }
+        if layer == PlotLayer::Backgrounds {
+            return;
         }
         let painter = context.painter.with_clip_rect(context.rect);
         for marker in indicator

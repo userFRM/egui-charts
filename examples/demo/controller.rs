@@ -11011,25 +11011,26 @@ mod tests {
             .find(|(_, study)| study.name() == "Doji")
             .unwrap()
             .0;
-        // Choose the study's visual order before checking that its tint is behind price.
-        assert!(
-            app.chart
-                .reorder_indicator(id, egui_charts::widget::VisualOrder::SendToBack)
-        );
-        for _ in 0..18 {
-            ui_frame(&ctx, size, vec![], |ui| {
-                app.ui(ui, &mut eframe::Frame::_new_kittest())
-            });
-        }
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                ..Default::default()
-            },
-            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
-        );
-        let shapes = std::mem::take(&mut output.shapes);
-        output.drop_without_applying_deltas();
+        // The tint lies behind the candle and the label wherever the study is ordered.
+        let capture = |app: &mut DemoApp| {
+            for _ in 0..18 {
+                ui_frame(&ctx, size, vec![], |ui| {
+                    app.ui(ui, &mut eframe::Frame::_new_kittest())
+                });
+            }
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![egui::Event::PointerGone],
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        let shapes = capture(&mut app);
         assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
         let (_, study) = app
             .chart
@@ -11057,17 +11058,42 @@ mod tests {
             })
             .collect();
         assert_eq!(backgrounds.len(), 1, "one tinted candle column");
-        let (background_at, rect) = backgrounds[0];
+        let (_, rect) = backgrounds[0];
         assert!((rect.center().x - x).abs() < 0.01);
         assert!((rect.width() - map.bar_spacing).abs() < 0.01);
         assert!((rect.top() - map.rect.top()).abs() < 0.01);
         assert!((rect.bottom() - map.rect.bottom()).abs() < 0.01);
-        let candle = egui::pos2(x, map.price.price_to_y(100.03125));
-        let candle_at = shapes.iter().position(|shape| matches!(&shape.shape,
-            egui::Shape::Rect(rect) if rect.fill != color && rect.rect.contains(candle)
-                && rect.rect.width() < map.bar_spacing && rect.rect.height() < map.rect.height()
-        )).expect("the Doji candle body");
-        assert!(background_at < candle_at, "the tint is behind the candle");
+        let check_order = |shapes: &[egui::epaint::ClippedShape]| {
+            let background_at = shapes
+                .iter()
+                .position(|shape| {
+                    matches!(&shape.shape,
+                        egui::Shape::Rect(rect) if rect.fill == color
+                    )
+                })
+                .expect("the formation background");
+            let candle = egui::pos2(x, map.price.price_to_y(100.03125));
+            let candle_at = shapes.iter().position(|shape| matches!(&shape.shape,
+                egui::Shape::Rect(rect) if rect.fill != color && rect.rect.contains(candle)
+                    && rect.rect.width() < map.bar_spacing && rect.rect.height() < map.rect.height()
+            )).expect("the Doji candle body");
+            let label_at = shapes
+                .iter()
+                .position(|shape| {
+                    matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == "D"
+                    )
+                })
+                .expect("the Doji label");
+            assert!(background_at < candle_at, "the tint is behind the candle");
+            assert!(background_at < label_at, "the tint is behind the label");
+        };
+        check_order(&shapes);
+        assert!(
+            app.chart
+                .reorder_indicator(id, egui_charts::widget::VisualOrder::SendToBack)
+        );
+        check_order(&capture(&mut app));
     }
 
     /// Quick search executes catalogue entries as well as opening settings.
