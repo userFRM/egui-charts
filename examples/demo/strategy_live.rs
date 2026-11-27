@@ -1,9 +1,11 @@
-//! A host-owned live run, fed by the displayed chart and delivered through the alert service.
+//! A host-owned live run, fed by the displayed chart, or by its own copy of the synthetic source
+//! while the chart shows another symbol, interval or session, and delivered through the alert service.
 
+use super::live::LiveFeed;
 use super::{DemoApp, SeriesId};
 use egui_charts::model::{
-    Alert, AlertCondition, AlertFrequency, AlertId, AlertStatus, CustomAlertEvent, OrderSide,
-    OrderType,
+    Alert, AlertCondition, AlertFrequency, AlertId, AlertStatus, BarClock, CustomAlertEvent,
+    OrderSide, OrderType,
 };
 use egui_charts::strategies::{
     Backtest, BacktestSettings, OrderTag, Strategy, StrategyAlertFrequency, StrategyContext,
@@ -50,6 +52,12 @@ pub(super) struct LiveStrategy {
     pub(super) run: Backtest,
     pub(super) id: String,
     script: Box<dyn Strategy>,
+    /// The run's own copy of the synthetic source, in the view the chart had when the run
+    /// started. It feeds the run while the chart shows another symbol, interval or session.
+    feed: LiveFeed,
+    /// The bar clock and extended-hours flag of the chart when the run started.
+    clock: BarClock,
+    extended_hours: bool,
     /// Cancelling the pending Add alert dialog stops this run.
     awaiting_alert: bool,
 }
@@ -136,6 +144,9 @@ impl DemoApp {
             run,
             id,
             script,
+            feed: self.live.detached(&self.chart),
+            clock: self.chart.bar_clock(),
+            extended_hours: self.chart.extended_hours(),
             awaiting_alert: false,
         });
         self.update_live_strategy();
@@ -237,31 +248,56 @@ impl DemoApp {
         }
     }
 
+    /// Advances a live run's own source in the steps and pause of the displayed feed, so it
+    /// generates the executions its chart would have shown.
+    pub(super) fn advance_live_strategy_source(&self, now: chrono::DateTime<chrono::Utc>) {
+        if let Some(live) = &self.live_strategy {
+            live.feed.set_paused(self.live.paused());
+            live.feed.advance(now);
+        }
+    }
+
     pub(super) fn update_live_strategy(&mut self) {
         let Some(LiveStrategy {
-            run, id, script, ..
+            run,
+            id,
+            script,
+            feed,
+            clock,
+            extended_hours,
+            ..
         }) = &mut self.live_strategy
         else {
             return;
         };
-        if self.replay.is_some()
-            || self.chart.symbol() != run.symbol
-            || self.chart.timeframe() != Some(run.timeframe)
-            || self.timeframe_toolbar.state.session_type != self.strategy_session
-        {
+        if self.replay.is_some() {
             return;
         }
-        let bars = self.chart.bars(SeriesId::MAIN);
+        let shown = self.chart.symbol() == run.symbol
+            && self.chart.timeframe() == Some(run.timeframe)
+            && self.timeframe_toolbar.state.session_type == self.strategy_session;
+        // Away from its chart, the run continues on its own source in the view it started on.
+        // shortcut: resamples that history every frame while away; cache it by the source's clock
+        // if a profile shows the cost.
+        let own;
+        let (bars, exchange) = if shown {
+            (
+                self.chart.bars(SeriesId::MAIN),
+                self.chart
+                    .instrument()
+                    .and_then(|instrument| instrument.exchange.clone()),
+            )
+        } else {
+            own = feed.snapshot(run.timeframe, clock.clone(), *extended_hours);
+            (own.as_slice(), feed.instrument().exchange)
+        };
         let source = &bars[bars.partition_point(|bar| {
             run.settings
                 .start_time
                 .is_some_and(|start| bar.time < start)
         })..];
         let fills = run.update(script.as_mut(), source, &[]);
-        let exchange = self
-            .chart
-            .instrument()
-            .and_then(|instrument| instrument.exchange.as_deref());
+        let exchange = exchange.as_deref();
         let now = chrono::Utc::now();
         let engine = self.alert_host.engine();
         engine.strategy_fills(id, &run.symbol, exchange, run.timeframe, &fills, now);
@@ -654,5 +690,123 @@ mod tests {
             .map(|trigger| trigger.message.as_str())
             .collect();
         assert_eq!(turns, ["Momentum turned long at 100.12"]);
+    }
+
+    /// A saved tester alert keeps the original run and delivers the same new fills after the
+    /// displayed chart changes symbol, interval or session.
+    #[test]
+    fn saved_strategy_fill_alert_keeps_its_run_when_the_chart_changes() {
+        let notices = |symbol: &str, stop_runs: bool, change: fn(&mut DemoApp)| {
+            let ctx = egui::Context::default();
+            let start = "2026-10-27T19:29:50Z".parse().unwrap();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                start,
+                true,
+            );
+            app.switch_symbol(symbol);
+            let mut settings = app.live.detectors().settings();
+            settings.stop_runs.enabled = stop_runs;
+            app.live.detectors().set_settings(settings);
+            app.switch_timeframe(Timeframe::Min1);
+            let shown = |app: &mut DemoApp| {
+                for _ in 0..4 {
+                    super::super::tests::finish_feed(&app.live);
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1440.0, 900.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            app.chart.show(ui);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                }
+            };
+            app.chart.set_feed_paused(false);
+            shown(&mut app);
+            app.run_sample_backtest();
+            app.strategy_report
+                .set_input("length", InputValue::Length(1))
+                .unwrap();
+            click(&mut app, &ctx, "Add alert");
+            click(&mut app, &ctx, "Save alert");
+            let [saved] = <[Alert; 1]>::try_from(app.alert_host.engine().alerts()).unwrap();
+            let settings = app.live_strategy.as_ref().unwrap().run.settings.clone();
+            let context = |app: &DemoApp| {
+                (
+                    app.chart.symbol().to_owned(),
+                    app.chart.timeframe(),
+                    app.timeframe_toolbar.state.session_type,
+                )
+            };
+            let before = context(&app);
+            change(&mut app);
+            let changed = context(&app) != before;
+            for second in (10..=600).step_by(10) {
+                app.advance_sample_to(start + chrono::TimeDelta::seconds(second));
+                shown(&mut app);
+                app.update_live_strategy();
+                app.alerts.poll(&ctx, &mut app.toasts);
+            }
+            let [alert] = <[Alert; 1]>::try_from(app.alert_host.engine().alerts()).unwrap();
+            assert_eq!(alert.id, saved.id);
+            assert_eq!(alert.status, AlertStatus::Active);
+            assert_eq!(alert.condition, saved.condition);
+            let run = &app.live_strategy.as_ref().unwrap().run;
+            assert_eq!(run.symbol, symbol);
+            assert_eq!(run.timeframe, Timeframe::Min1);
+            assert_eq!(run.settings, settings);
+            let log: Vec<_> = app
+                .alerts
+                .log()
+                .iter()
+                .filter(|trigger| Some(&trigger.id) == saved.id.as_ref())
+                .map(|trigger| {
+                    assert_eq!(trigger.symbol, symbol);
+                    (
+                        trigger.time,
+                        trigger.price,
+                        trigger.symbol.clone(),
+                        trigger.message.clone(),
+                    )
+                })
+                .collect();
+            ((log, run.report().cloned()), changed)
+        };
+        let cases: [(&str, fn(&mut DemoApp)); 3] = [
+            ("symbol", |app| app.switch_symbol("TOKENA")),
+            ("interval", |app| app.switch_timeframe(Timeframe::Min5)),
+            ("session", |app| {
+                use egui_charts::ui::timeframe_toolbar::SessionType;
+                let session = if app.timeframe_toolbar.state.session_type == SessionType::RTH {
+                    SessionType::ETH
+                } else {
+                    SessionType::RTH
+                };
+                app.timeframe_toolbar.set_session(session);
+                app.apply_session();
+            }),
+        ];
+        for (symbol, stop_runs) in [("SAMPLE", false), ("INDEXFZ2026", true)] {
+            let (unchanged, changed) = notices(symbol, stop_runs, |_| {});
+            assert!(!changed);
+            assert!(
+                !unchanged.0.is_empty(),
+                "{symbol}: ten minutes of bars must fill orders"
+            );
+            for (name, change) in cases {
+                let (actual, changed) = notices(symbol, stop_runs, change);
+                assert!(
+                    changed,
+                    "{symbol} {name}: the displayed context must change"
+                );
+                assert_eq!(actual, unchanged, "{symbol} {name}");
+            }
+        }
     }
 }

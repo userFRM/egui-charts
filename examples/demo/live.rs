@@ -277,6 +277,36 @@ impl LiveFeed {
         )
     }
 
+    /// A copy of the chart's execution stream and generation settings that advances only when
+    /// its owner advances it. Other symbols loading in the shared market cannot hold its clock.
+    pub(super) fn detached(&self, chart: &Chart) -> Self {
+        let clock = chart.bar_clock();
+        let sim = self.state();
+        let mut feed = if let Some(stream) = sim.streams.iter().find(|feed| {
+            feed.state().subscription.as_ref().is_some_and(|sub| {
+                sub.symbol == chart.symbol()
+                    && sub.clock == clock
+                    && sub.extended_hours == chart.extended_hours()
+                    && sub.adjusted == chart.dividend_adjusted()
+                    && sub.conversion.as_deref() == chart.conversion()
+                    && sub.sink.is_active()
+            })
+        }) {
+            let feed = stream.fork();
+            if let Some(detectors) = &stream.state().capture.detectors {
+                // Sweeps must keep the saved stream's settings without a chart subscription.
+                feed.1.set_settings(detectors.settings());
+                feed.state().capture.detectors = Some(feed.1.clone());
+            }
+            feed
+        } else {
+            drop(sim);
+            self.fork()
+        };
+        feed.2 = None;
+        feed
+    }
+
     pub(super) fn view(&self, extended_hours: bool) -> (SessionType, bool) {
         let sim = self.state();
         (sim.session(extended_hours), sim.adjusted)

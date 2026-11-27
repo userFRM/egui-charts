@@ -2116,7 +2116,9 @@ impl eframe::App for DemoApp {
         self.poll_watchlist_file();
         self.advance_replay();
         if self.replay.is_none() || self.live.loading() {
-            let delay = self.live.advance(chrono::Utc::now());
+            let now = chrono::Utc::now();
+            let delay = self.live.advance(now);
+            self.advance_live_strategy_source(now);
             if !self.live.paused() || delay.is_zero() {
                 ctx.request_repaint_after(delay);
             }
@@ -3851,6 +3853,7 @@ impl DemoApp {
         while cursor < time {
             cursor = (cursor + chrono::Duration::seconds(1)).min(time);
             self.live.advance(cursor);
+            self.advance_live_strategy_source(cursor);
         }
         self.live.set_paused(true);
     }
