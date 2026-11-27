@@ -309,7 +309,7 @@ impl DemoApp {
 mod tests {
     use super::super::tests::{AppStorage, ui_click, ui_frame};
     use super::*;
-    use egui_charts::model::{Bar, BarClock, Timeframe};
+    use egui_charts::model::{Bar, BarClock, StrategyEvents, Timeframe};
     use egui_charts::strategies::{Commission, Slippage, StrategyFactory};
 
     /// Clicks the one text `label` that a frame of the strategy panel and the dialogs shows.
@@ -406,11 +406,14 @@ mod tests {
             AlertCondition::StrategyFills(id.clone())
         );
         assert_eq!(app.alert_dialog.alert.frequency, AlertFrequency::EveryTime);
+        click(&mut app, &ctx, "Order fills and alert calls");
+        click(&mut app, &ctx, "Order fills only");
         click(&mut app, &ctx, "Save alert");
         assert!(!app.alert_dialog.is_open);
         assert!(app.live_strategy.is_some(), "a saved alert keeps its run");
         let [saved] = <[Alert; 1]>::try_from(app.alert_host.engine().alerts()).unwrap();
         assert_eq!(saved.condition, AlertCondition::StrategyFills(id.clone()));
+        assert_eq!(saved.strategy_events, StrategyEvents::Fills);
         assert_eq!(saved.status, AlertStatus::Active);
 
         let run = &app.live_strategy.as_ref().unwrap().run;
@@ -474,6 +477,7 @@ mod tests {
         let restored = restart(&mut app, &ctx);
         let [alert] = <[Alert; 1]>::try_from(restored.alert_host.engine().alerts()).unwrap();
         assert_eq!(alert.id, saved.id);
+        assert_eq!(alert.strategy_events, StrategyEvents::Fills);
         assert_eq!(alert.status, AlertStatus::Disabled);
         assert!(restored.toasts.toasts().iter().any(|toast| toast.message
             == "A strategy alert was stopped: its live run ended when the demo closed. \
