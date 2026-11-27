@@ -155,16 +155,28 @@ pub struct VolumeProfileConfig {
     pub show_value_area_lines: bool,
     /// Draw the price rows; hiding them leaves the profile's levels.
     pub show_rows: bool,
-    /// Write each row's volume beside it, following `display`.
+    /// Write each row's volume beside it, following `display`, in [`Self::values_color`].
     pub show_values: bool,
+    /// Colour of the row values that [`Self::show_values`] writes, unmultiplied RGBA; `None`
+    /// uses the theme's foreground.
+    pub values_color: Option<[u8; 4]>,
     /// Draw the point of control line.
     pub show_poc: bool,
+    /// Colour of the point of control line, unmultiplied RGBA. `None` draws a volume profile
+    /// drawing's in the theme's foreground and a study's in the study's colour.
+    pub poc_color: Option<[u8; 4]>,
     /// Draw the value area high even without `show_value_area_lines`.
     pub show_value_area_high: bool,
     /// Draw the value area low even without `show_value_area_lines`.
     pub show_value_area_low: bool,
     /// High and low line colours; placeholder bytes take the profile colour at alpha 200.
     pub value_area_line_colors: [[u8; 4]; 2],
+    /// Fill the price and time range of a volume profile drawing behind its rows. On by
+    /// default. Studies draw no box and ignore this.
+    pub show_box: bool,
+    /// Fill of a volume profile drawing's box, unmultiplied RGBA whose alpha is the box's
+    /// opacity; `None` takes the drawing's colour at alpha 15. Studies ignore this.
+    pub box_color: Option<[u8; 4]>,
     /// Keep a fixed range drawing growing to the last bar, past its second anchor.
     pub extend_right: bool,
     /// Draw a volume profile drawing's developing point of control: a step line through its bars
@@ -206,14 +218,22 @@ struct VolumeProfileFields {
     show_rows: bool,
     #[serde(default)]
     show_values: bool,
+    #[serde(default)]
+    values_color: Option<[u8; 4]>,
     #[serde(default = "profile_shown")]
     show_poc: bool,
+    #[serde(default)]
+    poc_color: Option<[u8; 4]>,
     #[serde(default)]
     show_value_area_high: bool,
     #[serde(default)]
     show_value_area_low: bool,
     #[serde(default = "profile_line_colors")]
     value_area_line_colors: [[u8; 4]; 2],
+    #[serde(default = "profile_shown")]
+    show_box: bool,
+    #[serde(default)]
+    box_color: Option<[u8; 4]>,
     #[serde(default)]
     extend_right: bool,
     #[serde(default)]
@@ -239,10 +259,14 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.show_value_area_lines = fields.show_value_area_lines;
         config.show_rows = fields.show_rows;
         config.show_values = fields.show_values;
+        config.values_color = fields.values_color;
         config.show_poc = fields.show_poc;
+        config.poc_color = fields.poc_color;
         config.show_value_area_high = fields.show_value_area_high;
         config.show_value_area_low = fields.show_value_area_low;
         config.value_area_line_colors = fields.value_area_line_colors;
+        config.show_box = fields.show_box;
+        config.box_color = fields.box_color;
         config.extend_right = fields.extend_right;
         config.show_developing_poc = fields.show_developing_poc;
         config.show_developing_value_area = fields.show_developing_value_area;
@@ -400,10 +424,14 @@ impl Default for VolumeProfileConfig {
             show_value_area_lines: false,
             show_rows: true,
             show_values: false,
+            values_color: None,
             show_poc: true,
+            poc_color: None,
             show_value_area_high: false,
             show_value_area_low: false,
             value_area_line_colors: profile_line_colors(),
+            show_box: true,
+            box_color: None,
             extend_right: false,
             show_developing_poc: false,
             show_developing_value_area: false,
