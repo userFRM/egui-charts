@@ -155,6 +155,9 @@ impl RateGuard<'_> {
         let revision = self.0.revision.max(saved.revision).wrapping_add(1);
         *self.0 = State {
             source: Source::Fixed(saved.kind),
+            tick_rule: None,
+            #[cfg(all(feature = "studies", feature = "widget"))]
+            tick_rule_before: BTreeMap::new(),
             trade_bars: saved.trade_bars.clone(),
             paged_rate: saved.paged_rate,
             cut: saved.cut,
