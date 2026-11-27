@@ -1,6 +1,6 @@
 //! A host-run sample backtest and the report's navigation, signals and CSV delivery.
 
-use super::{Bar, DemoApp, SeriesId, Timeframe, panel_frame};
+use super::{Bar, DemoApp, DemoSymbol, SeriesId, Timeframe, panel_frame};
 use egui_charts::model::{BarClock, OrderSide, StrategyExit, StrategyReport, StrategyTrade};
 use egui_charts::services::{Events, SignalEvent, Signals};
 use egui_charts::ui::strategy_report::{
@@ -223,8 +223,9 @@ impl DemoApp {
         self.refresh_strategy_signals();
     }
 
-    /// Sets the tester's price increment to the chart instrument's tick size once per instrument,
-    /// so that an increment typed afterwards holds until the instrument changes.
+    /// Sets the tester's price increment to the chart instrument's tick size, and its unit step to
+    /// the symbol's quantity step, once per instrument, so that values typed afterwards hold until
+    /// the instrument changes. Cash and equity sizes round down to that step.
     fn follow_instrument_tick(&mut self) {
         let Some(instrument) = self.chart.instrument() else {
             return;
@@ -236,13 +237,16 @@ impl DemoApp {
         if self.strategy_instrument.as_ref() == Some(&followed) {
             return;
         }
+        let mut settings = self.strategy_report.settings().clone();
         if let Some(tick) = tick {
-            let mut settings = self.strategy_report.settings().clone();
             settings.price_increment = tick;
-            // An invalid form refuses every change; try again once it is valid.
-            if self.strategy_report.set_settings(settings).is_err() {
-                return;
-            }
+        }
+        if let Some(step) = DemoSymbol::quantity_step(&instrument.symbol) {
+            settings.liquidation_increment = step;
+        }
+        // An invalid form refuses every change; try again once it is valid.
+        if self.strategy_report.set_settings(settings).is_err() {
+            return;
         }
         self.strategy_instrument = Some(followed);
     }
@@ -816,6 +820,71 @@ mod tests {
         super::super::tests::settle(&mut app, &ctx);
         frame(&mut app, vec![]).drop_without_applying_deltas();
         assert_eq!(increment(&app), 0.0001, "second switch");
+    }
+
+    #[test]
+    fn equity_sized_strategies_trade_whole_quantity_steps_of_each_symbol() {
+        let ctx = egui::Context::default();
+        let now = "2026-11-03T15:00:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        super::super::tests::settle(&mut app, &ctx);
+        app.run_sample_backtest();
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_strategy_report(ui, app.theme.ui.panel_bg),
+            )
+        };
+        // Bar Up/Down buys 10% of equity: a few whole shares of STOCKA, and a fraction of one
+        // TOKENA, which trades in ten-thousandths of a token.
+        for (symbol, step) in [("STOCKA", 1.0), ("TOKENA", 0.0001)] {
+            app.switch_symbol(symbol);
+            super::super::tests::settle(&mut app, &ctx);
+            app.strategy_report.select_strategy("Bar Up/Down").unwrap();
+            let output = frame(&mut app, vec![]);
+            let pos = text_at(&output, "Run");
+            output.drop_without_applying_deltas();
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                )
+                .drop_without_applying_deltas();
+            }
+            for _ in 0..100 {
+                frame(&mut app, vec![]).drop_without_applying_deltas();
+            }
+            assert!(
+                !app.strategy_report.is_stale(),
+                "{symbol}: the run completes"
+            );
+            let trades = &app.strategy_report.report().unwrap().trades;
+            assert!(!trades.is_empty(), "{symbol}: entries open positions");
+            for trade in trades {
+                let steps = trade.quantity / step;
+                assert!(
+                    (steps - steps.round()).abs() < 1e-9,
+                    "{symbol}: {} is not a whole number of steps",
+                    trade.quantity
+                );
+            }
+        }
     }
 
     fn fills_visible(
