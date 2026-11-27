@@ -250,10 +250,11 @@ fn every_study_styles_a_line_past_its_last() {
 
 /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
 /// components in a different order, and Donchian and Price Channel, which draw the same highest
-/// high, lowest low and midpoint with their own colours and fill. Fixed profiles use a saved end.
-/// Single candlestick patterns are left out.
+/// high, lowest low and midpoint with their own colours and fill. Close-to-Close and Historical
+/// Volatility both annualize a ten-return sample deviation by default. Fixed profiles use a
+/// saved end. Single candlestick patterns are left out.
 #[test]
-fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
+fn catalogue_studies_are_distinct_except_shared_formulas() {
     use crate::model::Bar;
     use chrono::{TimeZone, Utc};
 
@@ -355,7 +356,14 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
             duplicates.push(format!("{first} and {name}"));
         }
     }
-    assert_eq!(duplicates, ["ADX and DMI", "Donchian and Price Channel"]);
+    assert_eq!(
+        duplicates,
+        [
+            "ADX and DMI",
+            "C2C Vol and HV",
+            "Donchian and Price Channel"
+        ]
+    );
 }
 
 /// The study browser opens these studies with the lengths and switches most often used for them.
