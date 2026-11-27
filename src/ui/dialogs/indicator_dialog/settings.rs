@@ -3176,14 +3176,14 @@ mod tests {
                 15,
                 &["Call wall", "Put wall"],
             ),
-            // Developing and Target only style drawings.
+            // Developing, Target and Price line only style drawings.
             (
                 Box::new(ChartPatterns::all()),
                 None,
-                &["Bullish", "Bearish", "Developing", "Target"],
-                4,
+                &["Bullish", "Bearish", "Developing", "Target", "Price line"],
+                5,
                 2,
-                4,
+                5,
                 &[],
             ),
             // The chart draws the targets dotted at a fixed width.

@@ -1083,7 +1083,8 @@ impl State {
 /// neckline or breakout level. Hovering a mark or a boundary shows the formation's name, such as
 /// "Bear Flag". Line 3, Target, styles dotted targets ending in a Target label: orange while
 /// Awaiting, green when Reached, red when Failed and grey when Indefinable. Hovering it shows
-/// the price and status. Patterns and Price targets choose the formations and targets drawn.
+/// the price and status. Line 4, Price line, styles the path through every pivot, including a
+/// flag's pole. Patterns and Price targets choose the formations and targets drawn.
 #[derive(Clone, Debug)]
 pub struct ChartPatterns {
     scope: Scope,
@@ -1097,10 +1098,10 @@ pub struct ChartPatterns {
     stepper: Stepper<State>,
     #[cfg(feature = "drawings")]
     drawings: Vec<crate::drawings::Drawing>,
-    /// The plot that styles each drawing: Bullish, Bearish, Developing or Target.
+    /// The plot that styles each drawing: Bullish, Bearish, Developing, Target or Price line.
     #[cfg(feature = "drawings")]
     drawing_plots: Vec<usize>,
-    colors: [Color32; 4],
+    colors: [Color32; 5],
     precision: Option<usize>,
     label_precision: Option<usize>,
     visible: bool,
@@ -1177,7 +1178,13 @@ impl ChartPatterns {
             drawings: Vec::new(),
             #[cfg(feature = "drawings")]
             drawing_plots: Vec::new(),
-            colors: [palette::BLUE, palette::RED, palette::GRAY, palette::GRAY],
+            colors: [
+                palette::BLUE,
+                palette::RED,
+                palette::GRAY,
+                palette::GRAY,
+                palette::LIGHT_BLUE,
+            ],
             precision: None,
             label_precision: None,
             visible: true,
@@ -1394,7 +1401,7 @@ impl Indicator for ChartPatterns {
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[line.min(3)],
+            color: self.colors[line.min(4)],
             width: 1.0,
             pattern: match line {
                 2 => crate::model::LineStyle::Dashed,
@@ -1500,7 +1507,12 @@ impl Indicator for ChartPatterns {
                     _ => 2,
                 };
                 let name = formation.kind.label();
-                for segment in &formation.boundaries {
+                for (segment, plot) in formation.anchors.windows(2).map(|leg| (leg, 4)).chain(
+                    formation
+                        .boundaries
+                        .iter()
+                        .map(|segment| (&segment[..], plot)),
+                ) {
                     let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
                     drawing.completed = true;
                     drawing.stroke_width = 1.0;
@@ -1603,7 +1615,7 @@ impl Indicator for ChartPatterns {
     }
 
     fn line_names(&self) -> Vec<String> {
-        ["Bullish", "Bearish", "Developing", "Target"]
+        ["Bullish", "Bearish", "Developing", "Target", "Price line"]
             .map(str::to_owned)
             .into()
     }
@@ -1618,7 +1630,7 @@ impl Indicator for ChartPatterns {
         false
     }
 
-    // Developing only styles the boundaries of formations not yet confirmed.
+    // Developing, Target and Price line only style drawings.
     fn plot_holds_values(&self, line: usize) -> bool {
         line < 2
     }
@@ -2002,13 +2014,13 @@ mod tests {
         let failed = path(&[105.0, 100.0, 130.0, 122.0, 127.0, 119.0, 123.0, 100.0]);
         let reached = path(&[BULL_FLAG.as_slice(), &[160.0]].concat());
         for (bars, patterns, targets, expected) in [
-            (&two, 0, 0, [2, 0, 2, 1]),
-            (&two, 3, 0, [0, 0, 2, 0]),
-            (&two, 2, 3, [2, 0, 2, 0]),
-            (&failed, 0, 0, [0, 0, 2, 0]),
-            (&failed, 1, 0, [0, 0, 0, 0]),
-            (&reached, 0, 1, [2, 0, 0, 0]),
-            (&reached, 0, 2, [2, 0, 0, 1]),
+            (&two, 0, 0, [2, 0, 2, 1, 8]),
+            (&two, 3, 0, [0, 0, 2, 0, 4]),
+            (&two, 2, 3, [2, 0, 2, 0, 8]),
+            (&failed, 0, 0, [0, 0, 2, 0, 4]),
+            (&failed, 1, 0, [0, 0, 0, 0, 0]),
+            (&reached, 0, 1, [2, 0, 0, 0, 4]),
+            (&reached, 0, 2, [2, 0, 0, 1, 4]),
         ] {
             let mut study = ChartPatterns::only(FormationKind::BullFlag);
             study
@@ -2018,7 +2030,7 @@ mod tests {
                 .set_input("price_targets", InputValue::Choice(targets))
                 .unwrap();
             study.calculate(bars);
-            let mut counts = [0; 4];
+            let mut counts = [0; 5];
             for i in 0..study.drawings().len() {
                 counts[study.drawing_plot(i).unwrap()] += 1;
             }
@@ -2030,6 +2042,22 @@ mod tests {
         ] {
             let mut study = ChartPatterns::only(FormationKind::BullFlag);
             study.calculate(bars);
+            let first_leg = study
+                .drawings()
+                .iter()
+                .enumerate()
+                .find(|(i, _)| study.drawing_plot(*i) == Some(4))
+                .unwrap()
+                .1;
+            assert_eq!(
+                first_leg
+                    .chart_points
+                    .iter()
+                    .map(|p| (p.bar_idx, p.price))
+                    .collect::<Vec<_>>(),
+                [(5.0, 100.0), (10.0, 130.0)]
+            );
+            assert_eq!(first_leg.label.as_deref(), Some("Bull Flag"));
             let target = study
                 .drawings()
                 .iter()

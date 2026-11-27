@@ -1204,7 +1204,7 @@ impl StudyTemplate {
                 .retain(|(id, _)| id != "call_wall" && id != "put_wall");
             changed |= template.inputs.len() != listed;
         }
-        // Chart patterns saved before targets were drawn keep them off.
+        // Chart patterns saved before targets and price lines were drawn keep both off.
         if declares("price_targets") && !has("price_targets") {
             template
                 .inputs
@@ -1214,6 +1214,11 @@ impl StudyTemplate {
                     crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
                         .plot_style(3),
                 );
+                template.settings.plots.push(crate::studies::PlotStyle {
+                    visible: false,
+                    ..crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                        .plot_style(4)
+                });
             }
             changed = true;
         }
@@ -1773,7 +1778,14 @@ mod tests {
                 crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
                     .plot_style(3),
             );
-            expected.plot_variants.extend([Vec::new(), Vec::new()]);
+            expected.plots.push(crate::studies::PlotStyle {
+                visible: false,
+                ..crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                    .plot_style(4)
+            });
+            expected
+                .plot_variants
+                .extend([Vec::new(), Vec::new(), Vec::new()]);
             assert_eq!(restored.settings(), expected, "{}", saved.name);
             let inputs = restored.inputs();
             assert_eq!(
@@ -1835,6 +1847,7 @@ mod tests {
         }
         assert_eq!(&restored.settings().plots[..3], &old.settings.plots);
         assert!(restored.settings().plots[3].visible);
+        assert!(!restored.settings().plots[4].visible);
     }
 
     /// Main templates without Symbol or Offset keep every saved input, style and value.
