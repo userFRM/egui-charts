@@ -14,8 +14,8 @@
 //! - SAR above price: Downtrend (SAR acts as resistance/trailing stop)
 //! - When price crosses SAR: Trend reversal signal
 //!
-//! The SAR is output as two lines, the uptrend SAR and the downtrend SAR; each bar has a
-//! value on exactly one of them, the other is NaN.
+//! The SAR is one line, drawn as crosses: from the second bar with finite prices on, each bar
+//! with finite prices has a value, below the price in an uptrend and above it in a downtrend.
 //!
 //! # Example
 //! ```
@@ -41,8 +41,7 @@ pub struct ParabolicSAR {
     max_af: f64,
     values: IndicatorValues,
     stepper: Stepper<State>,
-    bullish_color: Color32,
-    bearish_color: Color32,
+    color: Color32,
     visible: bool,
 }
 
@@ -64,17 +63,27 @@ impl ParabolicSAR {
             max_af: clamp_param(max_af, initial_af, 1.0),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
-            bullish_color: palette::BLUE,
-            bearish_color: palette::BLUE,
+            color: palette::BLUE,
             visible: true,
         }
     }
 
-    /// Set colors for bullish and bearish SAR points
-    pub fn with_colors(mut self, bullish: Color32, bearish: Color32) -> Self {
-        self.bullish_color = bullish;
-        self.bearish_color = bearish;
+    /// Set the colour of the SAR crosses.
+    pub fn with_color(mut self, color: Color32) -> Self {
+        self.color = color;
         self
+    }
+
+    /// Whether each bar of `bars` is in an uptrend, `None` where the SAR has no value, replaying
+    /// the steps [`calculate`](Indicator::calculate) runs on `bars`.
+    #[cfg(feature = "strategies")]
+    pub(crate) fn trends(&self, bars: &[Bar]) -> Vec<Option<bool>> {
+        let mut state = State::default();
+        bars.iter()
+            .map(|bar| {
+                step(self.initial_af, self.af_step, self.max_af, &mut state, bar).map(|_| state.up)
+            })
+            .collect()
     }
 }
 
@@ -93,6 +102,49 @@ struct State {
     ep: f64,
     af: f64,
     up: bool,
+}
+
+/// One bar of the SAR: its value, or `None` on the first bar with finite prices and on bars
+/// without them. A bar without them leaves `state` as it was.
+fn step(initial_af: f64, af_step: f64, max_af: f64, state: &mut State, bar: &Bar) -> Option<f64> {
+    if !bar.high.is_finite() || !bar.low.is_finite() || !bar.close.is_finite() {
+        return None;
+    }
+    let current = [bar.high, bar.low, bar.close];
+    let previous = state.previous.replace(current)?;
+    if let Some(before) = state.before_previous {
+        let mut next = state.sar + state.af * (state.ep - state.sar);
+        let reversal = if state.up {
+            next = next.min(previous[1]).min(before[1]);
+            bar.low < next
+        } else {
+            next = next.max(previous[0]).max(before[0]);
+            bar.high > next
+        };
+        if reversal {
+            state.up = !state.up;
+            state.sar = state.ep;
+            state.ep = if state.up { bar.high } else { bar.low };
+            state.af = initial_af;
+        } else {
+            state.sar = next;
+            if (state.up && bar.high > state.ep) || (!state.up && bar.low < state.ep) {
+                state.ep = if state.up { bar.high } else { bar.low };
+                state.af = (state.af + af_step).min(max_af);
+            }
+        }
+    } else {
+        state.up = bar.close >= previous[2];
+        state.sar = if state.up { previous[1] } else { previous[0] };
+        state.ep = if state.up {
+            bar.high.max(previous[0])
+        } else {
+            bar.low.min(previous[1])
+        };
+        state.af = initial_af;
+    }
+    state.before_previous = Some([previous[0], previous[1]]);
+    Some(state.sar)
 }
 
 impl Indicator for ParabolicSAR {
@@ -131,50 +183,8 @@ impl Indicator for ParabolicSAR {
     fn update(&mut self, data: &[Bar], from: usize) {
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                if !bar.high.is_finite() || !bar.low.is_finite() || !bar.close.is_finite() {
-                    return IndicatorValue::None;
-                }
-                let current = [bar.high, bar.low, bar.close];
-                let Some(previous) = state.previous.replace(current) else {
-                    return IndicatorValue::None;
-                };
-                if let Some(before) = state.before_previous {
-                    let mut next = state.sar + state.af * (state.ep - state.sar);
-                    let reversal = if state.up {
-                        next = next.min(previous[1]).min(before[1]);
-                        bar.low < next
-                    } else {
-                        next = next.max(previous[0]).max(before[0]);
-                        bar.high > next
-                    };
-                    if reversal {
-                        state.up = !state.up;
-                        state.sar = state.ep;
-                        state.ep = if state.up { bar.high } else { bar.low };
-                        state.af = self.initial_af;
-                    } else {
-                        state.sar = next;
-                        if (state.up && bar.high > state.ep) || (!state.up && bar.low < state.ep) {
-                            state.ep = if state.up { bar.high } else { bar.low };
-                            state.af = (state.af + self.af_step).min(self.max_af);
-                        }
-                    }
-                } else {
-                    state.up = bar.close >= previous[2];
-                    state.sar = if state.up { previous[1] } else { previous[0] };
-                    state.ep = if state.up {
-                        bar.high.max(previous[0])
-                    } else {
-                        bar.low.min(previous[1])
-                    };
-                    state.af = self.initial_af;
-                }
-                state.before_previous = Some([previous[0], previous[1]]);
-                IndicatorValue::Multiple(if state.up {
-                    vec![state.sar, f64::NAN]
-                } else {
-                    vec![f64::NAN, state.sar]
-                })
+                step(self.initial_af, self.af_step, self.max_af, state, bar)
+                    .map_or(IndicatorValue::None, IndicatorValue::Single)
             });
     }
 
@@ -187,15 +197,12 @@ impl Indicator for ParabolicSAR {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.bullish_color, self.bearish_color]
+        vec![self.color]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if !colors.is_empty() {
-            self.bullish_color = colors[0];
-        }
-        if colors.len() > 1 {
-            self.bearish_color = colors[1];
+        if let Some(&color) = colors.first() {
+            self.color = color;
         }
     }
 
@@ -216,6 +223,6 @@ impl Indicator for ParabolicSAR {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec!["Up Trend".to_string(), "Down Trend".to_string()]
+        vec!["Parabolic SAR".to_string()]
     }
 }
