@@ -708,7 +708,7 @@ impl AlertEngine {
     ) {
         use crate::model::StrategyReport;
         let watches = |alert: &Alert| matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run);
-        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
+        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen, _| {
             fills
                 .iter()
                 .filter_map(|fill| {
@@ -804,7 +804,7 @@ impl AlertEngine {
     ) {
         use crate::model::StrategyReport;
         let watches = |alert: &Alert| matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run);
-        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
+        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen, _| {
             alerts
                 .iter()
                 .filter_map(|alert| {
@@ -870,7 +870,7 @@ impl AlertEngine {
             timeframe,
             now,
             watches,
-            |condition, seen| {
+            |condition, seen, _| {
                 let AlertCondition::DetectorSignals(detector) = condition else {
                     return Vec::new();
                 };
@@ -939,7 +939,7 @@ impl AlertEngine {
         now: DateTime<Utc>,
     ) {
         let watches = |alert: &Alert| matches!(&alert.condition, AlertCondition::CustomEvents(name) if name == source);
-        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
+        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen, _| {
             events
                 .iter()
                 .filter_map(|event| {
@@ -976,7 +976,19 @@ impl AlertEngine {
                     alert.condition == AlertCondition::Footprint(event.condition)
                         && (alert.frequency == AlertFrequency::OncePerBarClose) == event.closed
                 },
-                |_, seen| {
+                |_, seen, last| {
+                    // A restored run counts its saved firing only on its first delivery.
+                    if seen.fired.is_none()
+                        && last.is_some_and(|last| {
+                            if event.closed {
+                                event.time <= last
+                            } else {
+                                event.bar <= last
+                            }
+                        })
+                    {
+                        seen.fired = Some(event.bar);
+                    }
                     if seen.fired.is_some_and(|bar| event.bar <= bar) {
                         return Vec::new();
                     }
@@ -994,7 +1006,8 @@ impl AlertEngine {
     }
 
     /// Fires the active alerts of `symbol` on `timeframe` whose alert `watches` accepts,
-    /// with the occurrences `occurrences` takes from what the alert's run has seen.
+    /// with the occurrences `occurrences` takes from what the alert's run has seen and, for a
+    /// restored alert, the symbol's saved last firing.
     fn fire_events(
         &self,
         symbol: &str,
@@ -1002,7 +1015,7 @@ impl AlertEngine {
         timeframe: Timeframe,
         now: DateTime<Utc>,
         watches: impl Fn(&Alert) -> bool,
-        mut occurrences: impl FnMut(&AlertCondition, &mut Run) -> Vec<Occurrence>,
+        mut occurrences: impl FnMut(&AlertCondition, &mut Run, Option<DateTime<Utc>>) -> Vec<Occurrence>,
     ) {
         let mut fired = Vec::new();
         let mut state = self.lock();
@@ -1013,6 +1026,7 @@ impl AlertEngine {
             events,
             watchlists,
             triggers,
+            restored,
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
@@ -1042,7 +1056,12 @@ impl AlertEngine {
                     done,
                     ..Run::default()
                 });
-            for occurrence in occurrences(&alert.condition, seen) {
+            let last = match &alert.watchlist {
+                _ if !restored.contains(&id) => None,
+                Some(_) => alert.member_triggered_at.get(symbol).copied(),
+                None => alert.last_triggered_at,
+            };
+            for occurrence in occurrences(&alert.condition, seen, last) {
                 if seen.done {
                     continue;
                 }
@@ -2617,6 +2636,79 @@ mod tests {
             })
             .collect();
         assert_eq!(symbols, ["OTHER"]);
+    }
+
+    #[test]
+    fn restored_footprint_alerts_count_each_symbols_last_firing() {
+        use crate::model::FootprintCondition::{StackedBuyImbalance, StackedSellImbalance};
+        use AlertFrequency::{OncePerBar, OncePerBarClose};
+
+        for (frequency, last, open, at, covered) in [
+            (OncePerBar, 65, 60, 70, true),
+            (OncePerBar, 65, 120, 125, false),
+            (OncePerBarClose, 120, 60, 120, true),
+            (OncePerBarClose, 120, 60, 121, false),
+            (OncePerBarClose, 120, 120, 180, false),
+        ] {
+            for list in [false, true] {
+                for changed in [false, true] {
+                    let mut saved =
+                        alert(AlertCondition::Footprint(StackedBuyImbalance), frequency);
+                    saved.id = Some(AlertId("1".into()));
+                    saved.last_triggered_at = Some(time(last));
+                    if list {
+                        saved.symbol.clear();
+                        saved.watchlist = Some("tech".into());
+                        saved.member_triggered_at.insert("SYM".into(), time(last));
+                        saved.last_triggered_at = Some(time(last + 60));
+                    }
+                    let host = Host::new(vec![saved]);
+                    host.engine
+                        .set_watchlist("tech", vec!["SYM".into(), "OTHER".into()]);
+                    if changed {
+                        // A monitoring edit starts this session's alert with no restored guard.
+                        let mut edited = host.engine.alerts().remove(0);
+                        edited.condition = AlertCondition::Footprint(StackedSellImbalance);
+                        assert_eq!(host.save(edited), Ok(()));
+                    }
+                    let symbols: &[_] = if list { &["SYM", "OTHER"] } else { &["SYM"] };
+                    for symbol in symbols {
+                        let mut event = FootprintAlertEvent {
+                            symbol: (*symbol).into(),
+                            exchange: None,
+                            timeframe: Timeframe::Min1,
+                            condition: if changed {
+                                StackedSellImbalance
+                            } else {
+                                StackedBuyImbalance
+                            },
+                            bar: time(open),
+                            closed: frequency == OncePerBarClose,
+                            time: time(at),
+                            price: 100.0,
+                            message: String::new(),
+                        };
+                        host.engine.footprint_events(&[event.clone()], time(at));
+                        let expected = if !covered || *symbol == "OTHER" || changed {
+                            vec![100.0]
+                        } else {
+                            vec![]
+                        };
+                        assert_eq!(
+                            host.fired(),
+                            expected,
+                            "{frequency:?}, last {last}, open {open}, at {at}, list {list}, changed {changed}, {symbol}"
+                        );
+                        host.engine.footprint_events(&[event.clone()], time(at));
+                        assert!(host.fired().is_empty(), "same bar stays silent");
+                        event.bar = time(open + 60);
+                        event.time = time(at + 60);
+                        host.engine.footprint_events(&[event], time(at + 60));
+                        assert_eq!(host.fired(), [100.0], "the next bar fires");
+                    }
+                }
+            }
+        }
     }
 
     /// A crossing follows the configured ray's stable slot through drawing and alert restore,
