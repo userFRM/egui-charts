@@ -1153,7 +1153,12 @@ impl AlertDialog {
                 }
             }
         });
+        let was_event = events;
         let events = self.alert.condition.is_event();
+        if events && !was_event {
+            // A newly selected host-event condition starts at its constructor's frequency.
+            self.alert.frequency = AlertFrequency::EveryTime;
+        }
         if events {
             self.alert.additional_conditions.clear();
             self.alert.additional_timeframes.clear();
@@ -2526,6 +2531,25 @@ mod tests {
                 .value()
                 .is_some_and(|text| text == "gone")
         );
+        // Switching to fills starts at Every time; reopening keeps an explicit Only once.
+        h.state_mut().strategy_runs = vec![("run-7".into(), "Momentum live".into())];
+        h.state_mut()
+            .edit(Alert::new("SAMPLE", AlertCondition::Above(1.0)));
+        h.run();
+        assert_eq!(h.state().alert.frequency, AlertFrequency::Once);
+        h.get_by_label("Condition").click();
+        h.run();
+        h.get_by_label("Strategy fills").scroll_to_me();
+        h.run();
+        h.get_by_label("Strategy fills").click();
+        h.run();
+        assert_eq!(h.state().alert.frequency, AlertFrequency::EveryTime);
+        let mut once = Alert::new("SAMPLE", AlertCondition::StrategyFills("run-7".into()));
+        once.frequency = AlertFrequency::Once;
+        h.state_mut().edit(once);
+        h.run();
+        h.run();
+        assert_eq!(h.state().alert.frequency, AlertFrequency::Once);
     }
 
     /// Names the chart builds keep their parts through storage, so the source list shows the
