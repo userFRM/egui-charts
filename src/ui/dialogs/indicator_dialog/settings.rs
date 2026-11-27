@@ -3057,6 +3057,8 @@ mod tests {
                 dialog.show(ui.ctx(), &Theme::dark());
             });
         harness.run();
+        harness.get_by_label("Use custom timeframe").click();
+        harness.run();
         let combo = harness.get_by_role_and_label(Role::ComboBox, "Lower interval");
         assert_eq!(
             combo.accesskit_node().value().as_deref(),
