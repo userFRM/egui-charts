@@ -101,6 +101,27 @@ fn level_galley(
     )
 }
 
+/// A level's custom text, or its hint, at the label size in the level's colour. With `color-emoji` its emoji take the
+/// colour font.
+fn level_text_galley(
+    painter: &egui::Painter,
+    config: &FibonacciConfig,
+    level: &FibonacciLevel,
+    text: &str,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::default();
+    crate::drawings::glyphs::append_text(
+        painter.ctx(),
+        &mut job,
+        text,
+        egui::TextFormat::simple(
+            egui::FontId::proportional(typography::font_size(config.label_size)),
+            level_color(level),
+        ),
+    );
+    painter.layout_job(job)
+}
+
 impl Drawing {
     /// Effective settings, including the fixed presentation of older drawings without a config.
     pub(crate) fn fibonacci_config(&self) -> Cow<'_, FibonacciConfig> {
@@ -224,20 +245,22 @@ impl Drawing {
                 continue;
             }
             let label = level_galley(painter, &config, level, Some(price), Some(view));
-            let mut text = painter.layout_no_wrap(
+            let mut text = level_text_galley(
+                painter,
+                &config,
+                level,
                 if config.show_text {
-                    level.text.clone()
+                    level.text.as_str()
                 } else {
-                    String::new()
+                    ""
                 },
-                egui::FontId::proportional(typography::font_size(config.label_size)),
-                level_color(level),
             );
             if text.text().is_empty() && config.show_text && selected && self.accepts_user_edits() {
-                let hint = painter.layout_no_wrap(
-                    crate::localization::text(painter.ctx(), "Add text"),
-                    egui::FontId::proportional(typography::font_size(config.label_size)),
-                    level_color(level),
+                let hint = level_text_galley(
+                    painter,
+                    &config,
+                    level,
+                    &crate::localization::text(painter.ctx(), "Add text"),
                 );
                 let bounds = level_text_bounds(
                     range,
@@ -320,14 +343,15 @@ impl Drawing {
         self.render_fib_trend(painter);
     }
 
-    /// The custom text field of a visible retracement or extension level, including the empty-field hint.
+    /// The custom text field of a visible retracement or extension level, including the empty-field hint, and `text`
+    /// laid out as the level paints it.
     pub(crate) fn fib_text_bounds(
         &self,
         painter: &egui::Painter,
         pane: Rect,
         index: usize,
         text: &str,
-    ) -> Option<Rect> {
+    ) -> Option<(Rect, std::sync::Arc<egui::Galley>)> {
         if !matches!(
             self.tool_type,
             Tool::FibonacciRetracement | Tool::FibonacciExtension
@@ -348,16 +372,12 @@ impl Drawing {
         if !pane.y_range().contains(y) {
             return None;
         }
-        let galley = painter.layout_no_wrap(
-            text.to_owned(),
-            egui::FontId::proportional(typography::font_size(config.label_size)),
-            level_color(level),
-        );
+        let galley = level_text_galley(painter, &config, level, text);
         let range = self.fib_level_x_range(&config, pane);
         if !level_span_in_pane(range, pane) {
             return None;
         }
-        Some(level_text_bounds(
+        let bounds = level_text_bounds(
             range,
             y,
             galley.size(),
@@ -365,7 +385,8 @@ impl Drawing {
             config.text_vertical,
             self.tool_type == Tool::FibonacciExtension,
             pane,
-        ))
+        );
+        Some((bounds, galley))
     }
 
     fn render_fib_trend(&self, painter: &egui::Painter) {
