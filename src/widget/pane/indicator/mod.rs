@@ -984,12 +984,12 @@ mod tests {
         let mut study =
             crate::studies::ConfiguredStudy::new(Box::new(crate::studies::ChoppinessIndex::new(2)));
         study.calculate(&bars);
-        let fit = |study: &crate::studies::ConfiguredStudy| {
+        let fit = |study: &crate::studies::ConfiguredStudy, range| {
             IndicatorPane::with_config(IndicatorPaneConfig::from_study(study))
-                .calculate_y_range(study, &(0..3))
+                .calculate_y_range(study, &range)
         };
-        // The only value, 48.54, lies between the levels at 61.8 and 38.2.
-        let (low, high) = fit(&study);
+        // Bar 2's value, 48.54, lies between the levels at 61.8 and 38.2.
+        let (low, high) = fit(&study, 2..3);
         assert!(low < 38.2 && high > 61.8, "{low}..{high}");
 
         let mut settings = study.settings();
@@ -1002,7 +1002,7 @@ mod tests {
             settings.levels[0].price_line = enabled;
             settings.levels[0].color = color;
             study.apply_settings(&[], settings.clone()).unwrap();
-            let (low, high) = fit(&study);
+            let (low, high) = fit(&study, 2..3);
             assert!(low < 38.2, "{low}..{high}");
             assert_eq!(high > 61.8, shown, "{low}..{high}");
         }
@@ -1014,7 +1014,7 @@ mod tests {
         let mut study =
             crate::studies::ConfiguredStudy::new(Box::new(crate::studies::WilliamsR::new(2)));
         study.update_source(&bars, 0, &[f64::NAN, 14.0, 9.0]);
-        let (low, high) = fit(&study);
+        let (low, high) = fit(&study, 0..3);
         assert!(low < -80.0 && high > 50.0, "{low}..{high}");
     }
 }

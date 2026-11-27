@@ -497,6 +497,7 @@ impl DepthHistory {
 }
 
 /// Samples a book into columns on the grid of a [`DepthHistoryConfig`].
+#[derive(Clone)]
 pub(crate) struct Sampler {
     pub(crate) config: DepthHistoryConfig,
     /// Start of the period of the last update, whose sample is not taken yet.

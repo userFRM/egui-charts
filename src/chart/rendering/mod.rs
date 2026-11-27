@@ -44,6 +44,8 @@ pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 pub use grid::{render_grid, render_vertical_grid};
 pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::{paint_study_plot, triangle_centre};
+#[cfg(feature = "ui")]
+pub(crate) use legend::QuotePresets;
 pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
 pub(crate) use legend::{
     SeriesAction, calculation_text, controls_width, held_study_controls, price_change_text,

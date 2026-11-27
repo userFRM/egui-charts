@@ -121,6 +121,8 @@ pub struct TradingLines {
     pub outlined: Vec<usize>,
     /// The projected order whose submit button the user pressed.
     pub submitted: Option<OrderRequest>,
+    /// The new No overlap menu choice. Store it in [`TradingLineOptions::separate_labels`].
+    pub separate_labels: Option<bool>,
 }
 
 /// The appearance and permissions of one order's or position's line. Unset fields keep the
@@ -221,6 +223,14 @@ pub struct TradingLineOptions<'a> {
     pub line_length: f32,
     /// Horizontal placement of order and position labels.
     pub label_alignment: TradingLabelAlignment,
+    /// With `Some(true)`, separate order, bracket and position labels vertically by their
+    /// height and a 2-point gap, trying the nearest free row below before above. Positions
+    /// take rows before orders. Lines and price tags keep their prices, and moved labels
+    /// have leaders to their lines. Drags follow the pointer's travel while enabled.
+    /// With `Some`, label menus offer No overlap and [`TradingLines::separate_labels`]
+    /// reports changes for the host to store here. `None`, the default, keeps labels at
+    /// their prices and offers no switch.
+    pub separate_labels: Option<bool>,
     /// Treat the orders as projected, not yet placed: their entry lines are dashed and they offer
     /// a Buy or Sell submit button.
     pub submit: bool,
@@ -300,6 +310,7 @@ impl<'a> TradingLineOptions<'a> {
             line_width: 1.0,
             line_length: 0.0,
             label_alignment: TradingLabelAlignment::Right,
+            separate_labels: None,
             submit: false,
             modify: false,
             close: false,
@@ -458,7 +469,7 @@ pub fn render_trading_lines<'a>(
     let positions: Vec<_> = positions.into_iter().collect();
     let orders: Vec<_> = orders.into_iter().collect();
     let mut action = None;
-    let mut tags = Vec::new();
+    let mut so_far = Drawn::default();
     let mut outlined = Vec::new();
     let mut submitted = None;
 
@@ -476,7 +487,7 @@ pub fn render_trading_lines<'a>(
             options
                 .coverage
                 .then(|| position_coverage(position, &orders)),
-            &mut tags,
+            &mut so_far,
         );
         action = action.or(pressed);
     }
@@ -713,14 +724,14 @@ pub fn render_trading_lines<'a>(
                     && matches!(level, Level::Entry | Level::Limit))
                 .then_some(&menu as &dyn Fn(&mut Ui) -> Option<TradingLineAction>),
             };
-            let first_tag = tags.len();
+            let first_tag = so_far.tags.len();
             let (dragged, pressed, released, chosen) = ui
                 .push_id((level as u8, index), |ui| {
-                    label.show(ui, mapping, options, &line, &mut tags)
+                    label.show(ui, mapping, options, &line, &mut so_far)
                 })
                 .inner;
-            let drawn = tags.get(first_tag).map_or(price, |tag| tag.0);
-            if appearance == Level::Entry && tags.len() > first_tag {
+            let drawn = so_far.tags.get(first_tag).map_or(price, |tag| tag.0);
+            if appearance == Level::Entry && so_far.tags.len() > first_tag {
                 outlined.push(first_tag);
                 if level == Level::Entry {
                     parent_price = Some(drawn);
@@ -754,7 +765,7 @@ pub fn render_trading_lines<'a>(
             {
                 connector(ui, mapping, entry, drawn, entry_color);
             }
-            if tags.len() == first_tag {
+            if so_far.tags.len() == first_tag {
                 continue;
             }
             if let Some(chosen) = chosen {
@@ -841,9 +852,10 @@ pub fn render_trading_lines<'a>(
     }
     TradingLines {
         action,
-        tags,
+        tags: so_far.tags,
         outlined,
         submitted,
+        separate_labels: so_far.switched,
     }
 }
 
@@ -872,6 +884,48 @@ fn menu_entry(ui: &mut Ui, label: &str, enabled: bool, why: &str) -> bool {
     ui.add_enabled(enabled, egui::Button::new(l10n::text(ui.ctx(), label)))
         .on_disabled_hover_text(l10n::text(ui.ctx(), why))
         .clicked()
+}
+
+/// Shared state for the labels drawn in one renderer call.
+#[derive(Default)]
+struct Drawn {
+    tags: Vec<(f64, Color32)>,
+    rows: Vec<f32>,
+    switched: Option<bool>,
+}
+
+impl Drawn {
+    /// The nearest row clear of earlier labels, below before above; keep `y` if none fits.
+    fn row(&mut self, y: f32, pane: Rect, separate: bool) -> f32 {
+        if !separate {
+            return y;
+        }
+        const ROW: f32 = HEIGHT + 2.0;
+        // Each earlier label blocks at most two candidates. Search that many in each
+        // direction so a pane edge cannot hide free rows on the other side.
+        let row = (0..=2 * self.rows.len() as i32)
+            .flat_map(|k| [k, -k])
+            .map(|k| y + k as f32 * ROW)
+            .find(|&centre| {
+                pane.y_range().contains(centre)
+                    && self
+                        .rows
+                        .iter()
+                        .all(|other| (other - centre).abs() > HEIGHT)
+            })
+            .unwrap_or(y);
+        self.rows.push(row);
+        row
+    }
+}
+
+/// Offer the display switch only to hosts that store its returned state.
+fn overlap_switch(ui: &mut Ui, separate: Option<bool>) -> Option<bool> {
+    let mut on = separate?;
+    ui.separator();
+    ui.checkbox(&mut on, l10n::text(ui.ctx(), "No overlap"))
+        .changed()
+        .then_some(on)
 }
 
 /// The label menu of an order. `modify` and `cancel` are false when the order's own appearance
@@ -1288,7 +1342,7 @@ impl Label<'_> {
         mapping: &ChartMapping,
         options: &TradingLineOptions<'_>,
         line: &PriceLine,
-        tags: &mut Vec<(f64, Color32)>,
+        drawn: &mut Drawn,
     ) -> LabelResponse {
         let key = ui.scope_id().with(self.id);
         if !self.draggable {
@@ -1301,6 +1355,9 @@ impl Label<'_> {
         }
         // A tick can snap beyond the pane; keep its drag target reachable until release.
         let y = y.clamp(mapping.rect.top(), mapping.rect.bottom());
+        let separate = options.separate_labels == Some(true);
+        let row = drawn.row(y, mapping.rect, separate);
+        let shift = row - y;
         let font = FontId::proportional(ui.ctx().active_theme().text.ohlc);
         let painter = ui.painter().clone();
         let layout = |text: String, color| painter.layout_no_wrap(text, font.clone(), color);
@@ -1316,7 +1373,7 @@ impl Label<'_> {
         let group = total + exits_width;
         let inset = LABEL_INSET.min((mapping.rect.width() - group - 8.0).max(8.0));
         let mut x = options.label_alignment.left(mapping.rect, group, inset) + exits_width;
-        let rect = Rect::from_min_size(pos2(x, y - HEIGHT / 2.0), vec2(total, HEIGHT));
+        let rect = Rect::from_min_size(pos2(x, row - HEIGHT / 2.0), vec2(total, HEIGHT));
         let line_left = line_left(
             mapping.rect,
             rect.left(),
@@ -1328,7 +1385,10 @@ impl Label<'_> {
         let mut value = staged.unwrap_or(line.price);
         let grab = ui.interact(
             Rect::from_min_max(
-                pos2(line_left, rect.top()),
+                pos2(
+                    if shift == 0.0 { line_left } else { rect.left() },
+                    rect.top(),
+                ),
                 pos2(rect.max.x - HEIGHT * self.buttons.len() as f32, rect.max.y),
             )
             .intersect(mapping.rect),
@@ -1362,8 +1422,12 @@ impl Label<'_> {
             if grab.dragged_by(egui::PointerButton::Primary)
                 && let Some(pointer) = grab.interact_pointer_pos()
             {
-                let price =
-                    mapping.y_to_price(pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom()));
+                // A moved label sits away from its line, so its price follows the pointer's travel.
+                let y = match grab.total_drag_delta().filter(|_| separate) {
+                    Some(delta) => mapping.price_to_y(line.price) + delta.y,
+                    None => pointer.y,
+                };
+                let price = mapping.y_to_price(y.clamp(mapping.rect.top(), mapping.rect.bottom()));
                 value = TickGrid::new(options.tick_size, options.tick_tiers).snap(price);
                 if value.is_finite() {
                     ui.ctx().data_mut(|data| data.insert_temp(key, value));
@@ -1390,7 +1454,7 @@ impl Label<'_> {
             false,
             f32::INFINITY,
         );
-        tags.push((value, line.color));
+        drawn.tags.push((value, line.color));
         let node = pos2(mapping.rect.right() - NODE_INSET, mapping.price_to_y(value));
         clipped.circle(
             node,
@@ -1401,7 +1465,8 @@ impl Label<'_> {
 
         let y = mapping
             .price_to_y(value)
-            .clamp(mapping.rect.top(), mapping.rect.bottom());
+            .clamp(mapping.rect.top(), mapping.rect.bottom())
+            + shift;
         let rect = rect.translate(vec2(0.0, y - rect.center().y));
         let mut chosen = None;
         if let Some(menu) = self.menu {
@@ -1415,7 +1480,24 @@ impl Label<'_> {
             } else {
                 response
             };
-            response.context_menu(|ui| chosen = menu(ui));
+            response.context_menu(|ui| {
+                chosen = menu(ui);
+                if let Some(on) = overlap_switch(ui, options.separate_labels) {
+                    drawn.switched = Some(on);
+                }
+            });
+        }
+        if shift != 0.0 {
+            let x = rect.left() + 4.0;
+            let edge = if shift > 0.0 {
+                rect.top()
+            } else {
+                rect.bottom()
+            };
+            clipped.line_segment(
+                [pos2(x, y - shift), pos2(x, edge)],
+                Stroke::new(1.0, line.color),
+            );
         }
         let stroke = Stroke::new(1.0, self.label_color);
         clipped.rect(
@@ -1498,7 +1580,7 @@ impl Label<'_> {
             take_profit_hover_text: self.take_profit_hover_text,
             stop_loss_hover_text: self.stop_loss_hover_text,
         }
-        .show(ui, mapping, options, tags);
+        .show(ui, mapping, options, &mut drawn.tags);
         if let Some(side) = self.submit {
             let size = vec2(58.0, HEIGHT);
             let left = group_left - size.x - HEIGHT * 0.65;
@@ -2391,6 +2473,187 @@ mod tests {
         }
     }
 
+    /// Same-price labels keep the old layout by default; separated labels retain their own
+    /// buttons and dragging a moved label changes its price by the pointer's travel.
+    #[test]
+    fn no_overlap_moves_labels_at_one_price_apart() {
+        use egui_kittest::Harness;
+        struct State {
+            chart: crate::Chart,
+            action: Option<TradingLineAction>,
+        }
+        let orders = [("A", 1.0), ("B", 3.0)].map(|(id, quantity)| {
+            Order::new(
+                OrderId::new(id),
+                OrderRequest::new("SYM", OrderSide::Buy, quantity, OrderType::Limit(95.0)),
+                OrderStatus::Working,
+            )
+        });
+        let position = Position::new("SYM", 2.0, 95.0);
+        for (separate, at_top) in [
+            (None, false),
+            (Some(false), false),
+            (Some(true), false),
+            (Some(true), true),
+        ] {
+            let mut options = TradingLineOptions::new("USD", 0.01);
+            options.modify = true;
+            options.close = true;
+            options.separate_labels = separate;
+            let mut harness = Harness::builder()
+                .with_size(vec2(1000.0, 800.0))
+                // Empty chart space under a hovered label can write the missing-value marker.
+                .allow_missing_glyphs()
+                .build_ui_state(
+                    |ui, state: &mut State| {
+                        state.chart.show(ui);
+                        let mapping = state.chart.get_chart_mapping();
+                        let mut orders = orders.clone();
+                        let mut position = position.clone();
+                        if at_top {
+                            position.average_price = mapping.y_to_price(mapping.rect.top() + 5.0);
+                            for order in &mut orders {
+                                order.request.order_type =
+                                    OrderType::Limit(mapping.y_to_price(mapping.rect.top() + 0.25));
+                            }
+                        }
+                        let lines =
+                            render_trading_lines(ui, &mapping, &orders, [&position], &options);
+                        state.action = state.action.take().or(lines.action);
+                    },
+                    State {
+                        chart: crate::widget::test_frames::chart(&[90.0], &[115.0]),
+                        action: None,
+                    },
+                );
+            harness.run();
+            let mapping = harness.state().chart.get_chart_mapping();
+            let y0 = if at_top {
+                mapping.rect.top() + 0.25
+            } else {
+                mapping.price_to_y(95.0)
+            };
+            let color =
+                crate::theme::trading_side_color(&harness.ctx.active_theme(), OrderSide::Buy);
+            let rects: Vec<_> = harness
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect)
+                        if rect.rect.height() == 20.0
+                            && rect.stroke.width == 1.0
+                            && rect.stroke.color == color =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let centres = ["2", "1", "3"].map(|quantity| {
+                harness
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text)
+                            if text.galley.text() == quantity
+                                && rects.iter().any(|rect| {
+                                    rect.contains(
+                                        Rect::from_min_size(text.pos, text.galley.size()).center(),
+                                    )
+                                }) =>
+                        {
+                            Some(Rect::from_min_size(text.pos, text.galley.size()).center().y)
+                        }
+                        _ => None,
+                    })
+                    .expect("quantity on its label")
+            });
+            // Hand calculation: position takes 0, A takes +22, B takes -22.
+            let offsets = if at_top {
+                // The position at top + 5 blocks both top + 0.25 and top + 22.25.
+                // A takes top + 44.25, then B takes top + 66.25.
+                [4.75, 44.0, 66.0]
+            } else if separate == Some(true) {
+                [0.0, 22.0, -22.0]
+            } else {
+                [0.0; 3]
+            };
+            for (centre, offset) in centres.into_iter().zip(offsets) {
+                assert!(
+                    (centre - y0 - offset).abs() < 0.5,
+                    "{separate:?}: {centres:?}"
+                );
+            }
+            assert_eq!(rects.len(), 3);
+            if separate != Some(true) {
+                assert_eq!(rects[1], rects[2], "orders coincide by default");
+                assert!(rects.iter().all(|rect| (rect.center().y - y0).abs() < 0.5));
+                continue;
+            }
+            for i in 0..rects.len() {
+                for j in i + 1..rects.len() {
+                    assert!(!rects[i].intersects(rects[j]));
+                }
+            }
+            if at_top {
+                continue;
+            }
+            for (rect, expected) in [
+                (rects[1], TradingLineAction::Cancel(orders[0].clone())),
+                (rects[2], TradingLineAction::Cancel(orders[1].clone())),
+                (rects[0], TradingLineAction::Close(position.clone())),
+            ] {
+                harness.state_mut().action = None;
+                harness.run_steps(20);
+                let point = pos2(rect.right() - 10.0, rect.center().y);
+                harness.hover_at(point);
+                harness.run_steps(1);
+                for pressed in [true, false] {
+                    harness.event(egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                    harness.run_steps(1);
+                }
+                assert_eq!(harness.state().action, Some(expected));
+            }
+            harness.state_mut().action = None;
+            harness.run_steps(20);
+            let start = pos2(rects[2].left() + 6.0, y0 - 22.0);
+            harness.hover_at(start);
+            harness.run_steps(1);
+            harness.event(egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            });
+            harness.run_steps(1);
+            for dy in [10.0, 20.0, 30.0] {
+                harness.hover_at(start - vec2(0.0, dy));
+                harness.run_steps(1);
+            }
+            harness.event(egui::Event::PointerButton {
+                pos: start - vec2(0.0, 30.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            harness.run_steps(1);
+            let mut changed = orders[1].request.clone();
+            let price = (mapping.y_to_price(y0 - 30.0) * 100.0).round() / 100.0;
+            changed.order_type = OrderType::Limit(price);
+            assert_eq!(
+                harness.state().action,
+                Some(TradingLineAction::Modify(orders[1].clone(), changed))
+            );
+        }
+    }
+
     /// Label menus keep their actions, capability gates and explanations independent of buttons.
     #[test]
     fn label_menus_offer_what_the_account_supports() {
@@ -2407,6 +2670,7 @@ mod tests {
             point: Pos2,
             position_menu: bool,
             action: Option<TradingLineAction>,
+            separate: Option<bool>,
         }
         let full = Capabilities {
             limit: true,
@@ -2418,7 +2682,7 @@ mod tests {
             position_exits: true,
             ..Capabilities::default()
         };
-        for row in 0..25 {
+        for row in 0..27 {
             let mut capabilities = full;
             match row {
                 5 | 24 => capabilities.modify = false,
@@ -2474,8 +2738,9 @@ mod tests {
                 position: position.clone(),
                 capabilities: (row != 0).then_some(capabilities),
                 point: Pos2::ZERO,
-                position_menu: (8..=14).contains(&row) || (22..=23).contains(&row),
+                position_menu: (8..=14).contains(&row) || (22..=23).contains(&row) || row == 26,
                 action: None,
+                separate: None,
             };
             let mut harness = Harness::builder()
                 .with_size(vec2(1000.0, 800.0))
@@ -2490,6 +2755,11 @@ mod tests {
                         let mut options = TradingLineOptions::new("USD", 0.01);
                         options.label_alignment = TradingLabelAlignment::Left;
                         options.menu = state.capabilities;
+                        options.separate_labels = match row {
+                            25 => Some(false),
+                            26 => Some(true),
+                            _ => None,
+                        };
                         options.modify = row == 15;
                         let mut look = TradingLineAppearance::default();
                         match row {
@@ -2519,6 +2789,7 @@ mod tests {
                             &options,
                         );
                         state.action = state.action.take().or(lines.action);
+                        state.separate = state.separate.or(lines.separate_labels);
                     },
                     state,
                 );
@@ -2540,6 +2811,18 @@ mod tests {
                 harness.state().action.is_none(),
                 "secondary click changed row {row}"
             );
+            assert_eq!(
+                harness.query_by_label("No overlap").is_some(),
+                (25..=26).contains(&row),
+                "row {row}"
+            );
+            if (25..=26).contains(&row) {
+                harness.get_by_label("No overlap").click();
+                harness.run();
+                assert_eq!(harness.state().separate, Some(row == 25));
+                assert!(harness.state().action.is_none());
+                continue;
+            }
             let (label, why) = match row {
                 0 => ("Cancel order", None),
                 1 | 5 | 24 => (
@@ -2897,6 +3180,7 @@ mod tests {
                     line_width: 1.0,
                     line_length: 0.0,
                     label_alignment: TradingLabelAlignment::Right,
+                    separate_labels: None,
                     submit,
                     modify: false,
                     close: false,

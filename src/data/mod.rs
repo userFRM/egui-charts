@@ -125,7 +125,7 @@ pub use orders::{
     RestingOrder,
 };
 pub use recording::{RecordingReader, RecordingWriter};
-pub use replay::{MarketEvent, ReplayClock, ReplayDriver, ReplayEvent};
+pub use replay::{MarketEvent, ReplayCheckpointStats, ReplayClock, ReplayDriver, ReplayEvent};
 #[cfg(feature = "studies")]
 pub(crate) use resample::resample_periods;
 pub use resample::{resample, resample_with_session, resample_with_session_hours};

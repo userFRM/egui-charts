@@ -602,7 +602,8 @@ impl Chart {
     }
 
     /// The rising and falling body colours of the main series: Heikin-Ashi, hollow and volume
-    /// candles keep their own, other chart types use the chart configuration.
+    /// candles keep their own, Kagi, Point and Figure and Range their own or, saved without them,
+    /// the candle colours; other chart types use the chart configuration.
     pub(in crate::widget) fn main_body_colors(&self) -> (Color32, Color32) {
         let styles = &self.chart_type_params.styles;
         match self.chart_type {
@@ -612,11 +613,11 @@ impl Chart {
                 styles.volume_candles.body_up,
                 styles.volume_candles.body_down,
             ),
-            ChartType::Kagi | ChartType::PointAndFigure => {
-                let (up, down) = if self.chart_type == ChartType::Kagi {
-                    (styles.kagi.up_color, styles.kagi.down_color)
-                } else {
-                    (styles.point_figure.up_color, styles.point_figure.down_color)
+            ChartType::Kagi | ChartType::PointAndFigure | ChartType::Range => {
+                let (up, down) = match self.chart_type {
+                    ChartType::Kagi => (styles.kagi.up_color, styles.kagi.down_color),
+                    ChartType::Range => (styles.range.up_color, styles.range.down_color),
+                    _ => (styles.point_figure.up_color, styles.point_figure.down_color),
                 };
                 (
                     crate::model::or_candle(up, self.config.bullish_color),
@@ -630,7 +631,8 @@ impl Chart {
     /// The main series' last-value colour for the bar at `index` of `bars`: the price line
     /// colour, the bar's own colour, or its direction. Columns, hollow candles, and candles,
     /// volume candles and OHLC bars coloured by the previous close, take the direction their
-    /// painters give the bar; Columns take their column colour at full opacity.
+    /// painters give the bar; Columns follow their previous close switch and take their column
+    /// colour at full opacity.
     pub(in crate::widget) fn main_value_color(&self, bars: &[Bar], index: usize) -> Color32 {
         let styles = &self.chart_type_params.styles;
         let (up, down) = match self.chart_type {
@@ -665,7 +667,8 @@ impl Chart {
         };
         let bar = &bars[index];
         let by_previous_close = match self.chart_type {
-            ChartType::HollowCandles | ChartType::Columns => true,
+            ChartType::HollowCandles => true,
+            ChartType::Columns => styles.columns.color_by_previous_close,
             ChartType::Candles => styles.candles.color_by_previous_close,
             ChartType::VolumeCandles => styles.volume_candles.color_by_previous_close,
             ChartType::Bars => styles.bars.color_by_previous_close,

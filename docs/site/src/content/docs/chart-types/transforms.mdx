@@ -75,7 +75,7 @@ These main renderers share the parameter workflow above:
 | --- | --- | --- |
 | `Kagi` | Close by default, or `kagi_source` high/low; `kagi_reversal` in price units and `kagi_size_method` | `styles.kagi` thick and thin line widths and colours, `up_color` for thick lines and `down_color` for thin ones; [`KagiConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/kagi/struct.KagiConfig.html) |
 | `LineBreak` | Close by default, or `line_break_source` high/low; `line_break_count` reversal lookback, 1 to 10 | Chart up/down colours, and `styles.line_break` borders, hidden or in rising and falling colours of their own; [`LineBreakConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/line_break/struct.LineBreakConfig.html) |
-| `Range` | Retained executions in order, after the OHLC path approximation of the bars before the one holding the first retained trade, or that approximation alone when no trades are held; `range_size` and `range_size_method` | Chart up/down colours; `styles.range` thin bars, phantom bars that outline the bars a move across a price gap closed without a trade, and `forming_up` and `forming_down`, the colours of the bar in progress; [`RangeBarSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/enum.RangeBarSource.html), [`RangeBarConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/struct.RangeBarConfig.html) |
+| `Range` | Retained executions in order, after the OHLC path approximation of the bars before the one holding the first retained trade, or that approximation alone when no trades are held; `range_size` and `range_size_method` | `styles.range` `up_color` and `down_color`, the colours of completed bars; thin bars, on by default, or bold OHLC bars that widen with the bar spacing; phantom bars that outline the bars a move across a price gap closed without a trade, and `forming_up` and `forming_down`, the colours of the bar in progress; [`RangeBarSource`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/enum.RangeBarSource.html), [`RangeBarConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/range_bar/struct.RangeBarConfig.html) |
 
 [`ChartTypeParams`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html)
 holds all these fields. For high/low input, intrabar order is unknown: continuation
@@ -112,10 +112,11 @@ to apply a copy of the current parameters, preserving unrelated styles.
 Main transform colours and dimensions come from
 [`ChartConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html);
 Kagi has separate [`KagiStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.KagiStyle.html)
-stroke widths and colours, Point and Figure its own column colours, and Renko
-its wick switch, borders and wick colours. The Kagi and Point and Figure colours
-follow the theme while unedited, and documents saved before they existed draw
-these types in their candle body colours. The main candle style switches
+stroke widths and colours, Point and Figure its own column colours, Range its own
+bar colours, and Renko its wick switch, borders and wick colours. The Kagi, Point
+and Figure and Range colours follow the theme while unedited, and documents
+saved before they existed draw these types in their candle body colours; Range
+styles saved before bold bars keep their filled blocks. The main candle style switches
 are specific to `Candles`; they are not universal transform settings.
 
 Renko, Kagi, Line Break, Point and Figure, and Range have one time-scale slot per
