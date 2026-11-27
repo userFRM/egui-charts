@@ -680,11 +680,13 @@ fn fill_placeholders(message: &str, mut field: impl FnMut(&str) -> Option<String
 /// Each variant states its rule so that a host and a server evaluate it alike. Levels are finite
 /// and in the symbol's price units.
 ///
-/// On the price, the crossing, above and below rules, also against a drawing in
-/// [`Compare`](Self::Compare), read every price known to have traded since the alert's previous
-/// evaluation: the close, and the high and low of the bars received where they moved past what
-/// that evaluation saw. A level reached and left between two evaluations therefore counts. The
-/// first evaluation, and an alert at bar close, read the close alone.
+/// On the price, the crossing, above, below and channel rules, also against a drawing in
+/// [`Compare`](Self::Compare) and between two drawings in [`Channel`](Self::Channel), read every
+/// price known to have traded since the alert's previous evaluation: the close, and the high and
+/// low of the bars received where they moved past what that evaluation saw. A level or boundary
+/// reached and left between two evaluations therefore counts, and a channel can then be both
+/// inside and outside on one evaluation. The first evaluation, and an alert at bar close, read
+/// the close alone.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertCondition {
@@ -713,30 +715,30 @@ pub enum AlertCondition {
     Above(f64),
     /// A price since the previous evaluation is below the level.
     Below(f64),
-    /// Previous value was outside the inclusive channel, current value is inside it.
+    /// The previous value was outside the inclusive channel and a value since is inside it.
     EnteringChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
         /// Inclusive upper boundary.
         upper: f64,
     },
-    /// Previous value was inside the inclusive channel, current value is outside it.
+    /// The previous value was inside the inclusive channel and a value since is outside it.
     ExitingChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
         /// Inclusive upper boundary.
         upper: f64,
     },
-    /// The current value is inside the inclusive channel, `lower <= value <= upper`, whatever the
-    /// previous value was.
+    /// A value since the previous evaluation is inside the inclusive channel,
+    /// `lower <= value <= upper`, whatever the previous value was.
     InsideChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
         /// Inclusive upper boundary.
         upper: f64,
     },
-    /// The current value is outside the inclusive channel, below `lower` or above `upper`,
-    /// whatever the previous value was.
+    /// A value since the previous evaluation is outside the inclusive channel, below `lower` or
+    /// above `upper`, whatever the previous value was.
     OutsideChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
@@ -773,7 +775,9 @@ pub enum AlertCondition {
     /// order; their minimum and maximum define the inclusive channel. Missing, non-finite or
     /// coincident boundaries cannot satisfy the condition. On a new bar, transitions resolve the
     /// source and both boundaries at the preceding bar again. Within a bar they compare with the
-    /// previous evaluation, just as a crossing does.
+    /// previous evaluation, just as a crossing does. Between two drawings the price reads every
+    /// price traded since the previous evaluation; a study boundary is known only at the close,
+    /// so a channel with one reads the close.
     Channel {
         /// Stable sources of the two boundary lines, retained through drawing edits and storage.
         boundaries: Box<[AlertSource; 2]>,
@@ -1036,13 +1040,13 @@ pub enum AlertComparison {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertChannelComparison {
-    /// Previously outside, currently inside.
+    /// Previously outside, and a value since is inside.
     Entering,
-    /// Previously inside, currently outside.
+    /// Previously inside, and a value since is outside.
     Exiting,
-    /// Currently inside, regardless of the previous value.
+    /// A value since the previous evaluation is inside, regardless of the previous value.
     Inside,
-    /// Currently outside, regardless of the previous value.
+    /// A value since the previous evaluation is outside, regardless of the previous value.
     Outside,
 }
 

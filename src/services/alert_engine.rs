@@ -1666,12 +1666,19 @@ fn condition_holds(
         ),
         AlertCondition::Above(level) => traded[1] > *level,
         AlertCondition::Below(level) => traded[0] < *level,
-        AlertCondition::EnteringChannel { lower, upper } => previous
-            .is_some_and(|p| (p < *lower || p > *upper) && value >= *lower && value <= *upper),
-        AlertCondition::ExitingChannel { lower, upper } => previous
-            .is_some_and(|p| p >= *lower && p <= *upper && (value < *lower || value > *upper)),
-        AlertCondition::InsideChannel { lower, upper } => value >= *lower && value <= *upper,
-        AlertCondition::OutsideChannel { lower, upper } => value < *lower || value > *upper,
+        AlertCondition::EnteringChannel { lower, upper }
+        | AlertCondition::ExitingChannel { lower, upper }
+        | AlertCondition::InsideChannel { lower, upper }
+        | AlertCondition::OutsideChannel { lower, upper } => {
+            let comparison = match condition {
+                AlertCondition::EnteringChannel { .. } => AlertChannelComparison::Entering,
+                AlertCondition::ExitingChannel { .. } => AlertChannelComparison::Exiting,
+                AlertCondition::InsideChannel { .. } => AlertChannelComparison::Inside,
+                _ => AlertChannelComparison::Outside,
+            };
+            let was_inside = previous.map(|p| p >= *lower && p <= *upper);
+            channel(comparison, traded, was_inside, [*lower, *upper])
+        }
         AlertCondition::MovingBy {
             value: change,
             bars: back,
@@ -1693,26 +1700,31 @@ fn condition_holds(
             other[0]
                 .is_some_and(|level| compare(*comparison, traded, previous, level, previous_other))
         }
-        AlertCondition::Channel { comparison, .. } => {
-            let inside = |value: f64, a: f64, b: f64| {
-                (a != b).then_some(value >= a.min(b) && value <= a.max(b))
-            };
-            let Some(current) = other[0]
-                .zip(other[1])
-                .and_then(|(a, b)| inside(value, a, b))
-            else {
+        AlertCondition::Channel {
+            boundaries,
+            comparison,
+        } => {
+            let bounds = |a: f64, b: f64| (a != b).then_some([a.min(b), a.max(b)]);
+            let Some(current) = other[0].zip(other[1]).and_then(|(a, b)| bounds(a, b)) else {
                 return false;
             };
-            let previous = previous
-                .zip(previous_other)
-                .zip(previous_second)
-                .and_then(|((value, a), b)| inside(value, a, b));
-            match comparison {
-                AlertChannelComparison::Entering => previous == Some(false) && current,
-                AlertChannelComparison::Exiting => previous == Some(true) && !current,
-                AlertChannelComparison::Inside => current,
-                AlertChannelComparison::Outside => !current,
-            }
+            let was_inside =
+                previous
+                    .zip(previous_other)
+                    .zip(previous_second)
+                    .and_then(|((value, a), b)| {
+                        bounds(a, b).map(|[low, high]| value >= low && value <= high)
+                    });
+            // Drawings do not follow the price, so the range traded meets them.
+            let traded = if boundaries
+                .iter()
+                .all(|b| matches!(b, AlertSource::Drawing(_)))
+            {
+                traded
+            } else {
+                [value, value]
+            };
+            channel(*comparison, traded, was_inside, current)
         }
         AlertCondition::Position { progress, .. } => {
             let [Some(entry), Some(target), Some(stop)] = other else {
@@ -1746,6 +1758,26 @@ fn condition_holds(
                 / n as f64;
             mean.is_finite() && bars[bars.len() - 1].volume > multiplier * mean
         }
+    }
+}
+
+/// Whether `comparison` holds for a value that traded between `low` and `high` since the
+/// previous one, which `was_inside` tells was inside the inclusive channel from `lower` to
+/// `upper`, if known. The range is inside when it reaches the channel and outside when it passes
+/// either boundary, so a wick out of the channel and back is both.
+fn channel(
+    comparison: AlertChannelComparison,
+    [low, high]: [f64; 2],
+    was_inside: Option<bool>,
+    [lower, upper]: [f64; 2],
+) -> bool {
+    let inside = low <= upper && high >= lower;
+    let outside = low < lower || high > upper;
+    match comparison {
+        AlertChannelComparison::Entering => was_inside == Some(false) && inside,
+        AlertChannelComparison::Exiting => was_inside == Some(true) && outside,
+        AlertChannelComparison::Inside => inside,
+        AlertChannelComparison::Outside => outside,
     }
 }
 
@@ -3926,9 +3958,10 @@ mod tests {
         assert_eq!(triggers(&host), []);
     }
 
-    /// A price level reached and left between two evaluations fires from the high or low the bar
-    /// recorded, but a high or low the previous evaluation saw, or one made before the alert was
-    /// saved, does not. Alerts at bar close, study sources and study partners read the close.
+    /// A price level or channel boundary reached and left between two evaluations fires from the
+    /// high or low the bar recorded, but a high or low the previous evaluation saw, or one made
+    /// before the alert was saved, does not. Alerts at bar close, study sources, study partners and
+    /// study boundaries read the close.
     #[test]
     fn price_levels_reached_between_evaluations_fire_from_the_traded_range() {
         type RangeRow = (
@@ -3968,7 +4001,7 @@ mod tests {
                 bar(2, 99.0, 1.0),
             ],
         ];
-        let rows: Vec<RangeRow> = vec![
+        let mut rows: Vec<RangeRow> = vec![
             (
                 up.clone(),
                 price.clone(),
@@ -4066,7 +4099,70 @@ mod tests {
                 vec![2],
             ),
         ];
+        // A wick across a channel boundary with the close back where it started, on a fixed
+        // channel from 100 to 110 and on one between drawings at 100 and 110.
+        let drawn = |comparison| AlertCondition::Channel {
+            boundaries: Box::new(["line", "upper"].map(|id| AlertSource::Drawing(id.into()))),
+            comparison,
+        };
+        let (lower, upper) = (100.0, 110.0);
+        let (out, back_in) = (
+            same_bar(105.0, 112.0, 105.0, 105.5),
+            same_bar(95.0, 103.0, 95.0, 95.5),
+        );
+        for (fixed, comparison, updates) in [
+            (
+                AlertCondition::EnteringChannel { lower, upper },
+                AlertChannelComparison::Entering,
+                &back_in,
+            ),
+            (
+                AlertCondition::InsideChannel { lower, upper },
+                AlertChannelComparison::Inside,
+                &back_in,
+            ),
+            (
+                AlertCondition::ExitingChannel { lower, upper },
+                AlertChannelComparison::Exiting,
+                &out,
+            ),
+            (
+                AlertCondition::OutsideChannel { lower, upper },
+                AlertChannelComparison::Outside,
+                &out,
+            ),
+        ] {
+            for condition in [fixed, drawn(comparison)] {
+                rows.push((
+                    condition,
+                    AlertSource::Price,
+                    AlertFrequency::EveryTime,
+                    false,
+                    updates.clone(),
+                    vec![1],
+                ));
+            }
+        }
+        // A study boundary is known only at the close.
+        rows.push((
+            AlertCondition::Channel {
+                boundaries: Box::new([
+                    AlertSource::Study {
+                        id: "s".into(),
+                        output: 0,
+                    },
+                    AlertSource::Drawing("upper".into()),
+                ]),
+                comparison: AlertChannelComparison::Exiting,
+            },
+            AlertSource::Price,
+            AlertFrequency::EveryTime,
+            false,
+            out,
+            vec![],
+        ));
         let value = |source: &AlertSource, _| match source {
+            AlertSource::Drawing(id) if id == "upper" => Some(110.0),
             AlertSource::Drawing(_) => Some(100.0),
             AlertSource::Study { .. } => Some(99.5),
             _ => None,
