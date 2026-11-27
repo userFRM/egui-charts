@@ -59,6 +59,9 @@ pub struct StudyInput {
     pub default: InputValue,
     /// Accepted values, used to build the editor.
     pub kind: InputKind,
+    /// Number input increment per arrow key press and drag point; `None` uses 0.1.
+    /// Values between steps stay accepted.
+    pub step: Option<f64>,
     /// Edited in the Style tab; saved and applied like any other input.
     pub style: bool,
     /// The choice or toggle input this one applies with and its accepted values (0/1 for a
@@ -83,6 +86,7 @@ impl StudyInput {
             default: value.clone(),
             value,
             kind,
+            step: None,
             style: false,
             shown_when: None,
             confirm: false,
@@ -98,6 +102,13 @@ impl StudyInput {
     /// Set the declared default independently of the current value.
     pub fn with_default(mut self, value: InputValue) -> Self {
         self.default = value;
+        self
+    }
+
+    /// Set a number input's arrow and drag increment. A non-finite or non-positive step
+    /// restores the default increment of 0.1.
+    pub fn with_step(mut self, step: f64) -> Self {
+        self.step = (step.is_finite() && step > 0.0).then_some(step);
         self
     }
 
@@ -191,10 +202,12 @@ pub(crate) fn upgrade_saved_value(kind: &InputKind, value: InputValue) -> InputV
 
 /// `input` with its range widened to the value it holds, so that a study restored with a value
 /// saved before its range narrowed shows and applies that value until it is edited.
-#[cfg(feature = "studies")]
 pub(crate) fn holding(mut input: StudyInput) -> StudyInput {
     match (&mut input.kind, &input.value) {
         (InputKind::Length(min, max), InputValue::Length(value)) => {
+            (*min, *max) = ((*min).min(*value), (*max).max(*value));
+        }
+        (InputKind::Integer(min, max), InputValue::Integer(value)) => {
             (*min, *max) = ((*min).min(*value), (*max).max(*value));
         }
         (InputKind::Number(min, max), InputValue::Number(value)) if value.is_finite() => {
@@ -222,7 +235,6 @@ pub(crate) fn restoring<R>(saved: Vec<(String, InputValue)>, restore: impl FnOnc
 }
 
 /// Whether a study being restored takes `value` for input `id` as saved, from [`restoring`].
-#[cfg(feature = "studies")]
 pub(crate) fn restores(id: &str, value: &InputValue) -> bool {
     RESTORED.with_borrow(|saved| {
         saved
@@ -269,6 +281,10 @@ macro_rules! input_spec {
             crate::studies::InputValue::Number($value as f64),
             crate::studies::InputKind::Number($min, $max),
         )
+    };
+    ($id:expr, $value:expr, number($label:expr, $min:expr, $max:expr, $step:expr)) => {
+        crate::studies::inputs::input_spec!($id, $value, number($label, $min, $max))
+            .with_step($step)
     };
     ($id:expr, $value:expr, choice($label:expr, $choices:expr)) => {{
         let choices = $choices;
@@ -383,8 +399,9 @@ macro_rules! study_inputs {
         }
 
         fn set_input(&mut $this, id: &str, value: crate::studies::InputValue) -> Result<(), crate::studies::StudyError> {
-            let schema = $this.inputs().into_iter().find(|input| input.id == id).ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
-            if !schema.accepts(&value) && !crate::studies::inputs::restores(id, &value) { return Err(crate::studies::StudyError::invalid_input(id)); }
+            // Validate edits against the declaration, keeping an unchanged saved value.
+            let schema = [$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))),+].into_iter().find(|input| input.id == id).ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
+            if value != schema.value && !schema.accepts(&value) && !crate::studies::inputs::restores(id, &value) { return Err(crate::studies::StudyError::invalid_input(id)); }
             match id {
                 $(stringify!($field $([$index])?) => { $this.$field $([$index])? = crate::studies::inputs::input_assign!(value, $kind($($args),*)); }),+
                 _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),

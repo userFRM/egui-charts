@@ -331,6 +331,10 @@ impl Indicator for VolumeWeightedAvgPrice {
         ))
     }
 
+    fn offset_range(&self) -> std::ops::RangeInclusive<i32> {
+        0..=i32::MAX
+    }
+
     fn inputs(&self) -> Vec<crate::studies::StudyInput> {
         use crate::studies::{InputKind, InputValue, StudyInput};
         let mut inputs = vec![

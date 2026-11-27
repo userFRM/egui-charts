@@ -118,6 +118,23 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
     old_input.inputs = vec![("multiplier".into(), InputValue::Number(3.0))];
     let mut replacement = defaults.clone();
     replacement.settings.plots[0].width = 6.0;
+    let invalid_saved_inputs = [
+        ("C2C Vol", "period", InputValue::Number(2.0)),
+        ("Vortex", "period", InputValue::Integer(2)),
+        ("ASI", "limit_move", InputValue::Integer(2)),
+        ("Volatility Stop", "length", InputValue::Number(2.0)),
+        ("Volatility Stop", "multiplier", InputValue::Integer(2)),
+        ("Advance/Decline", "period", InputValue::Number(2.0)),
+        ("C2C Vol", "trading_days", InputValue::Number(f64::INFINITY)),
+        ("ASI", "limit_move", InputValue::Number(f64::INFINITY)),
+        ("VWAP", "plot_offset", InputValue::Number(2.0)),
+        ("VWMA", "plot_offset", InputValue::Length(2)),
+    ]
+    .map(|(name, id, value)| {
+        let mut template = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+        template.inputs = vec![(id.into(), value)];
+        template
+    });
     for template in [
         unknown_name,
         unknown_input,
@@ -126,7 +143,11 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
         precision,
         width,
         plots,
-    ] {
+    ]
+    .into_iter()
+    .chain(invalid_saved_inputs)
+    {
+        assert!(template.create_with(&factory).is_err(), "{}", template.name);
         assert!(
             factory
                 .set_defaults(&[replacement.clone(), template])
@@ -250,10 +271,11 @@ fn every_study_styles_a_line_past_its_last() {
 
 /// Catalogue studies have distinct values except ADX and DMI, which expose the same Wilder
 /// components in a different order, and Donchian and Price Channel, which draw the same highest
-/// high, lowest low and midpoint with their own colours and fill. Fixed profiles use a saved end.
-/// Single candlestick patterns are left out.
+/// high, lowest low and midpoint with their own colours and fill. Close-to-Close and Historical
+/// Volatility both annualize a ten-return sample deviation by default. Fixed profiles use a
+/// saved end. Single candlestick patterns are left out.
 #[test]
-fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
+fn catalogue_studies_are_distinct_except_shared_formulas() {
     use crate::model::Bar;
     use chrono::{TimeZone, Utc};
 
@@ -355,7 +377,14 @@ fn catalogue_studies_are_distinct_except_adx_dmi_and_donchian_price_channel() {
             duplicates.push(format!("{first} and {name}"));
         }
     }
-    assert_eq!(duplicates, ["ADX and DMI", "Donchian and Price Channel"]);
+    assert_eq!(
+        duplicates,
+        [
+            "ADX and DMI",
+            "C2C Vol and HV",
+            "Donchian and Price Channel"
+        ]
+    );
 }
 
 /// The study browser opens these studies with the lengths and switches most often used for them.
@@ -378,6 +407,11 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("TRIX", "period", Length(18)),
         ("CMO", "period", Length(9)),
         ("HV", "period", Length(10)),
+        ("C2C Vol", "period", Length(10)),
+        ("GK Vol", "period", Length(10)),
+        ("Zero-Trend Vol", "period", Length(10)),
+        ("ASI", "limit_move", Number(10.0)),
+        ("Volatility Stop", "source", Choice(3)),
         ("TSI", "signal_period", Length(13)),
         ("Correlation Coefficient", "length", Length(20)),
         ("Correlation - Log", "length", Length(25)),
@@ -423,10 +457,11 @@ fn catalogue_studies_open_with_their_usual_lengths() {
 }
 
 /// These studies label their inputs as the studies are usually labelled and accept exactly
-/// their usual range, through `set_input`, the Inputs tab and the strategies built on them.
+/// their usual range, through `set_input`, the Inputs tab, the chart's Offset and the strategies
+/// built on them.
 #[test]
 fn catalogue_inputs_take_their_usual_labels_and_ranges() {
-    use crate::studies::InputValue::{self, Length, Number};
+    use crate::studies::InputValue::{self, Integer, Length, Number};
     type Row = (
         &'static str,
         &'static str,
@@ -522,10 +557,100 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
                 (Number(50.5), false),
             ],
         ),
+        (
+            "Vortex",
+            "period",
+            "Length",
+            vec![(Length(1), false), (Length(2), true)],
+        ),
+        (
+            "C2C Vol",
+            "period",
+            "Period",
+            vec![(Length(1), false), (Length(2), true)],
+        ),
+        (
+            "C2C Vol",
+            "trading_days",
+            "Trading days per year",
+            vec![
+                (Number(0.0), false),
+                (Number(1.0), true),
+                (Number(366.0), true),
+                (Number(366.5), false),
+            ],
+        ),
+        (
+            "Volatility Stop",
+            "length",
+            "Length",
+            vec![(Length(1), false), (Length(2), true)],
+        ),
+        (
+            "Volatility Stop",
+            "multiplier",
+            "Multiplier",
+            vec![
+                (Number(0.2), false),
+                (Number(0.25), true),
+                (Number(2.1), true),
+                (Number(1000.0), true),
+            ],
+        ),
+        ("Volatility Stop", "source", "Source", vec![]),
+        (
+            "ASI",
+            "limit_move",
+            "Limit move",
+            vec![
+                (Number(0.09), false),
+                (Number(0.1), true),
+                (Number(100000.0), true),
+                (Number(100001.0), false),
+            ],
+        ),
+        (
+            "Advance/Decline",
+            "period",
+            "Length",
+            vec![
+                (Length(0), false),
+                (Length(1), true),
+                (Length(2000), true),
+                (Length(2001), false),
+            ],
+        ),
+        (
+            "VWAP",
+            "plot_offset",
+            "Offset",
+            vec![
+                (Integer(-1), false),
+                (Integer(0), true),
+                (Integer(500), true),
+            ],
+        ),
+        (
+            "VWMA",
+            "plot_offset",
+            "Offset",
+            vec![
+                (Integer(-501), false),
+                (Integer(-500), true),
+                (Integer(500), true),
+                (Integer(501), false),
+            ],
+        ),
+        (
+            "SMA",
+            "plot_offset",
+            "Offset",
+            vec![(Integer(-600), true), (Integer(600), true)],
+        ),
     ];
     let factory = IndicatorFactory::new();
     for (name, id, label, values) in rows {
-        let mut study = factory.create(name).unwrap();
+        let mut study = ConfiguredStudy::new(factory.create(name).unwrap());
         let listed = study.inputs().into_iter().find(|input| input.id == id);
         assert_eq!(
             listed.map(|input| input.label),
@@ -538,6 +663,49 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
                 accepted,
                 "{name} {id} {value:?}"
             );
+        }
+    }
+    // Saved templates and factory defaults can return a study already configured for a chart.
+    for (name, min, max, rejected) in [
+        ("VWAP", 0, i32::MAX, vec![-1]),
+        ("VWMA", -500, 500, vec![-501, 501]),
+        ("SMA", i32::MIN, i32::MAX, vec![]),
+    ] {
+        let mut factory = IndicatorFactory::new();
+        let template = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+        factory
+            .set_defaults(std::slice::from_ref(&template))
+            .unwrap();
+        for configured in [
+            Box::new(ConfiguredStudy::new(
+                IndicatorFactory::new().create(name).unwrap(),
+            )) as Box<dyn Indicator>,
+            template.create().unwrap(),
+            factory.create(name).unwrap(),
+        ] {
+            assert_eq!(configured.offset_range(), min..=max, "{name}");
+            let mut study = ConfiguredStudy::new(configured);
+            assert_eq!(study.offset_range(), min..=max, "{name} wrapped");
+            let offset = study
+                .inputs()
+                .into_iter()
+                .rev()
+                .find(|input| input.id == "plot_offset")
+                .unwrap();
+            assert!(
+                matches!(offset.kind, InputKind::Integer(lower, upper) if (lower, upper) == (min, max)),
+                "{name}: {:?}",
+                offset.kind
+            );
+            for value in &rejected {
+                assert!(
+                    study.set_input("plot_offset", Integer(*value)).is_err(),
+                    "{name} {value}"
+                );
+            }
+            for value in [min, max] {
+                study.set_input("plot_offset", Integer(value)).unwrap();
+            }
         }
     }
     // The strategies built on these studies take the studies' inputs.
@@ -986,4 +1154,17 @@ fn catalogue_choices_read_in_words_and_restore() {
         choice(restored.as_ref(), "basis"),
         Some((0, Some("SMA".to_owned())))
     );
+}
+
+/// Vortex keeps distinct four-decimal readings unless a study precision overrides them.
+#[test]
+fn catalogue_studies_read_in_their_usual_units() {
+    let factory = IndicatorFactory::new();
+    for (precision, expected) in [(None, "1.0473"), (Some(2), "1.05")] {
+        let mut study = ConfiguredStudy::new(factory.create("Vortex").unwrap());
+        let mut settings = study.settings();
+        settings.precision = precision;
+        study.apply_settings(&[], settings).unwrap();
+        assert_eq!(study.format_value(1.0473), expected);
+    }
 }
