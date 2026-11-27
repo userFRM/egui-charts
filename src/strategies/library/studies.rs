@@ -2,7 +2,7 @@
 //! reads the trend of its SAR on those bars. A crossing requires a strict inequality now and the
 //! opposite inequality or equality one bar ago.
 
-use super::{StrategyFactory, length, number, number_input, set_input, timeframe};
+use super::{StrategyFactory, number, number_input, set_input, timeframe};
 use crate::model::{Bar, OrderSide, OrderType, PriceSource, StudySource, Timeframe};
 use crate::strategies::{OrderSize, Strategy, StrategyContext};
 use crate::studies::{
