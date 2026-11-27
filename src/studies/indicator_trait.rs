@@ -444,8 +444,9 @@ pub trait Indicator: Send + ConcreteStudy {
     }
 
     /// Optional text beside the shape a circle, cross, triangle or character plot draws at a
-    /// source bar: beyond a triangle drawn beside its value, otherwise under an upward triangle
-    /// and over the other shapes, in the shape's colour.
+    /// source bar: beyond its value on the side [`plot_shape_side`](Self::plot_shape_side)
+    /// names, otherwise under an upward triangle and over the other shapes, in the shape's
+    /// colour. A character plot keeps its text over the character.
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
         let _ = (line, bar);
         None
@@ -466,7 +467,8 @@ pub trait Indicator: Send + ConcreteStudy {
     /// [`ShapeSide::Below`](super::ShapeSide::Below), and each triangle is drawn a small gap
     /// beyond its value, whichever way it points. Other plot types stay centred.
     /// [`ShapeSide::Centred`](super::ShapeSide::Centred), the default, centres each triangle on
-    /// its value.
+    /// its value. The text of [`plot_text`](Self::plot_text) goes beyond the value on the same
+    /// side, for every shape.
     fn plot_shape_side(&self, line: usize) -> super::ShapeSide {
         let _ = line;
         super::ShapeSide::Centred
