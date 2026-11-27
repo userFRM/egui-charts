@@ -1570,6 +1570,8 @@ fn run_errors_keep_the_bars_before_them() {
         assert_eq!(line.len(), fixture.len(), "{source}");
         assert!(same(&line[..bar], &closes), "{source}");
         assert!(line[bar..].iter().all(|value| value.is_nan()), "{source}");
+        // A layout check builds a study and calculates it on no bars, which keeps the error.
+        calculated(&script, &[]);
         assert_eq!(script.last_error(), Some(error), "{source}");
     }
 }
