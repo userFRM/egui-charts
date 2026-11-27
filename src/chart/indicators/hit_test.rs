@@ -179,7 +179,7 @@ where
         plot.width = coords.volume_bar_width();
     }
     // Only bars within reach of the click can be hit, so a zoomed-out chart tests a few of them.
-    let reach = HIT_TOLERANCE + plot.width + bar_spacing;
+    let reach = HIT_TOLERANCE + plot.width * 1.5 + 3.0 + bar_spacing;
     let start = visible_range
         .start
         .max(coords.x_to_idx(click_pos.x - reach).saturating_sub(1));
