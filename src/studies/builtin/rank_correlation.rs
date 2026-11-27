@@ -13,12 +13,16 @@ use std::collections::VecDeque;
 /// smoothing inputs add an average of the index, with bands for the band type, as they do for
 /// RSI. [`Default`] is a lookback of 10 with a 14-bar SMA of the index; [`new`](Self::new) stays
 /// without the average, so its values remain single numbers.
+/// The first value is on bar `length`, the bar after the first full window; the average starts
+/// from it.
 #[derive(Clone, Debug)]
 pub struct RankCorrelationIndex {
     period: usize,
     smoothing: SmoothingType,
     smoothing_length: usize,
     smoothing_deviation: f64,
+    /// Wait for the next bar after the first full window; the ribbon reads that window too.
+    late_start: bool,
     values: IndicatorValues,
     stepper: Stepper<Rolling>,
     colors: Vec<Color32>,
@@ -40,6 +44,7 @@ impl RankCorrelationIndex {
             smoothing: SmoothingType::None,
             smoothing_length: 14,
             smoothing_deviation: 2.0,
+            late_start: true,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: [palette::BLUE]
@@ -48,6 +53,12 @@ impl RankCorrelationIndex {
                 .collect(),
             visible: true,
         }
+    }
+
+    /// Read from the first full window, one bar before the standalone study starts.
+    pub(super) fn with_first_window(mut self) -> Self {
+        self.late_start = false;
+        self
     }
 
     /// Fill average ranks for ties, reusing the sorting and output buffers.
@@ -108,11 +119,12 @@ impl Indicator for RankCorrelationIndex {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let (period, kind, length, deviation) = (
+        let (period, kind, length, deviation, late_start) = (
             self.period,
             self.smoothing,
             self.smoothing_length,
             self.smoothing_deviation,
+            self.late_start,
         );
         let (mut indexed, mut ranks) = (Vec::new(), Vec::new());
         self.stepper
@@ -120,11 +132,11 @@ impl Indicator for RankCorrelationIndex {
                 if !bar.close.is_finite() {
                     return IndicatorValue::None;
                 }
+                let full = state.window.len() == period;
                 state.window.push_back(bar.close);
-                if state.window.len() > period {
+                if full {
                     state.window.pop_front();
-                }
-                if state.window.len() < period {
+                } else if late_start || state.window.len() < period {
                     return IndicatorValue::None;
                 }
                 ranks.resize(period, 0.0);
@@ -230,11 +242,12 @@ mod tests {
             .collect()
     }
 
-    /// The index over three closes, then its two-value average with bands 1.5 deviations away, by
-    /// hand. Tied closes share their average rank, so 1, 2, 2 ranks 1, 2.5, 2.5 against the times
-    /// 1, 2, 3: the covariance is 1.5 and the variances are 1.5 and 2, giving 1.5 / sqrt(3), or
-    /// `r` = 50 * sqrt(3) once scaled. The bar without a close has no value and leaves both
-    /// windows as they were, so the next windows are 2, 2, 1 (`-r`), 2, 1, 3 (50) and 1, 3, 5
+    /// The index starts one bar after its first full window of three closes, then its two-value
+    /// average with bands 1.5 deviations away, by hand. Tied closes share their average rank,
+    /// so 2, 2, 1 ranks 2.5, 2.5, 1 against times 1, 2, 3: the covariance is -1.5 and the
+    /// variances are 1.5 and 2, giving -1.5 / sqrt(3), or `-r` = -50 * sqrt(3) once scaled.
+    /// The bar without a close has no value and leaves both windows as they were, so the first
+    /// value is on bar 4 over 2, 2, 1 (`-r`), then 2, 1, 3 (50) and 1, 3, 5
     /// (100). The average of two values is their midpoint and their population deviation half
     /// their distance. Correcting the close of bar 4 from 1 to 4 makes the windows 2, 2, 4 (`r`),
     /// 2, 4, 3 (50) and 4, 3, 5 (50), and the average and bands follow from that bar on.
@@ -262,16 +275,20 @@ mod tests {
         study.calculate(&bars(&closes));
         let saved = [
             (1, [None; 4]),
-            (2, [Some(r), None, None, None]),
+            (2, [None; 4]),
             (3, [None; 4]),
-            (4, band(r, -r)),
+            (4, [Some(-r), None, None, None]),
             (5, band(-r, 50.0)),
             (6, band(50.0, 100.0)),
         ];
         closes[4] = 4.0;
         let mut corrected = study.clone();
         corrected.update(&bars(&closes), 4);
-        let rows = [(4, band(r, r)), (5, band(r, 50.0)), (6, band(50.0, 50.0))];
+        let rows = [
+            (4, [Some(r), None, None, None]),
+            (5, band(r, 50.0)),
+            (6, band(50.0, 50.0)),
+        ];
         for (study, rows) in [
             (&study, &saved[..]),
             (&corrected, &saved[..3]),

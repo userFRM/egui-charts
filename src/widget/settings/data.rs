@@ -618,6 +618,9 @@ pub struct TradingSettings {
     pub extend_lines: bool,
     /// Horizontal placement of order and position labels.
     pub label_alignment: TradingLabelAlignment,
+    /// Separate overlapping order and position labels vertically, keeping their lines, tags
+    /// and buttons. The label menus' No overlap switch; off for new and older saved settings.
+    pub separate_labels: bool,
     /// Include the visible trading overlays in images exported through `ui::trading::Trading`.
     pub include_in_image: bool,
     /// Draw the working orders and their brackets.
@@ -653,6 +656,7 @@ impl Default for TradingSettings {
             reverse_button: true,
             extend_lines: true,
             label_alignment: TradingLabelAlignment::Right,
+            separate_labels: false,
             include_in_image: false,
             show_orders: true,
             bracket_pnl: true,
