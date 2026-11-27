@@ -2086,8 +2086,9 @@ mod tests {
             .find(|(study, _)| *study == id)
             .unwrap()
             .1;
+        assert_eq!(trend.values().value(0, 0), None);
+        assert_eq!(trend.values().value(1, 0), None);
         for (bar, (line, value)) in [
-            (1, 102.),
             (1, 102.),
             (0, 100.),
             (0, 104.),
@@ -2098,8 +2099,8 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            assert_eq!(trend.values().value(line, bar), Some(value));
-            assert_eq!(trend.values().value(1 - line, bar), None);
+            assert_eq!(trend.values().value(line, bar + 1), Some(value));
+            assert_eq!(trend.values().value(1 - line, bar + 1), None);
         }
         let mut alert = alert(AlertCondition::Holds, AlertFrequency::EveryTime);
         alert.source = AlertSource::StudyCondition {

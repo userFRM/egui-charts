@@ -203,6 +203,10 @@ pub struct OrderPreset {
     /// keeps the ticket's expiry.
     #[serde(default)]
     pub expires_after: Option<std::time::Duration>,
+    /// Whether the chart's Buy and Sell buttons use this preset: chosen beside them or applied
+    /// last in the ticket. At most one preset per account is applied; older saves apply none.
+    #[serde(default)]
+    pub applied: bool,
 }
 
 fn restores() -> bool {
@@ -250,7 +254,84 @@ impl OrderPreset {
             price_ticks: None,
             limit_ticks: None,
             expires_after: None,
+            applied: false,
         }
+    }
+
+    /// The selected parameters, one localized line each, for the chart's preset menu and quotes.
+    pub(super) fn summary(&self, ctx: &egui::Context, currency: &str) -> String {
+        let format = |template, value: f64| {
+            l10n::format_text(
+                ctx,
+                template,
+                &[
+                    ("value", value.to_string().as_str()),
+                    ("currency", currency),
+                ],
+            )
+            .trim_end()
+            .to_owned()
+        };
+        let mut lines = Vec::new();
+        if let Some(sizing) = self.sizing {
+            lines.push(match sizing {
+                PresetSizing::Units => format("Quantity {value}", self.quantity),
+                PresetSizing::Value(value) => format("Value {value} {currency}", value),
+                PresetSizing::BalancePercent(value) => format("{value}% of the balance", value),
+                PresetSizing::RiskMoney(value) => format("Risk {value} {currency}", value),
+                PresetSizing::RiskPercent(value) => format("Risk {value}% of the balance", value),
+            });
+        }
+        if let Some(kind) = self.order_type {
+            lines.push(l10n::format_text(
+                ctx,
+                "Order type {name}",
+                &[("name", l10n::text(ctx, kind.name()))],
+            ));
+        }
+        let bracket = |bracket: Bracket| {
+            format(
+                match bracket.mode {
+                    BracketMode::Price => "at {value}",
+                    BracketMode::Ticks => "{value} ticks",
+                    BracketMode::Percent => "{value}%",
+                    BracketMode::Money => "{value} {currency}",
+                    BracketMode::BalancePercent => "{value}% of the balance",
+                },
+                bracket.value,
+            )
+        };
+        if self.exits {
+            if let Some(profit) = self.take_profit {
+                lines.push(l10n::format_text(
+                    ctx,
+                    "Take profit {bracket}",
+                    &[("bracket", bracket(profit))],
+                ));
+            }
+            if !self.take_profit_levels.is_empty() {
+                lines.push(l10n::format_text(
+                    ctx,
+                    "{count} take-profit levels",
+                    &[("count", (1 + self.take_profit_levels.len()).to_string())],
+                ));
+            }
+            if let Some(stop) = self.stop_loss {
+                lines.push(l10n::format_text(
+                    ctx,
+                    "Stop loss {bracket}",
+                    &[("bracket", bracket(stop))],
+                ));
+            }
+        }
+        if let Some(time) = self.time_in_force {
+            lines.push(l10n::format_text(
+                ctx,
+                "Time in force {name}",
+                &[("name", l10n::text(ctx, time_in_force_name(time)))],
+            ));
+        }
+        lines.join("\n")
     }
 }
 
@@ -1044,7 +1125,8 @@ impl OrderTicket {
         self.kind = kind;
     }
 
-    fn apply(&mut self, preset: &OrderPreset, market: &Market<'_>) {
+    /// Applies every parameter the account, symbol and order take, returning whether all fit.
+    pub(super) fn apply(&mut self, preset: &OrderPreset, market: &Market<'_>) -> bool {
         match preset.sizing {
             None => {}
             Some(PresetSizing::Value(amount)) => {
@@ -1118,7 +1200,9 @@ impl OrderTicket {
             }
         }
         let notice = self.unapplied(preset, market);
-        self.preset_notice = (!notice.is_empty()).then(|| (market.account.to_owned(), notice));
+        let fits = notice.is_empty();
+        self.preset_notice = (!fits).then(|| (market.account.to_owned(), notice));
+        fits
     }
 
     /// The parameters of `preset` that the ticket, as `apply` left it, could not take.
@@ -1269,6 +1353,7 @@ impl OrderTicket {
             price_ticks,
             limit_ticks,
             expires_after,
+            applied: false,
         }
     }
 }
@@ -1648,11 +1733,13 @@ mod tests {
         };
         // Literal produced by serializing OrderPreset on origin/main.
         let old = r#"{"name":"Scalp","quantity":2.0,"take_profit":null,"stop_loss":{"mode":"Ticks","value":8.0}}"#;
+        // The full preset format immediately before the chart stored its applied choice.
+        let previous = r#"{"name":"Scalp","quantity":2.0,"take_profit":null,"take_profit_levels":[],"first_level_stop_loss":null,"stop_loss":{"mode":"Ticks","value":8.0},"sizing":"Units","exits":true,"order_type":null,"trail":null,"trail_activation":null,"time_in_force":null,"price_ticks":null,"limit_ticks":null,"expires_after":null}"#;
         for (fields, accepts, legacy, kind, tif, units, profit, stop) in [
             (
                 all,
                 true,
-                false,
+                None,
                 Kind::Limit,
                 TimeInForce::GoodTillCancelled,
                 2.0,
@@ -1662,7 +1749,7 @@ mod tests {
             (
                 quantity,
                 true,
-                false,
+                None,
                 Kind::Stop,
                 TimeInForce::Day,
                 2.0,
@@ -1672,7 +1759,7 @@ mod tests {
             (
                 kinds,
                 true,
-                false,
+                None,
                 Kind::Limit,
                 TimeInForce::GoodTillCancelled,
                 1.0,
@@ -1682,7 +1769,7 @@ mod tests {
             (
                 all,
                 false,
-                false,
+                None,
                 Kind::Stop,
                 TimeInForce::Day,
                 2.0,
@@ -1692,7 +1779,17 @@ mod tests {
             (
                 all,
                 true,
+                Some(old),
+                Kind::Stop,
+                TimeInForce::Day,
+                2.0,
+                None,
+                Some(ticks(8.0)),
+            ),
+            (
+                all,
                 true,
+                Some(previous),
                 Kind::Stop,
                 TimeInForce::Day,
                 2.0,
@@ -1713,12 +1810,11 @@ mod tests {
                 preset_fields: fields,
                 ..OrderTicket::default()
             };
-            let saved = if legacy {
-                old.to_owned()
-            } else {
+            let saved = legacy.map(str::to_owned).unwrap_or_else(|| {
                 serde_json::to_string(&saving.preset(&ctx, "Scalp".into(), &market)).unwrap()
-            };
+            });
             let preset: OrderPreset = serde_json::from_str(&saved).unwrap();
+            assert!(!preset.applied, "older presets apply only when chosen");
             market.capabilities.limit = accepts;
             let mut restricted = rules.clone();
             if !accepts {

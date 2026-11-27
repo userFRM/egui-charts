@@ -7293,9 +7293,9 @@ mod tests {
         let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
         egui_charts::services::Broker::place(&*app.paper, request, reply);
         answer.take().expect("limit reply").expect("working limit");
-        app.trading
-            .presets
-            .insert(String::new(), vec![OrderPreset::new("Two", 2.0)]);
+        let mut two = OrderPreset::new("Two", 2.0);
+        two.applied = true;
+        app.trading.presets.insert(String::new(), vec![two]);
         app.account_panel_height = 470.0;
         let mut storage = AppStorage::default();
         eframe::App::save(&mut *app, &mut storage);
@@ -7720,6 +7720,98 @@ mod tests {
         app.trading.set_service(app.paper.clone());
         menu(&mut app);
         assert!(app.drawing_toolbar.state.hide_orders);
+    }
+
+    /// The order label menu separates same-price orders and updates the settings the demo saves.
+    #[test]
+    fn no_overlap_in_a_label_menu_moves_orders_at_one_price_apart() {
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType, TimeInForce};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let size = egui::vec2(1440.0, 900.0);
+        let symbol = app.chart.symbol().to_owned();
+        let last = app.chart.bars(SeriesId::MAIN).last().unwrap().close;
+        let limit = last * 0.99;
+        app.chart
+            .price_scale_mut()
+            .set_range(last * 0.97, last * 1.03);
+        app.paper.set_price(&symbol, last);
+        app.trading.set_service(app.paper.clone());
+        app.trading.poll(&ctx, &mut app.toasts);
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.chart.show(ui);
+            app.trading.show(ui, &mut app.chart);
+        });
+        app.trading.poll(&ctx, &mut app.toasts);
+        for quantity in [1.0, 3.0] {
+            let mut request =
+                OrderRequest::new(&symbol, OrderSide::Buy, quantity, OrderType::Limit(limit));
+            request.time_in_force = TimeInForce::GoodTillCancelled;
+            let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+            egui_charts::services::Broker::place(&*app.paper, request, reply);
+            answer.take().expect("limit reply").expect("working limit");
+        }
+        app.trading.poll(&ctx, &mut app.toasts);
+        let draw = |app: &mut DemoApp, ui: &mut egui::Ui| {
+            app.chart.show(ui);
+            app.trading.show(ui, &mut app.chart);
+        };
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        }
+        let mapping = app.chart.get_chart_mapping();
+        let y0 = mapping.price_to_y(limit);
+        let centres = |texts: &[(String, egui::Rect)]| {
+            ["1", "3"].map(|quantity| {
+                texts
+                    .iter()
+                    .find(|(text, rect)| {
+                        text == quantity
+                            && mapping.rect.contains(rect.center())
+                            && (rect.center().y - y0).abs() < 44.0
+                    })
+                    .expect("order quantity")
+                    .1
+                    .center()
+            })
+        };
+        let [one, three] = centres(&texts);
+        assert!((one.y - y0).abs() < 2.0 && (three.y - y0).abs() < 2.0);
+        assert!((one.y - three.y).abs() < 0.5);
+        ui_frame(&ctx, size, vec![egui::Event::PointerMoved(three)], |ui| {
+            draw(&mut app, ui)
+        });
+        ui_frame(
+            &ctx,
+            size,
+            [true, false]
+                .map(|pressed| egui::Event::PointerButton {
+                    pos: three,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                })
+                .to_vec(),
+            |ui| draw(&mut app, ui),
+        );
+        let texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        let switch = texts
+            .iter()
+            .find(|(text, _)| text == "No overlap")
+            .expect("No overlap switch")
+            .1
+            .center();
+        ui_click(&ctx, size, switch, |ui| draw(&mut app, ui));
+        assert!(app.trading.display.separate_labels);
+        assert!(app.chart_settings_state().trading.separate_labels);
+        let texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        let [one, three] = centres(&texts);
+        assert!((one.y - three.y).abs() > 20.0);
+        assert!((one.y - y0).abs() < 2.0 || (three.y - y0).abs() < 2.0);
     }
 
     /// The toolbar's real flyout toggles studies in both directions, including after undo.
@@ -13409,6 +13501,31 @@ mod tests {
                     .to_vec(),
             );
         }
+        fn scroll(
+            app: &mut DemoApp,
+            ctx: &egui::Context,
+            point: egui::Pos2,
+            delta: f32,
+        ) -> Vec<(String, egui::Rect)> {
+            let mut texts = frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, delta),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            for _ in 0..8 {
+                texts = frame(app, ctx, vec![]);
+            }
+            texts
+        }
         fn enter(app: &mut DemoApp, ctx: &egui::Context) {
             frame(
                 app,
@@ -13469,8 +13586,8 @@ mod tests {
             (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
-            (Tool::FixedRangeVolumeProfile, "VAL"),
-            (Tool::AnchoredVolumeProfile, "VAL"),
+            (Tool::FixedRangeVolumeProfile, "VA values colour"),
+            (Tool::AnchoredVolumeProfile, "VA values colour"),
             (Tool::RegressionTrend, "Upper deviation"),
             (Tool::BarsPattern, "Mirrored"),
         ] {
@@ -13499,11 +13616,31 @@ mod tests {
                 .1
                 .center();
             click(&mut app, &ctx, inputs);
-            let texts = frame(&mut app, &ctx, vec![]);
+            let mut texts = frame(&mut app, &ctx, vec![]);
+            // The profile's value controls start below the dialog's opening view.
+            let scroll_at = if matches!(
+                tool,
+                Tool::FixedRangeVolumeProfile | Tool::AnchoredVolumeProfile
+            ) {
+                let point = texts
+                    .iter()
+                    .find(|(text, _)| text == "VAH")
+                    .unwrap()
+                    .1
+                    .center();
+                texts = scroll(&mut app, &ctx, point, -160.0);
+                Some(point)
+            } else {
+                None
+            };
             assert!(
                 texts.iter().any(|(text, _)| text == heading),
                 "{tool:?}: {texts:?}"
             );
+            if let Some(point) = scroll_at {
+                // Keep the next tool's opening view at the top too.
+                scroll(&mut app, &ctx, point, 2000.0);
+            }
             assert_eq!(
                 format!("{:?}", app.chart.drawings().drawings[0]),
                 before,
@@ -15245,6 +15382,137 @@ mod tests {
             );
             assert!(!app.symbol_search.is_open(), "{letter} was not typed");
         }
+    }
+
+    /// The chart preset menu names and highlights its choice, and Shift+B uses its size and
+    /// exits in instant placement mode.
+    #[test]
+    fn a_preset_chosen_beside_buy_and_sell_sizes_the_shift_b_order() {
+        use egui::accesskit::Toggled;
+        use egui_charts::ui::trading::{Bracket, BracketMode, OrderPreset};
+        use egui_kittest::kittest::NodeT as _;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        let last = app
+            .chart
+            .bars(SeriesId::MAIN)
+            .iter()
+            .rfind(|bar| !bar.is_whitespace())
+            .unwrap()
+            .close;
+        let tick = app
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.tick_size)
+            .unwrap_or(0.01);
+        app.paper.set_price(&symbol, last);
+        app.trading.display.instant_orders = true;
+        let presets = [("Scalp", 2.0, 10.0, 5.0), ("Swing", 3.0, 20.0, 10.0)].map(
+            |(name, quantity, tp, sl)| {
+                let mut preset = OrderPreset::new(name, quantity);
+                preset.take_profit = Some(Bracket::new(BracketMode::Ticks, tp));
+                preset.stop_loss = Some(Bracket::new(BracketMode::Ticks, sl));
+                preset
+            },
+        );
+        app.trading.presets.insert(String::new(), presets.into());
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                ctx.all_styles_mut(|style| {
+                    style.interaction.tooltip_delay = 0.0;
+                    style.interaction.show_tooltips_only_when_still = false;
+                });
+            })
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(3);
+        h.get_by_label("Order presets").click();
+        h.run_steps(2);
+        for (name, selected) in [("No preset", true), ("Scalp", false), ("Swing", false)] {
+            assert_eq!(
+                h.get_by_label(name).accesskit_node().toggled(),
+                Some(if selected {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+            );
+        }
+        h.get_by_label("Swing").click();
+        h.run_steps(2);
+        assert_eq!(
+            h.state().trading.presets[""]
+                .iter()
+                .map(|preset| preset.applied)
+                .collect::<Vec<_>>(),
+            [false, true]
+        );
+        for label in ["BUY · Swing", "SELL · Swing"] {
+            assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)));
+        }
+        h.get_by_label("Order presets").click();
+        h.run_steps(2);
+        assert_eq!(
+            h.get_by_label("Swing").accesskit_node().toggled(),
+            Some(Toggled::True)
+        );
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        let buy = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "BUY · Swing" => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .unwrap();
+        h.hover_at(buy);
+        h.run_steps(2);
+        assert!(
+            h.query_all_by_role(egui::Role::Label)
+                .any(|node| node.value().is_some_and(|text| text.contains(
+                    "Preset Swing\nQuantity 3\nTake profit 20 ticks\nStop loss 10 ticks"
+                )))
+        );
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::B);
+        h.run_steps(3);
+        let saved = serde_json::to_value(h.state().paper.save()).unwrap();
+        let working = saved["working"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|order| order["request"]["symbol"] == symbol)
+            .collect::<Vec<_>>();
+        assert_eq!(working.len(), 2, "{working:?}");
+        for order in &working {
+            assert_eq!(order["request"]["quantity"], 3.0);
+        }
+        let tp = working
+            .iter()
+            .find_map(|order| order["request"]["order_type"]["Limit"].as_f64())
+            .unwrap();
+        let sl = working
+            .iter()
+            .find_map(|order| order["request"]["order_type"]["Stop"].as_f64())
+            .unwrap();
+        assert_eq!(((tp - sl) / tick).round(), 30.0);
     }
 
     /// The paper account attaches exits to open positions, so a position line shows its TP and
