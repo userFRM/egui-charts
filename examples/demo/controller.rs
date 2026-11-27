@@ -7830,6 +7830,98 @@ mod tests {
         assert!(app.drawing_toolbar.state.hide_orders);
     }
 
+    /// The order label menu separates same-price orders and updates the settings the demo saves.
+    #[test]
+    fn no_overlap_in_a_label_menu_moves_orders_at_one_price_apart() {
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType, TimeInForce};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let size = egui::vec2(1440.0, 900.0);
+        let symbol = app.chart.symbol().to_owned();
+        let last = app.chart.bars(SeriesId::MAIN).last().unwrap().close;
+        let limit = last * 0.99;
+        app.chart
+            .price_scale_mut()
+            .set_range(last * 0.97, last * 1.03);
+        app.paper.set_price(&symbol, last);
+        app.trading.set_service(app.paper.clone());
+        app.trading.poll(&ctx, &mut app.toasts);
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.chart.show(ui);
+            app.trading.show(ui, &mut app.chart);
+        });
+        app.trading.poll(&ctx, &mut app.toasts);
+        for quantity in [1.0, 3.0] {
+            let mut request =
+                OrderRequest::new(&symbol, OrderSide::Buy, quantity, OrderType::Limit(limit));
+            request.time_in_force = TimeInForce::GoodTillCancelled;
+            let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+            egui_charts::services::Broker::place(&*app.paper, request, reply);
+            answer.take().expect("limit reply").expect("working limit");
+        }
+        app.trading.poll(&ctx, &mut app.toasts);
+        let draw = |app: &mut DemoApp, ui: &mut egui::Ui| {
+            app.chart.show(ui);
+            app.trading.show(ui, &mut app.chart);
+        };
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        }
+        let mapping = app.chart.get_chart_mapping();
+        let y0 = mapping.price_to_y(limit);
+        let centres = |texts: &[(String, egui::Rect)]| {
+            ["1", "3"].map(|quantity| {
+                texts
+                    .iter()
+                    .find(|(text, rect)| {
+                        text == quantity
+                            && mapping.rect.contains(rect.center())
+                            && (rect.center().y - y0).abs() < 44.0
+                    })
+                    .expect("order quantity")
+                    .1
+                    .center()
+            })
+        };
+        let [one, three] = centres(&texts);
+        assert!((one.y - y0).abs() < 2.0 && (three.y - y0).abs() < 2.0);
+        assert!((one.y - three.y).abs() < 0.5);
+        ui_frame(&ctx, size, vec![egui::Event::PointerMoved(three)], |ui| {
+            draw(&mut app, ui)
+        });
+        ui_frame(
+            &ctx,
+            size,
+            [true, false]
+                .map(|pressed| egui::Event::PointerButton {
+                    pos: three,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                })
+                .to_vec(),
+            |ui| draw(&mut app, ui),
+        );
+        let texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        let switch = texts
+            .iter()
+            .find(|(text, _)| text == "No overlap")
+            .expect("No overlap switch")
+            .1
+            .center();
+        ui_click(&ctx, size, switch, |ui| draw(&mut app, ui));
+        assert!(app.trading.display.separate_labels);
+        assert!(app.chart_settings_state().trading.separate_labels);
+        let texts = ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
+        let [one, three] = centres(&texts);
+        assert!((one.y - three.y).abs() > 20.0);
+        assert!((one.y - y0).abs() < 2.0 || (three.y - y0).abs() < 2.0);
+    }
+
     /// The toolbar's real flyout toggles studies in both directions, including after undo.
     #[test]
     fn hide_indicator_menu_restores_studies_and_follows_undo() {
@@ -13393,6 +13485,31 @@ mod tests {
                     .to_vec(),
             );
         }
+        fn scroll(
+            app: &mut DemoApp,
+            ctx: &egui::Context,
+            point: egui::Pos2,
+            delta: f32,
+        ) -> Vec<(String, egui::Rect)> {
+            let mut texts = frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, delta),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            for _ in 0..8 {
+                texts = frame(app, ctx, vec![]);
+            }
+            texts
+        }
         fn enter(app: &mut DemoApp, ctx: &egui::Context) {
             frame(
                 app,
@@ -13453,8 +13570,8 @@ mod tests {
             (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
-            (Tool::FixedRangeVolumeProfile, "VAL"),
-            (Tool::AnchoredVolumeProfile, "VAL"),
+            (Tool::FixedRangeVolumeProfile, "VA values colour"),
+            (Tool::AnchoredVolumeProfile, "VA values colour"),
             (Tool::RegressionTrend, "Upper deviation"),
             (Tool::BarsPattern, "Mirrored"),
         ] {
@@ -13483,11 +13600,31 @@ mod tests {
                 .1
                 .center();
             click(&mut app, &ctx, inputs);
-            let texts = frame(&mut app, &ctx, vec![]);
+            let mut texts = frame(&mut app, &ctx, vec![]);
+            // The profile's value controls start below the dialog's opening view.
+            let scroll_at = if matches!(
+                tool,
+                Tool::FixedRangeVolumeProfile | Tool::AnchoredVolumeProfile
+            ) {
+                let point = texts
+                    .iter()
+                    .find(|(text, _)| text == "VAH")
+                    .unwrap()
+                    .1
+                    .center();
+                texts = scroll(&mut app, &ctx, point, -160.0);
+                Some(point)
+            } else {
+                None
+            };
             assert!(
                 texts.iter().any(|(text, _)| text == heading),
                 "{tool:?}: {texts:?}"
             );
+            if let Some(point) = scroll_at {
+                // Keep the next tool's opening view at the top too.
+                scroll(&mut app, &ctx, point, 2000.0);
+            }
             assert_eq!(
                 format!("{:?}", app.chart.drawings().drawings[0]),
                 before,
