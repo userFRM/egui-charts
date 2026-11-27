@@ -154,8 +154,8 @@ pub(super) fn show(
         let (mut kind, shown) = match settings.order_size {
             OrderSize::Fixed(v) => (0, v),
             OrderSize::Cash(v) => (1, v),
-            // Display percentages while keeping fractions in the settings.
-            OrderSize::EquityFraction(v) => (2, v * 100.0),
+            // Bound the percentage display without changing untouched saved fractions.
+            OrderSize::EquityFraction(v) => (2, (v * 100.0).clamp(f64::MIN_POSITIVE, f64::MAX)),
         };
         let before = (kind, shown);
         choice(
