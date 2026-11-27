@@ -896,7 +896,8 @@ mod tests {
                 range_size: 2.0,
                 ..Default::default()
             };
-            params.styles.range.thin_bars = thin_bars;
+            // The thin row keeps the default, so new charts must start with Thin bars on.
+            params.styles.range.thin_bars &= thin_bars;
             let (painted, chart) = paint(
                 ChartType::Range,
                 params,
