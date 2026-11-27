@@ -45,21 +45,21 @@ pub(crate) fn compile(
     source: &str,
     factory: &IndicatorFactory,
 ) -> Result<Compiled, ScriptError> {
-    let pass = |scope: &Scope, catalogue: Option<syntax::Catalogue>| {
+    let pass = |text: &str, scope: &Scope, catalogue: Option<syntax::Catalogue>| {
         let strict = catalogue.is_some();
         let collector = Arc::new(Mutex::new(syntax::Collector::new(catalogue)));
         let mut engine = engine::engine();
         syntax::register(&mut engine, &collector);
         engine.set_strict_variables(strict);
         let ast = engine
-            .compile_with_scope(scope, source)
-            .map_err(|error| errors::compile(&error, source))?;
+            .compile_with_scope(scope, text)
+            .map_err(|error| errors::compile(&error, text))?;
         let mut collector = collector.lock().unwrap_or_else(|e| e.into_inner());
         let spec = std::mem::take(&mut collector.spec);
         let called = std::mem::take(&mut collector.called);
         Ok::<_, ScriptError>((engine, ast, spec, called))
     };
-    let (_, ast, spec, called) = pass(&Scope::new(), None)?;
+    let (_, ast, spec, called) = pass(source, &Scope::new(), None)?;
     let orders = places_orders(source, &ast);
     if spec.plots.is_empty() && !orders {
         return Err(ScriptError::at(
@@ -83,7 +83,11 @@ pub(crate) fn compile(
     let unknown = calls::unknown(source, &ast);
     let alerts = alerts::declared(source, &ast);
     let drawings = drawings::called(source, &ast, &spec.plots);
-    let strict = pass(&scope(&spec, &defaults, false, false), Some(catalogue));
+    let strict = pass(
+        source,
+        &scope(&spec, &defaults, false, false),
+        Some(catalogue.clone()),
+    );
     let first = (strict.as_ref().err().into_iter())
         .chain(&unknown)
         .chain(alerts.as_ref().err())
@@ -91,7 +95,22 @@ pub(crate) fn compile(
     if let Some(error) = first.min_by_key(|error| (error.line, error.column)) {
         return Err(error.clone());
     }
-    let (engine, ast, mut spec, _) = strict?;
+    let (mut engine, mut ast, mut spec, _) = strict?;
+    // The declarations that do nothing on a bar are left out of the program the bars run. Each
+    // statement left knows its place in the declarations by the order they were read, so the
+    // program with them out stands in only when it reads as many of each.
+    let running = syntax::without_declarations(source);
+    let counts = |spec: &ScriptSpec| (spec.plots.len(), spec.series.len(), spec.studies.len());
+    if running != source
+        && let Ok((run_engine, run_ast, run_spec, _)) = pass(
+            &running,
+            &scope(&spec, &defaults, false, false),
+            Some(catalogue),
+        )
+        && counts(&run_spec) == counts(&spec)
+    {
+        (engine, ast) = (run_engine, run_ast);
+    }
     spec.alerts = alerts?;
     spec.calls = drawings?;
     Ok(Compiled {

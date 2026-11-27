@@ -486,6 +486,8 @@ fn arrays_and_maps_compare_and_write_as_rhai_does() {
         (r#"[1, "a"] == [1, 2]"#, false),
         ("#{a: [1], b: #{c: ()}} == #{b: #{c: ()}, a: [1]}", true),
         ("#{a: 1} == #{b: 1}", false),
+        // Keys named as declarations stay keys when the bars run without the declarations.
+        ("#{state: 1, display: 2}.len() == 2", true),
         (
             r#"`${[1, "a", [2.5, ()], #{b: [true], a: #{}}]}` == "[1, \"a\", [2.5, ()], #{\"a\": #{}, \"b\": [true]}]""#,
             true,
@@ -1366,6 +1368,13 @@ fn run_errors_keep_the_bars_before_them() {
         (
             "plot(\"x\", if bar_index == 20 { close[-1] } else { close });",
             37,
+            20,
+            "history offset -1 is negative",
+        ),
+        // The same past a declaration the bars run without, which keeps its place.
+        (
+            "state s = 0; plot(\"x\", if bar_index == 20 { close[-1] } else { close });",
+            50,
             20,
             "history offset -1 is negative",
         ),
