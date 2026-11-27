@@ -628,15 +628,17 @@ the web its 4 ms, by the calculation of one study, which costs the same on the c
 60 s for a full recompute and 256 MiB for the study's buffers, its drawings and its script's values.
 The buffers include the lines of every study called, with a copy of the one read, and the bars of
 other histories, but not what a called study keeps for itself. Values count with the room they hold,
-not their length: those the states keep, after each bar, and inside a bar, every 256 operations at
-the next variable read, the variables in scope there, with what the last count found in each call
-waiting on the running one. A run that passes a limit keeps none of its bars: the study keeps its
-previous values, colours and drawings, and the legend and `Script::last_error` say which limit
-stopped it and where. It runs again when its inputs change or its bars change from the first one on.
-Whether a run close to a limit finishes depends on the machine and its load. A script with long
-logic on every bar costs time on every bar: on 100,000 bars a restated built-in study takes several
-hundred milliseconds to recompute, off the UI thread, and a script that calls it with `study` a
-tenth of that.
+not their length: those the states keep, after each bar, and inside a bar the variables in scope at
+a variable read, with what the last count found in each call waiting on the running one. The first
+read in a call counts all its variables, its arguments among them, a later read the variables bound
+since the last count, and the first read after every 256 operations all the variables in scope
+again. A run that passes a limit keeps none of its bars: the study keeps its previous values,
+colours and drawings, and the legend and `Script::last_error` say which limit stopped it and where.
+It runs again when its inputs change or its bars change from the first one on. Whether a run close
+to a limit finishes depends on the machine and its load. A script with long logic on every bar
+costs time on every bar: on 100,000 bars a restated built-in study takes several hundred
+milliseconds to recompute, off the UI thread, and a script that calls it with `study` a tenth of
+that.
 
 `Limits` may gain fields, so a host starts from the defaults and sets the limits it changes:
 
@@ -666,10 +668,14 @@ Chrome and Firefox.
 The memory limit guards against runaway growth in ordinary scripts, such as a state that grows on
 every bar or a buffer built in a loop, and is not a bound against a hostile script. Inside a bar it
 does not count a value no variable holds, such as the arguments of a call while they are evaluated
-or the results `map` collects, nor what a waiting call bound after its last count. So what one bar
-allocates has no fixed ceiling: it grows with the shape of the script until the time limit stops the
-bar. For example, in a release build under the default limits, 250 copies of a 10 MB map passed to
-one call reached about 2.4 GiB before the time limit stopped the bar, after 981 ms. The clock is
+or the results `map` collects, nor what a waiting call assigned to its variables or added to their
+values after its last count. A call that has read no variable yet is not counted, and until the next
+count of all the variables in scope, a variable bound where a block released another, with no
+variable read between, counts as the released one, and a call that runs right after another at the
+same depth, with nothing read between them, may count as holding what the other held. So what one
+bar allocates has no fixed ceiling: it grows with the shape of the script until the time limit stops
+the bar. For example, in a release build under the default limits, 250 copies of a 10 MB map passed
+to one call reached about 2.4 GiB before the time limit stopped the bar, after 981 ms. The clock is
 read every 256 operations and one operation may copy a large value, so a bar may also run past its
 time limit, by up to about a second as measured. An allocation that fails ends the process natively
 and the WebAssembly module on the web. A host that runs scripts it does not trust caps the memory of
