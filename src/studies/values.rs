@@ -159,13 +159,6 @@ impl IndicatorValues {
         }
     }
 
-    #[cfg(feature = "studies")]
-    pub(crate) fn fill(&mut self, value: IndicatorValue) {
-        let len = self.len;
-        self.clear();
-        self.resize(len, value);
-    }
-
     pub(crate) fn extend(&mut self, values: impl IntoIterator<Item = IndicatorValue>) {
         for value in values {
             self.push(value);
