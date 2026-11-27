@@ -995,8 +995,11 @@ mod tests {
             }
             panic!("the backtest did not finish");
         };
-        // Bought 10 at the open of 103 after the rise to 101, sold at the open of 101 after the
-        // fall to 102.
+        // With 10,000 in the account, bought 10 at the open of 103 after the rise to 101, sold
+        // at the open of 101 after the fall to 102.
+        let mut settings = app.strategy_report.settings().clone();
+        settings.initial_capital = 10_000.0;
+        app.strategy_report.set_settings(settings).unwrap();
         run(&mut app);
         let report = app.strategy_report.report().expect("a report");
         let [trade] = report.trades.as_slice() else {
@@ -1130,16 +1133,12 @@ mod tests {
         app.sample_study.editor.open_document("Day close", daily);
         click(&mut app, &ctx, "Apply");
         calculated(&mut app, &ctx);
-        let id = study_id(&app.chart, "Day close");
-        let mut last = None;
-        for _ in 0..500 {
-            super::super::tests::settle(&mut app, &ctx);
-            last = values(&app.chart, id).last().copied().flatten();
-            if last.is_some_and(f64::is_finite) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        // The feed serves the history the study requests, which then calculates with it.
+        super::super::tests::settle(&mut app, &ctx);
+        calculated(&mut app, &ctx);
+        let last = (values(&app.chart, study_id(&app.chart, "Day close")).last())
+            .copied()
+            .flatten();
         let closes: Vec<_> = (app.market_history().iter()).map(|bar| bar.close).collect();
         assert!(last.is_some_and(|last| closes.contains(&last)), "{last:?}");
 
@@ -1388,17 +1387,12 @@ if bar_index == 6 {
         assert_ne!(study_id(&app.chart, "Close difference"), id);
         app.chart
             .update(SeriesId::MAIN, Bar::from_value(next, 104.0));
-        let mut shown = false;
-        for _ in 0..500 {
-            calculated(&mut app, &ctx);
-            let texts = render(&mut app, &ctx, Vec::new());
-            shown = texts.iter().any(|(text, _)| text.contains("on bar 3"));
-            if shown {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(shown);
+        calculated(&mut app, &ctx);
+        assert!(
+            render(&mut app, &ctx, Vec::new())
+                .iter()
+                .any(|(text, _)| text.contains("on bar 3"))
+        );
 
         // Examples opens a bundled script, drawn with its declarations coloured apart from names.
         let (title, example) = egui_charts_scripting::examples()[1];

@@ -20,7 +20,10 @@ use crate::model::{
 };
 use crate::model::{rounding_tolerance, trailed, trailing_stop};
 
-/// The default entry size, converted to units at the execution price.
+/// The default entry size, converted to units at the execution price. Equity and cash sizes
+/// round down to a whole number of [`BacktestSettings::liquidation_increment`] steps, and an
+/// entry they size at zero is rejected. Fixed sizes and quantities a strategy passes are used
+/// as they are.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum OrderSize {
@@ -71,7 +74,7 @@ pub enum Slippage {
 #[non_exhaustive]
 #[serde(default)]
 pub struct BacktestSettings {
-    /// Starting account value in the account currency. Must be finite.
+    /// Starting account value in the account currency, 1,000,000 by default. Must be finite.
     pub initial_capital: f64,
     /// The account currency of capital, profits, fees and equity, such as "EUR". `None` or an
     /// empty code uses [`Backtest::instrument_currency`]; another currency converts the run's
@@ -81,7 +84,8 @@ pub struct BacktestSettings {
     pub risk_free_rate: f64,
     /// Size used by entries that do not supply their own quantity.
     pub order_size: OrderSize,
-    /// Maximum simultaneously open entries in one direction. Zero disables entries.
+    /// Maximum simultaneously open entries in one direction. Zero counts as one: a strategy can
+    /// always open one position, and an opposite entry still reverses it.
     pub pyramiding: usize,
     /// Fee paid on each fill and allocated to trades by quantity.
     pub commission: Commission,
@@ -106,10 +110,12 @@ pub struct BacktestSettings {
     /// Smallest price increment for limit verification and [`Slippage::Increments`]. Must be
     /// positive and finite.
     pub price_increment: f64,
-    /// Unit step used to truncate the minimum liquidation before closing four times that size.
-    /// A deficit on a position smaller than one step closes the whole position, since truncation
-    /// could not reach it. Hosts derive this from the instrument's quantity precision. Defaults to
-    /// one unit.
+    /// Unit step of the instrument's quantities. Equity and cash order sizes round down to a
+    /// whole number of steps. The minimum liquidation is truncated to it before closing four
+    /// times that size; a deficit on a position smaller than one step closes the whole position,
+    /// since truncation could not reach it. Hosts derive this from the instrument's quantity
+    /// precision. Defaults to one unit. A step that is not positive and finite leaves order sizes
+    /// unrounded.
     pub liquidation_increment: f64,
     /// Try working orders again on the closing tick of the bar they were placed on: market orders
     /// fill there and priced orders fill if the close satisfies them.
@@ -145,7 +151,7 @@ pub struct BacktestSettings {
 impl Default for BacktestSettings {
     fn default() -> Self {
         Self {
-            initial_capital: 10_000.0,
+            initial_capital: 1_000_000.0,
             currency: None,
             risk_free_rate: 0.02,
             order_size: OrderSize::Fixed(1.0),
@@ -200,6 +206,26 @@ impl BacktestSettings {
             OrderSide::Sell => self.short_funding,
         }
         .filter(|value| value.is_finite() && *value >= 0.0)
+    }
+
+    /// `units` rounded down to a whole number of
+    /// [`liquidation_increment`](Self::liquidation_increment) steps. Without a positive finite
+    /// step, or when the number of steps is not finite, `units` stays as it is.
+    fn whole_steps(&self, units: f64) -> f64 {
+        let step = self.liquidation_increment;
+        let steps = units / step;
+        if !step.is_finite() || step <= 0.0 || !steps.is_finite() {
+            return units;
+        }
+        // A size on a whole step can divide to just below it: 0.3 / 0.1 is 2.9999999999999996.
+        // Times the step it can come out just above the size (3 * 0.1 is 0.30000000000000004),
+        // more than a full-equity size can pay for, so the size itself is kept.
+        let whole = steps.ceil();
+        if whole - steps <= rounding_tolerance(whole, 4.0 * f64::EPSILON) {
+            (whole * step).min(units)
+        } else {
+            steps.floor() * step
+        }
     }
 
     pub(crate) fn funding(&self, side: OrderSide) -> f64 {
@@ -260,6 +286,11 @@ impl BacktestSettings {
         } else {
             1.0
         }
+    }
+
+    /// The pyramiding limit in effect: zero allows one entry, as one does.
+    fn pyramiding(&self) -> usize {
+        self.pyramiding.max(1)
     }
 }
 
@@ -1194,7 +1225,7 @@ impl Backtest {
         };
         report.properties = vec![
             ("Order size".into(), size),
-            ("Pyramiding".into(), settings.pyramiding.to_string()),
+            ("Pyramiding".into(), settings.pyramiding().to_string()),
             ("Commission".into(), commission),
             ("Slippage".into(), slippage),
             ("Leverage".into(), settings.leverage().to_string()),
@@ -2259,19 +2290,19 @@ impl<'a> Run<'a> {
         match order.kind {
             Kind::Entry(..) => {
                 let reversing = self.lots.first().is_some_and(|lot| lot.side != side);
-                if self.settings.pyramiding == 0
-                    || (!reversing && self.lots.len() >= self.settings.pyramiding)
-                {
+                if !reversing && self.lots.len() >= self.settings.pyramiding() {
                     return;
                 }
                 let quantity = order
                     .quantity
                     .unwrap_or_else(|| match self.settings.order_size {
                         OrderSize::Fixed(value) => value,
-                        OrderSize::EquityFraction(value) => {
-                            self.equity(mark) * value / self.convert(price.abs())
+                        OrderSize::EquityFraction(value) => self
+                            .settings
+                            .whole_steps(self.equity(mark) * value / self.convert(price.abs())),
+                        OrderSize::Cash(value) => {
+                            self.settings.whole_steps(value / self.convert(price.abs()))
                         }
-                        OrderSize::Cash(value) => value / self.convert(price.abs()),
                     });
                 let filled = quantity + if reversing { held } else { 0.0 };
                 let fee = self.fee(filled, price);
@@ -2857,7 +2888,7 @@ mod tests {
         let report = run(
             long,
             1000.0,
-            OrderSize::EquityFraction(1.0),
+            OrderSize::Fixed(1000.0 / 1234.7),
             &[1234.7, 1234.7, 1252.0],
         );
         assert!(report.trades[0].exit.is_none());
@@ -3639,6 +3670,20 @@ mod tests {
                 context.entry("B", Buy, None, OrderType::Market);
             } else if bar == 1 {
                 context.entry("C", Buy, None, OrderType::Market);
+            }
+        }
+        fn both_ways(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => {
+                    context.entry("A", Buy, None, OrderType::Market);
+                    context.entry("B", Buy, None, OrderType::Market);
+                }
+                1 => {
+                    context.entry("C", Sell, None, OrderType::Market);
+                    context.entry("D", Sell, None, OrderType::Market);
+                }
+                2 => context.exit("X", None, None, None),
+                _ => {}
             }
         }
         fn hold(bar: usize, context: &mut StrategyContext<'_>) {
@@ -4520,17 +4565,85 @@ mod tests {
                 vec![1000.0, 1000.0, 1000.0, 1020.0],
                 0,
             ),
+            // 1000 / 100.1 = 9.99 units round down to 9 whole units.
             (
-                "cash size",
+                "cash size rounds down to whole units",
                 sized,
                 BacktestSettings {
-                    order_size: OrderSize::Cash(200.0),
+                    order_size: OrderSize::Cash(1000.0),
                     ..terms.clone()
                 },
-                flat(&[100.0, 125.0, 130.0]),
-                vec![trade(Buy, 1.6, 1, 125.0, Some((2, 130.0, 8.0)), "A / X")],
-                vec![1000.0, 1000.0, 1000.0, 1008.0],
+                flat(&[100.1, 100.1, 102.1]),
+                vec![trade(Buy, 9.0, 1, 100.1, Some((2, 102.1, 18.0)), "A / X")],
+                vec![1000.0, 1000.0, 1000.0, 1018.0],
                 0,
+            ),
+            (
+                "equity size rounds down to whole units",
+                sized,
+                BacktestSettings {
+                    initial_capital: 10_000.0,
+                    order_size: OrderSize::EquityFraction(0.1),
+                    ..terms.clone()
+                },
+                flat(&[100.1, 100.1, 102.1]),
+                vec![trade(Buy, 9.0, 1, 100.1, Some((2, 102.1, 18.0)), "A / X")],
+                vec![10_000.0, 10_000.0, 10_000.0, 10_018.0],
+                0,
+            ),
+            (
+                "equity size rounds down to the quantity step",
+                sized,
+                BacktestSettings {
+                    initial_capital: 10_000.0,
+                    order_size: OrderSize::EquityFraction(0.1),
+                    liquidation_increment: 0.01,
+                    ..terms.clone()
+                },
+                flat(&[100.1, 100.1, 102.1]),
+                vec![trade(Buy, 9.99, 1, 100.1, Some((2, 102.1, 19.98)), "A / X")],
+                vec![10_000.0, 10_000.0, 10_000.0, 10_019.98],
+                0,
+            ),
+            // 30 / 100 / 0.1 is 2.9999999999999996, three steps up to division noise.
+            (
+                "cash size on a whole step keeps that step",
+                sized,
+                BacktestSettings {
+                    order_size: OrderSize::Cash(30.0),
+                    liquidation_increment: 0.1,
+                    ..terms.clone()
+                },
+                flat(&[100.0, 100.0, 110.0]),
+                vec![trade(Buy, 0.3, 1, 100.0, Some((2, 110.0, 3.0)), "A / X")],
+                vec![1000.0, 1000.0, 1000.0, 1003.0],
+                0,
+            ),
+            (
+                "full equity on a whole step is accepted",
+                sized,
+                BacktestSettings {
+                    initial_capital: 30.0,
+                    order_size: OrderSize::EquityFraction(1.0),
+                    liquidation_increment: 0.1,
+                    ..terms.clone()
+                },
+                flat(&[100.0, 100.0, 110.0]),
+                vec![trade(Buy, 0.3, 1, 100.0, Some((2, 110.0, 3.0)), "A / X")],
+                vec![30.0, 30.0, 30.0, 33.0],
+                0,
+            ),
+            (
+                "cash size below one step is rejected",
+                hold,
+                BacktestSettings {
+                    order_size: OrderSize::Cash(50.0),
+                    ..terms.clone()
+                },
+                flat(&[100.1, 100.1, 102.1]),
+                vec![],
+                vec![1000.0; 4],
+                1,
             ),
             (
                 "equity size",
@@ -4549,6 +4662,7 @@ mod tests {
                 repeat,
                 BacktestSettings {
                     order_size: OrderSize::EquityFraction(0.5),
+                    liquidation_increment: 0.1,
                     ..terms.clone()
                 },
                 flat(&[100.0, 100.0, 120.0, 100.0, 110.0]),
@@ -4559,7 +4673,8 @@ mod tests {
                 vec![1000.0, 1000.0, 1000.0, 1100.0, 1100.0, 1155.0],
                 0,
             ),
-            // At the second fill equity is 1000+5*(120-100)=1100, so half buys 550/120.
+            // At the second fill equity is 1000+5*(120-100)=1100, so half buys 550/120 = 4.58 in
+            // steps of 0.01.
             (
                 "equity sizing marks existing lots",
                 stack_in_time,
@@ -4567,12 +4682,13 @@ mod tests {
                     order_size: OrderSize::EquityFraction(0.5),
                     pyramiding: 2,
                     leverage: 2.0,
+                    liquidation_increment: 0.01,
                     ..terms.clone()
                 },
                 flat(&[100.0, 100.0, 120.0]),
                 vec![
                     trade(Buy, 5.0, 1, 100.0, None, "A"),
-                    trade(Buy, 55.0 / 12.0, 2, 120.0, None, "B"),
+                    trade(Buy, 4.58, 2, 120.0, None, "B"),
                 ],
                 vec![1000.0, 1000.0, 1000.0, 1100.0],
                 0,
@@ -4622,16 +4738,21 @@ mod tests {
                 vec![1000.0, 1000.0, 1000.0, 1040.0],
                 0,
             ),
+            // Zero allows one entry per direction, as one does: B and D are not filled, and C
+            // reverses A at 110, earning 2 * (110 - 100), before X closes C at 100 for 2 * 10.
             (
-                "disabled entries",
-                stack,
+                "zero pyramiding allows one entry per direction",
+                both_ways,
                 BacktestSettings {
                     pyramiding: 0,
                     ..terms.clone()
                 },
-                flat(&[100.0, 100.0, 110.0]),
-                vec![],
-                vec![1000.0; 4],
+                flat(&[100.0, 100.0, 110.0, 100.0]),
+                vec![
+                    trade(Buy, 2.0, 1, 100.0, Some((2, 110.0, 20.0)), "A / C"),
+                    trade(Sell, 2.0, 2, 110.0, Some((3, 100.0, 20.0)), "C / X"),
+                ],
+                vec![1000.0, 1000.0, 1000.0, 1020.0, 1040.0],
                 0,
             ),
             (

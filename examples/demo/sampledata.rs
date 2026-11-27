@@ -181,6 +181,17 @@ impl DemoSymbol {
         }
     }
 
+    /// The quantity step a catalog symbol trades in: ten-thousandths of a token for crypto,
+    /// whole units otherwise. `None` for a symbol outside the catalog.
+    pub fn quantity_step(symbol: &str) -> Option<f64> {
+        let spec = Self::catalog().iter().find(|s| s.symbol == symbol)?;
+        Some(if spec.kind() == SymbolType::Crypto {
+            0.0001
+        } else {
+            1.0
+        })
+    }
+
     /// Whether the symbol trades in US equity hours and pays a dividend: the stocks and the fund.
     pub fn has_hours(symbol: &str) -> bool {
         matches!(
