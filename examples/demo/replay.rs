@@ -3348,7 +3348,7 @@ mod tests {
         settle(&mut app, &ctx);
         app.advance_sample_to(until);
         settle(&mut app, &ctx);
-        app.start_replay();
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 1);
         let interval = Timeframe::Ticks(NonZeroU64::MIN);
         app.set_replay_interval(interval);
         settle(&mut app, &ctx);
@@ -3371,7 +3371,7 @@ mod tests {
         for recorded in [true, false] {
             let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
             cc.storage = Some(&storage);
-            let mut restored = DemoApp::new_at(&cc, start, true);
+            let mut restored = DemoApp::new_at(&cc, if recorded { start } else { until }, true);
             settle(&mut restored, &ctx);
             if recorded {
                 restored.advance_sample_to(until);
