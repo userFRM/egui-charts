@@ -39,6 +39,7 @@
 //!
 //! let channel = AutoDrawing::new(AutoDrawingKind::ParallelChannel, 5.0, 10);
 //! let delta = CVD::new().with_mode(CVDMode::BodyRatio);
+//! let reversal = egui_charts::studies::BookerReversal::new(12, 26, 70, 10);
 //! let ribbon = MACombination::new(vec![
 //!     AverageLine::new(AverageType::Exponential, 20, Color32::YELLOW),
 //!     AverageLine::new(AverageType::Simple, 50, Color32::LIGHT_BLUE),
