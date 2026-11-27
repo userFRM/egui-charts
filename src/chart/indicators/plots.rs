@@ -450,21 +450,40 @@ pub(crate) fn paint_drawings(
         finer: &[],
     };
     let drawings = mapped_drawings(study, coords, price_to_y);
+    let painter = context.painter.with_clip_rect(context.rect);
+    let ctx = painter.ctx();
+    let pointer = ctx.pointer_hover_pos().filter(|&pos| {
+        context.rect.contains(pos) && ctx.layer_id_at(pos) == Some(painter.layer_id())
+    });
+    let mut hovered = None;
     for drawing in &drawings {
-        drawing.render(
-            &context.painter.with_clip_rect(context.rect),
-            context.rect,
-            &view,
-        );
+        let start = pointer.filter(|_| drawing.label.is_some()).map(|_| {
+            ctx.graphics(|g| {
+                g.get(painter.layer_id())
+                    .map_or(0, |list| list.next_idx().0)
+            })
+        });
+        drawing.render(&painter, context.rect, &view);
+        if let (Some(pos), Some(start)) = (pointer, start) {
+            let hit = crate::drawings::services::hit_test(pos, std::slice::from_ref(drawing), "")
+                .is_some()
+                || ctx.graphics(|g| {
+                    g.get(painter.layer_id()).is_some_and(|list| {
+                        list.all_entries().skip(start).any(|shape| {
+                            crate::drawings::services::hit_test_painted(
+                                pos,
+                                std::slice::from_ref(shape),
+                            )
+                        })
+                    })
+                });
+            // Later drawings keep precedence, including their labels above the line.
+            if hit {
+                hovered = drawing.label.as_deref();
+            }
+        }
     }
-    let ctx = context.painter.ctx();
-    // Pattern boundaries share ids, so hit-test each drawing on its own, topmost first.
-    if let Some(pos) = ctx.pointer_hover_pos().filter(|&pos| {
-        context.rect.contains(pos) && ctx.layer_id_at(pos) == Some(context.painter.layer_id())
-    }) && let Some(label) = drawings.iter().rev().find_map(|drawing| {
-        let label = drawing.label.as_deref()?;
-        crate::drawings::services::hit_test(pos, std::slice::from_ref(drawing), "").map(|_| label)
-    }) {
+    if let (Some(pos), Some(label)) = (pointer, hovered) {
         // One id per pane, shared with the marks, so egui stacks the tooltips of every study
         // under the pointer instead of painting them over each other.
         egui::Tooltip::always_open(
