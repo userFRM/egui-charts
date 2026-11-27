@@ -277,6 +277,14 @@ impl LiveFeed {
         )
     }
 
+    /// A copy of this source that advances only when its owner advances it. It leaves out the
+    /// shared market, whose loading symbols would otherwise hold its clock.
+    pub(super) fn detached(&self) -> Self {
+        let mut feed = self.fork();
+        feed.2 = None;
+        feed
+    }
+
     pub(super) fn view(&self, extended_hours: bool) -> (SessionType, bool) {
         let sim = self.state();
         (sim.session(extended_hours), sim.adjusted)
