@@ -1693,6 +1693,15 @@ mod tests {
                 config.show_developing_value_area = true;
                 config.developing_poc_color = [31, 32, 33, 34];
                 config.developing_value_area_colors = [[35, 36, 37, 38], [39, 40, 41, 42]];
+                config.poc_color = Some([43, 44, 45, 46]);
+                config.values_color = Some([47, 48, 49, 50]);
+                config.show_box = false;
+                config.box_color = Some([51, 52, 53, 54]);
+                config.show_values = true;
+                config.show_poc = false;
+                config.show_value_area_high = true;
+                config.value_area_colors = Some([[55, 56, 57, 58], [59, 60, 61, 62]]);
+                config.value_area_line_colors = [[63, 64, 65, 66], [67, 68, 69, 70]];
                 let mut storage = DrawingStorage::new("AAPL");
                 storage.add_drawing(drawing_to_stored(&drawing, bar_to_time));
                 let (loaded, skipped) =
@@ -1878,8 +1887,8 @@ mod tests {
                 if let Some(config) = &restored.pitchfork {
                     assert!(config.extend_lines, "older forks retain forward extension");
                 }
-                // These literal older saves have no tick layout and keep their row count, and
-                // draw no developing lines.
+                // These literal older saves have no tick layout and keep their row count, draw no
+                // developing lines and no values, and keep the point of control and box as before.
                 if let Some(config) = restored.volume_profile {
                     assert_eq!(config.row_ticks(), None);
                     assert_eq!((config.rows(), config.value_area()), (50, 0.68));
@@ -1892,6 +1901,11 @@ mod tests {
                         ),
                         ([255, 152, 0, 255], [[33, 150, 243, 255]; 2])
                     );
+                    assert_eq!(
+                        (config.poc_color, config.values_color, config.box_color),
+                        (None, None, None)
+                    );
+                    assert!(config.show_box && config.show_poc && !config.show_values);
                 }
                 assert!(
                     !serde_json::to_string(&stored.drawing)

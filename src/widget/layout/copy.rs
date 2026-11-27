@@ -391,6 +391,10 @@ fn apply_to_other_chart(
             tpo_poor_high: source.tpo_poor_high,
             tpo_poor_low: source.tpo_poor_low,
             tpo_extend_poor: source.tpo_extend_poor,
+            tpo_extend_poc: source.tpo_extend_poc,
+            tpo_extend_vah: source.tpo_extend_vah,
+            tpo_extend_val: source.tpo_extend_val,
+            tpo_extend_single_prints: source.tpo_extend_single_prints,
             tpo_initial_balance_extensions: source.tpo_initial_balance_extensions,
             tpo_single_prints: source.tpo_single_prints,
             tpo_midpoint: source.tpo_midpoint,
@@ -1224,6 +1228,10 @@ mod tests {
         params.tpo_initial_balance = false;
         params.tpo_initial_balance_minutes = 30;
         params.tpo_extend_poor = true;
+        params.tpo_extend_poc = true;
+        params.tpo_extend_vah = true;
+        params.tpo_extend_val = true;
+        params.tpo_extend_single_prints = true;
         params.tpo_initial_balance_extensions = true;
         params.tpo_single_prints = true;
         params.tpo_midpoint = true;
@@ -1358,6 +1366,10 @@ mod tests {
                 params.tpo_poor_low,
                 params.tpo_poor_highs_lows,
                 params.tpo_extend_poor,
+                params.tpo_extend_poc,
+                params.tpo_extend_vah,
+                params.tpo_extend_val,
+                params.tpo_extend_single_prints,
                 params.tpo_initial_balance_extensions,
                 params.tpo_single_prints,
                 params.tpo_midpoint,
@@ -1367,8 +1379,8 @@ mod tests {
                 params.tpo_split_periods,
             ],
             [
-                false, false, true, false, false, false, true, true, true, true, false, true,
-                false, false,
+                false, false, true, false, false, false, true, true, true, true, true, true, true,
+                true, false, true, false, false,
             ],
             "the other TPO display switches follow the source, including the legacy poor flag"
         );

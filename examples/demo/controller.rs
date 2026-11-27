@@ -80,7 +80,8 @@ use egui_charts::ui::context_menu::{
 use egui_charts::ui::dialogs::DrawingContextMenuAction;
 use egui_charts::ui::dialogs::{
     AlertDialog, AlertDialogAction, DrawingId, DrawingPropertiesAction, DrawingPropertiesDialog,
-    KeyboardShortcutsDialog, SeriesContextMenuAction, StudyContextMenuAction,
+    KeyboardShortcutsAction, KeyboardShortcutsDialog, SeriesContextMenuAction,
+    StudyContextMenuAction,
 };
 use egui_charts::ui::drawing_toolbar::{DrawingToolbar, DrawingToolbarAction};
 use egui_charts::ui::export::{ExportDialog, ExportFormat, ExportResponse, ExportScope};
@@ -133,6 +134,13 @@ const INDICATOR_ID_BASE: usize = usize::MAX / 2;
 /// Resting order sizes the demo marks: the block orders of the order-level instrument reach them,
 /// its ordinary orders do not.
 const ORDER_TIERS: OrderSizeTiers = OrderSizeTiers::new(100.0, 250.0);
+
+/// The largest watchlist file the demo reads, far more than the 1,000 entries a list keeps.
+const MAX_WATCHLIST_BYTES: u64 = 1024 * 1024;
+
+/// A chosen watchlist file's name and bytes, `None` when the choice was cancelled, or why the
+/// file could not be read.
+type WatchlistFile = Result<Option<(String, Vec<u8>)>, String>;
 
 /// The heatmap's history of `symbol`'s book: of its individual orders when its feed sends them, so
 /// the cells mark the large ones, otherwise of the aggregate depth.
@@ -405,6 +413,9 @@ pub struct DemoApp {
     alert_dialog: Box<AlertDialog>,
     drawing_props: Box<DrawingPropertiesDialog>,
     keyboard_shortcuts: KeyboardShortcutsDialog,
+    /// The key bindings the user saved in the shortcuts dialog, for the charts of every layout
+    /// tab; `None` keeps each chart's defaults.
+    shortcuts: Option<egui_charts::widget::ShortcutMap>,
     data_table: egui_charts::ui::dialogs::DataTableDialog,
     /// The table kept on the chart of a layout slot, whichever chart is active.
     fixed_data_table: (egui_charts::ui::dialogs::DataTableDialog, usize),
@@ -442,13 +453,15 @@ pub struct DemoApp {
     alert_evaluator: egui_charts::services::AlertEvaluator,
     alert_live: Arc<LiveFeed>,
 
-    // Session-only paper account, connected from the broker picker and traded through the
-    // library's order ticket and account panel.
+    // Paper account kept across restarts, connected from the broker picker and traded through
+    // the library's order ticket and account panel.
     pub(crate) trading: Box<egui_charts::ui::trading::Trading>,
     pub(crate) paper: Arc<egui_charts::services::PaperAccount>,
     broker_picker: egui_charts::ui::trading::BrokerPicker,
     account_panel: AccountPanelSize,
-    /// The height of the account panel the user dragged its top edge to.
+    /// The height of the account panel the user dragged its top edge to, kept across restarts.
+    /// A saved height that is not a finite number restores as 320 points, and one below the
+    /// drag's 42 point minimum as 42.
     account_panel_height: f32,
     // The account settings ask whether to reset the paper account.
     paper_reset: bool,
@@ -464,8 +477,8 @@ pub struct DemoApp {
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
     quotes: Arc<feeds::DemoQuotes>,
-    // Text pasted for a watchlist import, while its window is open.
-    watchlist_import: Option<String>,
+    // The watchlist file the user is choosing, until it is read.
+    watchlist_import: Option<std::sync::mpsc::Receiver<WatchlistFile>>,
     /// Whether the wide watchlist window is open.
     watchlist_wide: bool,
     // Symbol search is open for the watchlist's add button: the pick joins the list.
@@ -689,6 +702,15 @@ impl DemoApp {
         let strategy_report = Box::new(egui_charts::ui::strategy_report::StrategyTester::new(
             sample_study.strategy_factory(),
         ));
+        // `Some(None)`: a saved account that no longer reads, or whose balance is not finite.
+        let saved_paper = cc
+            .storage
+            .filter(|storage| storage.get_string("paper_account").is_some())
+            .map(|storage| {
+                eframe::get_value(storage, "paper_account")
+                    .and_then(egui_charts::services::PaperAccount::restore)
+            });
+        let paper_unreadable = matches!(saved_paper, Some(None));
         // Keep the controller off callers' stacks, including tests that restart it.
         let mut app = Box::new(Self {
             chart,
@@ -765,7 +787,13 @@ impl DemoApp {
             sample_study,
             alert_dialog: Box::new(AlertDialog::new()),
             drawing_props: Box::new(DrawingPropertiesDialog::new()),
-            keyboard_shortcuts: KeyboardShortcutsDialog::new(),
+            keyboard_shortcuts: {
+                let mut dialog = KeyboardShortcutsDialog::new();
+                dialog.editable = true;
+                dialog
+            },
+            // Read with the other user settings.
+            shortcuts: None,
             data_table: egui_charts::ui::dialogs::DataTableDialog::new(),
             fixed_data_table: (
                 egui_charts::ui::dialogs::DataTableDialog::new()
@@ -832,16 +860,20 @@ impl DemoApp {
             alert_evaluator: egui_charts::services::AlertEvaluator::new(alert_live.clone()),
             alert_live,
             trading: Default::default(),
-            paper: Arc::new(
-                egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
-            ),
+            paper: Arc::new(saved_paper.flatten().unwrap_or_else(|| {
+                egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0)
+            })),
             broker_picker: {
                 let mut picker = egui_charts::ui::trading::BrokerPicker::new(example_brokers());
                 picker.tiles[0].facts = broker_facts(egui_charts::ui::trading::BrokerTile::PAPER);
                 picker
             },
             account_panel: AccountPanelSize::Normal,
-            account_panel_height: 320.0,
+            account_panel_height: cc
+                .storage
+                .and_then(|storage| eframe::get_value::<f32>(storage, "account_panel_height"))
+                .filter(|height| height.is_finite())
+                .map_or(320.0, |height| height.max(42.0)),
             paper_reset: false,
             replay_paper: None,
             replay_prompt: Default::default(),
@@ -1095,6 +1127,20 @@ impl DemoApp {
                     .toasts
                     .error(format!("Could not restore detectors: {error}")),
             }
+        }
+        app.trading.presets = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "order_presets"))
+            .unwrap_or_default();
+        if cc
+            .storage
+            .and_then(|storage| eframe::get_value::<bool>(storage, "paper_connected"))
+            == Some(true)
+        {
+            app.connect_paper();
+        }
+        if paper_unreadable {
+            app.toasts.error("Could not restore the paper account");
         }
         app
     }
@@ -1638,8 +1684,12 @@ impl DemoApp {
             _ => {}
         }
 
-        // Keyboard shortcuts help.
-        let _ = self.keyboard_shortcuts.show_for_chart(ctx, &self.chart);
+        // Keyboard shortcuts help, whose Save gives the edited bindings to every chart.
+        if let KeyboardShortcutsAction::Apply(map) =
+            self.keyboard_shortcuts.show_for_chart(ctx, &self.chart)
+        {
+            self.shortcuts = Some(map);
+        }
         self.show_interval_entry(ctx);
         self.show_open_layout(ctx);
         self.show_idea(ctx);
@@ -1972,6 +2022,11 @@ impl eframe::App for DemoApp {
             &self.alert_host.engine().triggers(),
         );
         eframe::set_value(storage, "alert_list_options", self.alerts.options());
+        // The live account: a replay session trades an account of its own, which is not kept.
+        eframe::set_value(storage, "paper_account", &self.paper.save());
+        eframe::set_value(storage, "order_presets", &self.trading.presets);
+        eframe::set_value(storage, "paper_connected", &self.trading.has_broker());
+        eframe::set_value(storage, "account_panel_height", &self.account_panel_height);
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
         self.checkpoint_workspace();
@@ -2052,6 +2107,7 @@ impl eframe::App for DemoApp {
 
         // Drive replay before laying out the chart so its window is current.
         self.poll_recording(&ctx);
+        self.poll_watchlist_file();
         self.advance_replay();
         if self.replay.is_none() || self.live.loading() {
             let delay = self.live.advance(chrono::Utc::now());
@@ -2162,7 +2218,6 @@ impl eframe::App for DemoApp {
         self.show_replay_trading(&ctx);
         self.show_annotation_editor(&ctx);
         self.show_dialogs(&ctx);
-        self.show_watchlist_import(&ctx);
         self.show_wide_watchlist(&ctx);
         self.show_profile(&ctx);
 
@@ -3569,7 +3624,13 @@ impl DemoApp {
     }
 
     fn show_watchlist(&mut self, ui: &mut egui::Ui) {
-        match self.watchlist.show(ui) {
+        let action = self.watchlist.show(ui);
+        self.handle_watchlist_action(ui.ctx(), action);
+    }
+
+    /// What the compact and the wide watchlist ask of the host.
+    fn handle_watchlist_action(&mut self, ctx: &egui::Context, action: WatchlistAction) {
+        match action {
             WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
             WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
             WatchlistAction::AddSymbol => {
@@ -3577,7 +3638,8 @@ impl DemoApp {
                 self.symbol_search.open();
             }
             WatchlistAction::AdvancedView => self.watchlist_wide = true,
-            WatchlistAction::Import => self.watchlist_import = Some(String::new()),
+            WatchlistAction::CompactView => self.watchlist_wide = false,
+            WatchlistAction::Import => self.pick_watchlist_file(ctx),
             WatchlistAction::Export { text, .. } => self.save_text("watchlist.txt", &text),
             WatchlistAction::None => {}
             _ => {}
@@ -3634,35 +3696,83 @@ impl DemoApp {
             .open(&mut open)
             .default_size([900.0, 520.0])
             .show(ctx, |ui| action = self.watchlist.show_wide(ui, &details));
-        match action {
-            WatchlistAction::SelectSymbol(symbol) => self.open_catalog_symbol(&symbol),
-            WatchlistAction::AddNote(symbol) => self.add_note(&symbol),
-            WatchlistAction::CompactView => open = false,
-            _ => {}
-        }
-        self.watchlist_wide = open;
+        self.handle_watchlist_action(ctx, action);
+        self.watchlist_wide &= open;
     }
 
-    /// The demo has no file picker for imports: the user pastes the exported text instead.
-    fn show_watchlist_import(&mut self, ctx: &egui::Context) {
-        let Some(text) = &mut self.watchlist_import else {
+    /// Asks for a `.txt` watchlist file, which [`Self::poll_watchlist_file`] imports.
+    fn pick_watchlist_file(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.watchlist_import = Some(rx);
+        let ctx = ctx.clone();
+        let too_large = |name: &str| format!("{name} exceeds the 1 MiB watchlist limit");
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let result = (|| {
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Text", &["txt"])
+                    .pick_file()
+                else {
+                    return Ok(None);
+                };
+                let name = path
+                    .file_name()
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+                let mut bytes = Vec::new();
+                std::fs::File::open(&path)
+                    .and_then(|file| file.take(MAX_WATCHLIST_BYTES + 1).read_to_end(&mut bytes))
+                    .map_err(|error| format!("Could not read {name}: {error}"))?;
+                if bytes.len() as u64 > MAX_WATCHLIST_BYTES {
+                    return Err(too_large(&name));
+                }
+                Ok(Some((name, bytes)))
+            })();
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match rfd::AsyncFileDialog::new()
+                .add_filter("Text", &["txt"])
+                .pick_file()
+                .await
+            {
+                None => Ok(None),
+                Some(file) if file.inner().size() > MAX_WATCHLIST_BYTES as f64 => {
+                    Err(too_large(&file.file_name()))
+                }
+                Some(file) => Ok(Some((file.file_name(), file.read().await))),
+            };
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Imports the chosen watchlist file as a list named after the file without its extension.
+    fn poll_watchlist_file(&mut self) {
+        let Some(rx) = self.watchlist_import.take() else {
             return;
         };
-        let mut open = true;
-        let mut import = false;
-        egui::Window::new("Import watchlist")
-            .open(&mut open)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                ui.label("Paste symbols separated by commas; ###Title starts a section.");
-                ui.add(egui::TextEdit::multiline(text).desired_rows(6));
-                import = ui.button("Import").clicked();
-            });
-        if import {
-            self.watchlist.import("Imported", text);
-        }
-        if import || !open {
-            self.watchlist_import = None;
+        match rx.try_recv() {
+            Ok(Ok(Some((file, bytes)))) => match String::from_utf8(bytes) {
+                Ok(text) => {
+                    let name = std::path::Path::new(&file)
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(str::trim)
+                        .filter(|stem| !stem.is_empty())
+                        .unwrap_or("Imported");
+                    self.watchlist.import(name, &text);
+                }
+                Err(_) => self.notify(format!("{file} is not UTF-8 text")),
+            },
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => self.notify(error),
+            Err(std::sync::mpsc::TryRecvError::Empty) => self.watchlist_import = Some(rx),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.notify("Watchlist selection failed")
+            }
         }
     }
 
@@ -4072,6 +4182,10 @@ impl DemoApp {
                     let prepared = chart.symbol() == live::PREPARED_FOOTPRINT_SYMBOL;
                     chart.set_trade_history_on_demand(prepared);
                     chart.set_footprint_history_by_view(prepared);
+                }
+                // Each layout tab has a layout of its own: the one on view takes the bindings.
+                if self.layout.shortcuts() != self.shortcuts.as_ref() {
+                    self.layout.set_shortcuts(self.shortcuts.clone());
                 }
                 let rect = self.layout.show(ui, &mut charts).rect;
                 let visible = self.layout.visible_chart_rects(rect, charts.len());
@@ -6139,6 +6253,95 @@ mod tests {
         }
     }
 
+    /// The demo's series and study settings switch on extensions of TPO levels, which the alert
+    /// dialog then offers as sources, and switching them off withdraws them.
+    #[test]
+    fn tpo_level_extensions_reach_the_demo_alert_dialog() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        use egui_charts::model::{AlertSource, ChartType, TPOLevel};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T17:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        let click = |app: &mut DemoApp, label: &str| {
+            let nodes = draw(&ctx, app, vec![]);
+            let target_node = control(&nodes, label).0;
+            draw(
+                &ctx,
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: None,
+                })],
+            );
+        };
+        // The TPO levels the alert dialog offers, closing it again.
+        let offered = |app: &mut DemoApp| {
+            app.open_alert(None);
+            let levels: Vec<_> = (app.alert_dialog.sources.iter())
+                .filter_map(|(source, name)| match source {
+                    AlertSource::TPOLevel(level) => Some((level.level, name.to_string())),
+                    _ => None,
+                })
+                .collect();
+            app.alert_dialog.close();
+            levels
+        };
+        app.chart.set_chart_type(ChartType::TimePriceOpportunity);
+        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in ["Extend point of control until touched", "Ok"] {
+            click(&mut app, label);
+        }
+        assert!(!app.series_settings.is_open);
+        assert!(app.chart.chart_type_params().tpo_extend_poc);
+        let levels = offered(&mut app);
+        assert!(
+            !levels.is_empty()
+                && levels.iter().all(|(level, name)| {
+                    *level == TPOLevel::PointOfControl && name.starts_with("TPO ")
+                }),
+            "{levels:?}"
+        );
+
+        let study = IndicatorFactory::new()
+            .create("Time Price Opportunity")
+            .unwrap();
+        let id = app.chart.add_indicator(study);
+        app.open_indicator_settings(id);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in ["Extend value area high until touched", "Apply"] {
+            click(&mut app, label);
+        }
+        assert!(!app.indicator_settings.is_open());
+        let levels = offered(&mut app);
+        assert!(
+            levels.iter().any(|(level, name)| {
+                *level == TPOLevel::ValueAreaHigh && name.starts_with("Time Price Opportunity ")
+            }),
+            "{levels:?}"
+        );
+
+        let mut params = app.chart.chart_type_params().clone();
+        params.tpo_extend_poc = false;
+        app.chart.set_chart_type_params(params);
+        (app.chart.indicator_mut(id).unwrap())
+            .set_input("extend_vah", InputValue::Toggle(false))
+            .unwrap();
+        let levels = offered(&mut app);
+        assert!(levels.is_empty(), "{levels:?}");
+    }
+
     /// Study settings use the own-data chart's zones and apply the edited session clock.
     #[test]
     fn study_settings_edit_session_time_and_offer_the_own_data_zone() {
@@ -6999,6 +7202,138 @@ mod tests {
         ui_frame(&ctx, size, vec![], |ui| draw(&mut app, ui));
         assert!(app.broker_picker.is_open());
         assert!(app.trading.has_broker());
+    }
+
+    /// The paper account with its working order, the order presets, the broker connection and
+    /// the account panel's height come back after a restart, and storage saved without them
+    /// opens with a new account as before.
+    #[test]
+    fn paper_account_presets_connection_and_panel_height_survive_a_restart() {
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType, TimeInForce};
+        use egui_charts::services::PaperAccount;
+        use egui_charts::ui::trading::OrderPreset;
+
+        let ctx = egui::Context::default();
+        let now = "2026-11-18T15:30:00Z".parse().unwrap();
+        let start = |storage: Option<&AppStorage>| {
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = storage.map(|storage| storage as &dyn eframe::Storage);
+            DemoApp::new_at(&cc, now, true)
+        };
+        let mut app = start(None);
+        app.connect_paper();
+        let symbol = app.chart.symbol().to_owned();
+        app.paper.set_price(&symbol, 100.0);
+        // A buy limit below the price keeps working.
+        let mut request = OrderRequest::new(&symbol, OrderSide::Buy, 2.0, OrderType::Limit(99.0));
+        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+        egui_charts::services::Broker::place(&*app.paper, request, reply);
+        answer.take().expect("limit reply").expect("working limit");
+        app.trading
+            .presets
+            .insert(String::new(), vec![OrderPreset::new("Two", 2.0)]);
+        app.account_panel_height = 470.0;
+        let mut storage = AppStorage::default();
+        eframe::App::save(&mut *app, &mut storage);
+
+        // No frame runs, so no price reaches either account between the two saves.
+        let restored = start(Some(&storage));
+        assert_eq!(restored.account_panel_height, 470.0);
+        assert_eq!(restored.trading.presets, app.trading.presets);
+        assert!(restored.trading.has_broker());
+        let saved = restored.paper.save();
+        assert_eq!(saved, app.paper.save());
+        assert_eq!(
+            serde_json::to_value(&saved).unwrap()["working"][0]["request"]["order_type"]["Limit"],
+            99.0
+        );
+
+        // Storage saved before these keys existed opens as before.
+        for key in [
+            "paper_account",
+            "order_presets",
+            "paper_connected",
+            "account_panel_height",
+        ] {
+            storage.0.remove(key);
+        }
+        let old = start(Some(&storage));
+        assert_eq!(old.account_panel_height, 320.0);
+        assert!(old.trading.presets.is_empty());
+        assert!(!old.trading.has_broker());
+        assert_eq!(
+            old.paper.save(),
+            PaperAccount::new("USD", 100_000.0).leverage(10.0).save()
+        );
+    }
+
+    /// A binding saved in the shortcuts dialog reaches every chart of the layout, and it is in
+    /// effect again after a restart on the same storage until settings without bindings arrive.
+    #[test]
+    fn shortcuts_dialog_bindings_reach_every_chart_and_survive_a_restart() {
+        use egui::accesskit::Role;
+        use egui_charts::config::KeyboardAction;
+
+        let now = "2026-11-18T15:30:00Z".parse().unwrap();
+        let alt_b = egui::KeyboardShortcut::new(egui::Modifiers::ALT, egui::Key::B);
+        let page_left = |app: &DemoApp| -> Vec<Option<egui::KeyboardShortcut>> {
+            std::iter::once(&*app.chart)
+                .chain(app.extra_charts.iter().map(|extra| &*extra.chart))
+                .map(|chart| chart.shortcuts().shortcut(KeyboardAction::PanLeftFast))
+                .collect()
+        };
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        finish_feed(&app.live);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.keyboard_shortcuts.open();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(3);
+        assert_ne!(page_left(h.state())[0], Some(alt_b));
+        h.get_by_role_and_label(Role::Button, "Edit")
+            .click_accesskit();
+        // The edit mode is a window of its own, which sizes itself for a frame before it shows.
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, "Change Pan left by a page")
+            .click_accesskit();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::B);
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "Save")
+            .click_accesskit();
+        h.run_steps(3);
+        assert_eq!(page_left(h.state()), [Some(alt_b); 2]);
+        let mut storage = AppStorage::default();
+        eframe::App::save(&mut **h.state_mut(), &mut storage);
+
+        let ctx = egui::Context::default();
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut restored = DemoApp::new_at(&cc, now, true);
+        settle(&mut restored, &ctx);
+        assert_eq!(page_left(&restored), [Some(alt_b); 2]);
+
+        // Settings from another client that hold no bindings bring back the defaults.
+        let mut settings = restored.user_settings();
+        settings.shortcuts = None;
+        restored.apply_user_settings(&ctx, settings);
+        settle(&mut restored, &ctx);
+        let default =
+            egui_charts::widget::ShortcutMap::default().shortcut(KeyboardAction::PanLeftFast);
+        assert_eq!(page_left(&restored), [default; 2]);
     }
 
     /// Bulk removal waits for a lock decision, saves only remembered decisions, and restores
@@ -10700,6 +11035,48 @@ mod tests {
         );
     }
 
+    /// A chosen watchlist file imports as a list named after the file without its extension, and
+    /// a file that is not UTF-8 text adds no list and says so.
+    #[test]
+    fn a_chosen_watchlist_file_imports_under_its_name_and_text_only() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        for (file, bytes, imported) in [
+            (
+                "Tech.txt",
+                b"NASDAQ:AAPL,###Chips,NASDAQ:NVDA".to_vec(),
+                true,
+            ),
+            ("Bad.txt", vec![b'N', 0xff, b'A'], false),
+        ] {
+            let before = app.watchlist.lists().len();
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.watchlist_import = Some(rx);
+            tx.send(Ok(Some((file.to_owned(), bytes)))).unwrap();
+            settle(&mut app, &ctx);
+            let lists = app.watchlist.lists();
+            if imported {
+                assert_eq!(lists.len(), before + 1, "{file}");
+                let list = lists.last().unwrap();
+                assert_eq!(list.name, "Tech");
+                assert_eq!(list.to_text(), "NASDAQ:AAPL,###Chips,NASDAQ:NVDA");
+                assert_eq!(app.watchlist.active_list(), before);
+            } else {
+                assert_eq!(lists.len(), before, "{file}");
+                assert!(
+                    app.toasts
+                        .toasts()
+                        .iter()
+                        .any(|toast| toast.message == "Bad.txt is not UTF-8 text")
+                );
+            }
+        }
+    }
+
     #[test]
     fn watchlist_shortcuts_follow_the_filtered_order_and_replay_keeps_its_keys() {
         use eframe::App;
@@ -12780,8 +13157,8 @@ mod tests {
             (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
-            (Tool::FixedRangeVolumeProfile, "Developing POC"),
-            (Tool::AnchoredVolumeProfile, "Developing POC"),
+            (Tool::FixedRangeVolumeProfile, "VAL"),
+            (Tool::AnchoredVolumeProfile, "VAL"),
             (Tool::RegressionTrend, "Upper deviation"),
             (Tool::BarsPattern, "Mirrored"),
         ] {

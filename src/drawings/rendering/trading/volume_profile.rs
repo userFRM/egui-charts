@@ -441,6 +441,9 @@ impl Drawing {
             ProfileStyle::Drawing {
                 anchored: self.tool_type == DrawingToolType::AnchoredVolumeProfile,
                 poc_width: self.stroke_width,
+                volume_decimals: view
+                    .instrument
+                    .and_then(|instrument| instrument.volume_decimals),
             },
             view.price_to_y,
         );
@@ -1863,6 +1866,206 @@ mod tests {
                 estimated,
                 "{name}"
             );
+        }
+    }
+
+    /// The point of control, the value area high and low lines, the row values and the box of
+    /// both profile drawings paint in the colours set on them, or as before while none is set in
+    /// either theme, and not at all when switched off. Anchored values measure their room from
+    /// the rows at the pane's edge, and values follow the instrument's volume decimals.
+    #[test]
+    fn volume_profile_drawing_styles_paint_in_their_colours() {
+        use crate::data::VolumeProfileConfig;
+        use crate::model::Instrument;
+        use crate::theme::ThemeExt;
+        let bars = sample_bars();
+        let price_to_y = |price: f64| (16.0 - price) as f32 * 50.0;
+        let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+        let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let one_decimal = Instrument::new("TEST").with_volume_decimals(1);
+        let mut on = VolumeProfileConfig::new(4, 0.7).unwrap();
+        on.show_value_area_high = true;
+        on.show_value_area_low = true;
+        on.show_values = true;
+        let mut set = on;
+        set.poc_color = Some([200, 0, 0, 255]);
+        set.value_area_line_colors = [[0, 200, 0, 255], [0, 0, 200, 255]];
+        set.values_color = Some([250, 200, 0, 255]);
+        set.box_color = Some([10, 20, 30, 60]);
+        let mut off = set;
+        off.show_poc = false;
+        off.show_value_area_high = false;
+        off.show_value_area_low = false;
+        off.show_values = false;
+        off.show_box = false;
+        // Four 1.5-price rows have totals 83 1/3, 350, 619 1/6 and 397.5.
+        let two = ["83.33", "350.00", "619.17", "397.50"];
+        let one = ["83.3", "350.0", "619.2", "397.5"];
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for tool in [
+                DrawingToolType::FixedRangeVolumeProfile,
+                DrawingToolType::AnchoredVolumeProfile,
+            ] {
+                let anchored = tool == DrawingToolType::AnchoredVolumeProfile;
+                for (case, config, width, instrument, values) in [
+                    (
+                        "defaults",
+                        VolumeProfileConfig::new(4, 0.7).unwrap(),
+                        400.0,
+                        None,
+                        None,
+                    ),
+                    ("on", on, 400.0, None, Some(two)),
+                    ("set", set, 400.0, None, Some(two)),
+                    ("off", off, 400.0, None, None),
+                    (
+                        "set, one decimal",
+                        set,
+                        400.0,
+                        Some(&one_decimal),
+                        Some(one),
+                    ),
+                    // Anchored rows sit at the pane's edge, where the values fit.
+                    ("set, narrow", set, 24.0, None, anchored.then_some(two)),
+                ] {
+                    let mut drawing = Drawing::new(1, tool);
+                    drawing.color = [40, 90, 200, 255];
+                    drawing.volume_profile = Some(config);
+                    let view = ChartView {
+                        price_formatter: None,
+                        thousands_sep: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
+                        instrument,
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
+                        price_to_y: &price_to_y,
+                        y_to_price: &|y| 16.0 - f64::from(y) / 50.0,
+                        time_axis: true,
+                        executions: None,
+                        timeframe: None,
+                        finer: &[],
+                    };
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut text = Color32::PLACEHOLDER;
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        text = ui.ctx().active_theme().ui.text;
+                        let painter =
+                            egui::Painter::new(ui.ctx().clone(), egui::LayerId::background(), clip);
+                        drawing.draw_volume_profile(
+                            &painter,
+                            &view,
+                            0,
+                            &bars,
+                            100.0,
+                            100.0 + width,
+                        );
+                    });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let name = format!("{case}, {tool:?}, dark {}", theme.dark);
+                    // Placeholder bytes take the drawing's colour at alpha 200.
+                    let line = |set: [u8; 4]| {
+                        if set == Color32::PLACEHOLDER.to_srgba_unmultiplied() {
+                            rgba([40, 90, 200, 200])
+                        } else {
+                            rgba(set)
+                        }
+                    };
+                    let box_rect =
+                        Rect::from_min_max(Pos2::new(100.0, 50.0), Pos2::new(100.0 + width, 350.0));
+                    let mut boxes = Vec::new();
+                    let mut pocs = Vec::new();
+                    let mut edges = Vec::new();
+                    let mut labels = Vec::new();
+                    let mut figures = Vec::new();
+                    for shape in &shapes {
+                        match &shape.shape {
+                            egui::Shape::Rect(r) if r.rect == box_rect => boxes.push(r.fill),
+                            egui::Shape::Path(path) => {
+                                let egui::epaint::ColorMode::Solid(color) = path.stroke.color
+                                else {
+                                    panic!("{name}: POC is one colour");
+                                };
+                                pocs.push((path.points[0], path.points[1].x, color));
+                            }
+                            egui::Shape::LineSegment { points, stroke } => {
+                                edges.push((points[0].y, stroke.color));
+                            }
+                            egui::Shape::Text(t) => {
+                                let label = t.galley.job.text.clone();
+                                let color = t.galley.job.sections[0].format.color;
+                                if ["VAH", "VAL"].contains(&label.as_str()) {
+                                    labels.push((label, color));
+                                } else if label != "Estimated from bars" {
+                                    figures.push((label, color, t.visual_bounding_rect()));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let shown = config
+                        .show_box
+                        .then(|| rgba(config.box_color.unwrap_or([40, 90, 200, 15])));
+                    assert_eq!(boxes.first().copied(), shown, "{name}: box");
+                    let reach = if anchored {
+                        [0.0, 800.0]
+                    } else {
+                        [100.0, 100.0 + width]
+                    };
+                    let poc = config.poc_color.map_or(text, rgba);
+                    assert_eq!(
+                        pocs,
+                        if config.show_poc {
+                            vec![(Pos2::new(reach[0], 162.5), reach[1], poc)]
+                        } else {
+                            Vec::new()
+                        },
+                        "{name}: POC"
+                    );
+                    let [high, low] = config.value_area_line_colors;
+                    let want = if config.show_value_area_high {
+                        vec![(125.0, line(high)), (350.0, line(low))]
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(edges, want, "{name}: value area lines");
+                    if width >= 50.0 {
+                        assert_eq!(
+                            labels,
+                            want.iter()
+                                .zip(["VAH", "VAL"])
+                                .map(|(&(_, color), label)| (label.to_owned(), color))
+                                .collect::<Vec<_>>(),
+                            "{name}: value area labels"
+                        );
+                    }
+                    let figure = config.values_color.map_or(text, rgba);
+                    let bounds = if anchored {
+                        clip.x_range()
+                    } else {
+                        (102.0..=100.0 + width).into()
+                    };
+                    assert_eq!(
+                        figures
+                            .iter()
+                            .map(|(label, ..)| label.as_str())
+                            .collect::<Vec<_>>(),
+                        values.map_or(Vec::new(), Vec::from),
+                        "{name}: values"
+                    );
+                    for (label, color, rect) in &figures {
+                        assert_eq!(*color, figure, "{name}: {label}");
+                        assert!(
+                            bounds.contains(rect.min.x) && bounds.contains(rect.max.x),
+                            "{name}: {label} at {rect:?}"
+                        );
+                    }
+                }
+            }
         }
     }
 

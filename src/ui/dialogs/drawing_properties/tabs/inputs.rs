@@ -10,6 +10,7 @@ use crate::drawings::{
 use crate::data::{ProfileDisplay, VolumeProfileConfig};
 use crate::localization as l10n;
 use crate::model::{LineStyle, PriceSource};
+use crate::theme::ThemeExt;
 use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid, buttons::Button};
@@ -391,10 +392,19 @@ impl InputsTab {
                 let mut height = config.row_size().unwrap_or(1.0);
                 let mut ticks = config.row_ticks().unwrap_or(rows);
                 let mut percent = config.value_area() * 100.0;
+                let theme_text = ui.ctx().active_theme().ui.text.to_srgba_unmultiplied();
+                // The colour the box and lines take: placeholder bytes follow the theme.
+                let [r, g, b, _] =
+                    if drawing.color == egui::Color32::PLACEHOLDER.to_srgba_unmultiplied() {
+                        theme_text
+                    } else {
+                        drawing.color
+                    };
                 FormGrid::new("profile_inputs").show(ui, |ui| {
-                    // The up and down colours, then the developing POC's and the VA's high and low.
+                    // The up and down colours, the developing POC's and VA's high and low, the VA's
+                    // up and down, then the POC's, the VA lines', the values' and the box's.
                     let pickers = grid_pickers(pickers, 0);
-                    pickers.resize_with(5, ColorPickerState::default);
+                    pickers.resize_with(12, ColorPickerState::default);
                     let label = ui.label(l10n::text(ui.ctx(), "Row layout"));
                     ui.label_inputs_by(label.id, |ui| {
                         ui.combo_select(
@@ -480,9 +490,75 @@ impl InputsTab {
                         );
                         ui.end_row();
                     }
-                    let [poc_picker, high_picker, low_picker] = &mut pickers[2..] else {
+                    let [
+                        up_picker,
+                        down_picker,
+                        poc_picker,
+                        high_picker,
+                        low_picker,
+                        va_up_picker,
+                        va_down_picker,
+                        level_picker,
+                        vah_picker,
+                        val_picker,
+                        values_picker,
+                        box_picker,
+                    ] = &mut pickers[..]
+                    else {
                         unreachable!("resized above")
                     };
+                    let mut poc = config.poc_color.unwrap_or(theme_text);
+                    if switch_color(ui, "POC", &mut config.show_poc, &mut poc, level_picker) {
+                        config.poc_color = Some(poc);
+                    }
+                    // The drawing shows an edge for either switch; a toggle sets the edges apart.
+                    let edges = [
+                        config.show_value_area_lines || config.show_value_area_high,
+                        config.show_value_area_lines || config.show_value_area_low,
+                    ];
+                    let mut shown = edges;
+                    let line_color = |rgba: [u8; 4]| {
+                        if rgba == egui::Color32::PLACEHOLDER.to_srgba_unmultiplied() {
+                            [r, g, b, 200]
+                        } else {
+                            rgba
+                        }
+                    };
+                    let [vah, val] = &mut config.value_area_line_colors;
+                    let mut high = line_color(*vah);
+                    if switch_color(ui, "VAH", &mut shown[0], &mut high, vah_picker) {
+                        *vah = high;
+                    }
+                    let mut low = line_color(*val);
+                    if switch_color(ui, "VAL", &mut shown[1], &mut low, val_picker) {
+                        *val = low;
+                    }
+                    if shown != edges {
+                        config.show_value_area_lines = false;
+                        [config.show_value_area_high, config.show_value_area_low] = shown;
+                    }
+                    let mut values = config.values_color.unwrap_or(theme_text);
+                    if switch_color(
+                        ui,
+                        "Values",
+                        &mut config.show_values,
+                        &mut values,
+                        values_picker,
+                    ) {
+                        config.values_color = Some(values);
+                    }
+                    let current = config.box_color.unwrap_or([r, g, b, 15]);
+                    let mut picked = current;
+                    if switch_color(ui, "Box", &mut config.show_box, &mut picked, box_picker) {
+                        // The alpha is the box's opacity: an opaque palette swatch keeps it.
+                        let rgba = |[r, g, b, a]: [u8; 4]| {
+                            egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+                        };
+                        config.box_color = Some(
+                            keep_opacity(rgba(picked), rgba(current), box_picker.custom_mode)
+                                .to_srgba_unmultiplied(),
+                        );
+                    }
                     // Named in the label column, as the colour rows are, so a narrow dialog keeps
                     // its width.
                     let label = ui.label(l10n::text(ui.ctx(), "Developing POC"));
@@ -510,14 +586,35 @@ impl InputsTab {
                     if config.display != ProfileDisplay::Total {
                         let label = ui.label(l10n::text(ui.ctx(), "Up colour"));
                         ui.label_inputs_by(label.id, |ui| {
-                            level_color(ui, &mut config.up_color, &mut pickers[0]);
+                            level_color(ui, &mut config.up_color, up_picker);
                         });
                         ui.end_row();
                         let label = ui.label(l10n::text(ui.ctx(), "Down colour"));
                         ui.label_inputs_by(label.id, |ui| {
-                            level_color(ui, &mut config.down_color, &mut pickers[1]);
+                            level_color(ui, &mut config.down_color, down_picker);
                         });
                         ui.end_row();
+                        // Until one is picked, the value area keeps the up and down colours.
+                        let [mut va_up, mut va_down] = config
+                            .value_area_colors
+                            .unwrap_or([config.up_color, config.down_color]);
+                        let label = ui.label(l10n::text(ui.ctx(), "VA up colour"));
+                        let up_picked = ui.label_inputs_by(label.id, |ui| {
+                            ui.push_id("va_up", |ui| level_color(ui, &mut va_up, va_up_picker))
+                                .inner
+                        });
+                        ui.end_row();
+                        let label = ui.label(l10n::text(ui.ctx(), "VA down colour"));
+                        let down_picked = ui.label_inputs_by(label.id, |ui| {
+                            ui.push_id("va_down", |ui| {
+                                level_color(ui, &mut va_down, va_down_picker)
+                            })
+                            .inner
+                        });
+                        ui.end_row();
+                        if up_picked || down_picked {
+                            config.value_area_colors = Some([va_up, va_down]);
+                        }
                     }
                 });
                 // A share times 100 over 100 is not always the same share: keep an untouched one.
@@ -1845,6 +1942,30 @@ fn significant(value: f64) -> String {
     } else {
         text
     }
+}
+
+/// A row named `label` in the label column: a switch, then a colour well. True when a colour was
+/// picked.
+fn switch_color(
+    ui: &mut Ui,
+    label: &str,
+    shown: &mut bool,
+    color: &mut [u8; 4],
+    picker: &mut ColorPickerState,
+) -> bool {
+    let name = ui.label(l10n::text(ui.ctx(), label));
+    let picked = ui.label_inputs_by(name.id, |ui| {
+        ui.push_id(label, |ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(shown, "");
+                level_color(ui, color, picker)
+            })
+            .inner
+        })
+        .inner
+    });
+    ui.end_row();
+    picked
 }
 
 fn level_color(ui: &mut Ui, color: &mut [u8; 4], state: &mut ColorPickerState) -> bool {
@@ -3183,72 +3304,115 @@ mod tests {
         }
     }
 
-    /// Opening the Inputs tab of a volume profile drawing keeps the display settings the tab
-    /// does not show, the developing switches and colours it does, and a value area of 64.06%,
-    /// which times 100 over 100 is not the same share. Ticks per row and the Developing POC
-    /// switch preview on the drawing with them, Cancel restores the drawing, and Ok records one
-    /// undoable edit.
+    /// Opening the Inputs tab of either volume profile drawing keeps the display settings the tab
+    /// does not show, the switches and colours it does, and a value area of 64.06%, which times
+    /// 100 over 100 is not the same share. Ticks per row, every switch and every colour well
+    /// preview on the drawing, a palette swatch keeps the box's opacity, Cancel restores the
+    /// drawing, and Ok records one undoable edit.
     #[test]
-    fn volume_profile_inputs_keep_settings_they_do_not_edit() {
+    fn volume_profile_inputs_preview_cancel_and_commit_every_control() {
         use egui::Role;
         use egui_kittest::{Harness, kittest::Queryable};
-        let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
-        chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(0.25)));
         let mut config = VolumeProfileConfig::new(24, 0.6406).unwrap();
+        config.display = ProfileDisplay::UpDown;
         config.show_poc = false;
         config.show_rows = false;
         config.show_value_area_high = true;
-        config.value_area_line_colors = [[1, 2, 3, 255]; 2];
+        config.value_area_line_colors = [[1, 2, 3, 255], [3, 2, 1, 255]];
+        config.value_area_colors = Some([[11, 12, 13, 255], [14, 15, 16, 255]]);
+        config.poc_color = Some([21, 22, 23, 255]);
+        config.values_color = Some([31, 32, 33, 255]);
+        config.box_color = Some([41, 42, 43, 15]);
         config.show_developing_value_area = true;
         config.developing_poc_color = [9, 8, 7, 255];
         config.developing_value_area_colors = [[4, 5, 6, 255], [6, 5, 4, 255]];
-        let mut drawing = Drawing::new(7, Tool::FixedRangeVolumeProfile);
-        drawing.completed = true;
-        drawing.chart_points = vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)];
-        drawing.volume_profile = Some(config);
-        chart.drawings_mut().drawings.push(drawing);
-        let mut h = Harness::builder()
-            .with_size(egui::vec2(1440.0, 900.0))
-            .with_accessibility_check(false)
-            .allow_missing_glyphs()
-            .build_ui_state(
-                |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
-                    dialog.show_and_apply(ui.ctx(), chart);
-                },
-                (chart, DrawingPropertiesDialog::new()),
-            );
-        let saved = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
-            h.state().0.drawings().drawings[0].volume_profile
-        };
-        let mut ticks = config.with_row_ticks(Some(24)).unwrap();
-        ticks.show_developing_poc = true;
-        for confirm in [false, true] {
-            let (chart, dialog) = h.state_mut();
-            dialog.open_for_chart(chart, DrawingId(7));
-            dialog.active_tab = PropertiesTab::Inputs;
-            h.run();
-            assert_eq!(saved(&h), Some(config), "opened");
-            h.get_by_role_and_label(Role::ComboBox, "Row layout")
-                .click();
-            h.run();
-            h.get_by_label("Ticks per row").click();
-            h.run();
-            h.get_by_role_and_label(Role::CheckBox, "Developing POC")
-                .click();
-            h.run();
-            assert_eq!(saved(&h), Some(ticks), "previewed");
-            assert!(!h.state().0.can_undo());
-            if confirm {
-                h.get_by_role_and_label(Role::Button, "Ok").click();
-                h.run();
-                assert_eq!(saved(&h), Some(ticks), "applied");
-                assert!(h.state_mut().0.undo());
+        let mut edited = config.with_row_ticks(Some(24)).unwrap();
+        edited.show_developing_poc = true;
+        edited.show_poc = true;
+        edited.show_value_area_high = false;
+        edited.show_value_area_low = true;
+        edited.show_values = true;
+        edited.show_box = false;
+        edited.value_area_colors = Some([[128, 25, 34, 255], [230, 81, 0, 255]]);
+        edited.poc_color = Some([245, 127, 23, 255]);
+        edited.value_area_line_colors = [[27, 94, 32, 255], [0, 51, 42, 255]];
+        edited.values_color = Some([0, 96, 100, 255]);
+        // A translucent colour is stored premultiplied, so its well and value round to it.
+        let translucent = |r, g, b| egui::Color32::from_rgba_unmultiplied(r, g, b, 15);
+        let [r, g, b, _] = translucent(41, 42, 43).to_srgba_unmultiplied();
+        let box_well = format!("#{r:02X}{g:02X}{b:02X}");
+        // A palette swatch keeps the box's opacity.
+        edited.box_color = Some(translucent(12, 50, 153).to_srgba_unmultiplied());
+        for tool in [Tool::FixedRangeVolumeProfile, Tool::AnchoredVolumeProfile] {
+            let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
+            chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(0.25)));
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = if tool == Tool::AnchoredVolumeProfile {
+                vec![ChartPoint::new(2.0, 100.0)]
             } else {
-                h.state_mut().1.close();
+                vec![ChartPoint::new(2.0, 100.0), ChartPoint::new(8.0, 200.0)]
+            };
+            drawing.volume_profile = Some(config);
+            chart.drawings_mut().drawings.push(drawing);
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(1440.0, 900.0))
+                .with_accessibility_check(false)
+                .allow_missing_glyphs()
+                .build_ui_state(
+                    |ui, (chart, dialog): &mut (Chart, DrawingPropertiesDialog)| {
+                        dialog.show_and_apply(ui.ctx(), chart);
+                    },
+                    (chart, DrawingPropertiesDialog::new()),
+                );
+            let saved = |h: &Harness<'_, (Chart, DrawingPropertiesDialog)>| {
+                h.state().0.drawings().drawings[0].volume_profile
+            };
+            // The grid can reach past the dialog's fold.
+            let click =
+                |h: &mut Harness<'_, (Chart, DrawingPropertiesDialog)>, role: Role, label: &str| {
+                    h.get_by_role_and_label(role, label).scroll_to_me();
+                    h.run();
+                    h.get_by_role_and_label(role, label).click();
+                    h.run();
+                };
+            for confirm in [false, true] {
+                let (chart, dialog) = h.state_mut();
+                dialog.open_for_chart(chart, DrawingId(7));
+                dialog.active_tab = PropertiesTab::Inputs;
                 h.run();
+                assert_eq!(saved(&h), Some(config), "{tool:?} opened");
+                click(&mut h, Role::ComboBox, "Row layout");
+                h.get_by_label("Ticks per row").click();
+                h.run();
+                for switch in ["Developing POC", "POC", "VAH", "VAL", "Values", "Box"] {
+                    click(&mut h, Role::CheckBox, switch);
+                }
+                for (well, swatch) in [
+                    ("#0B0C0D", "#801922"),
+                    ("#0E0F10", "#E65100"),
+                    ("#151617", "#F57F17"),
+                    ("#010203", "#1B5E20"),
+                    ("#030201", "#00332A"),
+                    ("#1F2021", "#006064"),
+                    (box_well.as_str(), "#0C3299"),
+                ] {
+                    click(&mut h, Role::ColorWell, well);
+                    click(&mut h, Role::ColorWell, swatch);
+                }
+                assert_eq!(saved(&h), Some(edited), "{tool:?} previewed");
+                assert!(!h.state().0.can_undo());
+                if confirm {
+                    click(&mut h, Role::Button, "Ok");
+                    assert_eq!(saved(&h), Some(edited), "{tool:?} applied");
+                    assert!(h.state_mut().0.undo());
+                } else {
+                    h.state_mut().1.close();
+                    h.run();
+                }
+                assert_eq!(saved(&h), Some(config), "{tool:?} restored");
+                assert!(!h.state().0.can_undo());
             }
-            assert_eq!(saved(&h), Some(config), "restored");
-            assert!(!h.state().0.can_undo());
         }
     }
 }
