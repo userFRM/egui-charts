@@ -2415,6 +2415,7 @@ mod tests {
             brackets: true,
             close: true,
             reverse: true,
+            position_exits: true,
             ..Capabilities::default()
         };
         for row in 0..25 {

@@ -13,7 +13,8 @@
 //! with the mean of the first `length` closes, so the first value is on bar `length - 1`.
 //!
 //! # Presentation
-//! Columns, green at or above zero and red below.
+//! Columns in the plot colour, teal by default, at or above zero, and in the Below zero colour, red
+//! by default, below it; both are set in the Style tab.
 //!
 //! # Example
 //! ```
@@ -76,6 +77,17 @@ impl Indicator for BullBearPower {
             plot_type: crate::studies::PlotType::Columns,
             visible: true,
         }
+    }
+
+    fn plot_variants(&self, _line: usize) -> Vec<crate::studies::PlotVariant> {
+        vec![crate::studies::PlotVariant::new(
+            "Below zero",
+            self.negative_color,
+        )]
+    }
+
+    fn plot_variant(&self, _line: usize, bar: usize) -> Option<usize> {
+        (self.values.value(0, bar)? < 0.0).then_some(0)
     }
 
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {

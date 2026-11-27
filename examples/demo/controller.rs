@@ -15123,6 +15123,172 @@ mod tests {
         }
     }
 
+    /// The paper account attaches exits to open positions, so a position line shows its TP and
+    /// SL buttons and its label menu offers Protect position.
+    #[test]
+    fn paper_positions_offer_their_exit_buttons_and_protect_position() {
+        use egui::accesskit::Role;
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType, TimeInForce};
+        use egui_kittest::kittest::NodeT as _;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let last = bars.iter().rfind(|bar| !bar.is_whitespace()).unwrap().close;
+        app.paper.set_price(&symbol, last);
+        let mut request = OrderRequest::new(&symbol, OrderSide::Buy, 2.0, OrderType::Market);
+        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+        egui_charts::services::Broker::place(&*app.paper, request, reply);
+        answer.take().expect("market reply").expect("filled");
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(3);
+        // A text on the row of the position line, which lies at the entry price.
+        let on_line = |h: &Harness<'_, Box<DemoApp>>, name: &str| {
+            let mapping = h.state().chart.get_chart_mapping();
+            let y = mapping.price_to_y(last);
+            h.output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == name => {
+                        let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                        (mapping.rect.contains(rect.center()) && (rect.center().y - y).abs() < 2.0)
+                            .then(|| rect.center())
+                    }
+                    _ => None,
+                })
+        };
+        let label = on_line(&h, "2").expect("the position's quantity on its label");
+        h.hover_at(label);
+        h.run_steps(2);
+        for button in ["TP", "SL"] {
+            assert!(on_line(&h, button).is_some(), "{button} button");
+        }
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: label,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run_steps(3);
+        let protect = h.get_by_role_and_label(Role::Button, "Protect position");
+        assert!(!protect.accesskit_node().is_disabled());
+    }
+
+    /// The depth ladder opens a working order for modifying, and a saved preset of another order
+    /// type applied to it is named above the form as a type the order cannot change to, while the
+    /// order keeps its own type.
+    #[test]
+    fn a_preset_the_working_order_cannot_take_is_named_in_the_ticket() {
+        use egui::accesskit::Role;
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType, TimeInForce};
+        use egui_charts::ui::trading::{OrderKind, OrderPreset};
+        use egui_kittest::kittest::NodeT as _;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let last = bars.iter().rfind(|bar| !bar.is_whitespace()).unwrap().close;
+        let tick = app
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.tick_size)
+            .unwrap_or(0.01);
+        app.paper.set_price(&symbol, last);
+        // A few ticks under the price, so the buy limit keeps working in a row of the ladder.
+        let mut request = OrderRequest::new(
+            &symbol,
+            OrderSide::Buy,
+            1.0,
+            OrderType::Limit(last - 5.0 * tick),
+        );
+        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+        egui_charts::services::Broker::place(&*app.paper, request, reply);
+        answer.take().expect("limit reply").expect("working limit");
+        let mut stop = OrderPreset::new("Stop entry", 1.0);
+        stop.order_type = Some(OrderKind::Stop);
+        app.trading.presets.insert(String::new(), vec![stop]);
+        app.trading.toggle_ticket(symbol);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, "DOM")
+            .click_accesskit();
+        h.run_steps(2);
+        let tag = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "LIMIT" => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()).center())
+                }
+                _ => None,
+            })
+            .expect("the order's tag on the ladder");
+        // A click on the tag opens its menu.
+        h.hover_at(tag);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: tag,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "Edit order")
+            .click_accesskit();
+        h.run_steps(2);
+        h.get_by_label("More").click_accesskit();
+        h.run_steps(2);
+        h.get_by_label("Stop entry").click_accesskit();
+        h.run_steps(2);
+        let notice = h
+            .get_by_label("Order type Stop cannot be applied to a working order")
+            .rect();
+        // Modifying offers only the order's own type, near the top of the form.
+        let kind = h.get_by_role_and_label(Role::Button, "Limit");
+        assert_eq!(
+            kind.accesskit_node().toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert!(notice.bottom() <= kind.rect().top(), "{notice:?}");
+    }
+
     /// A day picked in the dialog is a day on the chart's clock. New York is five hours behind
     /// UTC in November, so its 10 November starts at 05:00 UTC, and the days 9 and 10 November
     /// run from 05:00 UTC on the 9th to 05:00 UTC on the 11th.

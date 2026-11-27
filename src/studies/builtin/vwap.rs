@@ -90,11 +90,11 @@ const VWAP_ANCHORS: [VwapAnchor; 11] = [
 
 /// The most bands that the study inputs can hold.
 const MAX_BANDS: usize = 10;
-/// The colours of successive band pairs: green, olive and dark teal.
+/// The colours of successive band pairs: green, olive and teal.
 pub(super) const BAND_COLORS: [Color32; 3] = [
     palette::GREEN,
     Color32::from_rgb(128, 128, 0),
-    Color32::from_rgb(0, 137, 123),
+    palette::TEAL,
 ];
 /// The most event anchors that the study inputs can hold.
 const MAX_EVENTS: usize = 1000;
@@ -1411,6 +1411,18 @@ mod tests {
         let fills = |study: &ConfiguredStudy| study.settings().fills;
         assert_eq!(fills(&edited).len(), 3);
         assert!(!fills(&edited)[0].visible);
+        // The third band opens in teal, and one saved in another colour keeps it.
+        assert_eq!([plots[5].color, plots[6].color], [palette::TEAL; 2]);
+        assert_eq!(fills(&edited)[2].color, palette::TEAL.gamma_multiply_u8(13));
+        let former = Color32::from_rgb(0, 137, 123);
+        let mut saved = StudyTemplate::from_study(&edited);
+        saved.settings.plots[5].color = former;
+        saved.settings.plots[6].color = former;
+        let colours: Vec<_> = saved.create().unwrap().settings().plots[5..]
+            .iter()
+            .map(|plot| plot.color)
+            .collect();
+        assert_eq!(colours, [former; 2]);
         let mut fewer = edited.clone();
         let settings = fewer.settings();
         fewer

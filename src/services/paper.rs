@@ -813,6 +813,7 @@ impl State {
                 close: true,
                 partial_close: true,
                 reverse: true,
+                position_exits: true,
                 preview: false,
                 modify: true,
             },
