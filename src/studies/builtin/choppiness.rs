@@ -9,6 +9,8 @@ use egui::Color32;
 /// Measures market trendiness vs choppiness
 /// Values close to 100 = choppy market, values close to 0 = trending market
 ///
+/// The first value is on bar `period - 1`; the first bar's true range is its high minus its low.
+///
 /// The pane draws dashed levels at 61.8 and 38.2, with the band between them filled in light blue
 /// at a tenth of full opacity, and a solid middle line at 50 in `#787B86` at half opacity. A true
 /// range can reach back past the window to a gap, so a reading can pass 100.
@@ -53,7 +55,7 @@ impl ChoppinessIndex {
     /// The values over `data`, every bar of which has finite inputs.
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let mut values = IndicatorValues::new();
-        if data.len() < self.period.saturating_add(1) {
+        if data.len() < self.period {
             for _ in 0..data.len() {
                 values.push(IndicatorValue::None);
             }
@@ -77,7 +79,7 @@ impl ChoppinessIndex {
 
         // Calculate Choppiness Index
         for i in 0..data.len() {
-            if i < self.period {
+            if i + 1 < self.period {
                 values.push(IndicatorValue::None);
             } else {
                 // Sum of TR over period
@@ -139,6 +141,7 @@ impl Indicator for ChoppinessIndex {
             &mut values,
             data,
             from,
+            // The extra bar supplies the previous close for the window's first true range.
             usable_behind(self.period, |b| {
                 b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
             }),

@@ -9,13 +9,15 @@
 //! - Down Trend: the SuperTrend line while the trend is bearish (above price)
 //! - Body Middle: (open + close) / 2 on each bar with a trend value; hidden, it bounds the background
 //!
-//! Each bar has a value on exactly one of the two lines; the other is NaN.
+//! Each plotted bar has a value on exactly one of the two lines; the other is NaN.
 //! The background between the trend line and the body middle is green in an up trend and red in a
 //! down trend at 90 % transparency, with a gap at each trend change.
 //!
 //! The first bar with an ATR starts a down trend on the upper band. A down trend turns up when a
 //! close rises above the upper band, and an up trend turns down when a close falls below the lower
 //! band.
+//! The first bar with a finite high, low and close has no value; with an ATR length of 1
+//! its down trend still decides the second bar.
 //!
 //! # Interpretation
 //! - SuperTrend below price (green): Bullish trend
@@ -128,13 +130,6 @@ impl Indicator for SuperTrend {
 
     fn update(&mut self, data: &[Bar], from: usize) {
         let period = self.atr_period;
-        let threshold = period.saturating_add(1);
-        // The batch warm-up hides even the seed bar until one more usable bar arrives.
-        let from = if self.stepper.state().usable < threshold {
-            0
-        } else {
-            from
-        };
         let atr_mult = 1.0 / period as f64;
         let multiplier = self.multiplier;
         self.stepper
@@ -182,6 +177,10 @@ impl Indicator for SuperTrend {
                     }
                 };
                 state.trend = if bullish { state.lower } else { state.upper };
+                // The first bar has no previous close; its trend still seeds the next bar.
+                if state.usable == 1 {
+                    return IndicatorValue::None;
+                }
                 let middle = (bar.open + bar.close) / 2.0;
                 if bullish {
                     IndicatorValue::Multiple(vec![state.trend, f64::NAN, middle])
@@ -189,9 +188,6 @@ impl Indicator for SuperTrend {
                     IndicatorValue::Multiple(vec![f64::NAN, state.trend, middle])
                 }
             });
-        if self.stepper.state().usable < threshold {
-            self.values.fill(IndicatorValue::None);
-        }
     }
 
     fn is_incremental(&self) -> bool {

@@ -3,7 +3,9 @@
 
 use super::account_panel::quantity_decimals;
 use super::format::Numbers;
-use super::ticket::{self, Action, Market, QuantityLimit, order_quantity};
+use super::ticket::{
+    self, Action, Market, OrderPreset, OrderTicket, QuantityLimit, order_quantity,
+};
 use super::{NOT_LIVE, Preview, Sent, Trading, executions};
 use crate::chart::selection::SeriesId;
 use crate::chart::{
@@ -116,6 +118,39 @@ impl Trading {
             account: &self.account_id,
             timezone: chart.display_timezone(),
         }
+    }
+
+    fn trade_preset(
+        &mut self,
+        ctx: &egui::Context,
+        chart: &Chart,
+        colors: &crate::theme::ChartColors,
+        side: OrderSide,
+        preset: &OrderPreset,
+    ) {
+        let mut request = OrderRequest::new(chart.symbol(), side, self.quantity, OrderType::Market);
+        if self.display.instant_orders && self.capabilities().market && self.rules_ready {
+            request.time_in_force = self.rules.time_in_force[0];
+            let placed = {
+                let market = self.market(chart, colors);
+                let mut ticket = OrderTicket::default();
+                ticket.open(&request);
+                ticket
+                    .apply(preset, &market)
+                    .then(|| ticket.request(ctx, &market).ok())
+                    .flatten()
+                    .filter(|request| request.order_type == OrderType::Market)
+            };
+            if let Some(request) = placed {
+                self.ticket.open = false;
+                self.place(request);
+                return;
+            }
+        }
+        self.open_ticket(request);
+        let mut ticket = std::mem::take(&mut self.ticket);
+        ticket.apply(preset, &self.market(chart, colors));
+        self.ticket = ticket;
     }
 
     /// Draws the order ticket, while it is open, as a panel at the right of `ui` for the chart's
@@ -244,6 +279,7 @@ impl Trading {
             line_width: 1.0,
             line_length: 0.0,
             label_alignment: display.label_alignment,
+            separate_labels: Some(display.separate_labels),
             show_positions: display.show_positions,
             submit: false,
             modify: capabilities.modify,
@@ -380,8 +416,18 @@ impl Trading {
             self.load_rules(symbol);
         }
 
+        if let Some((quoted, side)) = self.quoted.take() {
+            match self.applied_preset().cloned().filter(|_| quoted == symbol) {
+                Some(preset) => self.trade_preset(ui.ctx(), chart, &colors, side, &preset),
+                None => self.trade_now(quoted, side),
+            }
+        }
+
         if self.service.is_some() {
             let lines = self.draw_overlays(ui, chart);
+            if let Some(on) = lines.separate_labels {
+                self.display.separate_labels = on;
+            }
             chart.trading_tags = lines.tags;
             chart.trading_outlined = lines.outlined;
             match lines.action {
@@ -485,6 +531,32 @@ impl Trading {
             }
         }
 
+        if let Some(choice) = chart.preset_chosen.take()
+            && let Some(saved) = self.presets.get_mut(&self.account_id)
+        {
+            let selected =
+                choice.and_then(|name| saved.iter().position(|preset| preset.name == name));
+            for (index, preset) in saved.iter_mut().enumerate() {
+                preset.applied = selected == Some(index);
+            }
+        }
+        let currency = self
+            .account
+            .as_ref()
+            .map_or("", |account| account.currency.as_str());
+        chart.order_presets = self
+            .service
+            .as_ref()
+            .and_then(|_| self.presets.get(&self.account_id))
+            .filter(|saved| !saved.is_empty())
+            .map(|saved| crate::chart::rendering::QuotePresets {
+                applied: saved.iter().position(|preset| preset.applied),
+                presets: saved
+                    .iter()
+                    .map(|preset| (preset.name.clone(), preset.summary(ui.ctx(), currency)))
+                    .collect(),
+            });
+
         // The legend shows the order quantity under the spread; clicking it toggles the calculator.
         chart.order_quantity = self.service.is_some().then_some(self.quantity);
         chart.order_quantity_text = self
@@ -537,6 +609,7 @@ impl Trading {
                 line_width: 1.0,
                 line_length: 0.0,
                 label_alignment: self.display.label_alignment,
+                separate_labels: None,
                 show_positions: false,
                 submit: true,
                 modify: true,
@@ -2106,6 +2179,10 @@ mod tests {
             !defaults.compact_ticket,
             "older settings keep the full ticket"
         );
+        assert!(
+            !defaults.separate_labels,
+            "older settings keep labels at their prices"
+        );
         assert!(defaults.extend_lines);
         assert_eq!(defaults.label_alignment, Right);
         assert!(!defaults.include_in_image);
@@ -2130,6 +2207,7 @@ mod tests {
                 for extended in [false, true] {
                     trading.display.label_alignment = alignment;
                     trading.display.extend_lines = extended;
+                    trading.display.separate_labels = extended;
                     let json = serde_json::to_string(&trading.display).unwrap();
                     assert_eq!(
                         serde_json::from_str::<TradingSettings>(&json).unwrap(),
@@ -2937,6 +3015,98 @@ mod tests {
                 remaining.right() <= symbol.expect("the ticket's symbol"),
                 "later panels stay beside the ticket at {width}"
             );
+        }
+    }
+
+    /// Buy and Sell take the selected preset, including exits, and keep a non-market or partly
+    /// applicable preset in the ticket for review even when instant orders are enabled.
+    #[test]
+    fn buy_and_sell_take_the_applied_preset_or_open_it_in_the_ticket() {
+        use crate::ui::trading::{Bracket, BracketMode, OrderKind, OrderPreset};
+        for side in [OrderSide::Buy, OrderSide::Sell] {
+            for (instant, brackets, limit) in [
+                (true, true, false),
+                (false, true, false),
+                (true, true, true),
+                (true, false, false),
+            ] {
+                let ctx = egui::Context::default();
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                chart.symbol = "SYM".into();
+                let last = crate::model::last_with_value(chart.bars(SeriesId::MAIN))
+                    .unwrap()
+                    .close;
+                let broker = Arc::new(Recorder {
+                    brackets,
+                    ..Recorder::default()
+                });
+                let mut trading = Trading::default();
+                trading.set_service(broker.clone());
+                trading.poll(&ctx, &mut Toasts::new());
+                let frame = |trading: &mut Trading, chart: &mut Chart| {
+                    ctx.run_ui(egui::RawInput::default(), |ui| {
+                        chart.show(ui);
+                        trading.show(ui, chart);
+                    })
+                    .drop_without_applying_deltas();
+                };
+                frame(&mut trading, &mut chart);
+                broker
+                    .rules
+                    .lock()
+                    .unwrap()
+                    .pop()
+                    .unwrap()
+                    .1
+                    .send(Ok(TradingRules::new("SYM")));
+                trading.poll(&ctx, &mut Toasts::new());
+                trading.display.instant_orders = instant;
+                trading.quantity = 1.0;
+                let mut preset = OrderPreset::new("Swing", 3.0);
+                preset.take_profit = Some(Bracket::new(BracketMode::Ticks, 20.0));
+                preset.stop_loss = Some(Bracket::new(BracketMode::Ticks, 10.0));
+                preset.applied = true;
+                if limit {
+                    preset.order_type = Some(OrderKind::Limit);
+                    preset.price_ticks = Some(-5.0);
+                }
+                trading.presets.insert(
+                    trading.account_id.clone(),
+                    vec![OrderPreset::new("Scalp", 2.0), preset],
+                );
+                trading.trade("SYM".into(), side);
+                frame(&mut trading, &mut chart);
+                let placed = broker.placed.lock().unwrap();
+                let sends = instant && brackets && !limit;
+                assert_eq!(
+                    placed.len(),
+                    usize::from(sends),
+                    "{side:?}, {instant}, {brackets}, {limit}"
+                );
+                assert_eq!(trading.ticket.open, !sends);
+                if !brackets {
+                    continue;
+                }
+                let colors = crate::theme::Theme::dark().chart;
+                let market = trading.market(&chart, &colors);
+                let request = if sends {
+                    placed[0].clone()
+                } else {
+                    trading.ticket.request(&ctx, &market).unwrap()
+                };
+                assert_eq!(request.quantity, 3.0);
+                assert_eq!(request.side, side);
+                let sign = if side == OrderSide::Buy { 1.0 } else { -1.0 };
+                let entry = if limit { last - sign * 0.05 } else { last };
+                match request.order_type {
+                    OrderType::Market => assert!(!limit),
+                    OrderType::Limit(price) => assert!((price - entry).abs() < 1e-9),
+                    kind => panic!("unexpected type {kind:?}"),
+                }
+                // 20 and 10 ticks at 0.01 are 0.20 and 0.10 from the entry, mirrored for sells.
+                assert!((request.take_profit.unwrap() - (entry + sign * 0.20)).abs() < 1e-9);
+                assert!((request.stop_loss.unwrap() - (entry - sign * 0.10)).abs() < 1e-9);
+            }
         }
     }
 

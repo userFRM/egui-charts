@@ -1892,6 +1892,8 @@ mod tests {
         set.value_area_line_colors = [[0, 200, 0, 255], [0, 0, 200, 255]];
         set.values_color = Some([250, 200, 0, 255]);
         set.box_color = Some([10, 20, 30, 60]);
+        let mut inside = set;
+        inside.value_area_values_color = Some([0, 200, 200, 255]);
         let mut off = set;
         off.show_poc = false;
         off.show_value_area_high = false;
@@ -1917,6 +1919,7 @@ mod tests {
                     ),
                     ("on", on, 400.0, None, Some(two)),
                     ("set", set, 400.0, None, Some(two)),
+                    ("set, value area values", inside, 400.0, None, Some(two)),
                     ("off", off, 400.0, None, None),
                     (
                         "set, one decimal",
@@ -2043,7 +2046,6 @@ mod tests {
                             "{name}: value area labels"
                         );
                     }
-                    let figure = config.values_color.map_or(text, rgba);
                     let bounds = if anchored {
                         clip.x_range()
                     } else {
@@ -2058,7 +2060,15 @@ mod tests {
                         "{name}: values"
                     );
                     for (label, color, rect) in &figures {
-                        assert_eq!(*color, figure, "{name}: {label}");
+                        // The top row, 13.5 to 15 at y 50 to 125, lies above the VAH at y 125.
+                        let inside = rect.center().y > 125.0;
+                        let want = if inside {
+                            config.value_area_values_color.or(config.values_color)
+                        } else {
+                            config.values_color
+                        }
+                        .map_or(text, rgba);
+                        assert_eq!(*color, want, "{name}: {label}");
                         assert!(
                             bounds.contains(rect.min.x) && bounds.contains(rect.max.x),
                             "{name}: {label} at {rect:?}"
