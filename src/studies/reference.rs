@@ -73,8 +73,9 @@
 //! study's current behaviour: an Aroon tie counts the most recent bar, and Parabolic SAR takes its first direction from the first two closes (up
 //! on a tie), starts at the first bar's low or high and takes its first extreme point from the
 //! first two bars. The Chaikin volatility starts once its average and its change both have their full
-//! length; the windows of the Choppiness Index, Vortex indicator and Ultimate Oscillator start at the
-//! second bar, the first with a previous close. A bar of the Advance/Decline Ratio of bars that
+//! length; the windows of the Vortex indicator and Ultimate Oscillator start at the
+//! second bar, the first with a previous close; the Choppiness Index window starts at the first
+//! bar, whose true range is its high minus its low. A bar of the Advance/Decline Ratio of bars that
 //! closes at its open counts as up, and a window without a down bar gives its number of up bars.
 //! The Median takes the nearest-rank median (the lower middle value for an even length) and seeds its EMA
 //! with the mean of the first medians, the Chop Zone seeds its EMA with the mean of the first 34 closes,
