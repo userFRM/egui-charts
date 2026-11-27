@@ -45,6 +45,13 @@ impl OrderTicket {
         if !market.rules.time_in_force.contains(&self.time_in_force) {
             self.time_in_force = market.rules.time_in_force[0];
         }
+        if self
+            .preset_notice
+            .as_ref()
+            .is_some_and(|(account, _)| account != market.account)
+        {
+            self.preset_notice = None;
+        }
         ui.spacing_mut().item_spacing.y = 8.0;
         self.header(ui, market, presets, one_click, compact);
         self.switch(ui);
@@ -58,7 +65,23 @@ impl OrderTicket {
                     .inner;
                 egui::ScrollArea::vertical()
                     .auto_shrink(false)
-                    .show(ui, |ui| self.form(ui, market, *compact));
+                    .show(ui, |ui| {
+                        if let Some((_, notice)) = &self.preset_notice {
+                            for (template, name) in notice {
+                                let name = name.map(|name| l10n::text(ui.ctx(), name));
+                                ui.label(
+                                    RichText::new(l10n::format_text(
+                                        ui.ctx(),
+                                        template,
+                                        &[("name", name.unwrap_or_default())],
+                                    ))
+                                    .color(ui.active_theme().ui.warning)
+                                    .size(ui.active_theme().text.label),
+                                );
+                            }
+                        }
+                        self.form(ui, market, *compact)
+                    });
                 action
             }
             Tab::Dom => {
@@ -779,6 +802,165 @@ mod tests {
         harness.get_by_label("Delete preset").click();
         harness.run();
         assert!(!harness.state().1.contains_key("stocks"));
+    }
+
+    /// A preset the account or the order cannot take in full is applied in part, and the ticket
+    /// names each parameter it left out until a preset that fits or another account replaces
+    /// the notice.
+    #[test]
+    fn presets_name_the_parameters_they_cannot_apply() {
+        use super::super::{Bracket, BracketMode, Kind, PresetLevel, PresetSizing};
+        let rules = TradingRules::new("ES");
+        let base = super::super::tests::market(&rules).capabilities;
+        let ticks = |value| Bracket::new(BracketMode::Ticks, value);
+        let trailing = OrderPreset {
+            order_type: Some(Kind::TrailingStop),
+            time_in_force: Some(TimeInForce::FillOrKill),
+            ..OrderPreset::new("Preset 1", 1.0)
+        };
+        let fits = OrderPreset {
+            order_type: Some(Kind::Limit),
+            time_in_force: Some(TimeInForce::Day),
+            ..OrderPreset::new("Preset 2", 1.0)
+        };
+        let risk = OrderPreset {
+            sizing: Some(PresetSizing::RiskPercent(1.0)),
+            stop_loss: Some(ticks(8.0)),
+            ..OrderPreset::new("Preset 3", 1.0)
+        };
+        let levels = |stop_loss| OrderPreset {
+            take_profit: Some(ticks(8.0)),
+            take_profit_levels: vec![PresetLevel {
+                stop_loss,
+                ..PresetLevel::new(ticks(16.0), 50.0)
+            }],
+            ..OrderPreset::new("Preset 4", 1.0)
+        };
+        let stop = OrderPreset {
+            order_type: Some(Kind::Stop),
+            ..OrderPreset::new("Preset 5", 1.0)
+        };
+        let working = Order::new(
+            OrderId::new("1"),
+            OrderRequest::new("ES", OrderSide::Buy, 1.0, OrderType::Limit(99.5)),
+            crate::model::OrderStatus::Working,
+        );
+        for (row, (capabilities, editing, applied, switch, expected)) in [
+            (
+                base,
+                false,
+                vec![trailing.clone()],
+                false,
+                &[
+                    "Order type Trailing stop is not available for this account",
+                    "Time in force Fill or kill is not offered for this symbol",
+                ][..],
+            ),
+            (base, false, vec![trailing.clone(), fits], false, &[]),
+            (
+                Capabilities {
+                    brackets: false,
+                    ..base
+                },
+                false,
+                vec![risk],
+                false,
+                &[
+                    "Risk sizing is not available for this order, so the quantity is in units",
+                    "Take profit and stop loss are not available for this order",
+                ],
+            ),
+            (
+                base,
+                false,
+                vec![levels(None)],
+                false,
+                &[
+                    "Take-profit levels are not available for this account, so the first take profit closes the whole order",
+                ],
+            ),
+            (
+                Capabilities {
+                    take_profit_levels: true,
+                    ..base
+                },
+                false,
+                vec![levels(Some(ticks(4.0)))],
+                false,
+                &[
+                    "A stop loss for each take-profit level is not available for this account, so the order's stop loss protects every level",
+                ],
+            ),
+            (
+                base,
+                true,
+                vec![stop],
+                false,
+                &["Order type Stop cannot be applied to a working order"],
+            ),
+            (base, false, vec![trailing.clone()], true, &[]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut ticket = OrderTicket {
+                open: true,
+                symbol: "ES".into(),
+                ..OrderTicket::default()
+            };
+            if editing {
+                ticket.edit(&working);
+            }
+            let presets = BTreeMap::from([
+                ("a".to_owned(), applied.clone()),
+                ("b".to_owned(), applied.clone()),
+            ]);
+            let orders = vec![working.clone()];
+            let mut harness = egui_kittest::Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(vec2(700.0, 900.0))
+                .with_accessibility_check(false)
+                .build_ui_state(
+                    |ui,
+                     (ticket, presets, account): &mut (
+                        OrderTicket,
+                        BTreeMap<String, Vec<OrderPreset>>,
+                        &'static str,
+                    )| {
+                        let mut market = super::super::tests::market(&rules);
+                        market.capabilities = capabilities;
+                        market.account = account;
+                        market.orders = &orders;
+                        ticket.show(ui, &market, presets, &mut false, &mut false);
+                    },
+                    (ticket, presets, "a"),
+                );
+            harness.run();
+            harness.get_by_label("More").click();
+            harness.run();
+            for preset in &applied {
+                harness.get_by_label(&preset.name).click();
+                harness.run();
+            }
+            if switch {
+                harness.state_mut().2 = "b";
+                harness.run();
+            }
+            let notice: Vec<String> = harness
+                .query_all_by_role(egui::accesskit::Role::Label)
+                .filter_map(|node| node.value())
+                .filter(|text| {
+                    ["not available", "not offered", "cannot be applied"]
+                        .iter()
+                        .any(|part| text.contains(part))
+                })
+                .collect();
+            assert_eq!(notice, expected, "row {row}");
+            if row == 0 {
+                assert_eq!(harness.state().0.kind, Kind::Market);
+                assert_eq!(harness.state().0.time_in_force, TimeInForce::Day);
+            }
+        }
     }
 
     /// The broker rules control visibility, and a wall time at UTC-5 reaches the broker at UTC.

@@ -8,7 +8,7 @@ mod view;
 
 use super::dom::Ladder;
 use super::format::{Numbers, TradingFormatter};
-use super::widgets::grouped;
+use super::widgets::{grouped, time_in_force_name};
 use crate::chart::TradingLineAction;
 use crate::localization as l10n;
 use crate::model::{
@@ -325,6 +325,17 @@ impl Kind {
             Self::TrailingStop => capabilities.trailing_stop,
         }
     }
+
+    /// The type's full name, as notices write it.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Market => "Market",
+            Self::Limit => "Limit",
+            Self::Stop => "Stop",
+            Self::StopLimit => "Stop limit",
+            Self::TrailingStop => "Trailing stop",
+        }
+    }
 }
 
 /// How the ticket's trailing distance is entered.
@@ -512,6 +523,9 @@ pub(crate) struct OrderTicket {
     expires: Option<chrono::DateTime<chrono::Utc>>,
     preset_name: String,
     preset_fields: PresetFields,
+    /// What the last applied preset could not set, for the account it was applied on: each
+    /// entry is an English template and the name its `{name}` slot takes, if it has one.
+    preset_notice: Option<(String, Vec<(&'static str, Option<&'static str>)>)>,
     replacing: Option<OrderPreset>,
     renaming: Option<(String, String)>,
     tab: Tab,
@@ -554,6 +568,7 @@ impl Default for OrderTicket {
             expires: None,
             preset_name: String::new(),
             preset_fields: PresetFields::default(),
+            preset_notice: None,
             replacing: None,
             renaming: None,
             tab: Tab::Order,
@@ -570,6 +585,7 @@ impl Default for OrderTicket {
 impl OrderTicket {
     /// Fills the ticket from `request` and opens it on its Order tab.
     pub fn open(&mut self, request: &OrderRequest) {
+        self.preset_notice = None;
         self.editing = None;
         self.confirm = None;
         self.cancel = None;
@@ -1098,6 +1114,82 @@ impl OrderTicket {
                 self.expires = Some(expires);
             }
         }
+        let notice = self.unapplied(preset, market);
+        self.preset_notice = (!notice.is_empty()).then(|| (market.account.to_owned(), notice));
+    }
+
+    /// The parameters of `preset` that the ticket, as `apply` left it, could not take, each as
+    /// an English template and the name its `{name}` slot takes, if it has one.
+    fn unapplied(
+        &self,
+        preset: &OrderPreset,
+        market: &Market<'_>,
+    ) -> Vec<(&'static str, Option<&'static str>)> {
+        let capabilities = &market.capabilities;
+        let mut notice = Vec::new();
+        if let Some(kind) = preset.order_type {
+            if !kind.accepted(capabilities) {
+                notice.push((
+                    "Order type {name} is not available for this account",
+                    Some(kind.name()),
+                ));
+            } else if self.kind != kind {
+                notice.push((
+                    "Order type {name} cannot be applied to a working order",
+                    Some(kind.name()),
+                ));
+            }
+        }
+        if let Some(value) = preset.time_in_force
+            && !market.rules.time_in_force.contains(&value)
+        {
+            notice.push((
+                "Time in force {name} is not offered for this symbol",
+                Some(time_in_force_name(value)),
+            ));
+        }
+        if matches!(
+            preset.sizing,
+            Some(PresetSizing::RiskPercent(_) | PresetSizing::RiskMoney(_))
+        ) && self.sizing != Sizing::Risk
+        {
+            notice.push((
+                "Risk sizing is not available for this order, so the quantity is in units",
+                None,
+            ));
+        }
+        let stops = preset.first_level_stop_loss.is_some()
+            || preset
+                .take_profit_levels
+                .iter()
+                .any(|level| level.stop_loss.is_some());
+        let exits = preset.take_profit.is_some()
+            || preset.stop_loss.is_some()
+            || !preset.take_profit_levels.is_empty()
+            || stops;
+        // Only the outermost refusal: without brackets the levels and their stops are moot.
+        if preset.exits && exits {
+            if !self.brackets(market) {
+                notice.push((
+                    "Take profit and stop loss are not available for this order",
+                    None,
+                ));
+            } else if !preset.take_profit_levels.is_empty() && !levels_accepted(capabilities) {
+                notice.push((
+                    "Take-profit levels are not available for this account, so the first take profit closes the whole order",
+                    None,
+                ));
+            } else if stops
+                && levels_accepted(capabilities)
+                && !capabilities.take_profit_level_stops
+            {
+                notice.push((
+                    "A stop loss for each take-profit level is not available for this account, so the order's stop loss protects every level",
+                    None,
+                ));
+            }
+        }
+        notice
     }
 
     fn preset(&self, ctx: &egui::Context, name: String, market: &Market<'_>) -> OrderPreset {
