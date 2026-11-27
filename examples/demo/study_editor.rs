@@ -995,8 +995,11 @@ mod tests {
             }
             panic!("the backtest did not finish");
         };
-        // Bought 10 at the open of 103 after the rise to 101, sold at the open of 101 after the
-        // fall to 102.
+        // With 10,000 in the account, bought 10 at the open of 103 after the rise to 101, sold
+        // at the open of 101 after the fall to 102.
+        let mut settings = app.strategy_report.settings().clone();
+        settings.initial_capital = 10_000.0;
+        app.strategy_report.set_settings(settings).unwrap();
         run(&mut app);
         let report = app.strategy_report.report().expect("a report");
         let [trade] = report.trades.as_slice() else {
