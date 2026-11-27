@@ -238,6 +238,14 @@ fn skip(skipped: &mut Vec<(&'static str, usize)>, reason: &'static str) {
     }
 }
 
+/// The account and execution settings and the finer-fill choice restored by Undo and Redo.
+#[derive(Clone, Debug, PartialEq)]
+struct SettingsStep {
+    settings: BacktestSettings,
+    lower: bool,
+    lower_timeframe: Timeframe,
+}
+
 /// A factory-backed strategy tester, available with `ui` and `strategies`.
 ///
 /// Call [`Self::show`] with completed bars of the chart's current symbol and interval. Run and
@@ -270,9 +278,9 @@ pub struct StrategyTester {
     settings: BacktestSettings,
     instrument_currency: Option<String>,
     bar_clock: Option<BarClock>,
-    undo_settings: Vec<BacktestSettings>,
-    redo_settings: Vec<BacktestSettings>,
-    settings_edit: Option<BacktestSettings>,
+    undo_settings: Vec<SettingsStep>,
+    redo_settings: Vec<SettingsStep>,
+    settings_edit: Option<SettingsStep>,
     start: String,
     end: String,
     lower: bool,
@@ -434,7 +442,7 @@ impl StrategyTester {
         let strategy = self.factory.create(name).ok_or("Unknown strategy")?;
         let order_size = strategy_order_size(strategy.as_ref());
         if self.settings.order_size != order_size {
-            self.undo_settings.push(self.settings.clone());
+            self.undo_settings.push(self.settings_step());
             self.redo_settings.clear();
             self.settings.order_size = order_size;
         }
@@ -464,7 +472,7 @@ impl StrategyTester {
     pub fn set_settings(&mut self, settings: BacktestSettings) -> Result<(), &'static str> {
         super::properties::validate(&settings)?;
         if self.settings != settings {
-            self.undo_settings.push(self.settings.clone());
+            self.undo_settings.push(self.settings_step());
             self.redo_settings.clear();
             self.start = settings
                 .start_time
@@ -499,29 +507,42 @@ impl StrategyTester {
         }
     }
 
-    /// Restore the previous account and execution settings, retaining the report as stale.
+    /// Restore the previous account and execution settings, with the Lower-interval fills
+    /// choice and Fill interval, retaining the report as stale.
     pub fn undo_settings(&mut self) -> bool {
-        let Some(settings) = self.undo_settings.pop() else {
+        let Some(step) = self.undo_settings.pop() else {
             return false;
         };
-        self.redo_settings
-            .push(std::mem::replace(&mut self.settings, settings));
-        self.restore_settings();
+        let current = self.restore_settings(step);
+        self.redo_settings.push(current);
         true
     }
 
     /// Reapply settings undone through [`Self::undo_settings`].
     pub fn redo_settings(&mut self) -> bool {
-        let Some(settings) = self.redo_settings.pop() else {
+        let Some(step) = self.redo_settings.pop() else {
             return false;
         };
-        self.undo_settings
-            .push(std::mem::replace(&mut self.settings, settings));
-        self.restore_settings();
+        let current = self.restore_settings(step);
+        self.undo_settings.push(current);
         true
     }
 
-    fn restore_settings(&mut self) {
+    fn settings_step(&self) -> SettingsStep {
+        SettingsStep {
+            settings: self.settings.clone(),
+            lower: self.lower,
+            lower_timeframe: self.lower_timeframe,
+        }
+    }
+
+    /// Apply `step` as the form's settings and return the replaced ones.
+    fn restore_settings(&mut self, step: SettingsStep) -> SettingsStep {
+        let current = SettingsStep {
+            settings: std::mem::replace(&mut self.settings, step.settings),
+            lower: std::mem::replace(&mut self.lower, step.lower),
+            lower_timeframe: std::mem::replace(&mut self.lower_timeframe, step.lower_timeframe),
+        };
         self.end = self
             .settings
             .end_time
@@ -531,6 +552,7 @@ impl StrategyTester {
             .start_time
             .map_or_else(String::new, |time| time.to_rfc3339());
         self.changed();
+        current
     }
 
     /// Whether the report no longer describes the current form, chart scope or chart bars.
@@ -1064,7 +1086,7 @@ impl StrategyTester {
                                     self.redo_settings();
                                 }
                             });
-                            let before = self.settings.clone();
+                            let before = self.settings_step();
                             let changed = super::properties::show(
                                 ui,
                                 &mut self.settings,
@@ -1159,7 +1181,7 @@ impl StrategyTester {
         // A drag changes settings on every frame but is one undo step.
         if !ui.input(|input| input.pointer.any_down())
             && let Some(before) = self.settings_edit.take()
-            && self.settings != before
+            && self.settings_step() != before
         {
             self.undo_settings.push(before);
             self.redo_settings.clear();

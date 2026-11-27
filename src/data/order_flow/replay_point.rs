@@ -32,6 +32,10 @@ impl InputLock<'_> {
             d.events.len() * size_of::<(DateTime<Utc>, u64)>()
                 + d.counts.len() * size_of::<(u64, usize)>()
         });
+        #[cfg(all(feature = "studies", feature = "widget"))]
+        let tick_rules = s.tick_rule_before.len() * size_of::<(DateTime<Utc>, TickRule)>();
+        #[cfg(not(all(feature = "studies", feature = "widget")))]
+        let tick_rules = 0;
         #[cfg(feature = "widget")]
         let footprint = (s.footprint.as_ref()).map_or(Some(0), FootprintState::checkpoint_bytes);
         // Only the chart connects footprint sources.
@@ -41,6 +45,7 @@ impl InputLock<'_> {
             size_of::<State>(),
             s.bars.len() * size_of::<(DateTime<Utc>, ([f64; 3], u64))>(),
             s.changes.len() * size_of::<(DateTime<Utc>, u64)>(),
+            tick_rules,
             (s.window.events.len() + s.instant.events.len())
                 * size_of::<(DateTime<Utc>, [f64; 2])>(),
             (s.extremes.high.len() + s.extremes.low.len()) * size_of::<(DateTime<Utc>, f64)>(),
@@ -59,10 +64,11 @@ impl InputLock<'_> {
         InputPoint((*self.0).clone())
     }
 
-    /// Same aggregation, order filter, size basis and tick size.
+    /// Same aggregation, tick rule mode, order filter, size basis and tick size.
     pub(crate) fn compatible(&self, point: &InputPoint) -> bool {
         let (s, saved) = (&*self.0, &point.0);
         s.source == saved.source
+            && s.tick_rule.is_some() == saved.tick_rule.is_some()
             && s.filter == saved.filter
             && s.basis == saved.basis
             && s.tick_size == saved.tick_size

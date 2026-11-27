@@ -179,7 +179,7 @@ where
         plot.width = coords.volume_bar_width();
     }
     // Only bars within reach of the click can be hit, so a zoomed-out chart tests a few of them.
-    let reach = HIT_TOLERANCE + plot.width + bar_spacing;
+    let reach = HIT_TOLERANCE + plot.width * 1.5 + 3.0 + bar_spacing;
     let start = visible_range
         .start
         .max(coords.x_to_idx(click_pos.x - reach).saturating_sub(1));
@@ -260,6 +260,11 @@ where
                         };
                         (edge.min(baseline)..=edge.max(baseline)).contains(&click_pos.y)
                     })
+            }
+            PlotType::Dashes => {
+                let half = egui::vec2(plot.width + 3.0, 0.0);
+                point_to_segment_distance(click_pos, point - half, point + half)
+                    <= HIT_TOLERANCE + plot.width * 0.5
             }
             PlotType::Circles | PlotType::Crosses | PlotType::Character(_) => {
                 click_pos.distance(point) <= plot.width + HIT_TOLERANCE
@@ -438,6 +443,8 @@ mod tests {
                 (PlotType::Histogram, Pos2::new(99.0, 20.0), false),
                 (PlotType::Circles, Pos2::new(99.0, 20.0), false),
                 (PlotType::Circles, Pos2::new(149.0, 20.0), true),
+                (PlotType::Dashes, Pos2::new(157.0, 20.0), true),
+                (PlotType::Dashes, Pos2::new(99.0, 20.0), false),
                 (PlotType::Character('d'), Pos2::new(99.0, 20.0), false),
                 (PlotType::Character('d'), Pos2::new(149.0, 20.0), true),
                 (PlotType::Line, Pos2::new(99.0, 20.0), true),
