@@ -74,8 +74,14 @@ const TRIGGER_HISTORY: usize = 5_000;
 /// A crossing on a longer interval therefore fires once whatever the shorter interval does, and
 /// one between two closes of the shorter interval is caught at the later close. Crossing up needs
 /// a previous value strictly below the level and a current value at or above it, crossing down the
-/// reverse; a value that touches the level and stays there fires once. Moving by and volume
-/// above average read the bars before the evaluated one, as [`AlertCondition`] documents.
+/// reverse; a value that touches the level and stays there fires once. Where a rule reads the
+/// range traded, a price strictly beyond the level since the previous evaluation with the current
+/// price back at or across it also crosses, on its way back; a price outside a channel with the
+/// current one back inside enters it, one inside with the current one outside exits it, and
+/// prices on both sides of it enter and exit it. A move across and back therefore meets the same
+/// transitions however often the host evaluates, and one evaluation still fires an alert once.
+/// Moving by and volume above average read the bars before the evaluated one, as
+/// [`AlertCondition`] documents.
 /// Moving channels resolve the preceding bar again when a new bar arrives, so edits and
 /// skipped updates use that bar's current geometry. Within a bar they use the previous evaluation.
 ///
@@ -1644,6 +1650,7 @@ fn condition_holds(
         AlertCondition::Crossing(level) => compare(
             AlertComparison::Crossing,
             traded,
+            value,
             previous,
             *level,
             Some(*level),
@@ -1651,6 +1658,7 @@ fn condition_holds(
         AlertCondition::CrossingUp(level) => compare(
             AlertComparison::CrossingUp,
             traded,
+            value,
             previous,
             *level,
             Some(*level),
@@ -1658,6 +1666,7 @@ fn condition_holds(
         AlertCondition::CrossingDown(level) => compare(
             AlertComparison::CrossingDown,
             traded,
+            value,
             previous,
             *level,
             Some(*level),
@@ -1675,7 +1684,7 @@ fn condition_holds(
                 _ => AlertChannelComparison::Outside,
             };
             let was_inside = previous.map(|p| p >= *lower && p <= *upper);
-            channel(comparison, traded, was_inside, [*lower, *upper])
+            channel(comparison, traded, value, was_inside, [*lower, *upper])
         }
         AlertCondition::MovingBy {
             value: change,
@@ -1695,8 +1704,9 @@ fn condition_holds(
                 AlertSource::Drawing(_) => traded,
                 _ => [value, value],
             };
-            other[0]
-                .is_some_and(|level| compare(*comparison, traded, previous, level, previous_other))
+            other[0].is_some_and(|level| {
+                compare(*comparison, traded, value, previous, level, previous_other)
+            })
         }
         AlertCondition::Channel {
             boundaries,
@@ -1722,7 +1732,7 @@ fn condition_holds(
             } else {
                 [value, value]
             };
-            channel(*comparison, traded, was_inside, current)
+            channel(*comparison, traded, value, was_inside, current)
         }
         AlertCondition::Position { progress, .. } => {
             let [Some(entry), Some(target), Some(stop)] = other else {
@@ -1735,6 +1745,7 @@ fn condition_holds(
                 _ => compare(
                     AlertComparison::Crossing,
                     [value, value],
+                    value,
                     previous,
                     entry,
                     previous_other,
@@ -1762,35 +1773,51 @@ fn condition_holds(
 /// Whether `comparison` holds for a value that traded between `low` and `high` since the
 /// previous one, which `was_inside` tells was inside the inclusive channel from `lower` to
 /// `upper`, if known. The range is inside when it reaches the channel and outside when it passes
-/// either boundary, so a wick out of the channel and back is both.
+/// either boundary, so a wick out of the channel and back is both. Entering also holds when the
+/// range passed a boundary and `value`, the current value, is back inside, and exiting when the
+/// range reached the channel and `value` is outside: the way back of a move the previous
+/// evaluation did not see. A range past both boundaries went through the channel, so it enters
+/// and exits it whatever the previous value was.
 fn channel(
     comparison: AlertChannelComparison,
     [low, high]: [f64; 2],
+    value: f64,
     was_inside: Option<bool>,
     [lower, upper]: [f64; 2],
 ) -> bool {
     let inside = low <= upper && high >= lower;
     let outside = low < lower || high > upper;
+    let ends_inside = value >= lower && value <= upper;
+    let through = low < lower && high > upper;
     match comparison {
-        AlertChannelComparison::Entering => was_inside == Some(false) && inside,
-        AlertChannelComparison::Exiting => was_inside == Some(true) && outside,
+        AlertChannelComparison::Entering => {
+            was_inside.is_some_and(|was| (!was && inside) || (outside && ends_inside) || through)
+        }
+        AlertChannelComparison::Exiting => {
+            was_inside.is_some_and(|was| (was && outside) || (inside && !ends_inside) || through)
+        }
         AlertChannelComparison::Inside => inside,
         AlertChannelComparison::Outside => outside,
     }
 }
 
 /// Whether `comparison` holds for a value that traded between `low` and `high` since the
-/// previous one, `previous`, against `level`, which was `previous_level` then.
+/// previous one, `previous`, against `level`, which was `previous_level` then. A range strictly
+/// past the level with `value`, the current value, back at or across it also crosses, on the way
+/// back.
 fn compare(
     comparison: AlertComparison,
     [low, high]: [f64; 2],
+    value: f64,
     previous: Option<f64>,
     level: f64,
     previous_level: Option<f64>,
 ) -> bool {
     let sides = previous.zip(previous_level);
-    let up = sides.is_some_and(|(p, l)| p < l && high >= level);
-    let down = sides.is_some_and(|(p, l)| p > l && low <= level);
+    let up =
+        sides.is_some_and(|(p, l)| (p < l && high >= level) || (low < level && value >= level));
+    let down =
+        sides.is_some_and(|(p, l)| (p > l && low <= level) || (high > level && value <= level));
     match comparison {
         AlertComparison::Crossing => up || down,
         AlertComparison::CrossingUp => up,
@@ -4193,6 +4220,101 @@ mod tests {
                 }
             }
             assert_eq!(fired, expected, "row {row}");
+        }
+    }
+
+    /// A move past a level or a channel boundary and back fires the transition of its way back
+    /// alike whether the alert evaluates once over the move or after each trade, on a fixed
+    /// level or channel, a drawing level and a channel between two drawings. So does a move
+    /// through the whole channel, which enters it and exits it, while a touch of the level and
+    /// back is no crossing the other way.
+    #[test]
+    fn a_move_and_its_way_back_fire_alike_at_any_evaluation_rate() {
+        let (lower, upper) = (100.0, 110.0);
+        let drawn = |comparison| AlertCondition::Channel {
+            boundaries: Box::new(["line", "upper"].map(|id| AlertSource::Drawing(id.into()))),
+            comparison,
+        };
+        let level = |comparison| AlertCondition::Compare {
+            other: AlertSource::Drawing("upper".into()),
+            comparison,
+        };
+        // The trades of the forming bar, from the one the alert first observes.
+        let (out_and_back, in_and_back): (&[f64], &[f64]) =
+            (&[105.0, 112.0, 105.5], &[95.0, 103.0, 95.5]);
+        let down_and_back: &[f64] = &[115.0, 108.0, 114.5];
+        // Each row fires this many times at either rate.
+        let rows: [(AlertCondition, &[f64], usize); 12] = [
+            (
+                AlertCondition::EnteringChannel { lower, upper },
+                out_and_back,
+                1,
+            ),
+            (drawn(AlertChannelComparison::Entering), out_and_back, 1),
+            (
+                AlertCondition::ExitingChannel { lower, upper },
+                in_and_back,
+                1,
+            ),
+            (drawn(AlertChannelComparison::Exiting), in_and_back, 1),
+            (AlertCondition::CrossingDown(upper), out_and_back, 1),
+            (level(AlertComparison::CrossingDown), out_and_back, 1),
+            (AlertCondition::CrossingUp(upper), down_and_back, 1),
+            (level(AlertComparison::CrossingUp), down_and_back, 1),
+            // From the level itself, only the way back crosses it.
+            (AlertCondition::Crossing(upper), &[upper, 112.0, upper], 1),
+            // A touch of the level from below and back is no crossing down.
+            (
+                AlertCondition::CrossingDown(upper),
+                &[105.0, upper, 105.5],
+                0,
+            ),
+            // From inside, out below and up through the channel; from below, up through it and
+            // back in from above.
+            (
+                AlertCondition::EnteringChannel { lower, upper },
+                &[105.0, 95.0, 103.0, 115.0],
+                1,
+            ),
+            (
+                AlertCondition::ExitingChannel { lower, upper },
+                &[98.0, 95.0, 105.0, 115.0, 105.0],
+                1,
+            ),
+        ];
+        let value = |source: &AlertSource, _| match source {
+            AlertSource::Drawing(id) if id == "upper" => Some(upper),
+            AlertSource::Drawing(_) => Some(lower),
+            _ => None,
+        };
+        for (row, (condition, trades, fires)) in rows.into_iter().enumerate() {
+            let fired = [true, false].map(|each_trade| {
+                let host = Host::new(Vec::new());
+                host.save(alert(condition.clone(), AlertFrequency::EveryTime))
+                    .unwrap();
+                host.events();
+                let mut forming =
+                    Bar::new(time(60), trades[0], trades[0], trades[0], trades[0], 1.0);
+                let mut fired = 0;
+                for (n, &price) in trades.iter().enumerate() {
+                    forming.high = forming.high.max(price);
+                    forming.low = forming.low.min(price);
+                    forming.close = price;
+                    if n == 0 || each_trade || n == trades.len() - 1 {
+                        host.engine.update(
+                            "SYM",
+                            None,
+                            Timeframe::Min1,
+                            &[bar(0, trades[0], 1.0), forming.clone()],
+                            time(70 + n as i64),
+                            value,
+                        );
+                        fired += host.fired().len();
+                    }
+                }
+                fired
+            });
+            assert_eq!(fired, [fires; 2], "row {row}: after each trade, once");
         }
     }
 }
