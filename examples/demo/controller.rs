@@ -4327,7 +4327,10 @@ impl DemoApp {
                 points,
                 self.theme.ui.border,
             )));
-        if !self.replay_selecting && self.replay.is_none() {
+        // An all charts replay moves to the chart activated; another waits for its end.
+        if !self.replay_selecting
+            && (self.replay.is_none() || self.replay_slots.contains(&self.layout.active()))
+        {
             self.activate_chart_slot(self.layout.active());
         }
         self.drain_chart_events(ui.ctx());

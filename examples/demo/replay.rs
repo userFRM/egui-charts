@@ -1102,6 +1102,41 @@ impl DemoApp {
         self.replay_control.hide_control();
     }
 
+    /// Moves an all charts replay to the newly active chart, keeping the cursor, update
+    /// interval, speed and playback while pausing its feed and using its source history.
+    pub(super) fn take_over_replay(&mut self, cutoff: Option<DateTime<Utc>>) {
+        self.replay_selecting = false;
+        self.replay_start.is_open = false;
+        self.replay_prompt.is_open = false;
+        // A held move names a bar of the chart that was active.
+        self.replay_move = None;
+        self.live_was_paused = self.live.paused();
+        self.live.set_paused(true);
+        self.bars = self.live.snapshot(
+            self.state.timeframe,
+            self.chart.bar_clock(),
+            self.chart.extended_hours(),
+        );
+        self.replay_control.set_symbol(&self.state.symbol);
+        // One-trade bars of the same symbol belong to the recording the shared driver holds.
+        let same_trades = self.replay_interval.is_trade_based()
+            && self
+                .replay
+                .as_ref()
+                .and_then(|replay| replay.state.symbol.as_deref())
+                == Some(self.state.symbol.as_str());
+        if !same_trades {
+            let automatic = self.replay_control.uses_automatic_update_interval();
+            self.set_replay_interval(self.replay_interval);
+            self.replay_control.set_automatic_update_interval(automatic);
+        }
+        if let Some(cutoff) = cutoff
+            && self.chart.replay_time() != Some(cutoff)
+        {
+            self.apply_replay_window(cutoff);
+        }
+    }
+
     pub(super) fn push_market_replay_window(&mut self) {
         if let Some(driver) = self.chart.replay_driver() {
             if let Some(first) = self
@@ -3208,6 +3243,77 @@ mod tests {
             assert_eq!(
                 common_replay_interval(a.parse().unwrap(), b.parse().unwrap()),
                 expected
+            );
+        }
+    }
+
+    /// Activating every participant keeps the shared cursor and transport, for candle and
+    /// execution updates, and Exit gives each live feed back its pause state.
+    #[test]
+    fn activating_each_chart_keeps_an_all_charts_replay() {
+        use super::super::tests::settle;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.activate_chart_slot(1);
+        app.switch_timeframe(Timeframe::Min5);
+        app.activate_chart_slot(0);
+        app.switch_timeframe(Timeframe::Min1);
+        settle(&mut app, &ctx);
+        app.advance_sample_to(app.live.now() + chrono::TimeDelta::seconds(90));
+        settle(&mut app, &ctx);
+        assert_eq!(app.replay_scope, ReplayScope::AllCharts);
+        for interval in [Timeframe::Min1, Timeframe::Ticks(NonZeroU64::MIN)] {
+            let pauses = [app.live.paused(), app.extra_charts[0].live.paused()];
+            app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 10);
+            app.handle_replay_control(ReplayControlAction::SetUpdateInterval(interval));
+            let driver = app.chart.replay_driver().cloned();
+            assert_eq!(driver.is_some(), interval.is_trade_based());
+            let cutoff = app.chart.replay_time().unwrap();
+            for slot in [1, 0, 1, 0] {
+                app.layout.set_active(slot);
+                ctx.run_ui(egui::RawInput::default(), |ui| demo(&mut app, ui))
+                    .drop_without_applying_deltas();
+                assert_eq!(app.layout_slot, slot);
+                assert!(!app.replay.as_ref().unwrap().state.is_playing());
+                assert_eq!(app.replay_interval, interval);
+                assert!(!app.replay_control.uses_automatic_update_interval());
+                assert_eq!(app.replay_slots, [0, 1]);
+                for chart in [&app.chart, &app.extra_charts[0].chart] {
+                    assert_eq!(chart.replay_time(), Some(cutoff));
+                    if let Some(driver) = &driver {
+                        assert!(Arc::ptr_eq(chart.replay_driver().unwrap(), driver));
+                    }
+                }
+            }
+            app.handle_replay_control(ReplayControlAction::Play);
+            for slot in [1, 0] {
+                app.layout.set_active(slot);
+                ctx.run_ui(egui::RawInput::default(), |ui| demo(&mut app, ui))
+                    .drop_without_applying_deltas();
+                assert_eq!(app.layout_slot, slot);
+                assert!(app.replay.as_ref().unwrap().state.is_playing());
+                assert_eq!(app.replay_interval, interval);
+                assert!(app.chart.replay_time().is_some());
+                assert_eq!(
+                    app.chart.replay_time(),
+                    app.extra_charts[0].chart.replay_time()
+                );
+            }
+            app.handle_replay_control(ReplayControlAction::Stop);
+            assert!(app.replay.is_none());
+            for chart in [&app.chart, &app.extra_charts[0].chart] {
+                assert!(chart.replay_time().is_none());
+                assert!(chart.replay_driver().is_none());
+            }
+            assert_eq!(
+                [app.live.paused(), app.extra_charts[0].live.paused()],
+                pauses
             );
         }
     }
