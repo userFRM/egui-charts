@@ -799,6 +799,17 @@ struct Tracked {
     fail: f64,
 }
 
+/// What happened on one bar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Events {
+    /// One bit per kind that broke out bullish and bearish.
+    marks: [u32; 2],
+    /// The last pivot of a new formation became known.
+    found: bool,
+    failed: bool,
+    reached: bool,
+}
+
 /// The detectors' state after a bar: the bars of the latest pivot test, the pivots,
 /// the formations waiting for a break and the confirmed ones.
 #[derive(Clone, Debug, Default)]
@@ -825,18 +836,18 @@ impl State {
         scope: Scope,
         enabled: &[bool; 18],
         bar: &Bar,
-    ) -> [u32; 2] {
+    ) -> Events {
         // Every family keeps its share of developing and confirmed formations.
         let share = if scope == Scope::All { 2 } else { 1 };
         let index = self.index;
         self.index += 1;
-        let mut marks = [0; 2];
+        let mut events = Events::default();
         if ![bar.open, bar.high, bar.low, bar.close]
             .iter()
             .all(|v| v.is_finite())
         {
             self.swings.skip();
-            return marks;
+            return events;
         }
         let seq = self.swings.position;
         self.last = index;
@@ -856,6 +867,8 @@ impl State {
                 (false, true) => FormationStatus::Failed,
                 (false, false) => continue,
             };
+            events.failed |= status == FormationStatus::Failed;
+            events.reached |= status == FormationStatus::Reached;
             formation.status = status;
             formation.resolved_at = Some(index);
         }
@@ -872,7 +885,7 @@ impl State {
             .swings
             .push(bar, config.strength, config.strength, MAX_PIVOTS)
         {
-            self.detect(config, scope, enabled, share * MAX_PENDING);
+            events.found = self.detect(config, scope, enabled, share * MAX_PENDING);
         }
         let mut i = 0;
         while i < self.pending.len() {
@@ -882,6 +895,7 @@ impl State {
                     self.pending.remove(i);
                 }
                 Some(Outcome::Fail) => {
+                    events.failed = true;
                     let candidate = self.pending.remove(i);
                     let mut formation = candidate.formation(
                         candidate.kind.expected(),
@@ -915,6 +929,7 @@ impl State {
                     };
                     formation.target = Some(target);
                     if reached {
+                        events.reached = true;
                         formation.status = FormationStatus::Reached;
                         formation.resolved_at = Some(index);
                     }
@@ -930,14 +945,20 @@ impl State {
                         .iter()
                         .position(|&k| k == candidate.kind)
                         .unwrap();
-                    marks[direction as usize] |= 1 << slot;
+                    events.marks[direction as usize] |= 1 << slot;
                 }
             }
         }
-        marks
+        events
     }
 
-    fn detect(&mut self, config: &Config, scope: Scope, enabled: &[bool; 18], limit: usize) {
+    fn detect(
+        &mut self,
+        config: &Config,
+        scope: Scope,
+        enabled: &[bool; 18],
+        limit: usize,
+    ) -> bool {
         let pivots = &self.swings.pivots;
         let mut found: Vec<Option<Candidate>> = Vec::new();
         if scope.covers(PatternFamily::Continuation) {
@@ -973,6 +994,7 @@ impl State {
                     | FormationKind::BearPennant
             ) && slot_of(c.kind).is_some_and(|slot| enabled[slot])
         });
+        let mut detected = false;
         for candidate in found.into_iter().flatten() {
             if pole
                 && matches!(
@@ -998,10 +1020,12 @@ impl State {
             }
             self.used[slot] = Some(last);
             self.pending.push(candidate);
+            detected = true;
             if self.pending.len() > limit {
                 self.pending.remove(0);
             }
         }
+        detected
     }
 }
 
@@ -1084,7 +1108,10 @@ impl State {
 /// "Bear Flag". Line 3, Target, styles dotted targets ending in a Target label: orange while
 /// Awaiting, green when Reached, red when Failed and grey when Indefinable. Hovering it shows
 /// the price and status. Line 4, Price line, styles the path through every pivot, including a
-/// flag's pole. Patterns and Price targets choose the formations and targets drawn.
+/// flag's pole. Patterns and Price targets choose the formations and targets drawn. Alerts
+/// report New pattern when its last pivot becomes known, Pattern failed and Target reached
+/// when their outcomes are known; an Indefinable outcome raises neither. Display filters do
+/// not change these conditions or the breakout outputs.
 #[derive(Clone, Debug)]
 pub struct ChartPatterns {
     scope: Scope,
@@ -1092,8 +1119,8 @@ pub struct ChartPatterns {
     enabled: [bool; 18],
     pattern_filter: usize,
     price_targets: usize,
-    /// One bit per kind of the scope confirmed bullish and bearish on each bar.
-    found: Vec<[u32; 2]>,
+    /// Formation discoveries, breakouts and outcomes on each bar.
+    found: Vec<Events>,
     values: IndicatorValues,
     stepper: Stepper<State>,
     #[cfg(feature = "drawings")]
@@ -1258,7 +1285,7 @@ impl ChartPatterns {
         let bits = self
             .found
             .get(bar)
-            .and_then(|marks| marks.get(line))
+            .and_then(|events| events.marks.get(line))
             .copied()
             .unwrap_or(0);
         self.scope
@@ -1466,8 +1493,9 @@ impl Indicator for ChartPatterns {
         let (config, scope, enabled) = (self.config, self.scope, self.enabled);
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                let marks = state.advance(&config, scope, &enabled, bar);
-                self.found.push(marks);
+                let events = state.advance(&config, scope, &enabled, bar);
+                self.found.push(events);
+                let marks = events.marks;
                 if marks == [0, 0] {
                     return IndicatorValue::None;
                 }
@@ -1653,6 +1681,23 @@ impl Indicator for ChartPatterns {
             })
             .map(|(output, (_, name))| (output, name))
             .collect()
+    }
+
+    // Breakouts alert on the Bullish and Bearish outputs.
+    fn alert_conditions(&self) -> Vec<String> {
+        ["New pattern", "Pattern failed", "Target reached"]
+            .map(str::to_owned)
+            .into()
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        let events = self.found.get(bar)?;
+        match condition {
+            0 => Some(events.found),
+            1 => Some(events.failed),
+            2 => Some(events.reached),
+            _ => None,
+        }
     }
 
     fn is_visible(&self) -> bool {
@@ -1984,6 +2029,35 @@ mod tests {
             let mut study = ChartPatterns::only(kind);
             let formations = found(&mut study, &bars);
             assert_eq!(formations.len(), 1, "{label}");
+            let found_at = match kind {
+                Rectangle => 23,
+                DoubleTop => 18,
+                CupAndHandle => 33,
+                _ => 28,
+            };
+            assert_eq!(
+                study.alert_conditions(),
+                ["New pattern", "Pattern failed", "Target reached"]
+            );
+            for bar in 0..bars.len() {
+                assert_eq!(
+                    study.alert_condition(0, bar),
+                    Some(bar == found_at),
+                    "{label}: new on {bar}"
+                );
+                assert_eq!(
+                    study.alert_condition(1, bar),
+                    Some(status == Failed && Some(bar) == resolved),
+                    "{label}: failure on {bar}"
+                );
+                assert_eq!(
+                    study.alert_condition(2, bar),
+                    Some(status == Reached && Some(bar) == resolved),
+                    "{label}: target on {bar}"
+                );
+            }
+            assert_eq!(study.alert_condition(3, 0), None);
+            assert_eq!(study.alert_condition(0, bars.len()), None);
             let formation = &formations[0];
             assert_eq!(
                 (
