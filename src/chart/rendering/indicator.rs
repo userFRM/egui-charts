@@ -94,6 +94,15 @@ pub(crate) fn paint_study_plot(
                 }
             }
         }
+        PlotType::Dashes => {
+            let half = egui::vec2(plot.width + 3.0, 0.0);
+            for &point in points {
+                painter.line_segment(
+                    [point - half, point + half],
+                    Stroke::new(plot.width, plot.color),
+                );
+            }
+        }
         PlotType::Character(character) => {
             let galley = painter.layout_no_wrap(
                 character.to_string(),
@@ -784,6 +793,7 @@ impl IndicatorRenderer {
                 plot.plot_type,
                 PlotType::Circles
                     | PlotType::Crosses
+                    | PlotType::Dashes
                     | PlotType::TriangleUp
                     | PlotType::TriangleDown
                     | PlotType::Character(_)
@@ -1230,6 +1240,7 @@ mod tests {
             (PlotType::Columns, LineStyle::Solid, 4.0),
             (PlotType::StepLine, LineStyle::Solid, 4.0),
             (PlotType::Crosses, LineStyle::Solid, 4.0),
+            (PlotType::Dashes, LineStyle::Solid, 4.0),
             (PlotType::TriangleUp, LineStyle::Solid, 4.0),
             (PlotType::TriangleDown, LineStyle::Solid, 4.0),
             (PlotType::Area, LineStyle::Solid, 1.0),
@@ -1316,6 +1327,25 @@ mod tests {
                             [(20.0, -1.0), (26.0, 5.0), (20.0, 11.0), (14.0, 5.0)],
                         ]
                         .map(|corners| corners.map(|(x, y)| Pos2::new(x, y)))
+                    );
+                }
+                PlotType::Dashes => {
+                    let segments: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::LineSegment { points, stroke } if stroke.color == color => {
+                                assert_eq!(stroke.width, 4.0);
+                                Some(*points)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        segments,
+                        [
+                            [Pos2::new(3.0, 15.0), Pos2::new(17.0, 15.0)],
+                            [Pos2::new(13.0, 5.0), Pos2::new(27.0, 5.0)],
+                        ]
                     );
                 }
                 PlotType::Crosses => {
