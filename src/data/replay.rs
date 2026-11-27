@@ -526,8 +526,9 @@ impl ReplayDriver {
         store.publish(&mut state.stats);
     }
 
-    /// Lets seeks resume from checkpoints held in about `bytes` of memory; 0, the default, keeps
-    /// none, and every seek replays from the first event. While it rebuilds a subscription, on a
+    /// Lets seeks resume from checkpoints held in about `bytes` of memory, one budget for this
+    /// driver that all its subscriptions share; 0, the default, keeps none, and every seek replays
+    /// from the first event. While it rebuilds a subscription, on a
     /// seek or a new subscription, the driver saves the subscription's feed state every few
     /// thousand of its events, thinning them evenly when the budget fills, and a later seek
     /// resumes from the latest one at or before its time. Bars, executions, book, depth history
