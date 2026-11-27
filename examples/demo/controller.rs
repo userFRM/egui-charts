@@ -11950,6 +11950,62 @@ mod tests {
         assert!(!config.shade_overnight && config.shade_postmarket);
     }
 
+    /// The demo exposes the Columns close switch and Range's independent colours and Thin bars.
+    #[test]
+    fn chart_settings_columns_and_range_rows_reach_the_demo_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        let size = egui::vec2(1440.0, 900.0);
+        for kind in [ChartType::Columns, ChartType::Range] {
+            app.state.chart_type = kind;
+            app.chart.set_chart_type(kind);
+            app.open_chart_settings_dialog();
+            let show = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+            };
+            let mut labels = Vec::new();
+            for _ in 0..5 {
+                labels = show(&mut app, vec![]);
+            }
+            if kind == ChartType::Range {
+                for label in ["Rising bar colour", "Falling bar colour", "Thin bars"] {
+                    assert!(
+                        labels.iter().any(|(text, _)| text == label),
+                        "{label} is offered"
+                    );
+                }
+            } else {
+                let switch = labels
+                    .iter()
+                    .find(|(text, _)| text == "Color bars based on previous close")
+                    .expect("the Columns close switch is offered")
+                    .1
+                    .center();
+                ui_click(&ctx, size, switch, |ui| app.show_dialogs(ui.ctx()));
+            }
+            let ok = show(&mut app, vec![])
+                .into_iter()
+                .find(|(text, _)| text == "Ok")
+                .unwrap()
+                .1
+                .center();
+            ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+            if kind == ChartType::Columns {
+                assert!(
+                    !app.chart
+                        .chart_type_params()
+                        .styles
+                        .columns
+                        .color_by_previous_close
+                );
+            }
+        }
+    }
+
     /// The demo's chart settings offer the switch that keeps the left edge, and with it on an
     /// interval change keeps the bar at the left edge of the demo chart in place.
     #[test]
