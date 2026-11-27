@@ -1075,7 +1075,7 @@ mod tests {
         let closes: [&[f64]; 7] = [
             &[100.0, 101.0],
             &[100.0, 102.0],
-            &[100.0, 102.0],
+            &[100.0, 102.0, 103.0],
             &[100.0, 102.0, 103.0],
             &[100.0, 102.0, 103.0],
             &[100.0, 102.0, 104.0],
@@ -1086,8 +1086,8 @@ mod tests {
         let per_bar: [Alerts; 7] = [
             &[(0, 100.0, 1), (1, 101.0, 2)],
             &[],
-            &[],
             &[(2, 103.0, 3)],
+            &[],
             &[],
             &[],
             &[(3, 105.0, 4)],
@@ -1095,8 +1095,8 @@ mod tests {
         let at_close: [Alerts; 7] = [
             &[(0, 100.0, 1)],
             &[],
-            &[],
             &[(1, 102.0, 2)],
+            &[],
             &[],
             &[],
             &[(2, 104.0, 3)],
@@ -1109,7 +1109,8 @@ mod tests {
             engine.settings.recalculate_on_every_update = true;
             let mut strategy = Ticks(frequency);
             for (update, (closes, expected)) in closes.iter().zip(expected).enumerate() {
-                // The fifth update rebuilds the run on changed settings.
+                // The fourth update repeats the third, and the fifth rebuilds the run on
+                // changed settings.
                 if update == 4 {
                     engine.settings.commission = Commission::PerOrder(1.0);
                 }
