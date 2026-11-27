@@ -660,13 +660,15 @@ impl AlertEngine {
     /// Repeated batches are ignored by sequence, including after edits or rearming an alert
     /// on the same run and when multiple fills share a timestamp.
     /// `now` gates expiry and notification schedules; event times are the source fill times.
-    /// Empty messages use the execution side, quantity, price and resulting signed position.
+    /// Empty messages use the order's alert message, as written, or without one the execution
+    /// side, quantity, price and resulting signed position.
     /// Custom messages expand the usual placeholders using a flat bar at the fill price, with
     /// its source time and zero volume, and `exchange` as [`Alert::expand_message`] takes it. A
     /// fill carries no study values, so `{{plot_ID_N}}` reads `NaN`. Strategy-fill alerts need no
-    /// price-reader subscription. `{{order_id}}`, `{{side}}` (`Buy` or `Sell`), `{{quantity}}`
-    /// and `{{position}}`, the signed position after the fill, read the fill; other alerts leave
-    /// them as written.
+    /// price-reader subscription. `{{order_id}}`, `{{side}}` (`Buy` or `Sell`), `{{quantity}}`,
+    /// `{{position}}`, the signed position after the fill, `{{comment}}` and `{{alert_message}}`,
+    /// the order's texts or empty without them, read the fill; other alerts leave them as
+    /// written.
     /// Delivery callbacks run after unlocking, as they do for price alerts.
     #[cfg(feature = "strategies")]
     pub fn strategy_fills(
@@ -710,11 +712,22 @@ impl AlertEngine {
                             ("side", side.into()),
                             ("quantity", fill.quantity.to_string()),
                             ("position", fill.position.to_string()),
+                            ("comment", fill.comment.clone().unwrap_or_default()),
+                            (
+                                "alert_message",
+                                fill.alert_message.clone().unwrap_or_default(),
+                            ),
                         ],
-                        message: format!(
-                            "{side} {} at {price}, position {}",
-                            fill.quantity, fill.position
-                        ),
+                        message: fill
+                            .alert_message
+                            .clone()
+                            .filter(|message| !message.is_empty())
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "{side} {} at {price}, position {}",
+                                    fill.quantity, fill.position
+                                )
+                            }),
                     })
                 })
                 .collect()

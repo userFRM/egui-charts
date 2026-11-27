@@ -32,6 +32,6 @@ pub use optimize::{StrategyTrial, optimise};
 pub(crate) use backtest::same_bars;
 
 pub use backtest::{
-    Backtest, BacktestSettings, Commission, OrderSize, Slippage, Strategy, StrategyContext,
-    StrategyFill,
+    Backtest, BacktestSettings, Commission, OrderSize, OrderTag, Slippage, Strategy,
+    StrategyContext, StrategyFill,
 };

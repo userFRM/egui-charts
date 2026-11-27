@@ -21,6 +21,10 @@ pub struct StrategyFill {
     pub quantity: f64,
     /// Signed position immediately after this fill, before any fill callback orders execute.
     pub position: f64,
+    /// The comment of the order's [`OrderTag`], `None` without one and for a margin call.
+    pub comment: Option<String>,
+    /// The alert message of the order's [`OrderTag`], `None` without one and for a margin call.
+    pub alert_message: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -859,6 +863,8 @@ mod tests {
             price: 180.0,
             quantity: 7.0,
             position: -3.0,
+            comment: None,
+            alert_message: None,
         };
         for (template, order, expected, price_expected) in [
             ("{{order_id}}", "Reverse", "Reverse", "{{order_id}}"),
@@ -902,6 +908,90 @@ mod tests {
                     (*source == crate::model::AlertSource::Price).then_some(bar.close)
                 }),
                 price_expected
+            );
+        }
+    }
+
+    /// An order's texts reach its fills' alerts through the placeholders and as the default
+    /// text, as written.
+    #[test]
+    #[cfg(feature = "alert-engine")]
+    fn order_texts_and_strategy_alerts_reach_the_run_s_fill_alerts() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::services::{AlertEngine, AlertEvent};
+        use std::sync::{Arc, Mutex};
+        struct Tagged;
+        impl Strategy for Tagged {
+            fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+                match context.bars().len() {
+                    1 => context.entry(
+                        OrderTag::new("Long")
+                            .with_comment("Breakout")
+                            .with_alert_message("Long {{ticker}}"),
+                        OrderSide::Buy,
+                        2.0,
+                        OrderType::Market,
+                    ),
+                    3 => context.exit("Flat", None, None, None),
+                    _ => {}
+                }
+            }
+        }
+        let bars: Vec<_> = (0..5)
+            .map(|minute| bar(minute, 100.0 + minute as f64))
+            .collect();
+        let at = |minute: usize| bars[minute].time;
+        for (template, expected) in [
+            ("", ["Long {{ticker}}", "Sell 2 at 103.00, position 0"]),
+            (
+                "{{comment}}|{{alert_message}}",
+                ["Breakout|Long {{ticker}}", "|"],
+            ),
+            (
+                "{{order_id}} {{side}} {{ticker}} {{close}}",
+                ["Long Buy SYM 101", "Flat Sell SYM 103"],
+            ),
+        ] {
+            let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+            alert.message = template.into();
+            alert.timeframe = Some(Timeframe::Min1);
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let sink = delivered.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert])
+                .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+            let mut run = Backtest::new("Run", "SYM", Timeframe::Min1, 10_000.0);
+            for count in 1..=bars.len() {
+                let fills = run.update(&mut Tagged, &bars[..count], &[]);
+                // A repeated batch delivers nothing.
+                for _ in 0..2 {
+                    let now = bars[count - 1].time;
+                    engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &fills, now);
+                }
+            }
+            let events = delivered.lock().unwrap();
+            let observed: Vec<_> = events
+                .iter()
+                .map(|event| {
+                    let AlertEvent::TriggeredForSymbol {
+                        time,
+                        price,
+                        message,
+                        ..
+                    } = event
+                    else {
+                        panic!("a symbol trigger");
+                    };
+                    (*time, *price, message.as_str())
+                })
+                .collect();
+            assert_eq!(
+                observed,
+                [
+                    (at(1), Some(101.0), expected[0]),
+                    (at(3), Some(103.0), expected[1]),
+                ],
+                "{template}"
             );
         }
     }

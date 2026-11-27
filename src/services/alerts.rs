@@ -42,7 +42,7 @@ use crate::model::{Alert, AlertId, AlertTrigger};
 /// A [`StrategyFills`](crate::model::AlertCondition::StrategyFills) alert receives each execution
 /// of a host-named run through `AlertEngine::strategy_fills`, with `strategies` and `alert-engine`.
 /// Its event carries the fill time, execution price and a message such as
-/// "Buy 2 at 187.50, position 4". The host supplies bars and retains the run; delivery outside the
+/// "Buy 2 at 187.50, position 4", or the order's alert message. The host supplies bars and retains the run; delivery outside the
 /// application remains the host's responsibility. In the same way a
 /// [`DetectorSignals`](crate::model::AlertCondition::DetectorSignals) alert fires on each new
 /// signal of a named detector, and a [`CustomEvents`](crate::model::AlertCondition::CustomEvents)

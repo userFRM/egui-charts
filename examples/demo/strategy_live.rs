@@ -5,7 +5,7 @@ use egui_charts::model::{
     Alert, AlertCondition, AlertFrequency, AlertId, AlertStatus, CustomAlertEvent, OrderSide,
     OrderType,
 };
-use egui_charts::strategies::{Backtest, BacktestSettings, Strategy, StrategyContext};
+use egui_charts::strategies::{Backtest, BacktestSettings, OrderTag, Strategy, StrategyContext};
 use egui_charts::studies::InputValue;
 
 /// Ends the id of a run in the name of its custom event source, which raises an alert call each
@@ -23,9 +23,15 @@ impl Strategy for Momentum {
             return;
         };
         if bar.close > previous.close && context.position() <= 0.0 {
-            context.entry("Long", OrderSide::Buy, None, OrderType::Market);
+            let tag = OrderTag::new("Long")
+                .with_comment("Up close")
+                .with_alert_message("Momentum buys after an up close");
+            context.entry(tag, OrderSide::Buy, None, OrderType::Market);
         } else if bar.close < previous.close && context.position() >= 0.0 {
-            context.entry("Short", OrderSide::Sell, None, OrderType::Market);
+            let tag = OrderTag::new("Short")
+                .with_comment("Down close")
+                .with_alert_message("Momentum sells after a down close");
+            context.entry(tag, OrderSide::Sell, None, OrderType::Market);
         }
     }
 }
