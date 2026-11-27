@@ -1503,13 +1503,24 @@ mod tests {
                 let anchor = Rect::from_min_size(Pos2::new(10., 100.), Vec2::splat(40.));
                 let mut previous = "Search icons, emoji and stickers";
                 // Icons and emoji take the picker size, stickers their own 110 px default.
-                for (query, glyph, size) in [
+                #[allow(unused_mut)]
+                let mut rows = vec![
                     ("star", "icon:star", 48.0),
                     ("etoile", "icon:star", 48.0),
                     ("grinning", "😀", 48.0),
                     ("idea", "sticker:idea", 110.0),
                     ("", "sticker:idea", 110.0),
-                ] {
+                ];
+                // The full set: a flag and an Emoji 18.0 food, each in its category and in colour.
+                #[cfg(feature = "color-emoji")]
+                rows.splice(
+                    3..3,
+                    [
+                        ("flag: france", "\u{1f1eb}\u{1f1f7}", 48.0),
+                        ("pickle", "\u{1fadd}", 48.0),
+                    ],
+                );
+                for (query, glyph, size) in rows {
                     toolbar.toggle_category(&ctx, "Icons/Emojis", anchor);
                     frame(&mut toolbar, &ctx, vec![]);
                     let (_, shapes) = frame(&mut toolbar, &ctx, vec![]);
@@ -1557,8 +1568,28 @@ mod tests {
                     let (_, shapes) = frame(&mut toolbar, &ctx, vec![]);
                     if query == "star" {
                         assert!(label(&shapes, "Icons: shapes").is_some());
-                        assert!(label(&shapes, "Emoji: symbols").is_some());
+                        // The full set has more stars; its first star category is the one on screen.
+                        let emoji = if cfg!(feature = "color-emoji") {
+                            "Emoji: smileys and emotion"
+                        } else {
+                            "Emoji: symbols"
+                        };
+                        assert!(label(&shapes, emoji).is_some(), "{emoji}");
                         assert!(label(&shapes, "Emoji: faces").is_none());
+                    }
+                    #[cfg(feature = "color-emoji")]
+                    if let Some(category) = match query {
+                        "flag: france" => Some("Emoji: flags"),
+                        "pickle" => Some("Emoji: food and drink"),
+                        _ => None,
+                    } {
+                        assert!(label(&shapes, category).is_some(), "{query}: no {category}");
+                        assert!(
+                            shapes.iter().any(|s| matches!(s, egui::Shape::Text(t)
+                                if t.galley.job.text == glyph
+                                    && t.galley.rows.iter().any(|r| r.glyphs.iter().any(|g| g.is_color)))),
+                            "{query}: {glyph} is not drawn in colour"
+                        );
                     }
                     if query.is_empty() {
                         assert!(
