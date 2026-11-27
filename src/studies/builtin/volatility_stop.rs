@@ -59,12 +59,12 @@ struct State {
 }
 
 impl VolatilityStop {
-    /// Create the stop with the ATR length (typically 20) and the ATR multiplier (typically 2,
-    /// clamped into 0 to `f64::MAX`, NaN to 0).
+    /// Create the stop with the ATR length (typically 20, at least 2) and the ATR multiplier
+    /// (typically 2, clamped into 0.25 to `f64::MAX`, NaN to 0.25).
     pub fn new(length: usize, multiplier: f64) -> Self {
         Self {
-            length: length.max(1),
-            multiplier: clamp_param(multiplier, 0.0, f64::MAX),
+            length: length.max(2),
+            multiplier: clamp_param(multiplier, 0.25, f64::MAX),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             uptrend: Vec::new(),
@@ -86,8 +86,8 @@ impl Default for VolatilityStop {
 
 impl Indicator for VolatilityStop {
     crate::studies::inputs::study_inputs!(self;
-        length: length("Length", 1, usize::MAX),
-        multiplier: number("Multiplier", 0.0, f64::MAX, 0.25)
+        length: length("Length", 2, usize::MAX),
+        multiplier: number("Multiplier", 0.25, f64::MAX, 0.25)
     ; {});
 
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {

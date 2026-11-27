@@ -19,10 +19,10 @@ pub struct VortexIndicator {
 }
 
 impl VortexIndicator {
-    /// Create with a lookback of `period` bars, clamped to at least 1.
+    /// Create with a lookback of `period` bars, clamped to at least 2.
     pub fn new(period: usize) -> Self {
         Self {
-            period: period.max(1),
+            period: period.max(2),
             values: IndicatorValues::new(),
             colors: vec![
                 palette::BLUE, // +VI
@@ -112,7 +112,7 @@ impl VortexIndicator {
 
 impl Indicator for VortexIndicator {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Length", 2, usize::MAX)
     ; {});
 
     fn name(&self) -> &str {

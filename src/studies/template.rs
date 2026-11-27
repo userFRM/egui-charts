@@ -365,7 +365,7 @@ impl StudyTemplate {
         }
         // Studies saved before an input's range narrowed restore with the value they were saved
         // with, from the bottom of the range the input took then; only edits are bounded.
-        const NARROWED: [(&str, &str, f64); 10] = [
+        const NARROWED: [(&str, &str, f64); 17] = [
             ("BB", "std_dev", 0.0),
             ("BBTrend", "multiplier", 0.0),
             ("LinReg Slope", "period", 1.0),
@@ -374,6 +374,13 @@ impl StudyTemplate {
             ("SuperTrend", "multiplier", 0.0),
             ("Woodies CCI", "turbo_length", 1.0),
             ("Woodies CCI", "cci_length", 1.0),
+            ("Vortex", "period", 1.0),
+            ("C2C Vol", "period", 1.0),
+            ("C2C Vol", "trading_days", 0.0),
+            ("Volatility Stop", "length", 1.0),
+            ("Volatility Stop", "multiplier", 0.0),
+            ("ASI", "limit_move", f64::EPSILON),
+            ("Advance/Decline", "period", 1.0),
             ("VWAP", "plot_offset", f64::MIN),
             ("VWMA", "plot_offset", f64::MIN),
         ];
@@ -2067,6 +2074,31 @@ mod tests {
                 "LinReg Slope",
                 vec![("period", Length(1))],
                 vec![("period", Length(1))],
+            ),
+            (
+                "Vortex",
+                vec![("period", Length(1))],
+                vec![("period", Length(1))],
+            ),
+            (
+                "C2C Vol",
+                vec![("period", Length(1)), ("trading_days", Number(0.0))],
+                vec![("period", Length(1)), ("trading_days", Number(0.0))],
+            ),
+            (
+                "Volatility Stop",
+                vec![("length", Length(1)), ("multiplier", Number(0.0))],
+                vec![("length", Length(1)), ("multiplier", Number(0.0))],
+            ),
+            (
+                "ASI",
+                vec![("limit_move", Number(0.05))],
+                vec![("limit_move", Number(0.05))],
+            ),
+            (
+                "Advance/Decline",
+                vec![("period", Length(5000))],
+                vec![("period", Length(5000))],
             ),
             (
                 "VWAP",
