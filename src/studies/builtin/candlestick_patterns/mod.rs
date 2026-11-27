@@ -71,10 +71,11 @@
 //!
 //! Three lines: Bullish at the low of a bar with a bullish pattern (an upward triangle),
 //! Bearish at the high of a bar with a bearish one (a downward triangle) and Neutral at the
-//! high of a bar with a doji or spinning top (a circle). These values only place the marks: the
+//! low of a bar with only a doji or spinning top (a circle). These values only place the marks: the
 //! legend lists none of them, and the price scale starts without their tags. Each mark is
 //! labelled with the abbreviations of the patterns found on the bar, one per line; on a bar with a
-//! bearish pattern the neutral ones join the bearish label, so the two never overlap. Hovering a
+//! bearish pattern the neutral ones join the bearish label, and on a bar with only a bullish one
+//! the bullish label, so no two labels overlap. Hovering a
 //! mark shows the full name of each pattern it labels, such as "Three White Soldiers - Bullish",
 //! each followed by its rule in words, in the label's order. Every pattern has a toggle, all on by
 //! default, and the pattern type marks both sides (the default, neutral patterns included) or only
@@ -264,8 +265,8 @@ impl CandlestickPatterns {
             .map(|(_, p)| p)
     }
 
-    /// The patterns one line labels at a source bar: its side's, and on the bearish line the
-    /// neutral ones too, which the neutral line then leaves out.
+    /// The patterns one line labels at a source bar: its side's, joined by neutral names on
+    /// the bearish line, or the bullish line when there is no bearish pattern.
     fn labelled(&self, line: usize, bar: usize) -> Vec<&'static Pattern> {
         let Some(side) = [Bullish, Bearish, Neutral]
             .get(self.combined_line(line))
@@ -273,13 +274,18 @@ impl CandlestickPatterns {
         else {
             return Vec::new();
         };
+        let bearish = self.found(bar, Bearish).next().is_some();
+        let bullish = self.found(bar, Bullish).next().is_some();
         match side {
-            // The bearish and neutral marks share the high, so one label names both.
-            Bearish => self
+            Bearish if bearish => self
                 .found(bar, Bearish)
                 .chain(self.found(bar, Neutral))
                 .collect(),
-            Neutral if self.found(bar, Bearish).next().is_some() => Vec::new(),
+            Bullish if bullish && !bearish => self
+                .found(bar, Bullish)
+                .chain(self.found(bar, Neutral))
+                .collect(),
+            Neutral if bearish || bullish => Vec::new(),
             _ => self.found(bar, side).collect(),
         }
     }
@@ -409,11 +415,11 @@ impl Indicator for CandlestickPatterns {
     }
 
     fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
-        // Bullish marks hold the bar's low, bearish and neutral ones its high.
-        if self.combined_line(line) == 0 {
-            crate::studies::ShapeSide::Below
-        } else {
+        // Bullish and neutral marks hold the bar's low, bearish ones its high.
+        if self.combined_line(line) == 1 {
             crate::studies::ShapeSide::Above
+        } else {
+            crate::studies::ShapeSide::Below
         }
     }
 
@@ -558,7 +564,11 @@ impl Indicator for CandlestickPatterns {
                 let marks = [
                     if bull { bar.low } else { f64::NAN },
                     if bear { bar.high } else { f64::NAN },
-                    if neutral && !bear { bar.high } else { f64::NAN },
+                    if neutral && !bull && !bear {
+                        bar.low
+                    } else {
+                        f64::NAN
+                    },
                 ];
                 // A single study draws only its side's line.
                 match own {
@@ -980,6 +990,15 @@ mod tests {
         ];
         assert_eq!(text(none, &flat, tri_star, "", 1).as_deref(), Some("3S\nD"));
         assert_eq!(text(none, &flat, tri_star, "", 2), None);
+
+        // A bullish Tri-Star and the last doji share the low and one label.
+        let bullish: &[Ohlc] = &[
+            (100.0, 101.0, 99.0, 100.0),
+            (98.0, 99.0, 97.0, 98.0),
+            (100.0, 101.0, 99.0, 100.0),
+        ];
+        assert_eq!(text(none, &flat, bullish, "", 0).as_deref(), Some("3S\nD"));
+        assert_eq!(text(none, &flat, bullish, "", 2), None);
 
         // The pattern type keeps one side and drops the neutral patterns.
         let mut data = flat.clone();
