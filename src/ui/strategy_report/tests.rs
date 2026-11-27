@@ -703,12 +703,14 @@ fn trades_and_markers_show_fills_without_rounding_digits() {
     let mut engine = Backtest::new("Digits", "TEST", Timeframe::Min1, 10_000.0);
     engine.settings.slippage = Slippage::Increments(2);
     engine.settings.order_size = OrderSize::EquityFraction(0.5);
+    engine.settings.liquidation_increment = 1e-12;
     let report = engine.run(&mut InThenOut, &bars, &[]);
-    // 100.1 + 2 * 0.01, 101.02 - 2 * 0.01 and 10_000 * 0.5 / 100.12, as binary arithmetic gives them.
+    // 100.1 + 2 * 0.01, 101.02 - 2 * 0.01 and 10_000 * 0.5 / 100.12 in steps of 1e-12, as binary
+    // arithmetic gives them.
     let trade = &report.trades[0];
     assert_eq!(trade.entry_price, 100.11999999999999);
     assert_eq!(trade.exit.as_ref().unwrap().price, 101.0);
-    assert_eq!(trade.quantity, 49.94007191370356);
+    assert_eq!(trade.quantity, 49.940071913703);
     let tooltips: Vec<_> = report
         .signals()
         .into_iter()

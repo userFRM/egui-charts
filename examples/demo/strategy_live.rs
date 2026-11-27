@@ -541,8 +541,8 @@ mod tests {
         }
         assert!(expected > 0, "the live feed must exercise executions");
         let report = reference.report().unwrap();
-        // A reversal splits one order's fee between its closed and newly opened trades, in
-        // proportion to fractional quantities under the tester's default equity-fraction size.
+        // A reversal splits its order's fee between the trade it closes and the trade it opens,
+        // in proportion to their quantities.
         let fees = report.trades.iter().map(|trade| trade.fees).sum::<f64>();
         let orders_fees = 2.5 * report.trades.len() as f64;
         assert!((fees - orders_fees).abs() < 1e-9, "{fees} != {orders_fees}");
