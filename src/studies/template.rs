@@ -2492,6 +2492,20 @@ mod tests {
                 let input = inputs.iter().find(|input| input.id == id);
                 assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
             }
+            // Keeping a legacy value does not admit new values outside the declared range.
+            let refused = match name {
+                "C2C Vol" => Some(("trading_days", Number(0.5))),
+                "Volatility Stop" => Some(("multiplier", Number(0.125))),
+                "ASI" => Some(("limit_move", Number(0.075))),
+                "Advance/Decline" => Some(("period", Length(2001))),
+                _ => None,
+            };
+            if let Some((id, value)) = refused {
+                assert!(
+                    study.clone_box().set_input(id, value.clone()).is_err(),
+                    "{name}: a held value admitted {value:?}"
+                );
+            }
             // A style edit applies every input as it stands, which keeps its value.
             let values = |study: &dyn Indicator| {
                 let inputs = study.inputs().into_iter();

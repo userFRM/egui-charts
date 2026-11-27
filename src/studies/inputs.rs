@@ -399,8 +399,9 @@ macro_rules! study_inputs {
         }
 
         fn set_input(&mut $this, id: &str, value: crate::studies::InputValue) -> Result<(), crate::studies::StudyError> {
-            let schema = $this.inputs().into_iter().find(|input| input.id == id).ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
-            if !schema.accepts(&value) && !crate::studies::inputs::restores(id, &value) { return Err(crate::studies::StudyError::invalid_input(id)); }
+            // Validate edits against the declaration, keeping an unchanged saved value.
+            let schema = [$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))),+].into_iter().find(|input| input.id == id).ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
+            if value != schema.value && !schema.accepts(&value) && !crate::studies::inputs::restores(id, &value) { return Err(crate::studies::StudyError::invalid_input(id)); }
             match id {
                 $(stringify!($field $([$index])?) => { $this.$field $([$index])? = crate::studies::inputs::input_assign!(value, $kind($($args),*)); }),+
                 _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),
