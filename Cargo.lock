@@ -900,6 +900,7 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "unicode-segmentation",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
