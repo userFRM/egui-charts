@@ -1680,12 +1680,6 @@ impl OrderFlowInput {
                     },
                     |(parts, _)| parts,
                 );
-                #[cfg(feature = "studies")]
-                if let Some((_, bar, _)) = parts.first()
-                    && let Some(rule) = state.tick_rule_before.get(bar)
-                {
-                    part.tick_rule = Some(*rule);
-                }
                 let mut open = None;
                 let mut previous: Option<&Tick> = None;
                 for (trade, bar, size) in parts {
@@ -1699,6 +1693,14 @@ impl OrderFlowInput {
                     if matches!(part.source, Source::Footprint) {
                         part.push_footprint(clock, trade, Some((bar, size)));
                     } else {
+                        // Raw executions can outlive their source rows. Restore the saved rule
+                        // when the run reaches each retained boundary, before its first part.
+                        #[cfg(feature = "studies")]
+                        if !part.tick_rule_before.contains_key(&bar)
+                            && let Some(rule) = state.tick_rule_before.get(&bar)
+                        {
+                            part.tick_rule = Some(*rule);
+                        }
                         let first = previous.is_none_or(|previous| !std::ptr::eq(previous, trade));
                         part.add_trade(trade, bar, size, first);
                     }

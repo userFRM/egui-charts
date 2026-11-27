@@ -596,6 +596,58 @@ mod tests {
                 max: f64::MAX,
             });
             assert!(!plain.try_lock_replay_point().unwrap().compatible(&point));
+
+            // The raw tape starts at execution 1500, before the retained source rows and
+            // their boundary rules (execution 2002 onward). The excluded last trade falls.
+            let clock = BarClock::new("1t".parse().unwrap());
+            let mut study = CumulativeVolumeDelta::new();
+            study.set_bar_clock(&clock);
+            study
+                .set_input("aggregation", InputValue::Choice(1))
+                .unwrap();
+            let input = study.order_flow_inputs()[0].clone();
+            let mut retained = crate::data::trades::Trades::new(11_500);
+            let mut chart = Vec::new();
+            for second in 0..13_000 {
+                let price = if second == 0 || second == 12_999 {
+                    10.0
+                } else {
+                    11.0
+                };
+                let trade = tick(second, price, 1.0, None);
+                input.push_trade(&clock, &trade);
+                retained.push(trade.clone());
+                chart.push(Bar::new(trade.ts, price, price, price, price, 1.0));
+            }
+            let at = |second| Utc.timestamp_opt(second, 0).unwrap();
+            let cutoff = at(12_998) + chrono::TimeDelta::milliseconds(500);
+            let expected = [1.0, 1.0, 0.0];
+            assert_eq!(retained.iter().next().unwrap().ts, at(1500));
+            assert_eq!(input.values().first_key_value().unwrap().0, &at(2002));
+            assert_eq!(input.values()[&at(12_998)], expected);
+            let point = input.try_lock_replay_point().unwrap().capture();
+            for restore in [false, true] {
+                if restore {
+                    input.clear();
+                    input.push_trade(&clock, &tick(13_000, 9.0, 1.0, None));
+                    let mut locked = input.try_lock_replay_point().unwrap();
+                    assert!(locked.compatible(&point));
+                    locked.restore(&point);
+                }
+                input.set_replay(&clock, Some(cutoff), Some(&retained), &chart);
+                assert_eq!(input.values()[&at(12_998)], expected, "restore {restore}");
+                study.calculate(&chart);
+                assert_eq!(study.values().value(0, 12_998), Some(10_997.0));
+                input.set_replay(&clock, None, Some(&retained), &chart);
+                assert_eq!(input.values()[&at(12_999)], [-1.0, 0.0, -1.0]);
+            }
+            // Continue from the captured running rule, whose last price change was down.
+            input.push_trade(&clock, &tick(13_000, 10.0, 1.0, None));
+            retained.push(tick(13_000, 10.0, 1.0, None));
+            chart.push(Bar::new(at(13_000), 10.0, 10.0, 10.0, 10.0, 1.0));
+            assert_eq!(input.values()[&at(13_000)], [-1.0, 0.0, -1.0]);
+            input.set_replay(&clock, Some(cutoff), Some(&retained), &chart);
+            assert_eq!(input.values()[&at(12_998)], expected);
         }
     }
 
