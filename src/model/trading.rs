@@ -726,6 +726,12 @@ pub struct Capabilities {
     /// Reverses a position with an opposite market order of twice its size, so the Reverse
     /// controls work.
     pub reverse: bool,
+    /// Attaches a take profit or a stop loss to an open position, sent as an order with
+    /// [`OrderRequest::position_bracket`] set, so a position line offers its TP and SL buttons
+    /// and the Protect position entry. Needs [`limit`](Self::limit) for a take profit and
+    /// [`stop`](Self::stop) for a stop loss. Without it those controls are hidden or disabled,
+    /// so a broker that would take such orders as unlinked opposite orders never receives them.
+    pub position_exits: bool,
     /// Answers [`Broker::preview`](crate::services::Broker::preview), so the ticket offers to
     /// preview an order before it is placed.
     pub preview: bool,

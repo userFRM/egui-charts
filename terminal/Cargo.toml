@@ -10,7 +10,9 @@ publish = false
 
 [dependencies]
 egui-charts = { path = "..", features = ["ui", "alert-engine"] }
-egui = "0.37.0"
+# `monochrome_emoji_fonts` draws the emoji placed from the drawing bar and the Magic cursor; the same
+# feature is enabled by `examples/demo`, whose font licences are in `examples/demo/LICENSE-fonts.txt`.
+egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
 chrono = "0.4.43"
 egui_extras = { version = "0.37.0", default-features = false }
 serde_json = "1.0.149"

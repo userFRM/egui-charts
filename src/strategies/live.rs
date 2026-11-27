@@ -21,6 +21,25 @@ pub struct StrategyFill {
     pub quantity: f64,
     /// Signed position immediately after this fill, before any fill callback orders execute.
     pub position: f64,
+    /// The comment of the order's [`OrderTag`], `None` without one and for a margin call.
+    pub comment: Option<String>,
+    /// The alert message of the order's [`OrderTag`], `None` without one and for a margin call.
+    pub alert_message: Option<String>,
+}
+
+/// An alert a strategy raised through [`StrategyContext::alert`] in a live run.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct StrategyAlert {
+    /// Increasing identifier within this live run, starting at one and counted apart from the
+    /// fills' [`StrategyFill::sequence`]. Retained across rebuilds.
+    pub sequence: u64,
+    /// Open time of the bar the decision belongs to, the last of [`StrategyContext::bars`].
+    pub time: DateTime<Utc>,
+    /// [`StrategyContext::price`] at the call.
+    pub price: f64,
+    /// The message as the strategy gave it.
+    pub message: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +52,11 @@ pub(super) struct LiveState {
     processed: usize,
     forming: Option<(DateTime<Utc>, f64)>,
     sequence: u64,
+    alert_sequence: u64,
+    /// The bar times and messages of the alerts raised on the newest bars, see `Run::raised`.
+    raised: Vec<(DateTime<Utc>, String)>,
+    /// The alerts of the latest update.
+    alerts: Vec<StrategyAlert>,
     orders: Vec<Working>,
     lots: Vec<Lot>,
     trades: Vec<StrategyTrade>,
@@ -82,9 +106,19 @@ impl Backtest {
         self.live.as_ref().map(|live| &live.report)
     }
 
+    /// The alerts the strategy raised through [`StrategyContext::alert`] during the latest
+    /// [`Self::update`] or [`Self::update_closed_async`], oldest first. Like the fills, the first
+    /// update holds those of the primed history, and a rebuild never returns replayed alerts again.
+    /// Empty before the first update and after an update that raised none. Feed them to
+    /// `services::AlertEngine::strategy_alerts` with the run's id.
+    pub fn new_alerts(&self) -> &[StrategyAlert] {
+        self.live.as_ref().map_or(&[], |live| &live.alerts)
+    }
+
     /// Continues a live strategy on `bars`, oldest first, with the last bar still forming.
     /// Pass the same strategy instance and the full retained history on each call. The first
-    /// call processes the closed history and returns its fills; discard that batch when priming
+    /// call processes the closed history and returns its fills, and the strategy's alerts of the
+    /// same call are in [`Self::new_alerts`]; discard that batch when priming
     /// a run that should alert only on subsequent fills. `lower` has the meaning it has in `run`.
     ///
     /// With `settings.recalculate_on_every_update` off, only newly closed bars execute, exactly
@@ -169,6 +203,7 @@ impl Backtest {
                 .is_some_and(|before| time < before || (replayed_forming && time == before))
         };
         let sequence = previous.as_ref().map_or(0, |live| live.sequence);
+        let alert_sequence = previous.as_ref().map_or(0, |live| live.alert_sequence);
         let rebuild = previous.as_ref().is_none_or(|live| {
             let prefix = live.processed;
             bars.len() < live.bars.len()
@@ -209,6 +244,9 @@ impl Backtest {
                 processed: 0,
                 forming: None,
                 sequence,
+                alert_sequence,
+                raised: Vec::new(),
+                alerts: Vec::new(),
                 orders: Vec::new(),
                 lots: Vec::new(),
                 trades: Vec::new(),
@@ -244,6 +282,7 @@ impl Backtest {
             forming && self.settings.recalculate_on_every_update && !same_bars(&live.bars, bars);
         let changed = rebuild || live.processed < closed || tick_changed;
         if !changed {
+            live.alerts.clear();
             live.bars = bars.to_vec();
             live.lower = lower.to_vec();
             self.live = Some(live);
@@ -269,6 +308,7 @@ impl Backtest {
             strategy.prepare_update(calculation_bars);
         }
         let mut fills = Vec::new();
+        let mut alerts = Vec::new();
         let mut run = Run {
             orders: std::mem::take(&mut live.orders),
             lots: std::mem::take(&mut live.lots),
@@ -284,6 +324,9 @@ impl Backtest {
             tick: live.tick,
             open_tick: 0,
             fills: Some(&mut fills),
+            alerts: Some(&mut alerts),
+            raised: std::mem::take(&mut live.raised),
+            requested: Vec::new(),
             forming: false,
             margin_calls: std::mem::take(&mut live.margin_calls),
             peak_margin: live.peak_margin,
@@ -342,11 +385,14 @@ impl Backtest {
                 processed,
             )
             .await;
-            if rebuild
-                && replayed(bar.time)
-                && let Some(fills) = &mut run.fills
-            {
-                fills.clear();
+            if rebuild && replayed(bar.time) {
+                // Replayed alerts are not returned again; their keys stay raised.
+                if let Some(fills) = &mut run.fills {
+                    fills.clear();
+                }
+                if let Some(alerts) = &mut run.alerts {
+                    alerts.clear();
+                }
             }
         }
         live.processed = closed;
@@ -375,11 +421,14 @@ impl Backtest {
                 };
                 live.forming = Some((bar.time, execution.close));
             }
-            if rebuild
-                && replayed(bar.time)
-                && let Some(fills) = &mut run.fills
-            {
-                fills.clear();
+            if rebuild && replayed(bar.time) {
+                // Replayed alerts are not returned again; their keys stay raised.
+                if let Some(fills) = &mut run.fills {
+                    fills.clear();
+                }
+                if let Some(alerts) = &mut run.alerts {
+                    alerts.clear();
+                }
             }
         }
         run.report_trades(&mut live.report);
@@ -394,6 +443,7 @@ impl Backtest {
         live.range = run.range;
         live.rate = run.rate;
         live.unconverted = run.unconverted.get();
+        live.raised = run.raised;
         if live.unconverted {
             self.withhold(&mut live.report);
         }
@@ -405,6 +455,11 @@ impl Backtest {
             live.sequence += 1;
             fill.sequence = live.sequence;
         }
+        for alert in &mut alerts {
+            live.alert_sequence += 1;
+            alert.sequence = live.alert_sequence;
+        }
+        live.alerts = alerts;
         live.bars = bars.to_vec();
         live.lower = lower.to_vec();
         self.live = Some(live);
@@ -859,6 +914,8 @@ mod tests {
             price: 180.0,
             quantity: 7.0,
             position: -3.0,
+            comment: None,
+            alert_message: None,
         };
         for (template, order, expected, price_expected) in [
             ("{{order_id}}", "Reverse", "Reverse", "{{order_id}}"),
@@ -903,6 +960,172 @@ mod tests {
                 }),
                 price_expected
             );
+        }
+    }
+
+    /// An order's texts reach its fills' alerts through the placeholders and as the default
+    /// text, as written, and an alert the strategy raises on a bar without an order reaches the
+    /// same alerts once.
+    #[test]
+    #[cfg(feature = "alert-engine")]
+    fn order_texts_and_strategy_alerts_reach_the_run_s_fill_alerts() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::services::{AlertEngine, AlertEvent};
+        use std::sync::{Arc, Mutex};
+        struct Tagged;
+        impl Strategy for Tagged {
+            fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+                match context.bars().len() {
+                    1 => context.entry(
+                        OrderTag::new("Long")
+                            .with_comment("Breakout")
+                            .with_alert_message("Long {{ticker}}"),
+                        OrderSide::Buy,
+                        2.0,
+                        OrderType::Market,
+                    ),
+                    2 => {
+                        context.alert("Stop to break-even", StrategyAlertFrequency::OncePerBar);
+                        context.alert("Stop to break-even", StrategyAlertFrequency::OncePerBar);
+                    }
+                    3 => context.exit("Flat", None, None, None),
+                    _ => {}
+                }
+            }
+        }
+        let bars: Vec<_> = (0..5)
+            .map(|minute| bar(minute, 100.0 + minute as f64))
+            .collect();
+        let at = |minute: usize| bars[minute].time;
+        for (template, expected) in [
+            (
+                "",
+                [
+                    "Long {{ticker}}",
+                    "Stop to break-even",
+                    "Sell 2 at 103.00, position 0",
+                ],
+            ),
+            (
+                "{{comment}}|{{alert_message}}",
+                ["Breakout|Long {{ticker}}", "|Stop to break-even", "|"],
+            ),
+            (
+                "{{order_id}} {{side}} {{ticker}} {{close}}",
+                ["Long Buy SYM 101", "  SYM 101", "Flat Sell SYM 103"],
+            ),
+        ] {
+            let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+            alert.message = template.into();
+            alert.timeframe = Some(Timeframe::Min1);
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let sink = delivered.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert])
+                .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+            let mut run = Backtest::new("Run", "SYM", Timeframe::Min1, 10_000.0);
+            for count in 1..=bars.len() {
+                let fills = run.update(&mut Tagged, &bars[..count], &[]);
+                // A repeated batch delivers nothing.
+                for _ in 0..2 {
+                    let now = bars[count - 1].time;
+                    engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &fills, now);
+                    let alerts = run.new_alerts();
+                    engine.strategy_alerts("run-1", "SYM", None, Timeframe::Min1, alerts, now);
+                }
+            }
+            let events = delivered.lock().unwrap();
+            let observed: Vec<_> = events
+                .iter()
+                .map(|event| {
+                    let AlertEvent::TriggeredForSymbol {
+                        time,
+                        price,
+                        message,
+                        ..
+                    } = event
+                    else {
+                        panic!("a symbol trigger");
+                    };
+                    (*time, *price, message.as_str())
+                })
+                .collect();
+            assert_eq!(
+                observed,
+                [
+                    (at(1), Some(101.0), expected[0]),
+                    (at(1), Some(101.0), expected[1]),
+                    (at(3), Some(103.0), expected[2]),
+                ],
+                "{template}"
+            );
+        }
+    }
+
+    /// A message notifies once per bar across forming ticks and the close, or only at the close,
+    /// and a rebuild neither returns replayed alerts nor alerts again on its forming bar.
+    #[test]
+    fn strategy_alert_frequencies_follow_forming_closed_and_rebuilt_bars() {
+        struct Ticks(StrategyAlertFrequency);
+        impl Strategy for Ticks {
+            fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+                context.alert("Tick", self.0);
+            }
+        }
+        let closes: [&[f64]; 7] = [
+            &[100.0, 101.0],
+            &[100.0, 102.0],
+            &[100.0, 102.0, 103.0],
+            &[100.0, 102.0, 103.0],
+            &[100.0, 102.0, 103.0],
+            &[100.0, 102.0, 104.0],
+            &[100.0, 102.0, 104.0, 105.0],
+        ];
+        // Minute, price and sequence of each alert an update returns.
+        type Alerts = &'static [(i64, f64, u64)];
+        let per_bar: [Alerts; 7] = [
+            &[(0, 100.0, 1), (1, 101.0, 2)],
+            &[],
+            &[(2, 103.0, 3)],
+            &[],
+            &[],
+            &[],
+            &[(3, 105.0, 4)],
+        ];
+        let at_close: [Alerts; 7] = [
+            &[(0, 100.0, 1)],
+            &[],
+            &[(1, 102.0, 2)],
+            &[],
+            &[],
+            &[],
+            &[(2, 104.0, 3)],
+        ];
+        for (frequency, expected) in [
+            (StrategyAlertFrequency::OncePerBar, per_bar),
+            (StrategyAlertFrequency::OncePerBarClose, at_close),
+        ] {
+            let mut engine = Backtest::new("Ticks", "TEST", Timeframe::Min1, 10_000.0);
+            engine.settings.recalculate_on_every_update = true;
+            let mut strategy = Ticks(frequency);
+            for (update, (closes, expected)) in closes.iter().zip(expected).enumerate() {
+                // The fourth update repeats the third, and the fifth rebuilds the run on
+                // changed settings.
+                if update == 4 {
+                    engine.settings.commission = Commission::PerOrder(1.0);
+                }
+                let bars: Vec<_> = (closes.iter().enumerate())
+                    .map(|(minute, close)| bar(minute as i64, *close))
+                    .collect();
+                engine.update(&mut strategy, &bars, &[]);
+                let observed: Vec<_> = (engine.new_alerts().iter())
+                    .map(|alert| {
+                        let minute = (alert.time - DateTime::UNIX_EPOCH).num_minutes();
+                        (minute, alert.price, alert.sequence)
+                    })
+                    .collect();
+                assert_eq!(observed, expected, "{frequency:?}, update {update}");
+            }
         }
     }
 

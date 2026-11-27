@@ -13,8 +13,10 @@
 //! longer band is complete.
 //!
 //! # Presentation
-//! Columns: above zero, strong green while BBTrend rises and light green otherwise; at or
-//! below zero, strong red while it falls and light red otherwise.
+//! Columns: above zero, strong green while BBTrend rises or holds and light green while it eases;
+//! below zero, strong red while it falls or holds and light red while it recovers. Exactly zero
+//! and a first value above zero are light green, a first value below zero light red. Each
+//! stage's colour is set in the Style tab.
 //!
 //! # Example
 //! ```
@@ -40,7 +42,7 @@ pub struct BBTrend {
     long_length: usize,
     multiplier: f64,
     values: IndicatorValues,
-    /// Rising above zero, easing above zero, falling at or below zero, easing at or below zero.
+    /// The colour of each stage, as [`Self::stage`] numbers them.
     colors: [Color32; 4],
     visible: bool,
 }
@@ -63,6 +65,22 @@ impl BBTrend {
             ],
             visible: true,
         }
+    }
+
+    /// The stage of `bar`: 0 rising or holding above zero, 1 easing above zero or exactly zero,
+    /// 2 falling or holding below zero, 3 recovering below zero. A first value takes the lighter
+    /// stage of its side.
+    fn stage(&self, bar: usize) -> Option<usize> {
+        let value = self.values.value(0, bar)?;
+        // Bars without a value, skipped as non-finite, do not count as the previous one.
+        let previous = (0..bar).rev().find_map(|bar| self.values.value(0, bar));
+        Some(if value == 0.0 {
+            1
+        } else if value > 0.0 {
+            usize::from(!previous.is_some_and(|p| value >= p))
+        } else {
+            2 + usize::from(!previous.is_some_and(|p| value <= p))
+        })
     }
 
     /// The values over `data`, every bar of which has a finite close.
@@ -119,16 +137,23 @@ impl Indicator for BBTrend {
     }
 
     fn plot_color(&self, _line: usize, bar: usize) -> Option<Color32> {
-        let value = self.values.value(0, bar)?;
-        // Bars without a value, skipped as non-finite, do not count as the previous one.
-        let previous = (0..bar).rev().find_map(|bar| self.values.value(0, bar));
-        Some(if value == 0.0 {
-            self.colors[1]
-        } else if value > 0.0 {
-            self.colors[usize::from(!previous.is_some_and(|p| value >= p))]
-        } else {
-            self.colors[2 + usize::from(!previous.is_some_and(|p| value <= p))]
-        })
+        self.stage(bar).map(|stage| self.colors[stage])
+    }
+
+    fn plot_variants(&self, _line: usize) -> Vec<crate::studies::PlotVariant> {
+        [
+            "Easing above zero",
+            "Falling below zero",
+            "Easing below zero",
+        ]
+        .into_iter()
+        .zip(&self.colors[1..])
+        .map(|(name, &color)| crate::studies::PlotVariant::new(name, color))
+        .collect()
+    }
+
+    fn plot_variant(&self, _line: usize, bar: usize) -> Option<usize> {
+        self.stage(bar)?.checked_sub(1)
     }
 
     fn name(&self) -> &str {

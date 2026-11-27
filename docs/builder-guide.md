@@ -274,7 +274,7 @@ return their per-bar results through [`CustomIndicator`](https://userfrm.github.
 unavailable observations. Recalculate when the source bars or script inputs change;
 report compilation and execution errors in the host UI. A closure may capture an
 `Arc` holding the host evaluator; its calculation must be `Send + Sync`.
-The repository's [`egui-charts-scripting`](https://github.com/userFRM/egui-charts/blob/main/crates/scripting/README.md) package is such a host runtime: it compiles scripts with history, state and plots into studies that calculate away from the UI thread.
+The repository's [`egui-charts-scripting`](https://github.com/userFRM/egui-charts/blob/main/crates/scripting/README.md) package is such a host runtime: it compiles scripts with history, state and plots into studies that calculate away from the UI thread. Its `scripted_study` example, `examples/scripting.rs`, compiles a script into a chart study: run `cargo run --manifest-path crates/scripting/Cargo.toml --example scripted_study`.
 
 ## Runnable examples
 
@@ -288,7 +288,6 @@ public API and generated sample data.
 | `custom_indicator` | Ten-bar price change with explicit warm-up values |
 | `drawing_persistence` | Editable drawing JSON, save/load and error reporting |
 | `backtesting` | Host buy-and-hold run, fees, equity and strategy metrics |
-| `scripting` | Minimal host evaluator for `close - close[N]`, applied as a custom study |
 | `synchronized_charts` | UTC crosshair and viewport sharing across different intervals |
 
 The backtest also runs without egui: `cargo run --example backtesting

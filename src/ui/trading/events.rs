@@ -192,11 +192,14 @@ impl Trading {
                         && !account.capabilities.reverse
                     || matches!(&self.pending,
                         Some(TradingLineAction::Exit(_, exit))
-                        if !account.capabilities.accepts(&exit.order_type))
+                        if !account.capabilities.position_exits
+                            || !account.capabilities.accepts(&exit.order_type))
                 {
                     self.pending = None;
                 }
-                if !account.capabilities.limit && !account.capabilities.stop {
+                if !account.capabilities.position_exits
+                    || !account.capabilities.limit && !account.capabilities.stop
+                {
                     self.protecting = None;
                 }
                 self.account = Some(account);
