@@ -292,7 +292,15 @@ impl StudyTemplate {
         // for that built-in.
         let template = if template.inputs.iter().all(|(id, _)| {
             self.inputs.iter().any(|(saved, _)| saved == id)
-                || declared.iter().any(|input| input.id == *id)
+                || if id == "source" {
+                    // Built-in sources are supplied by the configuration wrapper, while a
+                    // host study keeps its own source when the save leaves it out.
+                    !factory.is_host(&self.name)
+                        && (study.source().is_some()
+                            || declared.iter().any(|input| input.id == *id))
+                } else {
+                    declared.iter().any(|input| input.id == *id)
+                }
         }) {
             template
         } else {
@@ -3625,6 +3633,15 @@ mod tests {
         let rows = [
             ("RSI", vec![], 1),
             (
+                "Woodies CCI",
+                vec![(
+                    "source",
+                    InputValue::Source(crate::studies::StudySource::Price(PriceSource::Open)),
+                    InputKind::Source,
+                )],
+                1,
+            ),
+            (
                 "Echo",
                 vec![
                     (
@@ -3715,11 +3732,15 @@ mod tests {
                 original.set_input("fast", Length(21)).unwrap();
             }
             // Echo is a literal chart study saved on origin/main before source routing changed.
-            let saved = if name == "Echo" {
+            let mut saved = if name == "Echo" {
                 serde_json::from_str(r#"{"name":"Echo","inputs":[["source",{"Source":{"Price":"HL2"}}],["basis",{"Source":{"Price":"OHLC4"}}],["symbol",{"Symbol":"OTHER"}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[240,145,40,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,9,3,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap()
             } else {
                 StudyTemplate::from_study(original.as_ref())
             };
+            if name == "Woodies CCI" {
+                // A host's default source is its own even when an older save leaves it out.
+                saved.inputs.retain(|(id, _)| id != "source");
+            }
             let mut restored = saved
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
