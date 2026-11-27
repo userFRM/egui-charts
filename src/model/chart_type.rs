@@ -1972,6 +1972,12 @@ mod tests {
                 older_expected.styles.columns.up_color,
                 older_expected.styles.columns.down_color,
             ] = placeholder;
+            older_expected.styles.range.thin_bars = false;
+            older_expected.styles.range.blocks = true;
+            [
+                older_expected.styles.range.up_color,
+                older_expected.styles.range.down_color,
+            ] = placeholder;
             [
                 older_expected.styles.range.forming_up,
                 older_expected.styles.range.forming_down,

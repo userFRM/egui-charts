@@ -83,9 +83,10 @@ pub(crate) fn follow_candle_colors(
             *color = new.bearish_color;
         }
     }
-    // So do the Kagi lines and the Point and Figure columns.
+    // So do the Kagi lines, the Point and Figure columns and the completed Range bars.
     for (up, down) in [
         (&mut styles.kagi.up_color, &mut styles.kagi.down_color),
+        (&mut styles.range.up_color, &mut styles.range.down_color),
         (
             &mut styles.point_figure.up_color,
             &mut styles.point_figure.down_color,
@@ -392,6 +393,7 @@ mod tests {
                     styles.hlc_area.high_line.color = EDITED;
                     styles.volume_candles.wick_up = EDITED;
                     styles.kagi.down_color = EDITED;
+                    styles.range.down_color = EDITED;
                 }
                 if via_override {
                     chart.set_theme_override(Some(to.clone()));
@@ -418,6 +420,9 @@ mod tests {
                 let kagi = &chart.chart_type_params.styles.kagi;
                 assert_eq!(kagi.up_color, up);
                 assert_eq!(kagi.down_color, if edited { EDITED } else { down });
+                let range = &chart.chart_type_params.styles.range;
+                assert_eq!(range.up_color, up);
+                assert_eq!(range.down_color, if edited { EDITED } else { down });
                 let point_figure = &chart.chart_type_params.styles.point_figure;
                 assert_eq!((point_figure.up_color, point_figure.down_color), (up, down));
             }

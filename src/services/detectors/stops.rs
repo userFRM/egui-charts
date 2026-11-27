@@ -7,7 +7,8 @@ use chrono::{DateTime, TimeDelta, Utc};
 use super::{DetectionKind, DetectorSettings, footprint};
 use crate::data::{Footprint, meets_threshold};
 use crate::model::{
-    BarClock, Direction, OrderSide, Placement, Signal, SignalId, SignalShape, Tick,
+    BarClock, Direction, FootprintCondition, OrderSide, Placement, Signal, SignalId, SignalShape,
+    Tick,
 };
 use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
@@ -209,6 +210,10 @@ pub(super) struct StopSweeps {
     pub(super) conditions: HashMap<String, DateTime<Utc>>,
     /// Footprint stacked imbalance zones still active on the current clock.
     zones: Vec<footprint::Zone>,
+    /// Last forming bar to meet each condition, in `FootprintCondition::ALL` order.
+    formed: [Option<DateTime<Utc>>; 4],
+    /// Conditions met by live bars since the service last took them.
+    pub(super) met: Vec<footprint::Met>,
 }
 
 struct Prices {
@@ -239,6 +244,8 @@ impl StopSweeps {
             live_open: None,
             conditions: HashMap::new(),
             zones: Vec::new(),
+            formed: [None; 4],
+            met: Vec::new(),
         }
     }
 
@@ -280,6 +287,8 @@ impl StopSweeps {
         if let Some(time) = self.last_time {
             self.advance(time, settings, out);
         }
+        self.met.clear();
+        self.formed = [None; 4];
     }
 
     pub(super) fn trade(
@@ -329,6 +338,29 @@ impl StopSweeps {
         let before = footprint.bar_at(open).map_or([0.0; 3], totals);
         if !matches!(footprint.push(fill), Ok(true)) {
             return;
+        }
+        if self.live_open.is_some_and(|live| open >= live)
+            && self.formed.iter().any(|formed| *formed != Some(open))
+            && let Some(bar) = footprint.bar_at(open)
+        {
+            for (i, message) in footprint::met(bar, &settings.footprint.rule)
+                .into_iter()
+                .enumerate()
+            {
+                if self.formed[i] != Some(open)
+                    && let Some(message) = message
+                {
+                    self.met.push(footprint::Met {
+                        condition: FootprintCondition::ALL[i],
+                        bar: open,
+                        closed: false,
+                        time: fill.ts,
+                        price: fill.price,
+                        message,
+                    });
+                    self.formed[i] = Some(open);
+                }
+            }
         }
         if settings.footprint.enabled
             && let Some(bar) = footprint.bar_at(open)
@@ -392,6 +424,23 @@ impl StopSweeps {
             let Some(bar) = bar else {
                 continue;
             };
+            if self.live_open.is_some_and(|live| at >= live) {
+                for (condition, message) in FootprintCondition::ALL
+                    .into_iter()
+                    .zip(footprint::met(bar, &settings.footprint.rule))
+                {
+                    if let Some(message) = message {
+                        self.met.push(footprint::Met {
+                            condition,
+                            bar: at,
+                            closed: true,
+                            time,
+                            price: prices.close,
+                            message,
+                        });
+                    }
+                }
+            }
             let volume = bar.volume();
             let buy = prices.close > prices.open;
             let delta = if buy { bar.delta() } else { -bar.delta() };

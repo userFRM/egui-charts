@@ -147,7 +147,8 @@ fn render_high_low_labels(
 }
 
 /// Range bars at their element slots, each over its whole range from its low to its high:
-/// filled, or as thin OHLC bars under `style`, outlined where `phantoms` marks a bar that
+/// as OHLC bars, thin or bold under `style`, or as filled blocks in styles saved before bold
+/// bars; outlined where `phantoms` marks a bar that
 /// closed without a trade while `style` draws them so, and the last bar, while `forming` marks
 /// it as the bar in progress, in the forming colours of `style`.
 pub(super) fn render_range_bars(
@@ -162,9 +163,9 @@ pub(super) fn render_range_bars(
     colors: &StyleColors,
     x_of: impl Fn(usize) -> f32,
 ) {
-    let thin = BarsStyle {
+    let ohlc = BarsStyle {
         open_visible: true,
-        thin_bars: true,
+        thin_bars: style.thin_bars,
         color_by_previous_close: false,
     };
     let forming_colors = StyleColors {
@@ -186,7 +187,7 @@ pub(super) fn render_range_bars(
             let stroke = Stroke::new(DESIGN_TOKENS.stroke.hairline, color);
             let outline = Shape::rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
             context.painter.add(outline);
-        } else if style.thin_bars {
+        } else if style.thin_bars || !style.blocks {
             let params = BarRenderParams::new(x, bar_width, wick_width);
             render_ohlc_bar(
                 context,
@@ -195,7 +196,7 @@ pub(super) fn render_range_bars(
                 price_scale,
                 colors,
                 &params,
-                &thin,
+                &ohlc,
             );
         } else {
             context.painter.add(Shape::rect_filled(rect, 0.0, color));
