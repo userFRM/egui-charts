@@ -761,12 +761,7 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             name: "SuperTrend",
             prices: points(&[10., 12., 8., 14., 7., 15., 15.]),
             inputs: vec![("atr_period", Length(1)), ("multiplier", Number(1.))],
-            expected: vec![
-                (3, Sell, 14.),
-                (4, Buy, 7.),
-                (5, Sell, 15.),
-                (6, Buy, 15.),
-            ],
+            expected: vec![(3, Sell, 14.), (4, Buy, 7.), (5, Sell, 15.), (6, Buy, 15.)],
         },
         // Only the six EMAs vote: scores 0, -1, +1, +1, -1, -1, +1, +1. Every bar after 0 is
         // strong; the repeats at 3 and 5 add nothing at pyramiding 1.

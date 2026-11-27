@@ -394,39 +394,15 @@ mod tests {
                 vec![
                     (
                         "SuperTrend: Trend turns up",
-                        vec![
-                            None,
-                            None,
-                            Some(1.),
-                            Some(0.),
-                            Some(0.),
-                            Some(0.),
-                            Some(1.),
-                        ],
+                        vec![None, None, Some(1.), Some(0.), Some(0.), Some(0.), Some(1.)],
                     ),
                     (
                         "SuperTrend: Trend turns down",
-                        vec![
-                            None,
-                            None,
-                            Some(0.),
-                            Some(0.),
-                            Some(1.),
-                            Some(0.),
-                            Some(0.),
-                        ],
+                        vec![None, None, Some(0.), Some(0.), Some(1.), Some(0.), Some(0.)],
                     ),
                     (
                         "SuperTrend: Trend change",
-                        vec![
-                            None,
-                            None,
-                            Some(1.),
-                            Some(0.),
-                            Some(1.),
-                            Some(0.),
-                            Some(1.),
-                        ],
+                        vec![None, None, Some(1.), Some(0.), Some(1.), Some(0.), Some(1.)],
                     ),
                 ],
             ),
