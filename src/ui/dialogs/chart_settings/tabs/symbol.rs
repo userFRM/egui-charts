@@ -1218,8 +1218,8 @@ mod tests {
     }
 
     /// Bars colour by their own open or the previous close, and columns reach the selected price
-    /// in their own colours while their colour still compares closes, through the dialog and the
-    /// painter after acceptance only, in both themes. Undo and saved charts keep these values
+    /// in their own colours, comparing their close with the previous close or their own open,
+    /// through the painter after acceptance only, in both themes. Undo and saved charts keep these values
     /// apart from the candle and line settings, and a layout saved before columns had colours
     /// draws them in its candle body colours.
     #[test]
@@ -1278,6 +1278,22 @@ mod tests {
             assert!(!dialog.is_open);
         };
 
+        // The columns of `chart` filled in one of `colours`, as (fill, top).
+        let columns_of = |ctx: &Context, chart: &mut Chart, colours: [Color32; 2]| {
+            let painted = crate::widget::test_frames::shapes(ctx, chart, 1.0, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            painted
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Rect(r)
+                        if plot.contains(r.rect.center()) && colours.contains(&r.fill) =>
+                    {
+                        Some((r.fill, r.rect.top()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
         // Against the bar's own open the last two colours swap: 12.5 is below its open of 13 but
         // above the last close of 12, and 10 is above its open of 9 but below the last close.
         let bars = [
@@ -1379,24 +1395,7 @@ mod tests {
                     let config = chart.config();
                     assert_eq!(config.price_source, PriceSource::OHLC4);
                     assert_eq!((config.bullish_color, config.bearish_color), (up, down));
-                    // The columns of `chart` filled in one of `colours`, as (fill, top).
-                    let columns_of = |chart: &mut Chart, colours: [Color32; 2]| {
-                        let painted = crate::widget::test_frames::shapes(&ctx, chart, 1.0, vec![]);
-                        let plot = chart.get_rendered_price_rect();
-                        painted
-                            .iter()
-                            .filter_map(|s| match s {
-                                Shape::Rect(r)
-                                    if plot.contains(r.rect.center())
-                                        && colours.contains(&r.fill) =>
-                                {
-                                    Some((r.fill, r.rect.top()))
-                                }
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                    };
-                    let drawn = columns_of(&mut chart, [COLUMN_UP, COLUMN_DOWN]);
+                    let drawn = columns_of(&ctx, &mut chart, [COLUMN_UP, COLUMN_DOWN]);
                     let mapping = chart.get_chart_mapping();
                     assert_eq!(drawn.len(), 2, "{source:?}");
                     for ((fill, top), (colour, price)) in drawn
@@ -1430,12 +1429,81 @@ mod tests {
                         let mut restored = chart_of(ChartType::Columns, &columns);
                         restored.restore(&former).unwrap();
                         crate::widget::test_frames::frame(&ctx, &mut restored, 1.0, vec![]);
-                        let fills: Vec<_> = columns_of(&mut restored, [up, down])
+                        let fills: Vec<_> = columns_of(&ctx, &mut restored, [up, down])
                             .into_iter()
                             .map(|(fill, _)| fill)
                             .collect();
                         assert_eq!(fills, [up, down], "{source:?}");
                     }
+                }
+                // The second close falls from 110 but rises from its open of 100.
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let examples = [(100.0, 112.0, 98.0, 110.0), (100.0, 106.0, 99.0, 105.0)];
+                let mut chart = chart_of(ChartType::Columns, &examples);
+                edit(
+                    &ctx,
+                    &mut chart,
+                    &theme,
+                    &["Color bars based on previous close"],
+                    accept,
+                );
+                let expected = ColumnsStyle {
+                    color_by_previous_close: !accept,
+                    ..Default::default()
+                };
+                assert_eq!(chart.chart_type_params().styles.columns, expected);
+                assert_eq!(chart.config().price_source, PriceSource::OHLC4);
+                assert_eq!(
+                    (chart.config().bullish_color, chart.config().bearish_color),
+                    (up, down)
+                );
+                let fills = |chart: &mut Chart, colors| {
+                    columns_of(&ctx, chart, colors)
+                        .into_iter()
+                        .map(|(fill, _)| fill)
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(
+                    fills(&mut chart, [COLUMN_UP, COLUMN_DOWN]),
+                    if accept {
+                        [COLUMN_UP; 2]
+                    } else {
+                        [COLUMN_UP, COLUMN_DOWN]
+                    }
+                );
+                if accept {
+                    let saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+                    assert!(chart.undo());
+                    assert_eq!(
+                        chart.chart_type_params().styles.columns,
+                        ColumnsStyle::default()
+                    );
+                    assert!(chart.redo());
+                    assert_eq!(chart.chart_type_params().styles.columns, expected);
+                    chart
+                        .restore(&serde_json::from_value(saved.clone()).unwrap())
+                        .unwrap();
+                    assert_eq!(chart.chart_type_params().styles.columns, expected);
+                    assert_eq!(fills(&mut chart, [COLUMN_UP, COLUMN_DOWN]), [COLUMN_UP; 2]);
+                    let mut former = saved;
+                    // The column entry written before the switch and its own colours existed.
+                    let entry: serde_json::Value =
+                        serde_json::from_str(r#"{"price_source":"Close"}"#).unwrap();
+                    for params in ["/chart_type_params", "/settings/chart_type_params"] {
+                        former.pointer_mut(params).unwrap()["styles"]["columns"] = entry.clone();
+                    }
+                    chart
+                        .restore(&serde_json::from_value(former).unwrap())
+                        .unwrap();
+                    assert!(
+                        chart
+                            .chart_type_params()
+                            .styles
+                            .columns
+                            .color_by_previous_close
+                    );
+                    assert_eq!(fills(&mut chart, [up, down]), [up, down]);
                 }
             }
         }

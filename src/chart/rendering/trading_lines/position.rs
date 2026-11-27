@@ -1,8 +1,8 @@
 use super::{
-    Button, COVERAGE_CELL, ExitButtons, HEIGHT, LABEL_INSET, Level, NODE_INSET, PADDING, PnlUnit,
-    TradingLabelAlignment, TradingLineAction, TradingLineOptions, coverage_text, direction,
-    exit_buttons_width, label_fill, line_left, line_width, menu_entry, offered_exits,
-    paint_coverage, paint_glyph, pnl_text, quantity_text,
+    Button, COVERAGE_CELL, Drawn, ExitButtons, HEIGHT, LABEL_INSET, Level, NODE_INSET, PADDING,
+    PnlUnit, TradingLabelAlignment, TradingLineAction, TradingLineOptions, coverage_text,
+    direction, exit_buttons_width, label_fill, line_left, line_width, menu_entry, offered_exits,
+    overlap_switch, paint_coverage, paint_glyph, pnl_text, quantity_text,
 };
 use crate::chart::coords::ChartMapping;
 use crate::chart::rendering::render_price_line;
@@ -25,7 +25,7 @@ pub(super) fn show_position(
     position: &Position,
     held: (bool, bool),
     coverage: Option<(f64, f64)>,
-    tags: &mut Vec<(f64, Color32)>,
+    drawn: &mut Drawn,
 ) -> Option<TradingLineAction> {
     let theme = ui.ctx().active_theme();
     let side = if position.quantity > 0.0 {
@@ -51,6 +51,7 @@ pub(super) fn show_position(
     if !y.is_finite() || !mapping.is_y_visible(y) {
         return None;
     }
+    let row = drawn.row(y, mapping.rect, options.separate_labels == Some(true));
     let painter = ui.painter().with_clip_rect(mapping.rect);
     let width = line_width(
         look.and_then(|look| look.line_width)
@@ -60,7 +61,7 @@ pub(super) fn show_position(
         look.and_then(|look| look.line_style)
             .unwrap_or(LineStyle::Solid),
     );
-    tags.push((entry, color));
+    drawn.tags.push((entry, color));
 
     let key = ui.scope_id().with(("trading_position", &position.symbol));
     let font = FontId::proportional(ui.ctx().active_theme().text.ohlc);
@@ -144,7 +145,10 @@ pub(super) fn show_position(
             .left(mapping.rect, label_width, inset);
         (left, left + label_width)
     };
-    let label = Rect::from_min_max(pos2(left, y - HEIGHT / 2.0), pos2(right, y + HEIGHT / 2.0));
+    let label = Rect::from_min_max(
+        pos2(left, row - HEIGHT / 2.0),
+        pos2(right, row + HEIGHT / 2.0),
+    );
     let line_left = line_left(
         mapping.rect,
         label.left(),
@@ -202,6 +206,9 @@ pub(super) fn show_position(
             let closable = look.and_then(|look| look.close) != Some(false);
             response.context_menu(|ui| {
                 action = position_menu(ui, position, capabilities, held, closable);
+                if let Some(on) = overlap_switch(ui, options.separate_labels) {
+                    drawn.switched = Some(on);
+                }
             });
         }
     }
@@ -238,7 +245,7 @@ pub(super) fn show_position(
         key,
         exits,
         x: right - total,
-        y,
+        y: row,
         entry,
         line_left,
         preview_right: right,
@@ -246,7 +253,7 @@ pub(super) fn show_position(
         take_profit_hover_text: look.and_then(|look| look.take_profit_hover_text.as_deref()),
         stop_loss_hover_text: look.and_then(|look| look.stop_loss_hover_text.as_deref()),
     }
-    .show(ui, mapping, options, tags);
+    .show(ui, mapping, options, &mut drawn.tags);
     if let Some((exit, price)) = released {
         let request = exit_request(
             position,
@@ -264,6 +271,15 @@ pub(super) fn show_position(
         x += HEIGHT * 0.65;
     }
     let group_rect = Rect::from_min_max(pos2(x, label.top()), pos2(right, label.bottom()));
+    if row != y {
+        let x = group_rect.left() + 4.0;
+        let edge = if row > y {
+            group_rect.top()
+        } else {
+            group_rect.bottom()
+        };
+        painter.line_segment([pos2(x, y), pos2(x, edge)], Stroke::new(1.0, color));
+    }
     painter.rect(
         group_rect,
         4.0,
@@ -285,7 +301,7 @@ pub(super) fn show_position(
         quantity_color,
     );
     painter.galley(
-        pos2(rect.left() + PADDING, y - quantity.size().y / 2.0),
+        pos2(rect.left() + PADDING, row - quantity.size().y / 2.0),
         quantity,
         Color32::WHITE,
     );
@@ -306,7 +322,7 @@ pub(super) fn show_position(
         x = rect.right();
         painter.vline(rect.left(), rect.y_range(), stroke);
         painter.galley(
-            pos2(rect.left() + PADDING, y - text.size().y / 2.0),
+            pos2(rect.left() + PADDING, row - text.size().y / 2.0),
             text,
             label_color,
         );
@@ -324,7 +340,7 @@ pub(super) fn show_position(
             .on_hover_text(pnl.job.text.clone());
         }
         painter.galley(
-            pos2(rect.left() + PADDING, y - pnl.size().y / 2.0),
+            pos2(rect.left() + PADDING, row - pnl.size().y / 2.0),
             pnl,
             text_color,
         );

@@ -259,6 +259,14 @@ impl OrderQueue {
         self.executions.drain(..).collect()
     }
 
+    /// Bytes a clone copies into its orders, held events and pending fills, without allocator
+    /// overhead.
+    pub(crate) fn clone_bytes(&self) -> usize {
+        self.orders.len() * size_of::<RestingOrder>()
+            + self.held.len() * size_of::<(u64, DateTime<Utc>, OrderEvent)>()
+            + self.executions.len() * size_of::<Tick>()
+    }
+
     /// Aggregated levels for ladders and heatmaps, counting only orders at least `minimum_size`.
     /// Invalid thresholds return an empty book. Counts and totals refer to the selected orders.
     pub fn aggregate(&self, symbol: impl Into<String>, minimum_size: f64) -> OrderBook {

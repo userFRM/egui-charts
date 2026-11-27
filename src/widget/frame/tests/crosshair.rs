@@ -3018,7 +3018,7 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
             &["Dragonfly Doji - Bullish", "Long Lower Shadow - Bullish"],
         ),
         (1, 100.0, &[]),
-        (3, 102.0, &["Spinning Top White"]),
+        (3, 97.0, &["Spinning Top White"]),
         (5, 92.0, &["Falling Window - Bearish", "Doji"]),
         (2, 100.75, &[]),
         (2, 99.25, &[]),

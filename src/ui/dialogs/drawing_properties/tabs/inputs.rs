@@ -402,9 +402,10 @@ impl InputsTab {
                     };
                 FormGrid::new("profile_inputs").show(ui, |ui| {
                     // The up and down colours, the developing POC's and VA's high and low, the VA's
-                    // up and down, then the POC's, the VA lines', the values' and the box's.
+                    // up and down, then the POC's, the VA lines', the values', the box's and the
+                    // VA values'.
                     let pickers = grid_pickers(pickers, 0);
-                    pickers.resize_with(12, ColorPickerState::default);
+                    pickers.resize_with(13, ColorPickerState::default);
                     let label = ui.label(l10n::text(ui.ctx(), "Row layout"));
                     ui.label_inputs_by(label.id, |ui| {
                         ui.combo_select(
@@ -503,6 +504,7 @@ impl InputsTab {
                         val_picker,
                         values_picker,
                         box_picker,
+                        va_values_picker,
                     ] = &mut pickers[..]
                     else {
                         unreachable!("resized above")
@@ -546,6 +548,22 @@ impl InputsTab {
                         values_picker,
                     ) {
                         config.values_color = Some(values);
+                    }
+                    // Until one is picked, values inside the value area keep the values colour.
+                    let mut va_values = config
+                        .value_area_values_color
+                        .or(config.values_color)
+                        .unwrap_or(theme_text);
+                    let label = ui.label(l10n::text(ui.ctx(), "VA values colour"));
+                    let picked = ui.label_inputs_by(label.id, |ui| {
+                        ui.push_id("va_values", |ui| {
+                            level_color(ui, &mut va_values, va_values_picker)
+                        })
+                        .inner
+                    });
+                    ui.end_row();
+                    if picked {
+                        config.value_area_values_color = Some(va_values);
                     }
                     let current = config.box_color.unwrap_or([r, g, b, 15]);
                     let mut picked = current;
@@ -3322,6 +3340,7 @@ mod tests {
         config.value_area_colors = Some([[11, 12, 13, 255], [14, 15, 16, 255]]);
         config.poc_color = Some([21, 22, 23, 255]);
         config.values_color = Some([31, 32, 33, 255]);
+        config.value_area_values_color = Some([51, 52, 53, 255]);
         config.box_color = Some([41, 42, 43, 15]);
         config.show_developing_value_area = true;
         config.developing_poc_color = [9, 8, 7, 255];
@@ -3337,6 +3356,7 @@ mod tests {
         edited.poc_color = Some([245, 127, 23, 255]);
         edited.value_area_line_colors = [[27, 94, 32, 255], [0, 51, 42, 255]];
         edited.values_color = Some([0, 96, 100, 255]);
+        edited.value_area_values_color = Some([49, 27, 146, 255]);
         // A translucent colour is stored premultiplied, so its well and value round to it.
         let translucent = |r, g, b| egui::Color32::from_rgba_unmultiplied(r, g, b, 15);
         let [r, g, b, _] = translucent(41, 42, 43).to_srgba_unmultiplied();
@@ -3395,6 +3415,7 @@ mod tests {
                     ("#010203", "#1B5E20"),
                     ("#030201", "#00332A"),
                     ("#1F2021", "#006064"),
+                    ("#333435", "#311B92"),
                     (box_well.as_str(), "#0C3299"),
                 ] {
                     click(&mut h, Role::ColorWell, well);

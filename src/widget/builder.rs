@@ -296,6 +296,10 @@ impl Chart {
             order_quantity_text: None,
             #[cfg(feature = "ui")]
             quantity_clicked: None,
+            #[cfg(feature = "ui")]
+            order_presets: None,
+            #[cfg(feature = "ui")]
+            preset_chosen: None,
             // Selection (Widget API)
             selection: SelectionState::new(),
             right_click: None,

@@ -205,6 +205,15 @@ impl SymbolTab {
                 ChartType::Columns => {
                     let candles = [settings.bullish_color, settings.bearish_color];
                     let style = &mut styles.columns;
+                    ui.vertical(|ui| {
+                        ui.set_width(160.0);
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                        ui.checkbox(
+                            &mut style.color_by_previous_close,
+                            l10n::text(ui.ctx(), "Color bars based on previous close"),
+                        );
+                    });
+                    ui.end_row();
                     Self::own_color_rows(
                         ui,
                         [
@@ -245,12 +254,26 @@ impl SymbolTab {
                     );
                 }
                 ChartType::Range => {
+                    let candles = [settings.bullish_color, settings.bearish_color];
                     let style = &mut styles.range;
-                    Self::switch(ui, "Thin bars", &mut style.thin_bars);
+                    if Self::switch(ui, "Thin bars", &mut style.thin_bars) {
+                        // Changing the switch ends the block look of a style saved before bold bars.
+                        style.blocks = false;
+                    }
                     Self::switch(ui, "Phantom bars", &mut style.phantom_bars);
-                    Self::candle_colors_section(ui, settings);
-                    let body = [settings.bullish_color, settings.bearish_color];
-                    let style = &mut settings.chart_type_params.styles.range;
+                    Self::own_color_rows(
+                        ui,
+                        [
+                            ("Rising bar colour", &mut style.up_color),
+                            ("Falling bar colour", &mut style.down_color),
+                        ],
+                        candles,
+                    );
+                    // The forming bar's default shows as the completed bar colour it draws in.
+                    let body = [
+                        crate::model::or_candle(style.up_color, candles[0]),
+                        crate::model::or_candle(style.down_color, candles[1]),
+                    ];
                     ui.label(l10n::text(ui.ctx(), "Forming bar"));
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
@@ -280,10 +303,11 @@ impl SymbolTab {
             });
     }
 
-    fn switch(ui: &mut Ui, name: &str, value: &mut bool) {
+    fn switch(ui: &mut Ui, name: &str, value: &mut bool) -> bool {
         let label = ui.label(l10n::text(ui.ctx(), name));
-        ui.checkbox(value, "").labelled_by(label.id);
+        let changed = ui.checkbox(value, "").labelled_by(label.id).changed();
         ui.end_row();
+        changed
     }
 
     /// A switch whose long name wraps in the label column, usable while `enabled`.

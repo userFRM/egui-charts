@@ -365,25 +365,40 @@ impl StudyTemplate {
         }
         // Studies saved before an input's range narrowed restore with the value they were saved
         // with, from the bottom of the range the input took then; only edits are bounded.
-        const NARROWED: [(&str, &str); 8] = [
-            ("BB", "std_dev"),
-            ("BBTrend", "multiplier"),
-            ("LinReg Slope", "period"),
-            ("MFI", "period"),
-            ("RCI", "smoothing_deviation"),
-            ("SuperTrend", "multiplier"),
-            ("Woodies CCI", "turbo_length"),
-            ("Woodies CCI", "cci_length"),
+        // The former input kind and finite-number contract still apply to those saved values.
+        use InputValue::{Integer, Length, Number};
+        const NARROWED: [(&str, &str, InputValue); 17] = [
+            ("BB", "std_dev", Number(0.0)),
+            ("BBTrend", "multiplier", Number(0.0)),
+            ("LinReg Slope", "period", Length(1)),
+            ("MFI", "period", Length(1)),
+            ("RCI", "smoothing_deviation", Number(0.0)),
+            ("SuperTrend", "multiplier", Number(0.0)),
+            ("Woodies CCI", "turbo_length", Length(1)),
+            ("Woodies CCI", "cci_length", Length(1)),
+            ("Vortex", "period", Length(1)),
+            ("C2C Vol", "period", Length(1)),
+            ("C2C Vol", "trading_days", Number(0.0)),
+            ("Volatility Stop", "length", Length(1)),
+            ("Volatility Stop", "multiplier", Number(0.0)),
+            ("ASI", "limit_move", Number(f64::EPSILON)),
+            ("Advance/Decline", "period", Length(1)),
+            ("VWAP", "plot_offset", Integer(i32::MIN)),
+            ("VWMA", "plot_offset", Integer(i32::MIN)),
         ];
         let saved = inputs
             .iter()
             .filter(|(id, value)| {
-                NARROWED.contains(&(study.name(), id.as_str()))
-                    && match value {
-                        InputValue::Length(value) => *value >= 1,
-                        InputValue::Number(value) => *value >= 0.0,
-                        _ => false,
-                    }
+                NARROWED.iter().any(|(name, input, bottom)| {
+                    *name == study.name()
+                        && *input == id
+                        && match (value, bottom) {
+                            (Length(value), Length(bottom)) => value >= bottom,
+                            (Number(value), Number(bottom)) => value.is_finite() && value >= bottom,
+                            (Integer(value), Integer(bottom)) => value >= bottom,
+                            _ => false,
+                        }
+                })
             })
             .cloned()
             .collect();
@@ -1249,6 +1264,23 @@ impl StudyTemplate {
                 }
                 changed = true;
             }
+            // Single patterns saved before candle tinting keep their Background hidden.
+            if template.settings.plots.len() == 1
+                && let Some(fresh) =
+                    crate::studies::CandlestickPatterns::single(study).map(|s| s.settings())
+            {
+                let settings = &mut template.settings;
+                settings.plots.push(crate::studies::PlotStyle {
+                    visible: false,
+                    ..fresh.plots[1]
+                });
+                settings.plot_variants.resize(1, Vec::new());
+                settings.plot_variants.push(fresh.plot_variants[1].clone());
+                if fresh.untagged_plots.contains(&1) {
+                    settings.untagged_plots.push(1);
+                }
+                changed = true;
+            }
         }
         changed.then_some(template)
     }
@@ -1608,14 +1640,14 @@ mod tests {
             ("statistics_total_volume", InputValue::Toggle(true)),
             ("statistics_rotation_factor", InputValue::Toggle(false)),
             ("statistics_range_extension", InputValue::Toggle(false)),
-            // Merges and splits are saved after the period and row size they were made for.
+            // Merges and splits follow the period, row size and profile period they were made for.
             (
                 "composites",
-                InputValue::Text("30,0|1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
+                InputValue::Text("30,0,2,3|1970-01-01T00:00:00Z/1970-01-02T00:00:00Z".into()),
             ),
             (
                 "splits",
-                InputValue::Text("30,0|1970-01-02T01:00:00Z".into()),
+                InputValue::Text("30,0,2,3|1970-01-02T01:00:00Z".into()),
             ),
         ] {
             tpo.set_input(id, value.clone()).unwrap();
@@ -1630,6 +1662,26 @@ mod tests {
             );
         }
         studies.push(ConfiguredStudy::new(Box::new(tpo)));
+
+        // A two-week study saved before edit lists recorded the profile period keeps them.
+        let saved: StudyTemplate = serde_json::from_str(
+            r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":60}],["profile_period",{"Choice":1}],["profile_periods",{"Length":2}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["hours",{"Choice":0}],["session_start",{"TimeOfDay":"00:00"}],["session_end",{"TimeOfDay":"00:00"}],["session_zone",{"TimeZone":""}],["custom_sessions",{"Choice":0}],["session_2_start",{"TimeOfDay":"00:00"}],["session_2_end",{"TimeOfDay":"00:00"}],["session_2_zone",{"TimeZone":""}],["session_3_start",{"TimeOfDay":"00:00"}],["session_3_end",{"TimeOfDay":"00:00"}],["session_3_zone",{"TimeZone":""}],["session_4_start",{"TimeOfDay":"00:00"}],["session_4_end",{"TimeOfDay":"00:00"}],["session_4_zone",{"TimeZone":""}],["session_5_start",{"TimeOfDay":"00:00"}],["session_5_end",{"TimeOfDay":"00:00"}],["session_5_zone",{"TimeZone":""}],["session_overlap",{"Choice":0}],["clip_hours",{"Toggle":false}],["split_sessions",{"Toggle":false}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["statistics_high_low_range",{"Toggle":false}],["statistics_poc",{"Toggle":true}],["statistics_value_area_high",{"Toggle":true}],["statistics_value_area_low",{"Toggle":true}],["statistics_value_area_range",{"Toggle":false}],["statistics_initial_balance_high",{"Toggle":false}],["statistics_initial_balance_low",{"Toggle":false}],["statistics_initial_balance_range",{"Toggle":true}],["statistics_tpos_above",{"Toggle":true}],["statistics_tpos_below",{"Toggle":true}],["statistics_total_tpos",{"Toggle":false}],["statistics_total_volume",{"Toggle":false}],["statistics_rotation_factor",{"Toggle":true}],["statistics_range_extension",{"Toggle":true}],["display",{"Choice":0}],["letters_color",{"Color":[64,254,0,128]}],["sessions",{"Choice":0}],["split_periods",{"Toggle":false}],["coloring",{"Choice":0}],["period_color_1",{"Color":[214,56,100,255]}],["period_color_2",{"Color":[90,197,97,255]}],["period_color_3",{"Color":[84,185,209,255]}],["period_color_4",{"Color":[93,36,245,255]}],["block_color",{"Color":[189,189,189,255]}],["outside_value_area_opacity",{"Length":45}],["poc",{"Toggle":true}],["poc_color",{"Color":[64,254,0,128]}],["value_area_levels",{"Toggle":true}],["value_area_high",{"Toggle":true}],["value_area_low",{"Toggle":true}],["initial_balance",{"Toggle":true}],["initial_balance_minutes",{"Length":60}],["initial_balance_extensions",{"Toggle":false}],["open_price",{"Toggle":true}],["close_price",{"Toggle":false}],["poor_high",{"Toggle":false}],["poor_low",{"Toggle":false}],["extend_poor",{"Toggle":false}],["extend_poc",{"Toggle":false}],["extend_vah",{"Toggle":false}],["extend_val",{"Toggle":false}],["extend_single_prints",{"Toggle":false}],["volume_profile",{"Toggle":false}],["volume_poc",{"Toggle":false}],["volume_poc_color",{"Color":[64,254,0,128]}],["volume_poc_style",{"Choice":0}],["volume_value_area_high",{"Toggle":false}],["volume_value_area_high_color",{"Color":[64,254,0,128]}],["volume_value_area_high_style",{"Choice":0}],["volume_value_area_low",{"Toggle":false}],["volume_value_area_low_color",{"Color":[64,254,0,128]}],["volume_value_area_low_style",{"Choice":0}],["volume_values",{"Toggle":false}],["volume_values_color",{"Color":[64,254,0,128]}],["volume_profile_color",{"Color":[64,254,0,128]}],["volume_value_area_color",{"Color":[64,254,0,128]}],["volume_placement",{"Choice":1}],["volume_tpo_value_area",{"Toggle":false}],["composites",{"Text":"60,0|1970-01-01T00:00:00Z/1970-01-02T00:00:00Z"}],["splits",{"Text":"60,0|1970-01-03T01:00:00Z"}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
+        )
+        .unwrap();
+        let restored = saved.create().unwrap();
+        let config = restored.tpo().unwrap();
+        assert_eq!(config.profile_period, crate::model::TPOProfilePeriod::Week);
+        assert_eq!(config.profile_periods, 2);
+        let start = chrono::DateTime::UNIX_EPOCH;
+        assert_eq!(
+            config.composites,
+            [start..=start + chrono::Duration::days(1)]
+        );
+        assert_eq!(
+            config.splits,
+            [start + chrono::Duration::days(2) + chrono::Duration::minutes(60)]
+        );
+        assert_eq!(restored.settings(), saved.settings);
         let mut scaled = ConfiguredStudy::new(Box::new(RSI::new(14)));
         scaled.set_scale(crate::studies::StudyScale::Shared(SeriesScale::Left));
         studies.push(scaled);
@@ -2063,7 +2115,7 @@ mod tests {
     /// limit above it that has one more decimal place, and their names write it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
-        use InputValue::{Choice, Length, Number, Text, Toggle};
+        use InputValue::{Choice, Integer, Length, Number, Text, Toggle};
         let rows = [
             (
                 "CCI",
@@ -2115,6 +2167,41 @@ mod tests {
                 "LinReg Slope",
                 vec![("period", Length(1))],
                 vec![("period", Length(1))],
+            ),
+            (
+                "Vortex",
+                vec![("period", Length(1))],
+                vec![("period", Length(1))],
+            ),
+            (
+                "C2C Vol",
+                vec![("period", Length(1)), ("trading_days", Number(0.0))],
+                vec![("period", Length(1)), ("trading_days", Number(0.0))],
+            ),
+            (
+                "Volatility Stop",
+                vec![("length", Length(1)), ("multiplier", Number(0.0))],
+                vec![("length", Length(1)), ("multiplier", Number(0.0))],
+            ),
+            (
+                "ASI",
+                vec![("limit_move", Number(0.05))],
+                vec![("limit_move", Number(0.05))],
+            ),
+            (
+                "Advance/Decline",
+                vec![("period", Length(5000))],
+                vec![("period", Length(5000))],
+            ),
+            (
+                "VWAP",
+                vec![("plot_offset", Integer(-3))],
+                vec![("plot_offset", Integer(-3))],
+            ),
+            (
+                "VWMA",
+                vec![("plot_offset", Integer(-600))],
+                vec![("plot_offset", Integer(-600))],
             ),
             // Saved under the earlier name.
             (
@@ -2498,6 +2585,20 @@ mod tests {
                 let input = inputs.iter().find(|input| input.id == id);
                 assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
             }
+            // Keeping a legacy value does not admit new values outside the declared range.
+            let refused = match name {
+                "C2C Vol" => Some(("trading_days", Number(0.5))),
+                "Volatility Stop" => Some(("multiplier", Number(0.125))),
+                "ASI" => Some(("limit_move", Number(0.075))),
+                "Advance/Decline" => Some(("period", Length(2001))),
+                _ => None,
+            };
+            if let Some((id, value)) = refused {
+                assert!(
+                    study.clone_box().set_input(id, value.clone()).is_err(),
+                    "{name}: a held value admitted {value:?}"
+                );
+            }
             // A style edit applies every input as it stands, which keeps its value.
             let values = |study: &dyn Indicator| {
                 let inputs = study.inputs().into_iter();
@@ -2526,6 +2627,16 @@ mod tests {
                 "{name}"
             );
         }
+        // Saved on main 7c5548b22 before VWMA's offset range narrowed. Its saved value,
+        // styles and input ids survive restoration unchanged.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"VWMA","inputs":[["period",{"Length":20}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":-600}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VWMA.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(
+            StudyTemplate::from_study(restored.as_ref()).inputs,
+            saved.inputs
+        );
+        assert_eq!(restored.settings(), saved.settings);
+
         // Literal study saved on main before Hours existed: all saved inputs and styles stay,
         // and the trading day remains selected with its extended hours split.
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":true}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
@@ -2998,6 +3109,15 @@ mod tests {
         ] {
             let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
             let restored = saved.create().unwrap();
+            if saved.name == "Volatility Stop" {
+                assert_eq!(
+                    restored.source(),
+                    Some(crate::studies::StudySource::Price(
+                        crate::model::PriceSource::Close
+                    )),
+                    "a save without Source keeps Close"
+                );
+            }
             let mut plots = saved.settings.plots.clone();
             plots[0].color = plot;
             assert_eq!(restored.settings().plots, plots, "{}", saved.name);

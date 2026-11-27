@@ -552,11 +552,21 @@ bar skipped because conditions are disabled or its retained footprint is incompl
 ends all active detector zones. Disabling and enabling inside a bar keeps them if its close is
 read. A buy volume, sell volume or delta level fires on the execution that takes the
 forming bar's value past it, from zero at the bar's open: a sell volume level of 100 fires on the
-101st unit sold. Each condition alerts at most once per bar and rebuilds with the stop sweeps on
-interval changes. Bars that opened before the bar of the first live event since tracking, such
-as loaded history, are marked without an alert. For other conditions and frequencies, such as
-sell volume below a level at bar close or delta leaving a range, add the Buy and Sell Volume
-study and alert on its outputs.
+101st unit sold. Panel conditions alert at most once per bar: imbalances and zone rejections
+fire at close. They rebuild with the stop sweeps on interval changes. Bars opened before the
+first live event's bar, including loaded history, are marked without an alert.
+
+[`AlertCondition::Footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.AlertCondition.html#variant.Footprint) watches buy, sell, stacked buy or stacked sell imbalance through the
+alert engine, independently of the panel switches. The host drains live conditions with
+[`OrderFlowDetectors::take_footprint_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.OrderFlowDetectors.html#method.take_footprint_events) and passes them to [`AlertEngine::footprint_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.AlertEngine.html#method.footprint_events).
+Only once fires at the execution that first meets the condition and ends the alert; Once per
+bar does so on each forming bar; Once per bar close fires on each closed bar that meets it.
+The demo's alert dialog offers these conditions and frequencies. They use the same rule's
+ratio, comparison, minimum volume, stack and rows as the panel, and repeated delivery from
+another chart fires nothing more. History and interval rebuilds report no events.
+
+For other conditions and frequencies, such as sell volume below a level at bar close or delta
+leaving a range, add the Buy and Sell Volume study and alert on its outputs.
 
 Icebergs count exact order refills at the same price and side within 100 ms of depletion, or
 an increase within 100 ms of execution without keeping priority. Unrelated adds and cancels
