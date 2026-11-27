@@ -53,7 +53,7 @@ pub(crate) fn picker_glyphs() -> impl Iterator<Item = &'static Glyph> + Clone {
 /// Whether `text` is one emoji of the colour set. Variation selectors are ignored, so the ids saved before the full
 /// set (`"✈"`, `"⚠"`, `"❤"` without U+FE0F) and minimally-qualified or unqualified forms find their emoji.
 #[cfg(feature = "color-emoji")]
-fn is_color_emoji(text: &str) -> bool {
+pub(crate) fn is_color_emoji(text: &str) -> bool {
     use std::collections::HashSet;
     use std::sync::OnceLock;
     static KEYS: OnceLock<HashSet<String>> = OnceLock::new();
