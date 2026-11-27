@@ -475,6 +475,7 @@ mod tests {
     use super::*;
     use chrono::Timelike;
     use egui::{Event, FullOutput, PointerButton, Pos2, RawInput, Rect, Shape};
+    use egui_charts::strategies::OrderSize;
 
     fn source(slope: f64, count: usize) -> Vec<Bar> {
         (0..count)
@@ -825,6 +826,7 @@ mod tests {
     #[test]
     fn equity_sized_strategies_trade_whole_quantity_steps_of_each_symbol() {
         let ctx = egui::Context::default();
+        ctx.enable_accesskit();
         let now = "2026-11-03T15:00:00Z".parse().unwrap();
         let mut app = DemoApp::new_at(
             &eframe::CreationContext::_new_kittest(ctx.clone()),
@@ -843,13 +845,77 @@ mod tests {
                 |ui| app.show_strategy_report(ui, app.theme.ui.panel_bg),
             )
         };
-        // Bar Up/Down buys 10% of equity: a few whole shares of STOCKA, and a fraction of one
-        // TOKENA, which trades in ten-thousandths of a token.
+        // Bar Up/Down declares 10% of equity; the field takes 20.
         for (symbol, step) in [("STOCKA", 1.0), ("TOKENA", 0.0001)] {
             app.switch_symbol(symbol);
             super::super::tests::settle(&mut app, &ctx);
             app.strategy_report.select_strategy("Bar Up/Down").unwrap();
             let output = frame(&mut app, vec![]);
+            let target_node = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|(_, node)| {
+                    node.role() == egui::accesskit::Role::Tab
+                        && node.label() == Some("Backtest settings")
+                })
+                .unwrap()
+                .0;
+            output.drop_without_applying_deltas();
+            frame(
+                &mut app,
+                vec![Event::AccessKitActionRequest(
+                    egui::accesskit::ActionRequest {
+                        action: egui::accesskit::Action::Click,
+                        target_tree: egui::accesskit::TreeId::ROOT,
+                        target_node,
+                        data: None,
+                    },
+                )],
+            )
+            .drop_without_applying_deltas();
+            let output = frame(&mut app, vec![]);
+            let nodes = &output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes;
+            let (target_node, node) = nodes
+                .iter()
+                .find(|(_, node)| {
+                    node.role() == egui::accesskit::Role::SpinButton
+                        && node.labelled_by().iter().any(|label| {
+                            nodes.iter().any(|(id, node)| {
+                                id == label && node.label().or(node.value()) == Some("Order size")
+                            })
+                        })
+                })
+                .unwrap();
+            assert_eq!(node.value(), Some("10.00"), "{symbol}");
+            let target_node = *target_node;
+            output.drop_without_applying_deltas();
+            frame(
+                &mut app,
+                vec![Event::AccessKitActionRequest(
+                    egui::accesskit::ActionRequest {
+                        action: egui::accesskit::Action::SetValue,
+                        target_tree: egui::accesskit::TreeId::ROOT,
+                        target_node,
+                        data: Some(egui::accesskit::ActionData::NumericValue(20.0)),
+                    },
+                )],
+            )
+            .drop_without_applying_deltas();
+            let output = frame(&mut app, vec![]);
+            assert_eq!(
+                app.strategy_report.settings().order_size,
+                OrderSize::EquityFraction(0.2),
+                "{symbol}"
+            );
             let pos = text_at(&output, "Run");
             output.drop_without_applying_deltas();
             for pressed in [true, false] {
