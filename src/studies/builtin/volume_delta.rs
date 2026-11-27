@@ -45,8 +45,8 @@ const ANCHORS: [Reset; 8] = [
 #[derive(Clone, Debug)]
 struct DeltaCandles {
     clock: BarClock,
-    /// The interval chosen in the Lower interval input; `None` picks one from the chart interval.
-    lower_interval: Option<Timeframe>,
+    /// The chosen lower interval and whether it is in use.
+    lower: lower_interval::Choice,
     /// The period from whose first bar the deltas add up; `None` starts every bar at zero.
     anchor: Option<Reset>,
     /// Length of the Interval anchor in minutes, 1 to 1440.
@@ -63,7 +63,7 @@ impl DeltaCandles {
     fn new(anchor: Option<Reset>) -> Self {
         Self {
             clock: BarClock::new(Timeframe::Min1),
-            lower_interval: None,
+            lower: lower_interval::Choice::default(),
             anchor,
             anchor_minutes: 60,
             candles: Vec::new(),
@@ -75,11 +75,11 @@ impl DeltaCandles {
     }
 
     fn lower(&self) -> Option<Timeframe> {
-        lower_interval::lower_timeframe(&self.clock, self.lower_interval)
+        lower_interval::lower_timeframe(&self.clock, self.lower.in_use())
     }
 
     fn inputs(&self) -> Vec<StudyInput> {
-        let mut inputs = vec![lower_interval::input(&self.clock, self.lower_interval)];
+        let mut inputs = self.lower.inputs(&self.clock).to_vec();
         if let Some(anchor) = self.anchor {
             inputs.push(
                 StudyInput::new(
@@ -110,7 +110,7 @@ impl DeltaCandles {
 
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         match (id, value) {
-            ("lower_interval", InputValue::Timeframe(chosen)) => self.lower_interval = chosen,
+            (_, ref value) if self.lower.set(id, value) => {}
             ("anchor", InputValue::Choice(at)) if self.anchor.is_some() && at < ANCHORS.len() => {
                 self.anchor = Some(ANCHORS[at]);
             }
@@ -241,7 +241,7 @@ macro_rules! delta_study {
             fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
                 self.core.set_input(id, value)?;
                 self.core.notice =
-                    lower_interval::notice($name, &self.core.clock, self.core.lower_interval);
+                    lower_interval::notice($name, &self.core.clock, self.core.lower.in_use());
                 Ok(())
             }
             fn data_requests(&self) -> Vec<StudyDataRequest> {
@@ -261,7 +261,7 @@ macro_rules! delta_study {
                 let changed = self.core.clock != *clock;
                 self.core.clock = clock.clone();
                 self.core.notice =
-                    lower_interval::notice($name, &self.core.clock, self.core.lower_interval);
+                    lower_interval::notice($name, &self.core.clock, self.core.lower.in_use());
                 changed
             }
             fn calculate(&mut self, data: &[Bar]) {

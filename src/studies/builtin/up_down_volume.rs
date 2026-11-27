@@ -23,8 +23,8 @@ use egui::Color32;
 #[derive(Clone, Debug)]
 pub struct UpDownVolume {
     clock: BarClock,
-    /// The interval chosen in the Lower interval input; `None` picks one from the chart interval.
-    lower_interval: Option<Timeframe>,
+    /// The chosen lower interval and whether it is in use.
+    lower: lower_interval::Choice,
     values: IndicatorValues,
     colors: [Color32; 3],
     visible: bool,
@@ -38,7 +38,7 @@ impl UpDownVolume {
     pub fn new() -> Self {
         Self {
             clock: BarClock::new(Timeframe::Min1),
-            lower_interval: None,
+            lower: lower_interval::Choice::default(),
             values: IndicatorValues::new(),
             colors: [
                 palette::GREEN.gamma_multiply_u8(102),
@@ -51,7 +51,7 @@ impl UpDownVolume {
     }
 
     fn lower_timeframe(&self) -> Option<Timeframe> {
-        lower_interval::lower_timeframe(&self.clock, self.lower_interval)
+        lower_interval::lower_timeframe(&self.clock, self.lower.in_use())
     }
     fn calculate_intrabars(&mut self, data: &[Bar], intrabars: &[Bar], from: usize) {
         let from = from.min(self.values.len()).min(data.len());
@@ -98,14 +98,13 @@ impl Indicator for UpDownVolume {
         "Up and down volume from lower-timeframe candles supplied by the host"
     }
     fn inputs(&self) -> Vec<StudyInput> {
-        vec![lower_interval::input(&self.clock, self.lower_interval)]
+        self.lower.inputs(&self.clock).to_vec()
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
-        let ("lower_interval", InputValue::Timeframe(chosen)) = (id, value) else {
+        if !self.lower.set(id, &value) {
             return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
-        };
-        self.lower_interval = chosen;
-        self.notice = lower_interval::notice(self.name(), &self.clock, chosen);
+        }
+        self.notice = lower_interval::notice(self.name(), &self.clock, self.lower.in_use());
         self.calculate(&[]);
         Ok(())
     }
@@ -134,7 +133,7 @@ impl Indicator for UpDownVolume {
     fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
         let changed = self.clock != *clock;
         self.clock = clock.clone();
-        self.notice = lower_interval::notice(self.name(), &self.clock, self.lower_interval);
+        self.notice = lower_interval::notice(self.name(), &self.clock, self.lower.in_use());
         changed
     }
     fn calculate(&mut self, data: &[Bar]) {
