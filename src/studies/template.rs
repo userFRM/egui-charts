@@ -3002,6 +3002,15 @@ mod tests {
         ] {
             let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
             let restored = saved.create().unwrap();
+            if saved.name == "Volatility Stop" {
+                assert_eq!(
+                    restored.source(),
+                    Some(crate::studies::StudySource::Price(
+                        crate::model::PriceSource::Close
+                    )),
+                    "a save without Source keeps Close"
+                );
+            }
             let mut plots = saved.settings.plots.clone();
             plots[0].color = plot;
             assert_eq!(restored.settings().plots, plots, "{}", saved.name);

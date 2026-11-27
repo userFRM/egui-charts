@@ -382,6 +382,7 @@ fn catalogue_studies_open_with_their_usual_lengths() {
         ("GK Vol", "period", Length(10)),
         ("Zero-Trend Vol", "period", Length(10)),
         ("ASI", "limit_move", Number(10.0)),
+        ("Volatility Stop", "source", Choice(3)),
         ("TSI", "signal_period", Length(13)),
         ("Correlation Coefficient", "length", Length(20)),
         ("Correlation - Log", "length", Length(25)),
@@ -567,6 +568,7 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
                 (Number(1000.0), true),
             ],
         ),
+        ("Volatility Stop", "source", "Source", vec![]),
         (
             "ASI",
             "limit_move",
