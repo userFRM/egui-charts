@@ -1239,6 +1239,24 @@ impl StudyTemplate {
                 .retain(|(id, _)| id != "call_wall" && id != "put_wall");
             changed |= template.inputs.len() != listed;
         }
+        // Chart patterns saved before targets and price lines were drawn keep both off.
+        if crate::studies::ChartPatterns::is_study(study, own) && !has("price_targets") {
+            template
+                .inputs
+                .push(("price_targets".to_owned(), InputValue::Choice(3)));
+            if template.settings.plots.len() == 3 {
+                template.settings.plots.push(
+                    crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                        .plot_style(3),
+                );
+                template.settings.plots.push(crate::studies::PlotStyle {
+                    visible: false,
+                    ..crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                        .plot_style(4)
+                });
+            }
+            changed = true;
+        }
         // A single candlestick pattern study saved while it drew the bullish, bearish and
         // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
         // reads, keeps the style of its side's line and drops a rule it now ignores.
@@ -1828,9 +1846,28 @@ mod tests {
                 plot_type: crate::studies::PlotType::Line,
                 visible: true,
             });
-            expected.plot_variants.push(Vec::new());
+            expected.plots.push(
+                crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                    .plot_style(3),
+            );
+            expected.plots.push(crate::studies::PlotStyle {
+                visible: false,
+                ..crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                    .plot_style(4)
+            });
+            expected
+                .plot_variants
+                .extend([Vec::new(), Vec::new(), Vec::new()]);
             assert_eq!(restored.settings(), expected, "{}", saved.name);
             let inputs = restored.inputs();
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == "price_targets")
+                    .unwrap()
+                    .value,
+                InputValue::Choice(3)
+            );
             if saved.name == "Missed Pivot Levels" {
                 assert_eq!(
                     inputs
@@ -1866,6 +1903,23 @@ mod tests {
                 );
             }
         }
+        let mut old = StudyTemplate::from_study(&crate::studies::ChartPatterns::only(
+            crate::studies::FormationKind::BullFlag,
+        ));
+        old.inputs
+            .retain(|(id, _)| !matches!(id.as_str(), "price_targets" | "pattern_filter"));
+        old.settings.plots.truncate(3);
+        old.settings.plot_variants.truncate(3);
+        let restored = old.create().unwrap();
+        for (id, expected) in [("price_targets", 3), ("pattern_filter", 0)] {
+            assert_eq!(
+                restored.inputs().iter().find(|i| i.id == id).unwrap().value,
+                InputValue::Choice(expected)
+            );
+        }
+        assert_eq!(&restored.settings().plots[..3], &old.settings.plots);
+        assert!(restored.settings().plots[3].visible);
+        assert!(!restored.settings().plots[4].visible);
     }
 
     /// Main templates without Symbol or Offset keep every saved input, style and value.
@@ -3644,6 +3698,9 @@ mod tests {
         let millis = || InputKind::Number(0.0, 1e13);
         let rows = [
             ("RSI", vec![], 1),
+            ("Bull Flag", vec![], 3),
+            ("Bear Flag", vec![], 3),
+            ("Host projections", vec![], 3),
             (
                 "Echo",
                 vec![
@@ -3706,10 +3763,28 @@ mod tests {
         ];
         let mut factory = IndicatorFactory::new();
         for (name, inputs, lines) in rows.clone() {
-            let schema: Vec<_> = inputs
+            let mut schema: Vec<_> = inputs
                 .into_iter()
                 .map(|(id, value, kind)| StudyInput::new(id, id, value, kind))
                 .collect();
+            if matches!(name, "Bull Flag" | "Bear Flag" | "Host projections") {
+                let choices = if name == "Bear Flag" {
+                    vec![
+                        "First".into(),
+                        "Second".into(),
+                        "Third".into(),
+                        "Fourth".into(),
+                    ]
+                } else {
+                    vec!["All".into(), "None".into()]
+                };
+                schema.push(StudyInput::new(
+                    "price_targets",
+                    "Projected levels",
+                    InputValue::Choice(0),
+                    InputKind::Choice(choices),
+                ));
+            }
             factory.register(name, move || {
                 Box::new(
                     CustomIndicator::new(name, |_| Vec::new())
@@ -3737,6 +3812,15 @@ mod tests {
             // Echo is a literal chart study saved on origin/main before source routing changed.
             let saved = if name == "Echo" {
                 serde_json::from_str(r#"{"name":"Echo","inputs":[["source",{"Source":{"Price":"HL2"}}],["basis",{"Source":{"Price":"OHLC4"}}],["symbol",{"Symbol":"OTHER"}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[240,145,40,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,9,3,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap()
+            } else if matches!(name, "Bull Flag" | "Bear Flag" | "Host projections") {
+                let old = CustomIndicator::new(name, |_| Vec::new()).with_line_count(lines);
+                let mut saved = StudyTemplate::from_study(&old);
+                saved.settings.plots[0].visible = false;
+                saved.settings.plots[1].width = 3.0;
+                saved.settings.precision = Some(4);
+                saved.visible = false;
+                saved.scale = Some(StudyScale::Independent);
+                saved
             } else {
                 StudyTemplate::from_study(original.as_ref())
             };
@@ -3744,6 +3828,20 @@ mod tests {
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!((restored.name(), restored.line_count()), (name, lines));
+            if matches!(name, "Bull Flag" | "Bear Flag" | "Host projections") {
+                assert_eq!(restored.settings(), saved.settings);
+                assert_eq!(restored.is_visible(), saved.visible);
+                assert_eq!(Some(restored.scale()), saved.scale);
+                assert_eq!(
+                    restored
+                        .inputs()
+                        .iter()
+                        .find(|input| input.id == "price_targets")
+                        .unwrap()
+                        .value,
+                    InputValue::Choice(0)
+                );
+            }
             if name == "Echo" {
                 assert_eq!(restored.settings(), saved.settings);
                 assert_eq!(

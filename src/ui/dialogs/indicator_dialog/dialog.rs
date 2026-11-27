@@ -2215,6 +2215,47 @@ mod tests {
             ("Moving Average Convergence Divergence", &["MACD"], &[]),
             ("Triple EMA", &["TEMA"], &["Triple MA"]),
             ("Double EMA", &["DEMA"], &["TEMA"]),
+            (
+                "Bullish Flag",
+                &["Bull Flag"],
+                &["Bear Flag", "Bull Pennant"],
+            ),
+            ("Bearish Flag", &["Bear Flag"], &["Bull Flag"]),
+            (
+                "Bullish Pennant",
+                &["Bull Pennant"],
+                &["Bear Pennant", "Bull Flag"],
+            ),
+            (
+                "Bearish Pennant",
+                &["Bear Pennant"],
+                &["Bull Pennant", "Bear Flag"],
+            ),
+            ("Chart Pattern Bullish Flag", &["Bull Flag"], &["Bear Flag"]),
+            (
+                "Chart Pattern Bearish Pennant",
+                &["Bear Pennant"],
+                &["Bull Pennant"],
+            ),
+            (
+                "Chart Pattern Triangle",
+                &[
+                    "Ascending Triangle",
+                    "Descending Triangle",
+                    "Symmetrical Triangle",
+                ],
+                &["Rectangle"],
+            ),
+            (
+                "Chart Pattern Cup and Handle",
+                &["Cup and Handle"],
+                &["Inverted Cup and Handle"],
+            ),
+            (
+                "Chart Pattern Head And Shoulders",
+                &["Head and Shoulders"],
+                &["Inverse Head and Shoulders"],
+            ),
             ("Volume-Weighted Moving Average", &["VWMA"], &[]),
             ("Bollinger BandWidth", &["BBW"], &["BB"]),
             ("Bollinger Bands %b", &["%B"], &["BB", "BBW"]),

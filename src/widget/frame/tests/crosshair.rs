@@ -2943,7 +2943,8 @@ fn scale_font_reaches_the_crosshair_time_label_and_nothing_else() {
 }
 
 /// Hovering a study's mark or boundary shows the full name of every pattern it labels, and
-/// hovering where none is shows no name. Names of studies marking the same spot stack.
+/// hovering where none is shows no name. Target labels show their price and status on the text
+/// as well as the line. Names of studies marking the same spot stack.
 #[cfg(all(feature = "studies", feature = "drawings"))]
 #[test]
 fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
@@ -2953,13 +2954,12 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
     };
     use chrono::{TimeZone, Utc};
 
-    /// The texts painted on the third frame with the pointer over `price` at `bar`, with their
-    /// screen bounds.
+    /// Texts and their screen bounds after the pointer from `at` has settled. `at` sees the
+    /// chart and its first painted frame.
     fn hovered(
         ohlc: &[(f64, f64, f64, f64)],
         studies: Vec<Box<dyn Indicator>>,
-        bar: usize,
-        price: f64,
+        at: impl FnOnce(&crate::widget::Chart, &[Shape]) -> Pos2,
     ) -> Vec<(String, egui::Rect)> {
         let bars = ohlc
             .iter()
@@ -2978,14 +2978,10 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
         for study in studies {
             chart.add_indicator(study);
         }
-        frame(&ctx, &mut chart, 0.0, vec![Event::PointerGone]);
-        let map = chart.get_chart_mapping();
-        let pos = Pos2::new(map.idx_to_x(bar), map.price_to_y(price));
-        assert!(
-            map.rect.contains(pos),
-            "{bar} {price}: {pos:?} outside {:?}",
-            map.rect
-        );
+        let initial = shapes(&ctx, &mut chart, 0.0, vec![Event::PointerGone]);
+        let pos = at(&chart, &initial);
+        let rect = chart.get_chart_mapping().rect;
+        assert!(rect.contains(pos), "{pos:?} outside {rect:?}");
         // A tooltip is sized unseen on its first frame.
         let mut painted = Vec::new();
         for time in [0.1, 0.2, 0.3] {
@@ -3029,10 +3025,13 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
     ];
     for (bar, price, names) in rows {
         let study = CandlestickPatterns::new(PatternTrend::NoDetection);
-        let texts: Vec<String> = hovered(&candles, vec![Box::new(study)], bar, price)
-            .into_iter()
-            .map(|(text, _)| text)
-            .collect();
+        let texts: Vec<String> = hovered(&candles, vec![Box::new(study)], |chart, _| {
+            let map = chart.get_chart_mapping();
+            Pos2::new(map.idx_to_x(bar), map.price_to_y(price))
+        })
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
         // Each pattern is its name over a line with its rule, a blank line apart.
         let named = |t: &String| {
             let entries: Vec<Vec<&str>> = t.split("\n\n").map(|e| e.lines().collect()).collect();
@@ -3071,7 +3070,10 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
             Box::new(ChartPatterns::new(PatternFamily::Reversal)),
             Box::new(CandlestickPatterns::new(PatternTrend::NoDetection)),
         ];
-        let texts = hovered(&flat, studies, bar, price);
+        let texts = hovered(&flat, studies, |chart, _| {
+            let map = chart.get_chart_mapping();
+            Pos2::new(map.idx_to_x(bar), map.price_to_y(price))
+        });
         let formation = texts.iter().find(|(t, _)| t == "Double Top");
         assert!(formation.is_some(), "{bar} {price}: {texts:?}");
         if bar == 18 {
@@ -3084,4 +3086,28 @@ fn pattern_marks_and_boundaries_name_their_patterns_on_hover() {
             );
         }
     }
+
+    // The target is 105 - (120 - 105) = 90, reached on its breakout bar. Its label is above
+    // the zero-length target line: hovering the text itself must show its price and status.
+    let texts = hovered(
+        &flat,
+        vec![Box::new(ChartPatterns::new(PatternFamily::Reversal))],
+        |_, painted| {
+            painted
+                .iter()
+                .find_map(|shape| match shape {
+                    Shape::Text(text) if text.galley.text() == "Target" => {
+                        Some(text.galley.rect.translate(text.pos.to_vec2()).center())
+                    }
+                    _ => None,
+                })
+                .expect("target label")
+        },
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|(text, _)| text == "Double Top\nTarget 90.00\nReached"),
+        "{texts:?}"
+    );
 }

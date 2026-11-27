@@ -2464,6 +2464,10 @@ mod tests {
                 plot.color = color;
             }
             settings.plots[2].width = 2.0;
+            // Exercise the boundary independently of its target and price line.
+            for style in &mut settings.plots[3..] {
+                style.visible = false;
+            }
             study.apply_settings(&[], settings.clone()).unwrap();
             study.calculate(&bars);
             let paint = |study: &dyn Indicator| {

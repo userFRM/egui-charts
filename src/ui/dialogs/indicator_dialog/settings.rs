@@ -3224,14 +3224,14 @@ mod tests {
                 15,
                 &["Call wall", "Put wall"],
             ),
-            // Developing only styles the boundaries of formations not yet confirmed.
+            // Developing, Target and Price line only style drawings.
             (
                 Box::new(ChartPatterns::all()),
                 None,
-                &["Bullish", "Bearish", "Developing"],
-                3,
+                &["Bullish", "Bearish", "Developing", "Target", "Price line"],
+                5,
                 2,
-                3,
+                5,
                 &[],
             ),
             // The chart draws the targets dotted at a fixed width.
