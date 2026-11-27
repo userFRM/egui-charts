@@ -10805,6 +10805,17 @@ mod tests {
             app.ui(ui, &mut eframe::Frame::_new_kittest())
         });
         app.indicator_dialog.close();
+        let id = app
+            .chart
+            .indicators()
+            .find(|(_, study)| study.name() == "Doji")
+            .unwrap()
+            .0;
+        // Choose the study's visual order before checking that its tint is behind price.
+        assert!(
+            app.chart
+                .reorder_indicator(id, egui_charts::widget::VisualOrder::SendToBack)
+        );
         for _ in 0..18 {
             ui_frame(&ctx, size, vec![], |ui| {
                 app.ui(ui, &mut eframe::Frame::_new_kittest())
