@@ -1162,6 +1162,19 @@ impl StudyTemplate {
                 changed = true;
             }
         }
+        // Profiles saved before the layout and figure switches drew the nearest expiry at
+        // the plot's edge without figures.
+        if study == "Options Volume Profile" && declares("layout") {
+            for (id, value) in [
+                ("layout", InputValue::Choice(0)),
+                ("show_values", InputValue::Toggle(false)),
+            ] {
+                if !has(id) {
+                    template.inputs.push((id.to_owned(), value));
+                    changed = true;
+                }
+            }
+        }
         // An options profile drew puts divided by calls in its puts colour before they had one
         // of their own.
         if study == "Options Volume Profile" && declares("ratio_color") && !has("ratio_color") {

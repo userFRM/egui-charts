@@ -298,14 +298,15 @@ impl OptionsVolumeProfile {
     /// its data has none. Split, net, calls plus puts and
     /// puts divided by calls bars take their own colour inputs in the Style tab, calls blue, puts
     /// red and puts divided by calls orange by default. Every row takes its display's colours at
-    /// one opacity; the profile marks no point of control or value area. Values, off by default,
+    /// one opacity; the profile marks no point of control or value area. Values, on by default,
     /// writes the calls × puts figures of each volume or open interest row beside it, or over the
     /// end of its bar where the profile has no room past it, with at most two decimals and no
     /// trailing zeros, abbreviated with K, M or B from a thousand, or the row's ratio of puts to
-    /// calls. The profile takes the right or the left 30% of the plot, its widest row from 1% to
-    /// 30% of the plot's width, 27% by default. Layout can instead place each upcoming expiration
-    /// beside its date on the time scale, on the chosen side, separately or grouped by week or
-    /// month. Maximum expirations counts from the nearest, 10 by default. Each group shares the
+    /// calls. Layout defaults to placing upcoming expirations beside their dates on the time
+    /// scale, on the chosen side, separately or grouped by week or month. Edge of plot draws
+    /// the Expiry choice in the right or left 30% of the plot instead, with the widest row
+    /// taking 1% to 30% of the plot's width, 27% by default. Maximum expirations counts from the
+    /// nearest, 10 by default. Each group shares the
     /// strike window and row height and marks its own walls with half pennants in their colours
     /// that point along their strikes' lines at their rows, the call wall's above the line and
     /// the put wall's below it: from before the rows' base and from past the row's bars, figures
@@ -372,7 +373,7 @@ impl OptionsVolumeProfile {
             expiries: Expiries::Nearest,
             max_expiries: 0,
             strikes_around: 10,
-            at_expiration: false,
+            at_expiration: true,
             expirations: 10,
             grouping: 0,
             expiry_labels: true,
@@ -382,7 +383,7 @@ impl OptionsVolumeProfile {
             gamma: Cell::new(false),
             sides: SIDES.map(|(.., default)| default),
             put_call: true,
-            show_values: false,
+            show_values: true,
             current_price: true,
             bar_colors: BAR_COLORS.map(|(.., color)| color),
             left: false,
@@ -1536,7 +1537,7 @@ impl Indicator for OptionsVolumeProfile {
                 InputValue::Choice(usize::from(self.at_expiration)),
                 InputKind::Choice(vec!["Edge of plot".into(), "At expiration".into()]),
             )
-            .with_default(InputValue::Choice(0)),
+            .with_default(InputValue::Choice(1)),
             StudyInput::new(
                 "expirations",
                 "Maximum expirations",
@@ -1675,7 +1676,7 @@ impl Indicator for OptionsVolumeProfile {
                 InputValue::Toggle(self.show_values),
                 InputKind::Toggle,
             )
-            .with_default(InputValue::Toggle(false)),
+            .with_default(InputValue::Toggle(true)),
             StudyInput::new(
                 "current_price",
                 "Current price line",
@@ -2036,8 +2037,7 @@ mod tests {
         }
         quotes.extend(later);
         sink.push(quotes).unwrap();
-        let mut study =
-            OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry, next]).unwrap();
+        let mut study = edge_profile(chain, "SAMPLE", vec![expiry, next]).unwrap();
         let bars = vec![Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0); 2];
         study.calculate(&bars);
         assert_eq!(study.plot_value(6, 0), None);
@@ -2156,8 +2156,7 @@ mod tests {
                 .unwrap()
                 .push(rows(expiry, as_of))
                 .unwrap();
-            let mut study =
-                OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+            let mut study = edge_profile(chain, "SAMPLE", vec![expiry]).unwrap();
             study.calculate(&bars);
             study.set_input("expiry", InputValue::Choice(1)).unwrap();
             study
@@ -2176,7 +2175,7 @@ mod tests {
         )
         .unwrap();
         let sink = feed.0.lock().unwrap().clone().unwrap();
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        let mut study = edge_profile(chain, "SAMPLE", vec![expiry]).unwrap();
         study.calculate(&bars);
         study
             .set_input("expected_move", InputValue::Toggle(true))
@@ -2283,8 +2282,7 @@ mod tests {
             })
             .collect();
             sink.push(rows.clone()).unwrap();
-            let mut study =
-                OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry, next]).unwrap();
+            let mut study = edge_profile(chain, "SAMPLE", vec![expiry, next]).unwrap();
             if supplied {
                 let handle = OptionExposureHandle::new(
                     &feed,
@@ -2568,7 +2566,7 @@ mod tests {
         .unwrap();
         let sink = feed.0.lock().unwrap().clone().unwrap();
         let bars = [Bar::new(time, 105.0, 112.0, 98.0, 105.0, 1.0)];
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        let mut study = edge_profile(chain, "SAMPLE", vec![expiry]).unwrap();
         study.calculate(&bars);
         for (calls, puts, walls) in [
             ([0.0, 0.0], [0.0, 0.0], [None, None]),
@@ -2926,6 +2924,21 @@ mod tests {
         factory
     }
 
+    /// A chain profile at the plot's edge without figures, the layout these rows were worked
+    /// out for.
+    fn edge_profile(
+        chain: OptionChain,
+        symbol: &str,
+        dates: Vec<NaiveDate>,
+    ) -> Option<OptionsVolumeProfile> {
+        let mut profile = OptionsVolumeProfile::from_chain(chain, symbol, dates)?;
+        profile.set_input("layout", InputValue::Choice(0)).unwrap();
+        profile
+            .set_input("show_values", InputValue::Toggle(false))
+            .unwrap();
+        Some(profile)
+    }
+
     /// A band hidden in a saved template stays hidden when the study is rebuilt before it knows
     /// its band, and when its settings are applied again. Quotes without an underlying price
     /// wait for the last close.
@@ -3094,10 +3107,7 @@ mod tests {
             feed.0.lock().unwrap().as_ref().unwrap().push(rows).unwrap();
             let mut factory = crate::studies::IndicatorFactory::new();
             factory.register("Options Volume Profile", move || {
-                Box::new(
-                    OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.clone())
-                        .unwrap(),
-                )
+                Box::new(edge_profile(chain.clone(), "SAMPLE", dates.clone()).unwrap())
             });
             factory
         };
@@ -3192,7 +3202,7 @@ mod tests {
             })
             .collect();
         sink.push(rows.clone()).unwrap();
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        let mut study = edge_profile(chain, "SAMPLE", vec![expiry]).unwrap();
         study.set_input("measure", InputValue::Choice(1)).unwrap();
         study
             .set_input("max_pain", InputValue::Toggle(true))
@@ -3233,9 +3243,7 @@ mod tests {
                 });
                 let mut factory = crate::studies::IndicatorFactory::new();
                 factory.register("Options Volume Profile", move || {
-                    let mut profile =
-                        OptionsVolumeProfile::from_chain(later.clone(), "SAMPLE", vec![expiry])
-                            .unwrap();
+                    let mut profile = edge_profile(later.clone(), "SAMPLE", vec![expiry]).unwrap();
                     if let Some(exposure) = &exposure {
                         profile = profile.with_exposure(exposure.clone()).unwrap();
                     }
@@ -3329,9 +3337,7 @@ mod tests {
             });
             let mut factory = crate::studies::IndicatorFactory::new();
             factory.register("Options Volume Profile", move || {
-                let profile =
-                    OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", vec![expiry])
-                        .unwrap();
+                let profile = edge_profile(chain.clone(), "SAMPLE", vec![expiry]).unwrap();
                 Box::new(match &handle {
                     Some(handle) => profile.with_exposure(handle.clone()).unwrap(),
                     None => profile,
@@ -3403,8 +3409,7 @@ mod tests {
             let chain = OptionChain::new(&feed, query, || {}).unwrap();
             let sink = feed.0.lock().unwrap().clone().unwrap();
             sink.push(rows(put_volume, gamma).to_vec()).unwrap();
-            let mut study =
-                OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+            let mut study = edge_profile(chain, "SAMPLE", vec![expiry]).unwrap();
             study.set_input("measure", InputValue::Choice(2)).unwrap();
             let inputs = study.inputs();
             let input = inputs.iter().find(|input| input.id == "measure").unwrap();
@@ -3542,7 +3547,7 @@ mod tests {
             row.open_interest = Some(4.0);
         }
         sink.push(rows).unwrap();
-        let mut profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        let mut profile = edge_profile(chain, "SAMPLE", vec![expiry]).unwrap();
         profile.set_input("expiry", InputValue::Choice(1)).unwrap();
         profile.set_input("measure", InputValue::Choice(1)).unwrap();
         for (theme, width, reset) in [
@@ -3626,7 +3631,7 @@ mod tests {
         let (chain, dates) = chain_by_expiry();
         let factory = profile_factory(chain.clone(), dates.clone());
         let mut study: Box<dyn Indicator> = Box::new(crate::studies::ConfiguredStudy::new(
-            Box::new(OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates).unwrap()),
+            Box::new(edge_profile(chain, "SAMPLE", dates).unwrap()),
         ));
         let display = |study: &dyn Indicator| study.volume_profiles(0..1)[0].config.display;
         assert_eq!(display(&*study), UpDown);
@@ -3663,7 +3668,7 @@ mod tests {
         let (chain, dates) = chain_by_expiry();
         let factory = profile_factory(chain.clone(), dates.clone());
         let mut study: Box<dyn Indicator> = Box::new(crate::studies::ConfiguredStudy::new(
-            Box::new(OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates).unwrap()),
+            Box::new(edge_profile(chain, "SAMPLE", dates).unwrap()),
         ));
         study.calculate(&[Bar::new(Utc::now(), 100.0, 101.0, 99.0, 100.0, 1.0)]);
         let show_line = |study: &mut dyn Indicator, line: usize, shown: bool| {
@@ -3755,7 +3760,7 @@ mod tests {
             );
             // Saved before the strike limit, the current price line, the daily interval default
             // and the Puts / calls colour: every strike, no price line, every interval and the
-            // puts colour.
+            // puts colour, the edge layout and no figures.
             let input = |id: &str| {
                 let inputs = restored.inputs();
                 inputs
@@ -3766,6 +3771,7 @@ mod tests {
             assert_eq!(input("strikes_around_price"), Some(InputValue::Length(0)));
             assert_eq!(input("current_price"), Some(InputValue::Toggle(false)));
             assert_eq!(input("layout"), Some(InputValue::Choice(0)));
+            assert_eq!(input("show_values"), Some(InputValue::Toggle(false)));
             assert_eq!(
                 input("ratio_color"),
                 Some(InputValue::Color(template.settings.plots[1].color))
@@ -3839,7 +3845,7 @@ mod tests {
         use InputValue::{Choice, Color};
         use ProfileDisplay::{Delta, Total, UpDown};
         let (chain, dates) = chain_by_expiry();
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates).unwrap();
+        let mut study = edge_profile(chain, "SAMPLE", dates).unwrap();
         study.calculate(&[Bar::new(Utc::now(), 100.0, 101.0, 99.0, 100.0, 1.0)]);
         let sides = |study: &OptionsVolumeProfile| {
             let plot = study.volume_profiles(0..1).remove(0);
@@ -3954,7 +3960,7 @@ mod tests {
         // A strike without calls has no ratio, and the readout still divides every put by every
         // call: (5 + 7 + 8) / (10 + 0 + 4).
         let (chain, dates) = chain_with_a_strike_without_calls();
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates).unwrap();
+        let mut study = edge_profile(chain, "SAMPLE", dates).unwrap();
         study.calculate(&[Bar::new(Utc::now(), 100.0, 101.0, 99.0, 100.0, 1.0)]);
         study.set_input("volume_sides", Choice(4)).unwrap();
         let profile = study.volume_profiles(0..1).remove(0).profile;
@@ -3975,7 +3981,7 @@ mod tests {
         let chain = OptionChain::new(&feed, query, || {}).unwrap();
         let sink = feed.0.lock().unwrap().clone().unwrap();
         let mut study: Box<dyn Indicator> = Box::new(crate::studies::ConfiguredStudy::new(
-            Box::new(OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap()),
+            Box::new(edge_profile(chain, "SAMPLE", vec![expiry]).unwrap()),
         ));
         study.calculate(&[Bar::new(Utc::now(), 100.0, 101.0, 99.0, 100.0, 1.0)]);
         assert!(
@@ -4076,9 +4082,7 @@ mod tests {
             for left in [false, true] {
                 for strikes in [[Some(105.0), Some(110.0)], [Some(110.0); 2]] {
                     let case = format!("sides {sides}, left {left}, walls {strikes:?}");
-                    let mut study =
-                        OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.clone())
-                            .unwrap();
+                    let mut study = edge_profile(chain.clone(), "SAMPLE", dates.clone()).unwrap();
                     let [r, g, b, a] = puts;
                     for (id, value) in [
                         ("volume_sides", Choice(sides)),
@@ -4211,8 +4215,7 @@ mod tests {
             let case = format!(
                 "measure {measure}, sides {sides}, through {through}, left {left}, width {width}"
             );
-            let mut profile =
-                OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.clone()).unwrap();
+            let mut profile = edge_profile(chain.clone(), "SAMPLE", dates.clone()).unwrap();
             let sides_id = if measure == 2 {
                 "gamma_sides"
             } else {
@@ -4268,8 +4271,7 @@ mod tests {
         }
         // An options profile without an edge strip stands beside bars 2 to 4. At spacing
         // 30 its span is 90 wide.
-        let mut profile =
-            OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.clone()).unwrap();
+        let mut profile = edge_profile(chain.clone(), "SAMPLE", dates.clone()).unwrap();
         profile.set_input("volume_sides", Choice(2)).unwrap();
         let mut plot = profile.volume_profiles(0..1).remove(0);
         plot.bars = 2..5;
@@ -4315,7 +4317,7 @@ mod tests {
             ),
             (chain, dates, ("measure", Choice(2)), Vec::new()),
         ] {
-            let mut profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates).unwrap();
+            let mut profile = edge_profile(chain, "SAMPLE", dates).unwrap();
             for (id, value) in [edit.clone(), ("show_values", Toggle(true))] {
                 profile.set_input(id, value).unwrap();
             }
@@ -4382,8 +4384,7 @@ mod tests {
                 })
                 .collect();
             feed.0.lock().unwrap().as_ref().unwrap().push(rows).unwrap();
-            let mut study =
-                OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates.to_vec()).unwrap();
+            let mut study = edge_profile(chain, "SAMPLE", dates.to_vec()).unwrap();
             for (id, value) in [
                 ("expiry", InputValue::Choice(6)),
                 ("through_date", InputValue::Text(dates[through].to_string())),
@@ -4400,8 +4401,8 @@ mod tests {
         }
     }
 
-    /// Upcoming expirations stand at their dates in the time scale's whitespace, with shared
-    /// rows, independent walls and labels, and grouping by calendar period.
+    /// A new profile stands upcoming expirations at their dates in the time scale's whitespace,
+    /// with figures, shared rows, independent walls and labels, and grouping by calendar period.
     #[test]
     fn expirations_draw_beside_their_dates() {
         use crate::model::Timeframe;
@@ -4509,9 +4510,17 @@ mod tests {
         ] {
             let mut study =
                 OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", dates.to_vec()).unwrap();
+            for (id, expected) in [("layout", Choice(1)), ("show_values", Toggle(true))] {
+                let input = study
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == id)
+                    .unwrap();
+                assert_eq!(input.value, expected, "{id}");
+                assert_eq!(input.default, expected, "{id}: reset");
+            }
             study.set_timeframe(Timeframe::Day1);
             for (id, value) in [
-                ("layout", Choice(1)),
                 ("placement", Choice(usize::from(left))),
                 ("grouping", Choice(grouping)),
                 ("expirations", Length(maximum)),
@@ -4529,6 +4538,7 @@ mod tests {
             for (plot, (span, volume, position)) in plots.iter().zip(expected) {
                 assert_eq!(plot.bars, span);
                 assert_eq!(plot.right_aligned, left);
+                assert!(plot.config.show_values);
                 assert_eq!(plot.strip, None);
                 assert_eq!(plot.width, 0.9);
                 assert_eq!(plot.profile.up(), [volume]);
@@ -4682,7 +4692,7 @@ mod tests {
             let shifted = study.volume_profiles(0..60);
             assert_eq!(shifted[0].bars.start, plots[0].bars.start + 1);
         }
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", dates.to_vec()).unwrap();
+        let mut study = edge_profile(chain, "SAMPLE", dates.to_vec()).unwrap();
         study.calculate(&bars);
         let edge = study.volume_profiles(0..60).remove(0);
         assert_eq!(edge.bars, 0..60);
@@ -4987,7 +4997,7 @@ mod tests {
                 .collect()
         };
         sink.push(rows(None)).unwrap();
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        let mut study = edge_profile(chain, "SAMPLE", vec![expiry]).unwrap();
         let every = [9.0, 0.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         // Without a supplied underlying price, the last close stands in; a new close alone moves
         // the rows.
@@ -5081,7 +5091,7 @@ mod tests {
             .unwrap()
             .push(quotes)
             .unwrap();
-        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        let mut study = edge_profile(chain, "SAMPLE", vec![expiry]).unwrap();
         let profile = study.volume_profiles(0..1).remove(0).profile;
         assert_eq!([profile.low(), profile.high()], [4.5, 25.5]);
         study

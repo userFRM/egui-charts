@@ -2698,6 +2698,7 @@ mod options_profile_tests {
             .factory()
             .create("Options Volume Profile")
             .expect("declared option chains offer a profile");
+        study.set_input("layout", InputValue::Choice(0)).unwrap();
         let time = Utc::now();
         study.calculate(
             &(0..3)
