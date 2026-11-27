@@ -16,7 +16,7 @@ type Side = Vec<(u64, OrderBookLevel)>;
 /// A book built from a snapshot and the deltas that follow it. Without a snapshot, or after a
 /// gap, it is empty until the feed pushes a new snapshot, and holds the deltas pushed meanwhile
 /// for that snapshot to apply.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Book {
     /// The instrument's tick size, positive and finite: prices are keyed by the nearest integer
     /// tick, so prices a feed computed with rounding errors land on one level. `None` keys them
@@ -157,6 +157,19 @@ impl Book {
             bids: levels(&self.bids),
             asks: levels(&self.asks),
         })
+    }
+
+    /// Bytes a clone copies into its sides, scratch space and held deltas, without allocator
+    /// overhead.
+    pub(crate) fn clone_bytes(&self) -> usize {
+        let sides = [&self.bids, &self.asks, &self.merged[0], &self.merged[1]];
+        let held = self.held.iter().map(|(_, book)| {
+            size_of::<(u64, OrderBook)>()
+                + (book.bids.len() + book.asks.len()) * size_of::<OrderBookLevel>()
+        });
+        sides.iter().map(|side| side.len()).sum::<usize>() * size_of::<(u64, OrderBookLevel)>()
+            + self.changes.len() * size_of::<(u64, usize)>()
+            + held.sum::<usize>()
     }
 
     /// Synchronized levels, best first on each side, without copying the book.

@@ -820,17 +820,21 @@ mod tests {
         })
         .collect();
         let mut chart = Chart::new(BarData::from_bars(source));
-        chart.set_chart_type_params(ChartTypeParams {
+        let mut params = ChartTypeParams {
             range_size: 2.0,
             ..Default::default()
-        });
+        };
+        params.styles.range.thin_bars = false;
+        params.styles.range.blocks = true;
+        chart.set_chart_type_params(params);
         chart.set_chart_type(ChartType::Range);
         let ctx = egui::Context::default();
         frame(&ctx, &mut chart, 0.0, vec![]);
         frame(&ctx, &mut chart, 0.1, vec![]);
         let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
         let map = chart.get_chart_mapping();
-        let colors = [chart.config().bullish_color, chart.config().bearish_color];
+        let style = &chart.chart_type_params().styles.range;
+        let colors = [style.up_color, style.down_color];
         let first = painted
             .iter()
             .find_map(|shape| match shape {
@@ -860,7 +864,7 @@ mod tests {
     /// that trades from 100 to 103.5 completes them along its path, and none is a gap. With a
     /// range of 2, the closes 100 and 102 complete a bar from 100 to 102, and a close at 103 or
     /// 101 reaches neither 104 nor 100: the bar from 102 is in progress, rising or falling, and
-    /// takes the forming colour of its direction, filled or thin, while it is in view. Bricks of
+    /// takes the forming colour of its direction, bold or thin, while it is in view. Bricks of
     /// 1 from 100 to 102 take the border and wick colours set for rising bricks, a translucent
     /// border as set. Shown Line Break borders take the colour set for rising lines, or else the
     /// rising body colour at full opacity.
@@ -887,59 +891,82 @@ mod tests {
             (painted, chart)
         };
 
-        let mut params = ChartTypeParams {
-            range_size: 2.0,
-            ..Default::default()
-        };
-        params.styles.range.thin_bars = true;
-        let (painted, chart) = paint(
-            ChartType::Range,
-            params,
-            bars(0, &[100.0, 101.0, 99.0], None),
-        );
-        let map = chart.get_chart_mapping();
-        let (x, down) = (map.idx_to_x(0), chart.config().bearish_color);
-        // A slot holds what lies within half the spacing of its centre.
-        let half = (map.idx_to_x(1) - x) / 2.0;
-        let near = |px: f32| (px - x).abs() < half;
-        let wick = chart.config().wick_width;
-        let parts: Vec<_> = painted
-            .iter()
-            .filter_map(|shape| match shape {
-                Shape::LineSegment {
-                    points: [a, b],
-                    stroke,
-                } if stroke.color == down && near(a.x) && near(b.x) => {
-                    let part = if a.x == b.x {
-                        "stroke"
-                    } else if a.x < x && b.x == x {
-                        "open tick"
-                    } else if a.x == x && b.x > x {
-                        "close tick"
-                    } else {
-                        "other"
-                    };
-                    Some((part, a.y, b.y, stroke.width == wick))
-                }
-                _ => None,
-            })
-            .collect();
-        let y = |price| map.price_to_y(price);
-        assert_eq!(
-            parts,
-            [
-                ("stroke", y(101.0), y(99.0), true),
-                ("open tick", y(100.0), y(100.0), true),
-                ("close tick", y(99.0), y(99.0), true),
-            ],
-            "thin range bar"
-        );
-        assert!(
-            !painted
+        for thin_bars in [true, false] {
+            let mut params = ChartTypeParams {
+                range_size: 2.0,
+                ..Default::default()
+            };
+            // The thin row keeps the default, so new charts must start with Thin bars on.
+            params.styles.range.thin_bars &= thin_bars;
+            let (painted, chart) = paint(
+                ChartType::Range,
+                params,
+                bars(0, &[100.0, 101.0, 99.0], None),
+            );
+            let map = chart.get_chart_mapping();
+            let (x, down) = (
+                map.idx_to_x(0),
+                chart.chart_type_params().styles.range.down_color,
+            );
+            let half_slot = (map.idx_to_x(1) - x) / 2.0;
+            let near = |px: f32| (px - x).abs() < half_slot;
+            let wick = chart.config().wick_width;
+            let parts: Vec<_> = painted
                 .iter()
-                .any(|shape| matches!(shape, Shape::Rect(r) if r.fill == down)),
-            "a thin range bar has no block"
-        );
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment {
+                        points: [a, b],
+                        stroke,
+                    } if stroke.color == down && near(a.x) && near(b.x) => {
+                        let part = if a.x == b.x {
+                            "stroke"
+                        } else if a.x < x && b.x == x {
+                            "open tick"
+                        } else if a.x == x && b.x > x {
+                            "close tick"
+                        } else {
+                            "other"
+                        };
+                        Some((part, a.y, b.y, stroke.width))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let half = painted
+                .iter()
+                .find_map(|shape| match shape {
+                    Shape::LineSegment {
+                        points: [a, b],
+                        stroke,
+                    } if stroke.color == down && a.x == x && b.x > x => Some(b.x - a.x),
+                    _ => None,
+                })
+                .expect("the close tick");
+            let width = parts[0].3;
+            if thin_bars {
+                assert_eq!(width, wick);
+            } else {
+                // Tick endpoints round to screen coordinates; the stroke keeps its exact width.
+                assert!((width - half.max(1.5)).abs() < 0.001);
+                assert!(width > wick);
+            }
+            let y = |price| map.price_to_y(price);
+            assert_eq!(
+                parts,
+                [
+                    ("stroke", y(101.0), y(99.0), width),
+                    ("open tick", y(100.0), y(100.0), width),
+                    ("close tick", y(99.0), y(99.0), width),
+                ],
+                "thin bars {thin_bars}"
+            );
+            assert!(
+                !painted
+                    .iter()
+                    .any(|shape| matches!(shape, Shape::Rect(r) if r.fill == down)),
+                "an OHLC range bar has no block"
+            );
+        }
 
         // The same three bars, completed by one bar that trades from 100 up to 103.5.
         let mut traded = bars(0, &[100.0, 103.5], None);
@@ -951,9 +978,11 @@ mod tests {
         ] {
             let mut params = ChartTypeParams::default();
             params.styles.range.phantom_bars = phantom_bars;
+            params.styles.range.thin_bars = false;
+            params.styles.range.blocks = true;
             let (painted, chart) = paint(ChartType::Range, params, source);
             let map = chart.get_chart_mapping();
-            let up = chart.config().bullish_color;
+            let up = chart.chart_type_params().styles.range.up_color;
             let drawn: Vec<_> = (0..3)
                 .map(|i| {
                     let x = map.idx_to_x(i);
@@ -982,13 +1011,8 @@ mod tests {
         // The candle and forming colours painted in each of the first two slots, without repeats.
         let slots = |painted: &[Shape], chart: &Chart| {
             let map = chart.get_chart_mapping();
-            let config = chart.config();
-            let known = [
-                config.bullish_color,
-                config.bearish_color,
-                forming[0],
-                forming[1],
-            ];
+            let style = &chart.chart_type_params().styles.range;
+            let known = [style.up_color, style.down_color, forming[0], forming[1]];
             let half = (map.idx_to_x(1) - map.idx_to_x(0)) / 2.0;
             (0..2)
                 .map(|i| {
@@ -1026,7 +1050,7 @@ mod tests {
             style.thin_bars = thin_bars;
             [style.forming_up, style.forming_down] = forming;
             let (painted, mut chart) = paint(ChartType::Range, params, bars(0, &closes, None));
-            let up = chart.config().bullish_color;
+            let up = chart.chart_type_params().styles.range.up_color;
             assert_eq!(
                 slots(&painted, &chart),
                 [vec![up], vec![forming[side]]],

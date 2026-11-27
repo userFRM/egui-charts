@@ -247,14 +247,7 @@ impl AlertPreset {
         alert
             .additional_timeframes
             .truncate(alert.additional_conditions.len());
-        if self.fields.frequency
-            && !position
-            && (!events
-                || matches!(
-                    self.frequency,
-                    AlertFrequency::Once | AlertFrequency::EveryTime
-                ))
-        {
+        if self.fields.frequency && alert.condition.frequencies().contains(&self.frequency) {
             alert.frequency = self.frequency;
         }
         if self.fields.expiry {
@@ -291,7 +284,11 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     let channel = |comparison| channel_condition(comparison, 0.0, 0.0);
     Some(match condition {
         C::Holds => C::Holds,
-        C::StrategyFills(_) | C::DetectorSignals(_) | C::CustomEvents(_) | C::Position { .. } => {
+        C::StrategyFills(_)
+        | C::DetectorSignals(_)
+        | C::CustomEvents(_)
+        | C::Footprint(_)
+        | C::Position { .. } => {
             return None;
         }
         C::Crossing(_) => C::Crossing(0.0),
@@ -380,6 +377,7 @@ fn restored_condition(
         C::StrategyFills(_)
         | C::DetectorSignals(_)
         | C::CustomEvents(_)
+        | C::Footprint(_)
         | C::Channel { .. }
         | C::Position { .. } => {
             return None;

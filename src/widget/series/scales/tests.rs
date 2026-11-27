@@ -523,7 +523,7 @@ fn last_value_queries_select_loaded_or_visible_on_the_series_scale() {
 /// the close before them. The last bar opens at 13 and closes at 12.5, above the previous close of
 /// 12, so it is painted in the rising colour, and its price line, label and last value take that
 /// colour too. Columns take their own rising colour, at full opacity for the line and the label.
-/// Candles compared with their open stay falling, and the bar before the first in view still
+/// Columns and candles compared with their open stay falling, and the bar before the first in view still
 /// counts when only the last bar is in view.
 #[test]
 fn last_value_colour_follows_the_previous_close_rule() {
@@ -531,6 +531,8 @@ fn last_value_colour_follows_the_previous_close_rule() {
     let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
     // The default rising column colour, rgba(8, 153, 129, 128), made opaque.
     let column_up = Color32::from_rgb(8, 153, 129);
+    // Stored as (121, 27, 35, 128): unmultiply by 255 / 128 and round each channel.
+    let column_down = Color32::from_rgb(241, 54, 70);
     let start = "2024-01-01T00:00:00Z"
         .parse::<chrono::DateTime<Utc>>()
         .unwrap();
@@ -540,7 +542,8 @@ fn last_value_colour_follows_the_previous_close_rule() {
     ];
     for (kind, by_previous_close, expected) in [
         (ChartType::HollowCandles, false, up),
-        (ChartType::Columns, false, column_up),
+        (ChartType::Columns, true, column_up),
+        (ChartType::Columns, false, column_down),
         (ChartType::Candles, true, up),
         (ChartType::Candles, false, down),
         (ChartType::VolumeCandles, true, up),
@@ -563,6 +566,7 @@ fn last_value_colour_follows_the_previous_close_rule() {
             params.styles.candles.color_by_previous_close = by_previous_close;
             params.styles.volume_candles.color_by_previous_close = by_previous_close;
             params.styles.bars.color_by_previous_close = by_previous_close;
+            params.styles.columns.color_by_previous_close = by_previous_close;
             chart.set_chart_type_params(params);
             chart.main_series_style.price_line_source = source;
             frame(&ctx, &mut chart, 0.0, vec![]);
@@ -578,7 +582,7 @@ fn last_value_colour_follows_the_previous_close_rule() {
             let label = painted.iter().find_map(|shape| match shape {
                 egui::Shape::Rect(r)
                     if !plot.contains(r.rect.center())
-                        && [up, down, column_up].contains(&r.fill) =>
+                        && [up, down, column_up, column_down].contains(&r.fill) =>
                 {
                     Some(r.fill)
                 }
@@ -589,7 +593,7 @@ fn last_value_colour_follows_the_previous_close_rule() {
             let line = painted.iter().find_map(|shape| match shape {
                 egui::Shape::LineSegment { points, stroke }
                     if points[0].y == points[1].y
-                        && [up, down, column_up].contains(&stroke.color)
+                        && [up, down, column_up, column_down].contains(&stroke.color)
                         && !points.iter().any(|point| bar_xs.contains(&Some(point.x))) =>
                 {
                     Some(stroke.color)

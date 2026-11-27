@@ -1238,6 +1238,23 @@ impl StudyTemplate {
                 }
                 changed = true;
             }
+            // Single patterns saved before candle tinting keep their Background hidden.
+            if template.settings.plots.len() == 1
+                && let Some(fresh) =
+                    crate::studies::CandlestickPatterns::single(study).map(|s| s.settings())
+            {
+                let settings = &mut template.settings;
+                settings.plots.push(crate::studies::PlotStyle {
+                    visible: false,
+                    ..fresh.plots[1]
+                });
+                settings.plot_variants.resize(1, Vec::new());
+                settings.plot_variants.push(fresh.plot_variants[1].clone());
+                if fresh.untagged_plots.contains(&1) {
+                    settings.untagged_plots.push(1);
+                }
+                changed = true;
+            }
         }
         changed.then_some(template)
     }
