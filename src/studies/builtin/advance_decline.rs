@@ -41,10 +41,10 @@ pub struct AdvanceDecline {
 }
 
 impl AdvanceDecline {
-    /// Create the ratio over the last `period` bars (conventionally 10).
+    /// Create the ratio over the last `period` bars (conventionally 10), clamped into 1 to 2000.
     pub fn new(period: usize) -> Self {
         Self {
-            period: period.max(1),
+            period: period.clamp(1, 2000),
             values: IndicatorValues::new(),
             color: palette::BLUE,
             visible: true,
@@ -85,7 +85,7 @@ impl Default for AdvanceDecline {
 
 impl Indicator for AdvanceDecline {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Length", 1, usize::MAX)
+        period: length("Length", 1, 2000)
     ; {});
 
     fn name(&self) -> &str {
