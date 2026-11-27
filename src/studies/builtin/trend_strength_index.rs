@@ -397,6 +397,7 @@ mod tests {
 
     /// A new study's pane draws its guides at 1 and -1 whole inside the pane, in both themes.
     #[test]
+    #[cfg(feature = "widget")]
     fn band_guides_paint_inside_the_pane() {
         use crate::widget::test_frames::{chart, run};
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
