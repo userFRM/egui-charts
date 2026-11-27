@@ -44,6 +44,8 @@ closes and then smooths with `2 / (period + 1)`. RSI needs 14 price changes
 before its first value and uses Wilder's smoothing. Neither needs a second feed. See
 [pane placement and resizing](panes.mdx) and the [built-in catalogue](api-reference.mdx).
 
+Migration: EMA now starts at the mean of its first full window of finite closes instead of the first close. Default MACD starts on bar 25, with its signal and histogram on bar 33. Early signals, trades and strategy report figures can change; saved inputs and presentation remain unchanged.
+
 ## Write a custom study
 
 [`CustomIndicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html) accepts a `Send + Sync` calculation closure. Return one value
