@@ -95,7 +95,7 @@ pub(super) fn begin_fibonacci_edit(
             } else {
                 level.text.as_str()
             };
-            let Some(bounds) = drawing.fib_text_bounds(ui.painter(), pane, index, text) else {
+            let Some((bounds, _)) = drawing.fib_text_bounds(ui.painter(), pane, index, text) else {
                 continue;
             };
             if response
@@ -298,16 +298,7 @@ pub(super) fn show_editor(
         let painted = if let Some(index) = editor.fib_level {
             drawing
                 .fib_text_bounds(ui.painter(), pane, index, &shown)
-                .map(|bounds| {
-                    let galley = ui.painter().layout_no_wrap(
-                        shown.clone(),
-                        egui::FontId::proportional(crate::styles::typography::font_size(
-                            drawing.fibonacci_config().label_size,
-                        )),
-                        caret,
-                    );
-                    (bounds.min, galley)
-                })
+                .map(|(bounds, galley)| (bounds.min, galley))
         } else {
             // A shape shows its hint in place of a blank draft, and the field stays on it.
             manager
@@ -325,20 +316,14 @@ pub(super) fn show_editor(
             };
             // The draft wraps where the drawing wraps it, so the caret stays on the painted text.
             let wrap = galley.job.wrap.clone();
-            // Fibonacci level labels are painted in one section (`fibonacci.rs`), so their draft is too.
-            let emoji = editor.fib_level.is_none();
             let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
                 let mut job = egui::text::LayoutJob::default();
-                if emoji {
-                    crate::drawings::glyphs::append_text(
-                        ui.ctx(),
-                        &mut job,
-                        text.as_str(),
-                        format.clone(),
-                    );
-                } else {
-                    job.append(text.as_str(), 0.0, format.clone());
-                }
+                crate::drawings::glyphs::append_text(
+                    ui.ctx(),
+                    &mut job,
+                    text.as_str(),
+                    format.clone(),
+                );
                 job.wrap = wrap.clone();
                 ui.fonts_mut(|fonts| fonts.layout_job(job))
             };

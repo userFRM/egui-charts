@@ -2047,10 +2047,10 @@ mod tests {
         }
     }
 
-    /// With `color-emoji`, each emoji in a drawing's text, its line text, a table cell and a price
-    /// note's typed text takes the colour font once egui has it. By Unicode's emoji presentation,
-    /// `©` and `❤` without U+FE0F, digits, `#` and `*` are text and keep the drawing's font, and
-    /// text without emoji stays one section.
+    /// With `color-emoji`, each emoji in a drawing's text, its line text, a table cell, a price
+    /// note's typed text and a Fibonacci level's text takes the colour font once egui has it. By
+    /// Unicode's emoji presentation, `©` and `❤` without U+FE0F, digits, `#` and `*` are text and
+    /// keep the drawing's font, and text without emoji stays one section.
     #[cfg(feature = "color-emoji")]
     #[test]
     fn emoji_in_drawing_text_draw_in_colour() {
@@ -2080,13 +2080,26 @@ mod tests {
         ];
         let emoji = egui::FontFamily::Name("Noto Color Emoji".into());
         let ctx = egui::Context::default();
-        for tool in [TextLabel, Callout, Note, Table, TrendLine, PriceNote] {
+        for tool in [
+            TextLabel,
+            Callout,
+            Note,
+            Table,
+            TrendLine,
+            PriceNote,
+            FibonacciRetracement,
+        ] {
             for (text, expected, colour_glyphs) in rows {
                 let mut drawing = pattern(tool);
                 drawing.text = Some(text.into());
                 if tool == PriceNote {
                     drawing.note_text_style =
                         Some(crate::drawings::NoteTextStyle::new([0, 0, 255, 255], 18.0));
+                }
+                if tool == FibonacciRetracement {
+                    // The 0.618 level's own text, which shows by default.
+                    drawing.fib_config.as_mut().unwrap().levels[4].text = text.into();
+                    drawing.update_screen_coords(|x| x, |p| p as f32);
                 }
                 // The first pass asks for the colour font, which egui has from the next one.
                 paint_on(&ctx, &drawing, false);
