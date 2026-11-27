@@ -488,6 +488,10 @@ pub(crate) enum Action {
     Edit(Order),
 }
 
+/// The parameters of a preset the ticket could not apply, each as an English template and the
+/// name its `{name}` slot takes, if it has one.
+type Unapplied = Vec<(&'static str, Option<&'static str>)>;
+
 /// The state of the order ticket panel.
 #[derive(Debug)]
 pub(crate) struct OrderTicket {
@@ -523,9 +527,8 @@ pub(crate) struct OrderTicket {
     expires: Option<chrono::DateTime<chrono::Utc>>,
     preset_name: String,
     preset_fields: PresetFields,
-    /// What the last applied preset could not set, for the account it was applied on: each
-    /// entry is an English template and the name its `{name}` slot takes, if it has one.
-    preset_notice: Option<(String, Vec<(&'static str, Option<&'static str>)>)>,
+    /// What the last applied preset could not set, for the account it was applied on.
+    preset_notice: Option<(String, Unapplied)>,
     replacing: Option<OrderPreset>,
     renaming: Option<(String, String)>,
     tab: Tab,
@@ -1118,13 +1121,8 @@ impl OrderTicket {
         self.preset_notice = (!notice.is_empty()).then(|| (market.account.to_owned(), notice));
     }
 
-    /// The parameters of `preset` that the ticket, as `apply` left it, could not take, each as
-    /// an English template and the name its `{name}` slot takes, if it has one.
-    fn unapplied(
-        &self,
-        preset: &OrderPreset,
-        market: &Market<'_>,
-    ) -> Vec<(&'static str, Option<&'static str>)> {
+    /// The parameters of `preset` that the ticket, as `apply` left it, could not take.
+    fn unapplied(&self, preset: &OrderPreset, market: &Market<'_>) -> Unapplied {
         let capabilities = &market.capabilities;
         let mut notice = Vec::new();
         if let Some(kind) = preset.order_type {
