@@ -365,35 +365,37 @@ impl StudyTemplate {
         }
         // Studies saved before an input's range narrowed restore with the value they were saved
         // with, from the bottom of the range the input took then; only edits are bounded.
-        const NARROWED: [(&str, &str, f64); 17] = [
-            ("BB", "std_dev", 0.0),
-            ("BBTrend", "multiplier", 0.0),
-            ("LinReg Slope", "period", 1.0),
-            ("MFI", "period", 1.0),
-            ("RCI", "smoothing_deviation", 0.0),
-            ("SuperTrend", "multiplier", 0.0),
-            ("Woodies CCI", "turbo_length", 1.0),
-            ("Woodies CCI", "cci_length", 1.0),
-            ("Vortex", "period", 1.0),
-            ("C2C Vol", "period", 1.0),
-            ("C2C Vol", "trading_days", 0.0),
-            ("Volatility Stop", "length", 1.0),
-            ("Volatility Stop", "multiplier", 0.0),
-            ("ASI", "limit_move", f64::EPSILON),
-            ("Advance/Decline", "period", 1.0),
-            ("VWAP", "plot_offset", f64::MIN),
-            ("VWMA", "plot_offset", f64::MIN),
+        // The former input kind and finite-number contract still apply to those saved values.
+        use InputValue::{Integer, Length, Number};
+        const NARROWED: [(&str, &str, InputValue); 17] = [
+            ("BB", "std_dev", Number(0.0)),
+            ("BBTrend", "multiplier", Number(0.0)),
+            ("LinReg Slope", "period", Length(1)),
+            ("MFI", "period", Length(1)),
+            ("RCI", "smoothing_deviation", Number(0.0)),
+            ("SuperTrend", "multiplier", Number(0.0)),
+            ("Woodies CCI", "turbo_length", Length(1)),
+            ("Woodies CCI", "cci_length", Length(1)),
+            ("Vortex", "period", Length(1)),
+            ("C2C Vol", "period", Length(1)),
+            ("C2C Vol", "trading_days", Number(0.0)),
+            ("Volatility Stop", "length", Length(1)),
+            ("Volatility Stop", "multiplier", Number(0.0)),
+            ("ASI", "limit_move", Number(f64::EPSILON)),
+            ("Advance/Decline", "period", Length(1)),
+            ("VWAP", "plot_offset", Integer(i32::MIN)),
+            ("VWMA", "plot_offset", Integer(i32::MIN)),
         ];
         let saved = inputs
             .iter()
             .filter(|(id, value)| {
-                NARROWED.iter().any(|&(name, input, bottom)| {
-                    name == study.name()
-                        && input == id
-                        && match value {
-                            InputValue::Length(value) => *value as f64 >= bottom,
-                            InputValue::Number(value) => *value >= bottom,
-                            InputValue::Integer(value) => f64::from(*value) >= bottom,
+                NARROWED.iter().any(|(name, input, bottom)| {
+                    *name == study.name()
+                        && *input == id
+                        && match (value, bottom) {
+                            (Length(value), Length(bottom)) => value >= bottom,
+                            (Number(value), Number(bottom)) => value.is_finite() && value >= bottom,
+                            (Integer(value), Integer(bottom)) => value >= bottom,
                             _ => false,
                         }
                 })

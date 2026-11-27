@@ -118,6 +118,23 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
     old_input.inputs = vec![("multiplier".into(), InputValue::Number(3.0))];
     let mut replacement = defaults.clone();
     replacement.settings.plots[0].width = 6.0;
+    let invalid_saved_inputs = [
+        ("C2C Vol", "period", InputValue::Number(2.0)),
+        ("Vortex", "period", InputValue::Integer(2)),
+        ("ASI", "limit_move", InputValue::Integer(2)),
+        ("Volatility Stop", "length", InputValue::Number(2.0)),
+        ("Volatility Stop", "multiplier", InputValue::Integer(2)),
+        ("Advance/Decline", "period", InputValue::Number(2.0)),
+        ("C2C Vol", "trading_days", InputValue::Number(f64::INFINITY)),
+        ("ASI", "limit_move", InputValue::Number(f64::INFINITY)),
+        ("VWAP", "plot_offset", InputValue::Number(2.0)),
+        ("VWMA", "plot_offset", InputValue::Length(2)),
+    ]
+    .map(|(name, id, value)| {
+        let mut template = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+        template.inputs = vec![(id.into(), value)];
+        template
+    });
     for template in [
         unknown_name,
         unknown_input,
@@ -126,7 +143,11 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
         precision,
         width,
         plots,
-    ] {
+    ]
+    .into_iter()
+    .chain(invalid_saved_inputs)
+    {
+        assert!(template.create_with(&factory).is_err(), "{}", template.name);
         assert!(
             factory
                 .set_defaults(&[replacement.clone(), template])
