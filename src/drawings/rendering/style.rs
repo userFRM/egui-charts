@@ -203,7 +203,7 @@ impl Drawing {
     }
 
     /// Lays annotation text out once, at the drawing's font size and slant, for both sizing its
-    /// box and painting it.
+    /// box and painting it. With `color-emoji` its emoji take the colour font.
     pub(super) fn annotation_galley(
         &self,
         painter: &Painter,
@@ -214,7 +214,9 @@ impl Drawing {
             italics: self.italic,
             ..egui::TextFormat::simple(self.annotation_font(), color)
         };
-        painter.layout_job(egui::text::LayoutJob::simple_format(text, format))
+        let mut job = egui::text::LayoutJob::default();
+        crate::drawings::glyphs::append_text(painter.ctx(), &mut job, &text, format);
+        painter.layout_job(job)
     }
 
     /// The drawing's text, or the localised word "Text", so an empty annotation stays selectable.
@@ -2013,6 +2015,78 @@ mod tests {
                 (offset - egui::vec2(0.6, 0.0)).length() < 1e-4,
                 "{end:?}: {offset:?}"
             );
+        }
+    }
+
+    /// With `color-emoji`, each emoji in a drawing's text, its line text, a table cell and a price
+    /// note's typed text takes the colour font once egui has it. By Unicode's emoji presentation,
+    /// `©` and `❤` without U+FE0F, digits, `#` and `*` are text and keep the drawing's font, and
+    /// text without emoji stays one section.
+    #[cfg(feature = "color-emoji")]
+    #[test]
+    fn emoji_in_drawing_text_draw_in_colour() {
+        use DrawingToolType::*;
+        use egui::FontFamily::Proportional;
+        use egui::epaint::text::ByteRangeExt as _;
+        type Row = (&'static str, &'static [(&'static str, bool)], usize);
+        // Text, its sections as (text, in the colour font), and the colour glyphs it draws.
+        let rows: [Row; 5] = [
+            ("Buy 🚀", &[("Buy ", false), ("🚀", true)], 1),
+            (
+                "🚀 Buy 👍🏽",
+                &[("🚀", true), (" Buy ", false), ("👍🏽", true)],
+                2,
+            ),
+            (
+                "❤\u{fe0f} 1\u{fe0f}\u{20e3}",
+                &[
+                    ("❤\u{fe0f}", true),
+                    (" ", false),
+                    ("1\u{fe0f}\u{20e3}", true),
+                ],
+                2,
+            ),
+            ("© ❤ 1 # *", &[("© ❤ 1 # *", false)], 0),
+            ("Buy", &[("Buy", false)], 0),
+        ];
+        let emoji = egui::FontFamily::Name("Noto Color Emoji".into());
+        let ctx = egui::Context::default();
+        for tool in [TextLabel, Callout, Note, Table, TrendLine, PriceNote] {
+            for (text, expected, colour_glyphs) in rows {
+                let mut drawing = pattern(tool);
+                drawing.text = Some(text.into());
+                if tool == PriceNote {
+                    drawing.note_text_style =
+                        Some(crate::drawings::NoteTextStyle::new([0, 0, 255, 255], 18.0));
+                }
+                // The first pass asks for the colour font, which egui has from the next one.
+                paint_on(&ctx, &drawing, false);
+                let shapes = paint_on(&ctx, &drawing, false);
+                let Some(galley) = shapes.iter().find_map(|s| match s {
+                    Shape::Text(t) if t.galley.text().ends_with(text) => Some(&t.galley),
+                    _ => None,
+                }) else {
+                    panic!("{tool:?} {text:?}: not painted");
+                };
+                // The sections over the row's text, which follows a price note's price.
+                let start = galley.text().len() - text.len();
+                let sections: Vec<_> = (galley.job.sections.iter())
+                    .map(|s| (s.byte_range.as_usize(), &s.format.font_id.family))
+                    .filter(|(range, _)| range.end > start)
+                    .map(|(range, family)| {
+                        (&galley.text()[range.start.max(start)..range.end], family)
+                    })
+                    .collect();
+                let expected: Vec<_> = (expected.iter())
+                    .map(|&(part, colour)| (part, if colour { &emoji } else { &Proportional }))
+                    .collect();
+                assert_eq!(sections, expected, "{tool:?} {text:?}");
+                let drawn = (galley.rows.iter())
+                    .flat_map(|r| r.glyphs.iter())
+                    .filter(|g| g.is_color && !g.uv_rect.is_nothing())
+                    .count();
+                assert_eq!(drawn, colour_glyphs, "{tool:?} {text:?}");
+            }
         }
     }
 }

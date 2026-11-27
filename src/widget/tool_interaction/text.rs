@@ -319,13 +319,26 @@ pub(super) fn show_editor(
         {
             let format = egui::TextFormat {
                 color: egui::Color32::TRANSPARENT,
+                // Drawing text is proportional; a leading emoji's section holds the colour font.
+                font_id: egui::FontId::proportional(section.format.font_id.size),
                 ..section.format.clone()
             };
             // The draft wraps where the drawing wraps it, so the caret stays on the painted text.
             let wrap = galley.job.wrap.clone();
+            // Fibonacci level labels are painted in one section (`fibonacci.rs`), so their draft is too.
+            let emoji = editor.fib_level.is_none();
             let mut layouter = |ui: &Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
-                let mut job =
-                    egui::text::LayoutJob::simple_format(text.as_str().to_owned(), format.clone());
+                let mut job = egui::text::LayoutJob::default();
+                if emoji {
+                    crate::drawings::glyphs::append_text(
+                        ui.ctx(),
+                        &mut job,
+                        text.as_str(),
+                        format.clone(),
+                    );
+                } else {
+                    job.append(text.as_str(), 0.0, format.clone());
+                }
                 job.wrap = wrap.clone();
                 ui.fonts_mut(|fonts| fonts.layout_job(job))
             };
@@ -1917,5 +1930,59 @@ mod tests {
 
         // 4 / 4 at the first zoom, wherever the text sits, and 8 / 4 after zooming.
         assert_eq!([at_first, moved, zoomed], [[14.0; 2], [14.0; 2], [28.0; 2]]);
+    }
+
+    /// The draft over a drawing's text lays out as the text is painted, with each emoji in the
+    /// colour font, so the caret and the selection stay on the painted characters.
+    #[cfg(feature = "color-emoji")]
+    #[test]
+    fn inline_editor_keeps_the_caret_on_colour_emoji() {
+        use crate::drawings::{ChartPoint, Drawing};
+        use egui::FontFamily::Proportional;
+        use egui::epaint::{TextShape, text::ByteRangeExt as _};
+        /// The left edge of each glyph on screen.
+        fn edges(text: &TextShape) -> Vec<f32> {
+            (text.galley.rows.iter())
+                .flat_map(|row| (row.glyphs.iter()).map(move |g| text.pos.x + row.pos.x + g.pos.x))
+                .collect()
+        }
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let mut drawing = Drawing::with_text(1, "🚀 Hi".into());
+        drawing.chart_points.push(ChartPoint::new(50.0, 15.0));
+        chart.drawings_mut().drawings.push(drawing);
+        // The first frame asks for the colour font, which egui has from the next one.
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        super::begin_edit(chart.drawings_mut(), 1, false);
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        let (shapes, _) = crate::widget::test_frames::run(&ctx, &mut chart, 0.3, vec![]);
+        let (drafts, painted): (Vec<_>, Vec<_>) = (shapes.iter())
+            .filter_map(|(_, shape)| match shape {
+                egui::Shape::Text(t) if t.galley.text() == "🚀 Hi" => Some(t),
+                _ => None,
+            })
+            .partition(|t| t.galley.job.sections[0].format.color == egui::Color32::TRANSPARENT);
+        let ([draft], [painted]) = (drafts.as_slice(), painted.as_slice()) else {
+            panic!("{} drafts, {} painted", drafts.len(), painted.len());
+        };
+        let emoji = egui::FontFamily::Name("Noto Color Emoji".into());
+        for text in [draft, painted] {
+            let sections: Vec<_> = (text.galley.job.sections.iter())
+                .map(|s| {
+                    (
+                        &text.galley.text()[s.byte_range.as_usize()],
+                        &s.format.font_id.family,
+                    )
+                })
+                .collect();
+            assert_eq!(sections, [("🚀", &emoji), (" Hi", &Proportional)]);
+        }
+        let (at, expected) = (edges(draft), edges(painted));
+        assert!(
+            at.len() == expected.len()
+                && at.iter().zip(&expected).all(|(a, b)| (a - b).abs() < 0.5),
+            "{at:?} against {expected:?}"
+        );
     }
 }
