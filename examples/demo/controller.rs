@@ -13345,8 +13345,8 @@ mod tests {
             (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
-            (Tool::FixedRangeVolumeProfile, "VAL"),
-            (Tool::AnchoredVolumeProfile, "VAL"),
+            (Tool::FixedRangeVolumeProfile, "VA values colour"),
+            (Tool::AnchoredVolumeProfile, "VA values colour"),
             (Tool::RegressionTrend, "Upper deviation"),
             (Tool::BarsPattern, "Mirrored"),
         ] {
