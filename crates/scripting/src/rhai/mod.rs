@@ -256,6 +256,10 @@ impl Program for Compiled {
 pub(crate) fn count(context: &EvalContext) -> Result<(), Box<EvalAltResult>> {
     let scope = context.scope();
     let len = scope.len();
+    // Most reads leave the counts as they are, which the thread knows without the run.
+    if runtime::settled(context.call_level(), address(scope), len) {
+        return Ok(());
+    }
     let stopped = runtime::with(|run| -> Result<bool, Box<EvalAltResult>> {
         let Some((from, clock, top)) = run.count_due(context.call_level(), address(scope), len)
         else {
