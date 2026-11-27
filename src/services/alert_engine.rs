@@ -74,8 +74,14 @@ const TRIGGER_HISTORY: usize = 5_000;
 /// A crossing on a longer interval therefore fires once whatever the shorter interval does, and
 /// one between two closes of the shorter interval is caught at the later close. Crossing up needs
 /// a previous value strictly below the level and a current value at or above it, crossing down the
-/// reverse; a value that touches the level and stays there fires once. Moving by and volume
-/// above average read the bars before the evaluated one, as [`AlertCondition`] documents.
+/// reverse; a value that touches the level and stays there fires once. Where a rule reads the
+/// range traded, a price strictly beyond the level since the previous evaluation with the current
+/// price back at or across it also crosses, on its way back; a price outside a channel with the
+/// current one back inside enters it, one inside with the current one outside exits it, and
+/// prices on both sides of it enter and exit it. A move across and back therefore meets the same
+/// transitions however often the host evaluates, and one evaluation still fires an alert once.
+/// Moving by and volume above average read the bars before the evaluated one, as
+/// [`AlertCondition`] documents.
 /// Moving channels resolve the preceding bar again when a new bar arrives, so edits and
 /// skipped updates use that bar's current geometry. Within a bar they use the previous evaluation.
 ///
@@ -245,6 +251,9 @@ struct Run {
 struct Occurrence {
     time: DateTime<Utc>,
     price: Option<f64>,
+    /// The price the message's `{{value}}` and bar placeholders read where it differs from
+    /// `price`, as a fill price without binary rounding digits.
+    shown_price: Option<f64>,
     message: String,
     /// Placeholders only this occurrence fills, as a fill's `{{order_id}}`.
     fields: Vec<(&'static str, String)>,
@@ -257,6 +266,9 @@ struct Observation {
     /// Whether the rules that read this bar alone hold. Those that compare two evaluations are
     /// tested when the alert evaluates, see [`reads_previous`].
     holds: bool,
+    /// Whether they hold on the close alone, which they read once an evaluation read this
+    /// observation, as nothing traded on it since.
+    still_holds: bool,
     /// The values of `seen.rules` one bar earlier, read when this bar first arrived.
     before: Vec<[Option<f64>; 4]>,
     clock: BarClock,
@@ -273,8 +285,9 @@ struct Observation {
     /// bar close keeps it.
     earlier: Option<Box<Observation>>,
     /// The lowest and highest price known to have traded since the alert's previous evaluation
-    /// of this interval, see [`traded_since`], which its price rules read. `None` before the
-    /// alert's first evaluation and for an alert at bar close, whose price rules read the close.
+    /// of this interval, see [`traded_since`], which its price rules read on the first evaluation
+    /// that reads this observation. `None` before the alert's first evaluation and for an alert
+    /// at bar close, whose price rules read the close.
     traded: Option<[f64; 2]>,
 }
 
@@ -665,13 +678,21 @@ impl AlertEngine {
     /// on the same run and when multiple fills share a timestamp.
     /// `now` gates expiry and notification schedules; event times are the source fill times.
     /// Empty messages use the order's alert message, as written, or without one the execution
-    /// side, quantity, price and resulting signed position.
-    /// Custom messages expand the usual placeholders using a flat bar at the fill price, with
-    /// its source time and zero volume, and `exchange` as [`Alert::expand_message`] takes it. A
-    /// fill carries no study values, so `{{plot_ID_N}}` reads `NaN`. Strategy-fill alerts need no
+    /// side, quantity, price and resulting signed position, written as the list of trades writes
+    /// them: the price with at least the run's
+    /// [`price_decimals`](crate::strategies::StrategyFill::price_decimals) and more where it has
+    /// them, the quantity and position with their own decimals up to eight, all without binary
+    /// rounding digits, such as `Buy 1 at 100.12, position 1`.
+    /// Custom messages expand the usual placeholders using a flat bar at the fill price at 15
+    /// significant digits, with its source time and zero volume, and `exchange` as
+    /// [`Alert::expand_message`] takes it; the trigger reports the exact fill price. A fill
+    /// carries no study values, so `{{plot_ID_N}}` reads `NaN`. Strategy-fill alerts need no
     /// price-reader subscription. `{{order_id}}`, `{{side}}` (`Buy` or `Sell`), `{{quantity}}`,
-    /// `{{position}}`, the signed position after the fill, `{{comment}}` and `{{alert_message}}`,
-    /// the order's texts or empty without them, read the fill; other alerts leave them as
+    /// `{{position}}`, the signed position after the fill, `{{market_position}}` (`long`, `flat`
+    /// or `short` after the fill), `{{market_position_size}}`, its absolute size,
+    /// `{{prev_market_position}}` and `{{prev_market_position_size}}`, the same before the fill,
+    /// `{{comment}}`, the order's comment or without one its id, and `{{alert_message}}`, the
+    /// order's alert message or empty without one, read the fill; other alerts leave them as
     /// written.
     /// Delivery callbacks run after unlocking, as they do for price alerts.
     #[cfg(feature = "strategies")]
@@ -684,6 +705,7 @@ impl AlertEngine {
         fills: &[crate::strategies::StrategyFill],
         now: DateTime<Utc>,
     ) {
+        use crate::model::StrategyReport;
         let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
         self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
             fills
@@ -702,21 +724,48 @@ impl AlertEngine {
                         crate::model::OrderSide::Buy => "Buy",
                         crate::model::OrderSide::Sell => "Sell",
                     };
-                    let mut price = fill.price.to_string();
-                    match price.split_once('.') {
-                        None => price.push_str(".00"),
-                        Some((_, fraction)) if fraction.len() == 1 => price.push('0'),
-                        _ => {}
-                    }
+                    let signed = match fill.side {
+                        crate::model::OrderSide::Buy => fill.quantity,
+                        crate::model::OrderSide::Sell => -fill.quantity,
+                    };
+                    let market = |position: f64| {
+                        let direction = if position > 0.0 {
+                            "long"
+                        } else if position < 0.0 {
+                            "short"
+                        } else {
+                            "flat"
+                        };
+                        (
+                            direction.to_owned(),
+                            StrategyReport::quantity_text(position.abs()),
+                        )
+                    };
+                    let (after, after_size) = market(fill.position);
+                    let (before, before_size) = market(fill.position - signed);
+                    let quantity = StrategyReport::quantity_text(fill.quantity);
+                    let position = StrategyReport::quantity_text(fill.position);
+                    let price = StrategyReport::price_text_with(fill.price, fill.price_decimals);
                     Some(Occurrence {
                         time: fill.time,
                         price: Some(fill.price),
+                        shown_price: Some(StrategyReport::without_rounding_digits(fill.price)),
                         fields: vec![
                             ("order_id", fill.order_id.clone()),
                             ("side", side.into()),
-                            ("quantity", fill.quantity.to_string()),
-                            ("position", fill.position.to_string()),
-                            ("comment", fill.comment.clone().unwrap_or_default()),
+                            ("quantity", quantity.clone()),
+                            ("position", position.clone()),
+                            ("market_position", after),
+                            ("market_position_size", after_size),
+                            ("prev_market_position", before),
+                            ("prev_market_position_size", before_size),
+                            (
+                                "comment",
+                                fill.comment
+                                    .clone()
+                                    .filter(|comment| !comment.is_empty())
+                                    .unwrap_or_else(|| fill.order_id.clone()),
+                            ),
                             (
                                 "alert_message",
                                 fill.alert_message.clone().unwrap_or_default(),
@@ -727,10 +776,7 @@ impl AlertEngine {
                             .clone()
                             .filter(|message| !message.is_empty())
                             .unwrap_or_else(|| {
-                                format!(
-                                    "{side} {} at {price}, position {}",
-                                    fill.quantity, fill.position
-                                )
+                                format!("{side} {quantity} at {price}, position {position}")
                             }),
                     })
                 })
@@ -744,7 +790,7 @@ impl AlertEngine {
     /// one already received are ignored, counted apart from fills. A trigger reports the alert's
     /// bar time and finite price, and the strategy's message when the alert has none; custom
     /// messages expand as for `strategy_fills`, with `{{alert_message}}` the strategy's message
-    /// and `{{order_id}}`, `{{side}}`, `{{quantity}}`, `{{position}}` and `{{comment}}` empty.
+    /// and the other fill placeholders empty.
     #[cfg(feature = "strategies")]
     pub fn strategy_alerts(
         &self,
@@ -755,6 +801,7 @@ impl AlertEngine {
         alerts: &[crate::strategies::StrategyAlert],
         now: DateTime<Utc>,
     ) {
+        use crate::model::StrategyReport;
         let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
         self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
             alerts
@@ -764,15 +811,21 @@ impl AlertEngine {
                         return None;
                     }
                     seen.last_alert = alert.sequence;
+                    let price = Some(alert.price).filter(|price| price.is_finite());
                     Some(Occurrence {
                         time: alert.time,
-                        price: Some(alert.price).filter(|price| price.is_finite()),
+                        price,
+                        shown_price: price.map(StrategyReport::without_rounding_digits),
                         message: alert.message.clone(),
                         fields: vec![
                             ("order_id", String::new()),
                             ("side", String::new()),
                             ("quantity", String::new()),
                             ("position", String::new()),
+                            ("market_position", String::new()),
+                            ("market_position_size", String::new()),
+                            ("prev_market_position", String::new()),
+                            ("prev_market_position_size", String::new()),
                             ("comment", String::new()),
                             ("alert_message", alert.message.clone()),
                         ],
@@ -848,6 +901,7 @@ impl AlertEngine {
                         Some(Occurrence {
                             time,
                             price: price.filter(|price| price.is_finite()),
+                            shown_price: None,
                             fields: Vec::new(),
                             message: text.map_or_else(
                                 || detector.clone(),
@@ -895,6 +949,7 @@ impl AlertEngine {
                     Some(Occurrence {
                         time: event.time,
                         price: event.price.filter(|price| price.is_finite()),
+                        shown_price: None,
                         message: event.message.clone(),
                         fields: Vec::new(),
                     })
@@ -959,13 +1014,15 @@ impl AlertEngine {
                 let Occurrence {
                     time,
                     price,
+                    shown_price,
                     message,
                     fields,
                 } = occurrence;
                 let message = if alert.message.is_empty() {
                     message
                 } else {
-                    let flat = price.unwrap_or(f64::NAN);
+                    let shown = shown_price.or(price);
+                    let flat = shown.unwrap_or(f64::NAN);
                     let bar = Bar::new(time, flat, flat, flat, flat, 0.0);
                     alert.expand_message_with(
                         symbol,
@@ -973,7 +1030,7 @@ impl AlertEngine {
                         timeframe,
                         &bar,
                         time,
-                        |source| price.filter(|_| *source == AlertSource::Price),
+                        |source| shown.filter(|_| *source == AlertSource::Price),
                         &fields,
                     )
                 };
@@ -1268,23 +1325,26 @@ fn observe(
         .map(|last| traded_since(bars, index, last));
     let observed = |at: usize, seen: Seen, before, event, earlier| {
         let traded = traded.filter(|_| at == index);
-        let holds = rules
-            .iter()
-            .zip(&seen.rules)
-            .all(|((src, condition), &[current, a, b, c])| {
-                reads_previous(condition)
-                    || current.is_some_and(|current| {
-                        condition_holds(
-                            condition,
-                            current,
-                            range(traded, src, current),
-                            [None; 4],
-                            [a, b, c],
-                            &bars[..=at],
-                            |back| at.checked_sub(back as usize).and_then(|at| source(src, at)),
-                        )
-                    })
-            });
+        let held = |traded| {
+            rules
+                .iter()
+                .zip(&seen.rules)
+                .all(|((src, condition), &[current, a, b, c])| {
+                    reads_previous(condition)
+                        || current.is_some_and(|current| {
+                            condition_holds(
+                                condition,
+                                current,
+                                range(traded, src, current),
+                                [None; 4],
+                                [a, b, c],
+                                &bars[..=at],
+                                |back| at.checked_sub(back as usize).and_then(|at| source(src, at)),
+                            )
+                        })
+                })
+        };
+        let (holds, still_holds) = (held(traded), held(None));
         // Only the message knows the sources it names, so this expansion collects them.
         let values = std::cell::RefCell::new(Vec::new());
         if holds && timeframe == alert.timeframe.unwrap_or_default() {
@@ -1298,6 +1358,7 @@ fn observe(
             available: true,
             seen,
             holds,
+            still_holds,
             before,
             clock: clock.clone(),
             event,
@@ -1429,8 +1490,14 @@ fn evaluate(
             .zip(&intervals)
             .enumerate()
             .all(|(position, (observation, interval))| {
-                observation.holds
-                    && previous_rules_hold(alert, *interval, observation, run.joined.get(position))
+                let last = run.joined.get(position);
+                // An interval the previous evaluation read has traded nothing since.
+                let holds = if last == Some(&observation.seen) {
+                    observation.still_holds
+                } else {
+                    observation.holds
+                };
+                holds && previous_rules_hold(alert, *interval, observation, last)
             });
     run.joined = joined
         .iter()
@@ -1512,7 +1579,8 @@ fn evaluate(
 
 /// Whether the rules of `interval` that compare two evaluations hold between `last`, the inputs of
 /// the alert's previous evaluation, and `observation`. Without `last`, and for a moving channel
-/// on a new bar, the earlier side is the bar before the observed one.
+/// on a new bar, the earlier side is the bar before the observed one. An observation `last` read
+/// has traded nothing since, so its rules read the close.
 fn previous_rules_hold(
     alert: &Alert,
     interval: Timeframe,
@@ -1539,7 +1607,13 @@ fn previous_rules_hold(
                 condition_holds(
                     condition,
                     current,
-                    range(observation.traded, source, current),
+                    range(
+                        observation
+                            .traded
+                            .filter(|_| last != Some(&observation.seen)),
+                        source,
+                        current,
+                    ),
                     previous,
                     [a, b, c],
                     &[],
@@ -1706,6 +1780,7 @@ fn condition_holds(
         AlertCondition::Crossing(level) => compare(
             AlertComparison::Crossing,
             traded,
+            value,
             previous,
             *level,
             Some(*level),
@@ -1713,6 +1788,7 @@ fn condition_holds(
         AlertCondition::CrossingUp(level) => compare(
             AlertComparison::CrossingUp,
             traded,
+            value,
             previous,
             *level,
             Some(*level),
@@ -1720,6 +1796,7 @@ fn condition_holds(
         AlertCondition::CrossingDown(level) => compare(
             AlertComparison::CrossingDown,
             traded,
+            value,
             previous,
             *level,
             Some(*level),
@@ -1737,7 +1814,7 @@ fn condition_holds(
                 _ => AlertChannelComparison::Outside,
             };
             let was_inside = previous.map(|p| p >= *lower && p <= *upper);
-            channel(comparison, traded, was_inside, [*lower, *upper])
+            channel(comparison, traded, value, was_inside, [*lower, *upper])
         }
         AlertCondition::MovingBy {
             value: change,
@@ -1757,8 +1834,9 @@ fn condition_holds(
                 AlertSource::Drawing(_) | AlertSource::TPOLevel(_) => traded,
                 _ => [value, value],
             };
-            other[0]
-                .is_some_and(|level| compare(*comparison, traded, previous, level, previous_other))
+            other[0].is_some_and(|level| {
+                compare(*comparison, traded, value, previous, level, previous_other)
+            })
         }
         AlertCondition::Channel {
             boundaries,
@@ -1784,7 +1862,7 @@ fn condition_holds(
             } else {
                 [value, value]
             };
-            channel(*comparison, traded, was_inside, current)
+            channel(*comparison, traded, value, was_inside, current)
         }
         AlertCondition::Position { progress, .. } => {
             let [Some(entry), Some(target), Some(stop)] = other else {
@@ -1797,6 +1875,7 @@ fn condition_holds(
                 _ => compare(
                     AlertComparison::Crossing,
                     [value, value],
+                    value,
                     previous,
                     entry,
                     previous_other,
@@ -1824,35 +1903,51 @@ fn condition_holds(
 /// Whether `comparison` holds for a value that traded between `low` and `high` since the
 /// previous one, which `was_inside` tells was inside the inclusive channel from `lower` to
 /// `upper`, if known. The range is inside when it reaches the channel and outside when it passes
-/// either boundary, so a wick out of the channel and back is both.
+/// either boundary, so a wick out of the channel and back is both. Entering also holds when the
+/// range passed a boundary and `value`, the current value, is back inside, and exiting when the
+/// range reached the channel and `value` is outside: the way back of a move the previous
+/// evaluation did not see. A range past both boundaries went through the channel, so it enters
+/// and exits it whatever the previous value was.
 fn channel(
     comparison: AlertChannelComparison,
     [low, high]: [f64; 2],
+    value: f64,
     was_inside: Option<bool>,
     [lower, upper]: [f64; 2],
 ) -> bool {
     let inside = low <= upper && high >= lower;
     let outside = low < lower || high > upper;
+    let ends_inside = value >= lower && value <= upper;
+    let through = low < lower && high > upper;
     match comparison {
-        AlertChannelComparison::Entering => was_inside == Some(false) && inside,
-        AlertChannelComparison::Exiting => was_inside == Some(true) && outside,
+        AlertChannelComparison::Entering => {
+            was_inside.is_some_and(|was| (!was && inside) || (outside && ends_inside) || through)
+        }
+        AlertChannelComparison::Exiting => {
+            was_inside.is_some_and(|was| (was && outside) || (inside && !ends_inside) || through)
+        }
         AlertChannelComparison::Inside => inside,
         AlertChannelComparison::Outside => outside,
     }
 }
 
 /// Whether `comparison` holds for a value that traded between `low` and `high` since the
-/// previous one, `previous`, against `level`, which was `previous_level` then.
+/// previous one, `previous`, against `level`, which was `previous_level` then. A range strictly
+/// past the level with `value`, the current value, back at or across it also crosses, on the way
+/// back.
 fn compare(
     comparison: AlertComparison,
     [low, high]: [f64; 2],
+    value: f64,
     previous: Option<f64>,
     level: f64,
     previous_level: Option<f64>,
 ) -> bool {
     let sides = previous.zip(previous_level);
-    let up = sides.is_some_and(|(p, l)| p < l && high >= level);
-    let down = sides.is_some_and(|(p, l)| p > l && low <= level);
+    let up =
+        sides.is_some_and(|(p, l)| (p < l && high >= level) || (low < level && value >= level));
+    let down =
+        sides.is_some_and(|(p, l)| (p > l && low <= level) || (high > level && value <= level));
     match comparison {
         AlertComparison::Crossing => up || down,
         AlertComparison::CrossingUp => up,
@@ -3651,6 +3746,81 @@ mod tests {
         assert_eq!(fired, [101.0], "one crossing fires once");
     }
 
+    /// A five-minute bar that trades past a level or a channel boundary within one poll fires the
+    /// alert once, and not again while it stays unchanged and only one-minute bars arrive, whether
+    /// the host updates both intervals at once or one after the other.
+    #[test]
+    fn a_longer_interval_move_fires_once_however_often_the_shorter_one_updates() {
+        let (lower, upper) = (100.0, 110.0);
+        let (up_and_back, down_and_back) = ([105.0, 112.0, 105.5], [115.0, 108.0, 114.5]);
+        // The five-minute bar opens at the first price, trades to the second and closes at the third.
+        let rows = [
+            (AlertCondition::CrossingUp(upper), [105.0, 112.0, 109.0]),
+            (AlertCondition::CrossingUp(upper), down_and_back),
+            (AlertCondition::CrossingDown(upper), up_and_back),
+            (
+                AlertCondition::EnteringChannel { lower, upper },
+                up_and_back,
+            ),
+            (AlertCondition::Above(upper), [105.0, 112.0, 109.0]),
+            (AlertCondition::OutsideChannel { lower, upper }, up_and_back),
+        ];
+        let (five, one) = (
+            BarClock::new(Timeframe::Min5),
+            BarClock::new(Timeframe::Min1),
+        );
+        for (row, (condition, [open, extreme, close])) in rows.into_iter().enumerate() {
+            for together in [true, false] {
+                let mut watching = alert(condition.clone(), AlertFrequency::EveryTime);
+                watching.timeframe = Some(Timeframe::Min5);
+                watching
+                    .additional_conditions
+                    .push(crate::model::AlertRule::new(
+                        AlertSource::Price,
+                        AlertCondition::Above(50.0),
+                    ));
+                watching.additional_timeframes.push(Some(Timeframe::Min1));
+                let host = Host::new(Vec::new());
+                host.save(watching).unwrap();
+                host.events();
+                let poll = |slow: &[Bar], fast: &[Bar], now| {
+                    if together {
+                        host.engine.update_matching(
+                            None,
+                            "SYM",
+                            None,
+                            &[(&five, slow), (&one, fast)],
+                            time(now),
+                            |_, _, _| None,
+                        );
+                    } else {
+                        for (timeframe, bars) in [(Timeframe::Min1, fast), (Timeframe::Min5, slow)]
+                        {
+                            host.engine
+                                .update("SYM", None, timeframe, bars, time(now), |_, _| None);
+                        }
+                    }
+                    host.fired().len()
+                };
+                let older = bar(-5, open, 10.0);
+                let mut fired = vec![poll(
+                    &[older.clone(), bar(0, open, 10.0)],
+                    &[bar(1, open, 5.0), bar(2, open, 5.0)],
+                    150,
+                )];
+                let (high, low) = (open.max(extreme), open.min(extreme));
+                let slow = [older, Bar::new(time(0), open, high, low, close, 11.0)];
+                let mut fast = vec![bar(1, open, 5.0), bar(2, close, 6.0)];
+                fired.push(poll(&slow, &fast, 160));
+                for minute in [3, 4] {
+                    fast.push(bar(minute, close, 1.0));
+                    fired.push(poll(&slow, &fast, minute * 60));
+                }
+                assert_eq!(fired, [0, 1, 0, 0], "row {row}, together {together}");
+            }
+        }
+    }
+
     #[test]
     fn once_per_close_sees_a_longer_interval_crossing_during_the_bar() {
         // At the close of one-minute bar -1 the five-minute close is 99; at the close of bar 0 it
@@ -4255,6 +4425,101 @@ mod tests {
                 }
             }
             assert_eq!(fired, expected, "row {row}");
+        }
+    }
+
+    /// A move past a level or a channel boundary and back fires the transition of its way back
+    /// alike whether the alert evaluates once over the move or after each trade, on a fixed
+    /// level or channel, a drawing level and a channel between two drawings. So does a move
+    /// through the whole channel, which enters it and exits it, while a touch of the level and
+    /// back is no crossing the other way.
+    #[test]
+    fn a_move_and_its_way_back_fire_alike_at_any_evaluation_rate() {
+        let (lower, upper) = (100.0, 110.0);
+        let drawn = |comparison| AlertCondition::Channel {
+            boundaries: Box::new(["line", "upper"].map(|id| AlertSource::Drawing(id.into()))),
+            comparison,
+        };
+        let level = |comparison| AlertCondition::Compare {
+            other: AlertSource::Drawing("upper".into()),
+            comparison,
+        };
+        // The trades of the forming bar, from the one the alert first observes.
+        let (out_and_back, in_and_back): (&[f64], &[f64]) =
+            (&[105.0, 112.0, 105.5], &[95.0, 103.0, 95.5]);
+        let down_and_back: &[f64] = &[115.0, 108.0, 114.5];
+        // Each row fires this many times at either rate.
+        let rows: [(AlertCondition, &[f64], usize); 12] = [
+            (
+                AlertCondition::EnteringChannel { lower, upper },
+                out_and_back,
+                1,
+            ),
+            (drawn(AlertChannelComparison::Entering), out_and_back, 1),
+            (
+                AlertCondition::ExitingChannel { lower, upper },
+                in_and_back,
+                1,
+            ),
+            (drawn(AlertChannelComparison::Exiting), in_and_back, 1),
+            (AlertCondition::CrossingDown(upper), out_and_back, 1),
+            (level(AlertComparison::CrossingDown), out_and_back, 1),
+            (AlertCondition::CrossingUp(upper), down_and_back, 1),
+            (level(AlertComparison::CrossingUp), down_and_back, 1),
+            // From the level itself, only the way back crosses it.
+            (AlertCondition::Crossing(upper), &[upper, 112.0, upper], 1),
+            // A touch of the level from below and back is no crossing down.
+            (
+                AlertCondition::CrossingDown(upper),
+                &[105.0, upper, 105.5],
+                0,
+            ),
+            // From inside, out below and up through the channel; from below, up through it and
+            // back in from above.
+            (
+                AlertCondition::EnteringChannel { lower, upper },
+                &[105.0, 95.0, 103.0, 115.0],
+                1,
+            ),
+            (
+                AlertCondition::ExitingChannel { lower, upper },
+                &[98.0, 95.0, 105.0, 115.0, 105.0],
+                1,
+            ),
+        ];
+        let value = |source: &AlertSource, _| match source {
+            AlertSource::Drawing(id) if id == "upper" => Some(upper),
+            AlertSource::Drawing(_) => Some(lower),
+            _ => None,
+        };
+        for (row, (condition, trades, fires)) in rows.into_iter().enumerate() {
+            let fired = [true, false].map(|each_trade| {
+                let host = Host::new(Vec::new());
+                host.save(alert(condition.clone(), AlertFrequency::EveryTime))
+                    .unwrap();
+                host.events();
+                let mut forming =
+                    Bar::new(time(60), trades[0], trades[0], trades[0], trades[0], 1.0);
+                let mut fired = 0;
+                for (n, &price) in trades.iter().enumerate() {
+                    forming.high = forming.high.max(price);
+                    forming.low = forming.low.min(price);
+                    forming.close = price;
+                    if n == 0 || each_trade || n == trades.len() - 1 {
+                        host.engine.update(
+                            "SYM",
+                            None,
+                            Timeframe::Min1,
+                            &[bar(0, trades[0], 1.0), forming.clone()],
+                            time(70 + n as i64),
+                            value,
+                        );
+                        fired += host.fired().len();
+                    }
+                }
+                fired
+            });
+            assert_eq!(fired, [fires; 2], "row {row}: after each trade, once");
         }
     }
 }

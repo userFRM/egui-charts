@@ -94,7 +94,7 @@
 //! | `strategies` | off | `strategies::Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`; needs no egui |
 //! | `icons` | via `ui` | Embedded SVG icons and their pixel-aligned loader; enables `widget` |
 //! | `ui` | on | Toolbars, panels, dialogs and `ui_kit`; enables `icons`, `studies`, `drawings`, `csv` and `png-export` |
-//! | `color-emoji` | off | The full Unicode emoji list in colour in the icon and emoji picker and on the chart, from the bundled Noto Color Emoji font (about 5 MB); enables `ui` |
+//! | `color-emoji` | off | The full Unicode emoji list in colour in the icon and emoji picker, on the chart and in drawing text, from the bundled Noto Color Emoji font (about 5 MB); enables `ui` |
 //! | `locales` | on | Localized month and weekday names and AM/PM markers through chrono; otherwise English |
 //! | `timezones` | on | IANA zones and daylight-saving rules through chrono-tz; otherwise UTC, system local time and fixed offsets |
 //! | `csv` | on | CSV import/export for bars, strategy reports and chart data; enabled by `ui` |

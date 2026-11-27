@@ -17,6 +17,11 @@ pub struct StrategyFill {
     pub side: OrderSide,
     /// Execution price, including applicable slippage.
     pub price: f64,
+    /// Decimals of the run's [`BacktestSettings::price_increment`], as
+    /// [`StrategyReport::price_decimals`](crate::model::StrategyReport::price_decimals) gives
+    /// them, such as 2 for 0.01, or `None` for an increment that is not positive and finite. A
+    /// fill alert's default message writes `price` with at least these.
+    pub price_decimals: Option<u8>,
     /// Total executed units, always positive.
     pub quantity: f64,
     /// Signed position immediately after this fill, before any fill callback orders execute.
@@ -912,6 +917,7 @@ mod tests {
             order_id: "Reverse".into(),
             side: OrderSide::Sell,
             price: 180.0,
+            price_decimals: Some(2),
             quantity: 7.0,
             position: -3.0,
             comment: None,
@@ -1008,7 +1014,7 @@ mod tests {
             ),
             (
                 "{{comment}}|{{alert_message}}",
-                ["Breakout|Long {{ticker}}", "|Stop to break-even", "|"],
+                ["Breakout|Long {{ticker}}", "|Stop to break-even", "Flat|"],
             ),
             (
                 "{{order_id}} {{side}} {{ticker}} {{close}}",
@@ -1059,6 +1065,107 @@ mod tests {
                 ],
                 "{template}"
             );
+        }
+    }
+
+    /// Fill alerts write prices at the run's price decimals and sizes as the report does,
+    /// without binary rounding digits, name the market position before and after each fill, and
+    /// report the exact fill price; a strategy alert's price reads the same way.
+    #[test]
+    #[cfg(feature = "alert-engine")]
+    fn fill_alerts_write_prices_sizes_and_market_positions_as_the_report_does() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::services::{AlertEngine, AlertEvent};
+        use std::sync::{Arc, Mutex};
+        struct Turns;
+        impl Strategy for Turns {
+            fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+                match context.bars().len() {
+                    1 => context.entry("Long", OrderSide::Buy, 1.0, OrderType::Market),
+                    2 => context.entry("Short", OrderSide::Sell, 1.0, OrderType::Market),
+                    3 => context.exit("Flat", None, None, None),
+                    4 => context.entry("Cash", OrderSide::Buy, None, OrderType::Market),
+                    _ => {}
+                }
+            }
+        }
+        // Each decision fills at the next open, two increments of 0.01 against the order, and
+        // the fill is reported once that bar closes.
+        let bars: Vec<_> = [100.0, 100.1, 101.0, 99.0, 100.08, 100.0]
+            .into_iter()
+            .enumerate()
+            .map(|(minute, open)| bar(minute as i64, open))
+            .collect();
+        let mut run = Backtest::new("Run", "SYM", Timeframe::Min1, 10_000.0);
+        run.settings.slippage = Slippage::Increments(2);
+        run.settings.order_size = OrderSize::Cash(1000.0);
+        run.settings.liquidation_increment = 1e-6;
+        let mut fills = Vec::new();
+        for count in 1..=bars.len() {
+            fills.extend(run.update(&mut Turns, &bars[..count], &[]));
+        }
+        // 100.1 + 0.02, and 1000 / (100.08 + 0.02) in steps of 1e-6, as binary arithmetic gives
+        // them.
+        assert_eq!(fills.len(), 4);
+        assert_eq!(fills[0].price, 100.11999999999999);
+        assert_eq!(fills[3].quantity, 9.990008999999999);
+        let raised = StrategyAlert {
+            sequence: 1,
+            time: bars[1].time,
+            price: fills[0].price,
+            message: "Filled".into(),
+        };
+        for (template, expected) in [
+            (
+                "",
+                [
+                    "Buy 1 at 100.12, position 1",
+                    "Sell 2 at 100.98, position -1",
+                    "Buy 1 at 99.02, position 0",
+                    "Buy 9.990009 at 100.10, position 9.990009",
+                    "Filled",
+                ],
+            ),
+            (
+                "{{value}}",
+                ["100.12", "100.98", "99.02", "100.1", "100.12"],
+            ),
+            (
+                "{{prev_market_position}} {{prev_market_position_size}} to \
+                 {{market_position}} {{market_position_size}}",
+                [
+                    "flat 0 to long 1",
+                    "long 1 to short 1",
+                    "short 1 to flat 0",
+                    "flat 0 to long 9.990009",
+                    "  to  ",
+                ],
+            ),
+        ] {
+            let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+            alert.message = template.into();
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let sink = delivered.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert])
+                .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+            let now = bars[5].time;
+            engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &fills, now);
+            let alerts = std::slice::from_ref(&raised);
+            engine.strategy_alerts("run-1", "SYM", None, Timeframe::Min1, alerts, now);
+            let events = delivered.lock().unwrap();
+            let observed: Vec<_> = events
+                .iter()
+                .map(|event| {
+                    let AlertEvent::TriggeredForSymbol { price, message, .. } = event else {
+                        panic!("a symbol trigger");
+                    };
+                    (*price, message.as_str())
+                })
+                .collect();
+            let prices = fills.iter().map(|fill| fill.price).chain([raised.price]);
+            let wanted: Vec<_> = prices.map(Some).zip(expected).collect();
+            assert_eq!(observed, wanted, "{template}");
         }
     }
 

@@ -986,6 +986,7 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
+ "unicode-segmentation",
  "web-time",
 ]
 
