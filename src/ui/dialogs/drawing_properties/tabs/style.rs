@@ -76,7 +76,10 @@ impl StyleTab {
                     ],
                 );
             }
-            if tool.is_none_or(|tool| tool.supports_color())
+            if props
+                .tool_settings
+                .as_ref()
+                .is_none_or(|template| template.settings.supports_color())
                 && tool != Some(DrawingToolType::PriceLabel)
                 && !position
                 && !regression
