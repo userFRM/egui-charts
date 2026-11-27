@@ -1145,12 +1145,28 @@ pub struct ChartPatterns {
 }
 
 impl ChartPatterns {
-    /// Whether a saved study name belongs to a built-in chart pattern study.
-    pub(crate) fn is_study(name: &str) -> bool {
-        name == "All Chart Patterns"
+    /// Whether a name and declared choice inputs match a built-in chart pattern study.
+    /// Host studies may reuse a built-in name and input id with different meanings.
+    pub(crate) fn is_study(name: &str, inputs: &[StudyInput]) -> bool {
+        let named = name == "All Chart Patterns"
             || PatternFamily::ALL.into_iter().any(|family| {
                 name == family.name() || family.kinds().iter().any(|kind| name == kind.label())
-            })
+            });
+        named
+            && Self::all()
+                .inputs()
+                .into_iter()
+                .filter(|input| matches!(input.id.as_str(), "pattern_filter" | "price_targets"))
+                .all(|expected| {
+                    inputs.iter().any(|input| {
+                        input.id == expected.id
+                            && matches!(
+                                (&input.kind, &expected.kind),
+                                (InputKind::Choice(actual), InputKind::Choice(expected))
+                                    if actual == expected
+                            )
+                    })
+                })
     }
 
     /// Detect every formation of `family` with its conventional parameters.

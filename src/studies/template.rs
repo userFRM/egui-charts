@@ -1240,10 +1240,7 @@ impl StudyTemplate {
             changed |= template.inputs.len() != listed;
         }
         // Chart patterns saved before targets and price lines were drawn keep both off.
-        if crate::studies::ChartPatterns::is_study(study)
-            && declares("price_targets")
-            && !has("price_targets")
-        {
+        if crate::studies::ChartPatterns::is_study(study, own) && !has("price_targets") {
             template
                 .inputs
                 .push(("price_targets".to_owned(), InputValue::Choice(3)));
@@ -3702,6 +3699,7 @@ mod tests {
         let rows = [
             ("RSI", vec![], 1),
             ("Bull Flag", vec![], 3),
+            ("Bear Flag", vec![], 3),
             ("Host projections", vec![], 3),
             (
                 "Echo",
@@ -3769,12 +3767,22 @@ mod tests {
                 .into_iter()
                 .map(|(id, value, kind)| StudyInput::new(id, id, value, kind))
                 .collect();
-            if name == "Host projections" {
+            if matches!(name, "Bull Flag" | "Bear Flag" | "Host projections") {
+                let choices = if name == "Bear Flag" {
+                    vec![
+                        "First".into(),
+                        "Second".into(),
+                        "Third".into(),
+                        "Fourth".into(),
+                    ]
+                } else {
+                    vec!["All".into(), "None".into()]
+                };
                 schema.push(StudyInput::new(
                     "price_targets",
                     "Projected levels",
                     InputValue::Choice(0),
-                    InputKind::Choice(vec!["All".into(), "None".into()]),
+                    InputKind::Choice(choices),
                 ));
             }
             factory.register(name, move || {
@@ -3804,13 +3812,14 @@ mod tests {
             // Echo is a literal chart study saved on origin/main before source routing changed.
             let saved = if name == "Echo" {
                 serde_json::from_str(r#"{"name":"Echo","inputs":[["source",{"Source":{"Price":"HL2"}}],["basis",{"Source":{"Price":"OHLC4"}}],["symbol",{"Symbol":"OTHER"}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[240,145,40,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,9,3,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap()
-            } else if name == "Host projections" {
+            } else if matches!(name, "Bull Flag" | "Bear Flag" | "Host projections") {
                 let old = CustomIndicator::new(name, |_| Vec::new()).with_line_count(lines);
                 let mut saved = StudyTemplate::from_study(&old);
                 saved.settings.plots[0].visible = false;
                 saved.settings.plots[1].width = 3.0;
                 saved.settings.precision = Some(4);
                 saved.visible = false;
+                saved.scale = Some(StudyScale::Independent);
                 saved
             } else {
                 StudyTemplate::from_study(original.as_ref())
@@ -3819,9 +3828,10 @@ mod tests {
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!((restored.name(), restored.line_count()), (name, lines));
-            if name == "Host projections" {
+            if matches!(name, "Bull Flag" | "Bear Flag" | "Host projections") {
                 assert_eq!(restored.settings(), saved.settings);
                 assert_eq!(restored.is_visible(), saved.visible);
+                assert_eq!(Some(restored.scale()), saved.scale);
                 assert_eq!(
                     restored
                         .inputs()
