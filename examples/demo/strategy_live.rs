@@ -797,7 +797,10 @@ mod tests {
             );
             for (name, change) in cases {
                 let (actual, changed) = notices(symbol, stop_runs, change);
-                assert!(changed, "{symbol} {name}: the displayed context must change");
+                assert!(
+                    changed,
+                    "{symbol} {name}: the displayed context must change"
+                );
                 assert_eq!(actual, unchanged, "{symbol} {name}");
             }
         }
