@@ -77,9 +77,10 @@
 //! bearish pattern the neutral ones join the bearish label, and on a bar with only a bullish one
 //! the bullish label, so no two labels overlap. Hovering a
 //! mark shows the full name of each pattern it labels, such as "Three White Soldiers - Bullish",
-//! each followed by its rule in words, in the label's order. Every pattern has a toggle, all on by
-//! default, and the pattern type marks both sides (the default, neutral patterns included) or only
-//! the bullish or only the bearish patterns.
+//! each followed by its rule in words, in the label's order. Every pattern has a toggle; Abandoned
+//! Baby, Doji, Dragonfly Doji, Engulfing and Hammer are on by default. The pattern type marks
+//! both sides (the default) or only the bullish or only the bearish patterns; neutral patterns
+//! are marked under every type while their toggle is on.
 //!
 //! Each pattern also has its own study, registered under its label, such as "Doji" or
 //! "Engulfing - Bearish". It draws one line, named and styled as its side's line above, and
@@ -138,9 +139,9 @@ pub enum PatternType {
     /// Bullish, bearish and neutral patterns.
     #[default]
     Both,
-    /// Bullish patterns only.
+    /// Bullish and neutral patterns.
     Bullish,
-    /// Bearish patterns only.
+    /// Bearish and neutral patterns.
     Bearish,
 }
 
@@ -154,12 +155,12 @@ impl PatternType {
         }
     }
 
-    /// Whether this choice marks patterns of `side`; neutral ones only with both sides.
+    /// Whether this choice marks patterns of `side`; neutral ones are always marked.
     fn marks(self, side: Side) -> bool {
         match self {
             Self::Both => true,
-            Self::Bullish => side == Bullish,
-            Self::Bearish => side == Bearish,
+            Self::Bullish => side != Bearish,
+            Self::Bearish => side != Bullish,
         }
     }
 }
@@ -180,6 +181,17 @@ const TYPES: [PatternType; 3] = [
     PatternType::Both,
     PatternType::Bullish,
     PatternType::Bearish,
+];
+
+/// The patterns All Candlestick Patterns marks when it is added; the others start off.
+const ON_BY_DEFAULT: [&str; 7] = [
+    "Abandoned Baby - Bearish",
+    "Abandoned Baby - Bullish",
+    "Doji",
+    "Dragonfly Doji - Bullish",
+    "Engulfing - Bearish",
+    "Engulfing - Bullish",
+    "Hammer - Bullish",
 ];
 
 /// All Candlestick Patterns: the common candlestick patterns, each with a toggle, marked
@@ -240,7 +252,7 @@ impl CandlestickPatterns {
         }
     }
 
-    /// Mark both sides with neutral patterns, or only bullish or only bearish patterns.
+    /// Mark both sides, or only bullish or only bearish patterns; neutral ones are always marked.
     pub fn with_pattern_type(mut self, pattern_type: PatternType) -> Self {
         self.pattern_type = pattern_type;
         self
@@ -322,10 +334,11 @@ impl CandlestickPatterns {
     }
 }
 
-/// Construct with the conventional default trend rule and every pattern on.
+/// Construct with the conventional default trend rule and the usual patterns on: Abandoned
+/// Baby, Doji, Dragonfly Doji, Engulfing and Hammer.
 impl Default for CandlestickPatterns {
     fn default() -> Self {
-        Self::new(PatternTrend::Sma50)
+        Self::new(PatternTrend::Sma50).with_patterns(|label| ON_BY_DEFAULT.contains(&label))
     }
 }
 
@@ -357,7 +370,7 @@ impl Indicator for CandlestickPatterns {
                         InputValue::Toggle(on),
                         InputKind::Toggle,
                     )
-                    .with_default(InputValue::Toggle(true))
+                    .with_default(InputValue::Toggle(ON_BY_DEFAULT.contains(&pattern.label)))
                 },
             ));
         }
@@ -716,7 +729,11 @@ mod tests {
         } else {
             label
         };
-        let mut study = IndicatorFactory::new().create(name).unwrap();
+        let mut study: Box<dyn Indicator> = if label.is_empty() {
+            Box::new(CandlestickPatterns::new(trend))
+        } else {
+            IndicatorFactory::new().create(name).unwrap()
+        };
         let rule = TRENDS.iter().position(|&rule| rule == trend).unwrap();
         study.set_input("trend", InputValue::Choice(rule)).unwrap();
         study.calculate(&data);
@@ -1000,7 +1017,7 @@ mod tests {
         assert_eq!(text(none, &flat, bullish, "", 0).as_deref(), Some("3S\nD"));
         assert_eq!(text(none, &flat, bullish, "", 2), None);
 
-        // The pattern type keeps one side and drops the neutral patterns.
+        // The pattern type filters directional patterns while neutral patterns remain enabled.
         let mut data = flat.clone();
         data.extend(
             tri_star
@@ -1011,6 +1028,17 @@ mod tests {
         study.calculate(&data);
         let last = data.len() - 1;
         assert_eq!(study.plot_text(1, last), None);
+        assert_eq!(study.plot_text(2, last).as_deref(), Some("D"));
+        assert_eq!(study.values().value(2, last), Some(99.0));
+        let doji = PATTERNS.iter().position(|p| p.label == "Doji").unwrap();
+        assert_eq!(study.alert_condition(doji, last), Some(true));
+        assert_eq!(
+            study.alert_outputs(),
+            [(0, "Bullish".into()), (2, "Neutral".into())]
+        );
+        let mut study = study.with_pattern_type(PatternType::Bearish);
+        study.calculate(&data);
+        assert_eq!(study.plot_text(1, last).as_deref(), Some("3S\nD"));
         assert_eq!(study.plot_text(2, last), None);
     }
 
@@ -1040,6 +1068,36 @@ mod tests {
         );
         let rising = with(walk((40..100).map(f64::from)), hammer);
         let long_fall = with(walk((90..300).rev().map(f64::from)), hammer);
+
+        let mut combined = IndicatorFactory::new()
+            .create("All Candlestick Patterns")
+            .unwrap();
+        let usual = [
+            "Abandoned Baby - Bearish",
+            "Abandoned Baby - Bullish",
+            "Doji",
+            "Dragonfly Doji - Bullish",
+            "Engulfing - Bearish",
+            "Engulfing - Bullish",
+            "Hammer - Bullish",
+        ];
+        for (k, pattern) in PATTERNS.iter().enumerate() {
+            let inputs = combined.inputs();
+            let input = inputs
+                .iter()
+                .find(|input| input.id == format!("patterns [{k}]"))
+                .unwrap();
+            let expected = InputValue::Toggle(usual.contains(&pattern.label));
+            assert_eq!(input.value, expected, "{}", pattern.label);
+            assert_eq!(input.default, expected, "{}", pattern.label);
+        }
+        combined.set_input("trend", InputValue::Choice(2)).unwrap();
+        let flat = walk((0..14).map(|i| 100.0 + f64::from(i % 2)));
+        let dragonfly = with(flat, &[(100.0, 100.0625, 96.0, 100.0625)]);
+        assert_eq!(
+            marks(&mut combined, &dragonfly, 0).as_deref(),
+            Some("DD\nH")
+        );
 
         let mut study = IndicatorFactory::new().create("Hammer - Bullish").unwrap();
         let ids: Vec<String> = study.inputs().into_iter().map(|input| input.id).collect();
