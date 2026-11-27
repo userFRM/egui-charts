@@ -4950,7 +4950,8 @@ mod tests {
     /// Volume Delta, PVO, Choppiness Index and Trend Strength Index open with their usual guides
     /// and bands. Older saves keep their guide styles and leave new guides and fills hidden;
     /// a guide shown since keeps its style through a template. Awesome Oscillator opens as
-    /// columns and keeps a saved histogram; Balance of Power keeps its saved smoothing.
+    /// columns and keeps a saved histogram; Balance of Power keeps its saved smoothing. An older
+    /// SuperTrend keeps its styles with its new body middle and background hidden.
     #[test]
     fn oscillator_guides_open_declared_and_older_saves_restore_as_drawn() {
         use crate::studies::{IndicatorFactory, PlotType, StudyTemplate, palette};
@@ -5258,6 +5259,8 @@ mod tests {
         }
         // Literal baseline saves keep their styles, with newly declared guides and fills hidden.
         for text in [
+            // SuperTrend saved on origin/main 9544f5b34 before its background and body middle.
+            r#"{"name":"SuperTrend","inputs":[["atr_period",{"Length":10}],["multiplier",{"Number":3.0}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.SuperTrend.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
             r#"{"name":"MFI","inputs":[["period",{"Length":14}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MoneyFlowIndex.html","plots":[{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":true,"level_fill_color":[13,9,20,26],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
             r#"{"name":"Aroon Oscillator","inputs":[["period",{"Length":14}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AroonOscillator.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
             r#"{"name":"AO","inputs":[["fast_period",{"Length":5}],["slow_period",{"Length":34}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AwesomeOscillator.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"Histogram","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[{"name":"Decreasing bars","color":[244,67,54,255],"width":1.0}]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
@@ -5273,7 +5276,7 @@ mod tests {
                     visible: false,
                     ..expected.levels[0]
                 }),
-                "Aroon Oscillator" | "%B" => {
+                "Aroon Oscillator" | "%B" | "SuperTrend" => {
                     expected.fills = factory
                         .create(&saved.name)
                         .unwrap()
@@ -5285,6 +5288,12 @@ mod tests {
                             ..FillStyle::new(fill.color)
                         })
                         .collect();
+                    if saved.name == "SuperTrend" {
+                        expected
+                            .plots
+                            .push(crate::studies::SuperTrend::default().plot_style(2));
+                        expected.plot_variants.push(Vec::new());
+                    }
                     if saved.name == "Aroon Oscillator" {
                         expected.plot_variants =
                             vec![vec![PlotVariant::new("Below zero", palette::HISTOGRAM_RED)]];
@@ -5292,12 +5301,7 @@ mod tests {
                 }
                 _ => {}
             }
-            assert_eq!(
-                older.line_count(),
-                saved.settings.plots.len(),
-                "{}",
-                saved.name
-            );
+            assert_eq!(older.line_count(), expected.plots.len(), "{}", saved.name);
             assert_eq!(older.settings(), expected, "{}", saved.name);
             for (id, value) in &saved.inputs {
                 assert_eq!(
