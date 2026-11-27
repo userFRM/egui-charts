@@ -24,6 +24,10 @@ const CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 /// of its symbol until the user shares it.
 const PRACTICE_FOLDER: &str = "Practice";
 
+/// Memory a recording driver keeps seek checkpoints in; the web build shares its memory with the
+/// recording itself.
+const REPLAY_CHECKPOINT_BYTES: usize = 32 << 20;
+
 /// A replay move held while the replay trading prompt asks about the account.
 pub(super) enum ReplayMove {
     /// A step back or a jump to the start from the replay bar.
@@ -288,6 +292,7 @@ impl RecordingImport {
         .map_err(|e| e.to_string())?;
         let driver =
             ReplayDriver::new(self.events, vec![instrument.clone()]).map_err(|e| e.to_string())?;
+        driver.set_checkpoint_budget(REPLAY_CHECKPOINT_BYTES);
         Ok(LoadedRecording {
             driver: Arc::new(driver),
             instrument,
@@ -1242,9 +1247,9 @@ impl DemoApp {
                     instruments.push(extra.live.instrument());
                     extra.live.read_recording(&mut merged);
                 }
-                let driver =
-                    Arc::new(ReplayDriver::new(merged, instruments).expect("captured market data"));
-                Some(driver)
+                let driver = ReplayDriver::new(merged, instruments).expect("captured market data");
+                driver.set_checkpoint_budget(REPLAY_CHECKPOINT_BYTES);
+                Some(Arc::new(driver))
             }
         } else {
             None
@@ -1941,6 +1946,87 @@ mod tests {
         );
         assert!(app.chart.instrument().unwrap().unit.is_none());
         assert!(!app.chart.bars(SeriesId::MAIN).is_empty());
+    }
+
+    /// A seek back in an opened recording resumes from a checkpoint and shows what a replay
+    /// from the first event shows, inside a partly filled volume candle.
+    #[test]
+    fn seeking_back_in_a_recording_resumes_from_a_checkpoint() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        super::super::tests::settle(&mut app, &ctx);
+        let volume_bars = 5.0;
+        app.switch_timeframe(Timeframe::Volume(NonZeroU64::new(5).unwrap()));
+        super::super::tests::settle(&mut app, &ctx);
+        app.live.set_paused(false);
+        app.live
+            .advance(app.live.now() + chrono::TimeDelta::seconds(20));
+        app.live.set_paused(true);
+        let mut events = Vec::new();
+        app.live.read_recording(&mut events);
+        let last = events.last().unwrap().clone();
+        let price = (events.iter().rev())
+            .find_map(|event| match &event.event {
+                MarketEvent::Trade(trade) => Some(trade.price),
+                _ => None,
+            })
+            .unwrap();
+        let recorded = events.len();
+        for i in 1..=9000 {
+            let time = last.time + chrono::TimeDelta::milliseconds(i);
+            let trade = egui_charts::model::Tick::new(time, price, 1.0, Some(OrderSide::Buy));
+            events.push(ReplayEvent::new(
+                &app.state.symbol,
+                time,
+                last.sequence + i as u64,
+                MarketEvent::Trade(trade),
+            ));
+        }
+        // The first appended execution from the 6,000th on that leaves its volume bar part full.
+        let mut volume = 0.0;
+        let (target, through) = (events.iter().enumerate())
+            .find_map(|(at, event)| {
+                if let MarketEvent::Trade(trade) = &event.event {
+                    volume += trade.size;
+                }
+                let part = volume % volume_bars;
+                (at >= recorded + 6000 && part > 1e-6 && part < volume_bars - 1e-6)
+                    .then_some((event.time, at + 1))
+            })
+            .unwrap();
+        let bytes = recording_bytes(&app.live.instrument(), &events).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.recording_files.selected = Some(rx);
+        tx.send(Ok(Some(bytes))).unwrap();
+        for _ in 0..16 {
+            super::super::tests::settle(&mut app, &ctx);
+            if app.chart.replay_driver().is_some() {
+                break;
+            }
+        }
+        let driver = app.chart.replay_driver().unwrap().clone();
+        app.seek_recording(events.last().unwrap().time);
+        super::super::tests::settle(&mut app, &ctx);
+        assert!(driver.checkpoint_stats().checkpoints > 0);
+        app.seek_recording(target);
+        super::super::tests::settle(&mut app, &ctx);
+        let stats = driver.checkpoint_stats();
+        assert_eq!(stats.seek_resumed, 1);
+        assert!(
+            stats.seek_events < through,
+            "{} events fed",
+            stats.seek_events
+        );
+        let bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        let trades: Vec<_> = app.chart.trades(SeriesId::MAIN).cloned().collect();
+        let part = volume - volume_bars * (volume / volume_bars).floor();
+        assert!((bars.last().unwrap().volume - part).abs() < 1e-9);
+        driver.set_checkpoint_budget(0);
+        app.seek_recording(target);
+        super::super::tests::settle(&mut app, &ctx);
+        assert_eq!(driver.checkpoint_stats().seek_resumed, 0);
+        assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
+        assert!(app.chart.trades(SeriesId::MAIN).eq(&trades));
     }
 
     /// A fixed unit conversion must reach source prices, feed metadata, replay and saved layouts.

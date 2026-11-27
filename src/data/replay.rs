@@ -1,5 +1,6 @@
 //! One event clock for host-supplied trades, quotes and depth across instruments.
 
+use super::inbox::{RebuildPoint, RestoreRefused};
 use super::{
     Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, HistoryPage, HistoryRequest,
     OrderEvent, RecordingReader, Reply, RestingOrder, Sink, Subscription, SubscriptionId,
@@ -278,6 +279,8 @@ impl ReplayClock {
 /// capture, storage and scheduling. Bar aggregation, book gaps and trade deduplication use the
 /// live sink's rules. A new subscription reconstructs the current position, including when its
 /// interval changes. No history request can return events beyond the playback position.
+/// With [`set_checkpoint_budget`](Self::set_checkpoint_budget), a seek resumes each subscription
+/// from a saved state instead of the first event.
 /// A subscription receives the executions inside the instrument's session windows that
 /// [`Subscription::extended_hours`] and [`Subscription::overnight_hours`] select; book events
 /// and quotes apply at every hour, so the book stays continuous.
@@ -300,7 +303,56 @@ impl ReplayClock {
 pub struct ReplayDriver {
     state: Mutex<Playback>,
     // Serialize pushes without blocking readouts or unsubscribe while a waker waits on egui.
-    dispatch: Mutex<()>,
+    dispatch: Mutex<Checkpoints>,
+}
+
+/// Seek checkpoints a [`ReplayDriver`] holds, and what its last seek replayed.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct ReplayCheckpointStats {
+    /// Checkpoints held for the active subscriptions.
+    pub checkpoints: usize,
+    /// Their estimated size in bytes, as [`ReplayDriver::set_checkpoint_budget`] counts it.
+    pub bytes: usize,
+    /// Events the last [`ReplayDriver::seek`] pushed, summed over the subscriptions it rebuilt.
+    pub seek_events: usize,
+    /// Subscriptions the last seek resumed from a checkpoint rather than from the first event.
+    pub seek_resumed: usize,
+}
+
+/// Events of a subscription between its first two checkpoints. Later spacings double it.
+const FIRST_SPACING: usize = 4096;
+
+/// The checkpoints of every subscription, within the host's budget.
+#[derive(Default)]
+struct Checkpoints {
+    budget: usize,
+    bytes: usize,
+    routes: HashMap<SubscriptionId, RoutePoints>,
+}
+
+struct RoutePoints {
+    /// Checkpoints lie at multiples of this many of the route's own events.
+    spacing: usize,
+    /// Ascending by `ordinal`.
+    points: Vec<Point>,
+}
+
+impl Default for RoutePoints {
+    fn default() -> Self {
+        Self {
+            spacing: FIRST_SPACING,
+            points: Vec::new(),
+        }
+    }
+}
+
+struct Point {
+    /// Events of the route's symbol pushed before it.
+    ordinal: usize,
+    /// Index of the next recorded event.
+    cursor: usize,
+    state: RebuildPoint,
 }
 
 impl std::fmt::Debug for ReplayDriver {
@@ -314,6 +366,8 @@ struct Playback {
     instruments: HashMap<String, Instrument>,
     /// Replaced when a subscription starts or ends, so a frame shares them without copying.
     routes: Arc<[Route]>,
+    /// Written after every change to the checkpoints, so reading it never waits for a seek.
+    stats: ReplayCheckpointStats,
 }
 
 /// Where one subscription's events go.
@@ -352,8 +406,9 @@ impl ReplayDriver {
                 clock: ReplayClock::new(events)?,
                 instruments,
                 routes: Arc::new([]),
+                stats: ReplayCheckpointStats::default(),
             }),
-            dispatch: Mutex::new(()),
+            dispatch: Mutex::default(),
         })
     }
 
@@ -441,13 +496,14 @@ impl ReplayDriver {
     }
 
     /// Reconstructs every active subscription through `time`, clearing all later state first.
-    /// Replays book history from the beginning as well as trades: starting at the latest book
-    /// snapshot would lose earlier heatmap columns. No later snapshot or execution is exposed.
+    /// Replays book history as well as trades from the first event, or from the latest
+    /// checkpoint at or before `time`: starting at the latest book snapshot would lose earlier
+    /// heatmap columns. No later snapshot or execution is exposed.
     /// The bars equal those of playback through `time` at any speed, and none is dropped for
     /// the pending bar limit however long the recording. Call outside egui context locks, as
     /// with live pushes.
     pub fn seek(&self, time: DateTime<Utc>) {
-        let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut store = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
         let (events, end, routes) = {
             let mut state = self.state();
             state.clock.position(time);
@@ -457,9 +513,126 @@ impl ReplayDriver {
                 state.routes(),
             )
         };
+        store.prune(&routes);
+        let (mut pushed, mut resumed) = (0, 0);
         for route in routes.iter() {
-            route.rebuild(&events[..end], time);
+            let (count, from_point) = route.rebuild(&events[..end], time, &mut store);
+            pushed += count;
+            resumed += usize::from(from_point);
         }
+        let mut state = self.state();
+        state.stats.seek_events = pushed;
+        state.stats.seek_resumed = resumed;
+        store.publish(&mut state.stats);
+    }
+
+    /// Lets seeks resume from checkpoints held in about `bytes` of memory; 0, the default, keeps
+    /// none, and every seek replays from the first event. While it rebuilds a subscription, on a
+    /// seek or a new subscription, the driver saves the subscription's feed state every few
+    /// thousand of its events, thinning them evenly when the budget fills, and a later seek
+    /// resumes from the latest one at or before its time. Bars, executions, book, depth history
+    /// and order-flow inputs equal those of a replay from the first event. Playback saves
+    /// nothing: a seek past a position reached only by playing resumes from the latest
+    /// checkpoint before it. A subscription whose interval, hours, depth history or connected
+    /// studies change starts over. Sizes count the bars, executions, book levels, depth columns
+    /// and order-flow rows held, not allocator overhead. Waits for a seek or advance in progress.
+    pub fn set_checkpoint_budget(&self, bytes: usize) {
+        let mut store = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
+        store.budget = bytes;
+        if bytes == 0 {
+            store.routes.clear();
+            store.bytes = 0;
+        }
+        store.fit();
+        store.publish(&mut self.state().stats);
+    }
+
+    /// The checkpoints held and the work of the last seek.
+    pub fn checkpoint_stats(&self) -> ReplayCheckpointStats {
+        self.state().stats
+    }
+}
+
+impl Checkpoints {
+    /// Drops the checkpoints of ended subscriptions.
+    fn prune(&mut self, routes: &[Route]) {
+        let mut freed = 0;
+        self.routes.retain(|id, points| {
+            let active = routes.iter().any(|route| route.id == *id);
+            if !active {
+                freed = usize::saturating_add(freed, points.bytes());
+            }
+            active
+        });
+        self.bytes = self.bytes.saturating_sub(freed);
+    }
+
+    fn remove(&mut self, id: SubscriptionId) {
+        if let Some(points) = self.routes.remove(&id) {
+            self.bytes = self.bytes.saturating_sub(points.bytes());
+        }
+    }
+
+    /// Saves `route` after its `ordinal`-th event, the one before `cursor`, when its spacing
+    /// asks for a checkpoint there.
+    fn capture(&mut self, route: &Route, ordinal: usize, cursor: usize) {
+        let points = self.routes.entry(route.id).or_default();
+        if !ordinal.is_multiple_of(points.spacing)
+            || points.points.iter().any(|point| point.ordinal == ordinal)
+        {
+            return;
+        }
+        let Some(state) = route.sink.capture_rebuild(self.budget) else {
+            return;
+        };
+        self.bytes = self.bytes.saturating_add(state.bytes());
+        let at = points
+            .points
+            .partition_point(|point| point.ordinal < ordinal);
+        let point = Point {
+            ordinal,
+            cursor,
+            state,
+        };
+        points.points.insert(at, point);
+        self.fit();
+    }
+
+    /// Halves the checkpoints of the largest route, keeping every other one, until they fit.
+    fn fit(&mut self) {
+        while self.bytes > self.budget {
+            let Some(points) = (self.routes.iter_mut())
+                .max_by_key(|(id, points)| (points.bytes(), std::cmp::Reverse(id.0)))
+                .map(|(_, points)| points)
+                .filter(|points| !points.points.is_empty())
+            else {
+                // Nothing is held: a total that saturated starts over.
+                self.bytes = 0;
+                return;
+            };
+            let spacing = points.spacing.saturating_mul(2);
+            let mut freed = 0;
+            points.points.retain(|point| {
+                let kept = point.ordinal.is_multiple_of(spacing);
+                if !kept {
+                    freed = usize::saturating_add(freed, point.state.bytes());
+                }
+                kept
+            });
+            points.spacing = spacing;
+            self.bytes = self.bytes.saturating_sub(freed);
+        }
+    }
+
+    fn publish(&self, stats: &mut ReplayCheckpointStats) {
+        stats.checkpoints = self.routes.values().map(|points| points.points.len()).sum();
+        stats.bytes = self.bytes;
+    }
+}
+
+impl RoutePoints {
+    fn bytes(&self) -> usize {
+        (self.points.iter()).fold(0, |sum, point| sum.saturating_add(point.state.bytes()))
     }
 }
 
@@ -517,14 +690,48 @@ impl Route {
         self.sink.advance_time(time);
     }
 
-    /// Reconstructs this subscription through `events`, which end at `time`.
-    fn rebuild(&self, events: &[ReplayEvent], time: DateTime<Utc>) {
+    /// Reconstructs this subscription through `events`, which end at `time`, from its latest
+    /// checkpoint inside them when it has one, saving more as `store` asks. Returns the events
+    /// pushed and whether it resumed from a checkpoint.
+    fn rebuild(
+        &self,
+        events: &[ReplayEvent],
+        time: DateTime<Utc>,
+        store: &mut Checkpoints,
+    ) -> (usize, bool) {
         self.sink.start_rebuild(time);
-        for event in events.iter().filter(|event| event.symbol == self.symbol) {
+        // By index, never by time: events sharing a timestamp may straddle a checkpoint.
+        let restored = (store.routes.get(&self.id))
+            .and_then(|points| points.points.iter().rfind(|p| p.cursor <= events.len()))
+            .map(|point| {
+                (
+                    self.sink.restore_rebuild(&point.state),
+                    point.cursor,
+                    point.ordinal,
+                )
+            });
+        let (mut cursor, mut ordinal, mut resumed) = (0, 0, false);
+        match restored {
+            Some((Ok(()), at, count)) => (cursor, ordinal, resumed) = (at, count, true),
+            Some((Err(RestoreRefused::Incompatible), ..)) => store.remove(self.id),
+            Some((Err(RestoreRefused::Busy), ..)) | None => {}
+        }
+        let mut pushed = 0;
+        for (at, event) in events.iter().enumerate().skip(cursor) {
+            if event.symbol != self.symbol {
+                continue;
+            }
             self.deliver(event);
+            pushed += 1;
+            ordinal += 1;
+            // Every spacing is a multiple of the first: most events skip the store.
+            if store.budget > 0 && ordinal.is_multiple_of(FIRST_SPACING) {
+                store.capture(self, ordinal, at + 1);
+            }
         }
         self.publish(time);
         self.sink.finish_rebuild();
+        (pushed, resumed)
     }
 }
 
@@ -545,7 +752,7 @@ impl Datafeed for ReplayDriver {
     }
 
     fn subscribe(&self, subscription: Subscription) {
-        let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut store = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
         let position = {
             let mut state = self.state();
             let hours = state
@@ -580,7 +787,9 @@ impl Datafeed for ReplayDriver {
             subscription.sink.report_error(FeedError::NotSupported);
             return;
         };
-        route.rebuild(&events[..end], time);
+        store.prune(&self.state().routes());
+        route.rebuild(&events[..end], time, &mut store);
+        store.publish(&mut self.state().stats);
     }
 
     fn unsubscribe(&self, id: SubscriptionId) {
@@ -1416,5 +1625,142 @@ mod tests {
                 "{timeframe:?}"
             );
         }
+    }
+
+    /// A seek from a checkpoint shows what a seek from the first event shows, and pushes only
+    /// the events after the checkpoint.
+    #[cfg(any(feature = "widget", feature = "alert-engine"))]
+    #[test]
+    fn a_seek_resumes_from_the_latest_checkpoint_before_it() {
+        use super::super::{DepthHistoryConfig, OrderFlowInput, OrderFlowKind};
+        let at_ms = |i: usize| DateTime::from_timestamp_millis(i as i64).unwrap();
+        let level = |price, size| OrderBookLevel {
+            price,
+            size,
+            order_cnt: None,
+        };
+        let book = |i, bids, asks| OrderBook {
+            ts: at_ms(i),
+            symbol: "A".into(),
+            bids,
+            asks,
+        };
+        // A snapshot each 1,000 events, a delta 500 after it, a quote each 10 and trades between.
+        let events: Vec<_> = (0..10_000)
+            .map(|i| {
+                let sequence = 2 * (i / 1000) as u64;
+                let event = match (i % 1000, i % 10) {
+                    (0, _) => MarketEvent::DepthSnapshot {
+                        sequence,
+                        book: book(
+                            i,
+                            vec![level(99.0, (i / 1000 + 1) as f64)],
+                            vec![level(101.0, 1.0)],
+                        ),
+                    },
+                    (500, _) => MarketEvent::DepthDelta {
+                        sequence: sequence + 1,
+                        book: book(i, vec![level(99.0, 0.5)], vec![]),
+                    },
+                    (_, 5) => MarketEvent::Quote(Level1Quote {
+                        ts: at_ms(i),
+                        symbol: "A".into(),
+                        bid: 99.0,
+                        ask: 101.0,
+                        bid_size: 1.0,
+                        ask_size: 1.0,
+                    }),
+                    _ => MarketEvent::Trade(
+                        Tick::new(at_ms(i), 100.0, 1.0, Some(OrderSide::Buy)).with_id(i as u64),
+                    ),
+                };
+                ReplayEvent::new("A", at_ms(i), i as u64, event)
+            })
+            .collect();
+        let timeframe = Timeframe::Volume(std::num::NonZeroU64::new(5).unwrap());
+        let connect = |budget| {
+            let driver = ReplayDriver::new(
+                events.clone(),
+                vec![Instrument::new("A").with_tick_size(1.0)],
+            )
+            .unwrap();
+            driver.set_checkpoint_budget(budget);
+            let inbox = Arc::new(Inbox::default());
+            let sink = inbox.subscribe("A".into(), timeframe.into(), 100_000, Some(1.0));
+            inbox.sample_depth(sink.id, Some(DepthHistoryConfig::default()));
+            let input = OrderFlowInput::new(OrderFlowKind::SideVolume);
+            inbox.study_inputs(sink.id, vec![input.clone()]);
+            driver.subscribe(Subscription {
+                id: sink.id,
+                symbol: "A".into(),
+                timeframe,
+                clock: timeframe.into(),
+                extended_hours: true,
+                overnight_hours: true,
+                adjusted: false,
+                conversion: None,
+                sink: sink.clone(),
+            });
+            inbox.drain();
+            (driver, inbox, sink, input)
+        };
+        let shown = |inbox: &Inbox, input: &OrderFlowInput| {
+            let (_, update) = inbox.drain().updates.pop().unwrap();
+            let bars: Vec<_> = update.bars.into_values().map(|(bar, _)| bar).collect();
+            let trades: Vec<_> = update.trades.iter().cloned().collect();
+            let columns: Vec<_> = update.replay_depth.unwrap().columns().cloned().collect();
+            (
+                bars,
+                trades,
+                update.depth,
+                columns,
+                update.quote,
+                input.values(),
+            )
+        };
+        let (driver, inbox, sink, input) = connect(usize::MAX);
+        let (reference, reference_inbox, _, reference_input) = connect(0);
+        let stats = |checkpoints, seek_events, seek_resumed| {
+            let stats = driver.checkpoint_stats();
+            assert_eq!(
+                (stats.checkpoints, stats.seek_events, stats.seek_resumed),
+                (checkpoints, seek_events, seek_resumed)
+            );
+            stats
+        };
+        // Checkpoints after the 4,096th and 8,192nd events: one symbol, so at those cursors.
+        driver.seek(at_ms(9999));
+        inbox.drain();
+        stats(2, 10_000, 0);
+        driver.seek(at_ms(6999));
+        stats(2, 7000 - 4096, 1);
+        reference.seek(at_ms(6999));
+        let resumed = shown(&inbox, &input);
+        assert!(resumed == shown(&reference_inbox, &reference_input));
+        let (bars, trades, depth, columns, quote, values) = resumed;
+        // 7 snapshots, 7 deltas and 700 quotes leave 6,286 trades: 1,257 full bars and one of 1.
+        assert_eq!((bars.len(), bars.last().unwrap().volume), (1258, 1.0));
+        assert_eq!((trades.len(), values.len()), (6286, 1258));
+        assert_eq!(values.values().last(), Some(&[1.0, 0.0, 1.0]));
+        assert_eq!(depth.unwrap().bids[0].size, 0.5);
+        assert_eq!(quote.unwrap().ts, at_ms(6995));
+        assert!(!columns.is_empty());
+        // Another depth history: the checkpoints no longer apply and new ones replace them.
+        let config = DepthHistoryConfig {
+            cadence: TimeDelta::seconds(2),
+            ..Default::default()
+        };
+        inbox.sample_depth(sink.id, Some(config));
+        driver.seek(at_ms(9999));
+        let held = stats(2, 10_000, 0);
+        // Thinning keeps every other checkpoint: the one after 8,192 events.
+        driver.set_checkpoint_budget(held.bytes - 1);
+        stats(1, 10_000, 0);
+        driver.seek(at_ms(6999));
+        stats(1, 7000, 0);
+        driver.seek(at_ms(9999));
+        stats(1, 10_000 - 8192, 1);
+        driver.set_checkpoint_budget(0);
+        assert_eq!((stats(0, 1808, 1).bytes), 0);
     }
 }
