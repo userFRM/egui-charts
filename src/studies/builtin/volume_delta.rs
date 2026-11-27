@@ -20,6 +20,7 @@
 
 use super::anchor_period::AnchorPeriod;
 use super::lower_interval;
+use super::order_flow::{Reset, reset_key};
 use crate::model::{Bar, BarClock, LineStyle, Timeframe};
 use crate::scales::StudyFormat;
 use crate::studies::palette;
@@ -29,14 +30,16 @@ use crate::studies::{
 };
 use egui::Color32;
 
-const PERIODS: [AnchorPeriod; 7] = [
-    AnchorPeriod::Session,
-    AnchorPeriod::Week,
-    AnchorPeriod::Month,
-    AnchorPeriod::Quarter,
-    AnchorPeriod::Year,
-    AnchorPeriod::Decade,
-    AnchorPeriod::Century,
+/// The Anchor period choices in their saved order: new choices go at the end.
+const ANCHORS: [Reset; 8] = [
+    Reset::Period(AnchorPeriod::Session),
+    Reset::Period(AnchorPeriod::Week),
+    Reset::Period(AnchorPeriod::Month),
+    Reset::Period(AnchorPeriod::Quarter),
+    Reset::Period(AnchorPeriod::Year),
+    Reset::Period(AnchorPeriod::Decade),
+    Reset::Period(AnchorPeriod::Century),
+    Reset::Interval,
 ];
 
 #[derive(Clone, Debug)]
@@ -45,7 +48,9 @@ struct DeltaCandles {
     /// The interval chosen in the Lower interval input; `None` picks one from the chart interval.
     lower_interval: Option<Timeframe>,
     /// The period from whose first bar the deltas add up; `None` starts every bar at zero.
-    anchor: Option<AnchorPeriod>,
+    anchor: Option<Reset>,
+    /// Length of the Interval anchor in minutes, 1 to 1440.
+    anchor_minutes: usize,
     candles: Vec<StudyCandle>,
     values: IndicatorValues,
     colors: [Color32; 3],
@@ -55,11 +60,12 @@ struct DeltaCandles {
 }
 
 impl DeltaCandles {
-    fn new(anchor: Option<AnchorPeriod>) -> Self {
+    fn new(anchor: Option<Reset>) -> Self {
         Self {
             clock: BarClock::new(Timeframe::Min1),
             lower_interval: None,
             anchor,
+            anchor_minutes: 60,
             candles: Vec::new(),
             values: IndicatorValues::new(),
             colors: [palette::BLUE, palette::UP, palette::DOWN],
@@ -79,10 +85,24 @@ impl DeltaCandles {
                 StudyInput::new(
                     "anchor",
                     "Anchor period",
-                    InputValue::Choice(PERIODS.iter().position(|p| *p == anchor).unwrap_or(0)),
-                    InputKind::Choice(PERIODS.iter().map(|p| format!("{p:?}")).collect()),
+                    InputValue::Choice(ANCHORS.iter().position(|p| *p == anchor).unwrap_or(0)),
+                    InputKind::Choice(ANCHORS.iter().map(|a| match a {
+                        Reset::Period(period) => period.label(),
+                        Reset::Interval => "Interval",
+                        Reset::Continuous => unreachable!("anchors always restart"),
+                    }).map(str::to_owned).collect()),
                 )
                 .with_default(InputValue::Choice(0)),
+            );
+            inputs.push(
+                StudyInput::new(
+                    "anchor_minutes",
+                    "Anchor interval (minutes)",
+                    InputValue::Length(self.anchor_minutes),
+                    InputKind::Length(1, 1440),
+                )
+                .with_default(InputValue::Length(60))
+                .shown_when("anchor", [ANCHORS.len() - 1]),
             );
         }
         inputs
@@ -91,9 +111,11 @@ impl DeltaCandles {
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         match (id, value) {
             ("lower_interval", InputValue::Timeframe(chosen)) => self.lower_interval = chosen,
-            ("anchor", InputValue::Choice(at)) if self.anchor.is_some() && at < PERIODS.len() => {
-                self.anchor = Some(PERIODS[at]);
+            ("anchor", InputValue::Choice(at)) if self.anchor.is_some() && at < ANCHORS.len() => {
+                self.anchor = Some(ANCHORS[at]);
             }
+            ("anchor_minutes", InputValue::Length(n))
+                if self.anchor.is_some() && (1..=1440).contains(&n) => self.anchor_minutes = n,
             _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         self.refresh(&[], 0, &[]);
@@ -134,9 +156,9 @@ impl DeltaCandles {
         let Some(lower) = self.lower().filter(|_| !candles.is_empty()) else {
             return;
         };
-        let sessions = self.clock.sessions();
         let anchor = self.anchor;
-        let period = |bar: &Bar| anchor.map(|anchor| anchor.key(sessions.trading_date(bar.time)));
+        let key = anchor.map(|a| reset_key(a, self.anchor_minutes, &self.clock));
+        let period = |bar: &Bar| key.as_ref().and_then(|k| k(bar.time));
         let mut last = self
             .candles
             .last()
@@ -316,7 +338,7 @@ delta_study!(
     CumulativeVolumeDelta,
     "Cumulative Volume Delta",
     "Cumulative Volume Delta - Volume delta of lower-interval candles added up over each anchor period",
-    Some(AnchorPeriod::Session)
+    Some(Reset::Period(AnchorPeriod::Session))
 );
 
 #[cfg(test)]
@@ -488,5 +510,22 @@ mod tests {
             ]
         );
         assert_eq!(cumulative.values().value(0, 5), Some(8.0));
+        // Two-hour periods from midnight: 22:00, 00:00 and 02:00. A missing 02:00
+        // candle does not carry the old total into 03:00.
+        cumulative.set_input("anchor", InputValue::Choice(7)).unwrap();
+        cumulative.set_input("anchor_minutes", InputValue::Length(120)).unwrap();
+        update(&mut cumulative, &chart, 0, &candles);
+        assert_eq!(drawn(&cumulative), [
+            (0, 1, [0.0, 10.0, 0.0, 6.0]),
+            (1, 2, [6.0, 6.0, -2.0, -2.0]),
+            (2, 1, [0.0, 7.0, 0.0, 7.0]),
+            (3, 1, [7.0, 9.0, 5.0, 9.0]),
+            (5, 1, [0.0, 1.0, 0.0, 1.0]),
+        ]);
+        assert_eq!(cumulative.values().value(0, 5), Some(1.0));
+        for n in [0, 1441] {
+            assert!(cumulative.set_input("anchor_minutes", InputValue::Length(n)).is_err());
+        }
+
     }
 }

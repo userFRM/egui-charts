@@ -12,7 +12,7 @@ use egui::Color32;
 
 /// When the running total of Cumulative Execution Delta and Size-Filtered CVD returns to zero.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Reset {
+pub(super) enum Reset {
     /// Never.
     Continuous,
     /// On the first bar of each calendar period of exchange trading days.
@@ -38,7 +38,7 @@ const RESETS: [Reset; 9] = [
 
 /// The reset period of a bar opening at `time`: a bar continues the running total of an earlier
 /// bar only when their keys are equal. Always `None` for [`Reset::Continuous`].
-fn reset_key(
+pub(super) fn reset_key(
     reset: Reset,
     minutes: usize,
     clock: &BarClock,
