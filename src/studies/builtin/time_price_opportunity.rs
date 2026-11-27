@@ -453,6 +453,34 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Toggle(defaults.extend_poor_extremes)),
             StudyInput::new(
+                "extend_poc",
+                "Extend point of control until touched",
+                InputValue::Toggle(self.config.extend_poc),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.extend_poc)),
+            StudyInput::new(
+                "extend_vah",
+                "Extend value area high until touched",
+                InputValue::Toggle(self.config.extend_value_area_high),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.extend_value_area_high)),
+            StudyInput::new(
+                "extend_val",
+                "Extend value area low until touched",
+                InputValue::Toggle(self.config.extend_value_area_low),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.extend_value_area_low)),
+            StudyInput::new(
+                "extend_single_prints",
+                "Extend single prints until touched",
+                InputValue::Toggle(self.config.extend_single_prints),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.extend_single_prints)),
+            StudyInput::new(
                 "volume_profile",
                 "Volume profile",
                 InputValue::Toggle(self.config.show_volume_profile),
@@ -687,6 +715,12 @@ impl Indicator for TimePriceOpportunity {
             ("poor_high", InputValue::Toggle(show)) => self.config.show_poor_high = show,
             ("poor_low", InputValue::Toggle(show)) => self.config.show_poor_low = show,
             ("extend_poor", InputValue::Toggle(show)) => self.config.extend_poor_extremes = show,
+            ("extend_poc", InputValue::Toggle(show)) => self.config.extend_poc = show,
+            ("extend_vah", InputValue::Toggle(show)) => self.config.extend_value_area_high = show,
+            ("extend_val", InputValue::Toggle(show)) => self.config.extend_value_area_low = show,
+            ("extend_single_prints", InputValue::Toggle(show)) => {
+                self.config.extend_single_prints = show
+            }
             ("volume_profile", InputValue::Toggle(show)) => self.config.show_volume_profile = show,
             ("composites" | "splits", InputValue::Text(text)) => {
                 let rejected = || crate::studies::StudyError::rejected(&self.inputs(), id);
