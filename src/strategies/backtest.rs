@@ -217,9 +217,11 @@ impl BacktestSettings {
             return units;
         }
         // A size on a whole step can divide to just below it: 0.3 / 0.1 is 2.9999999999999996.
+        // Times the step it can come out just above the size (3 * 0.1 is 0.30000000000000004),
+        // more than a full-equity size can pay for, so the size itself is kept.
         let whole = steps.ceil();
         if whole - steps <= rounding_tolerance(whole, 4.0 * f64::EPSILON) {
-            whole * step
+            (whole * step).min(units)
         } else {
             steps.floor() * step
         }
@@ -4597,6 +4599,20 @@ mod tests {
                 flat(&[100.0, 100.0, 110.0]),
                 vec![trade(Buy, 0.3, 1, 100.0, Some((2, 110.0, 3.0)), "A / X")],
                 vec![1000.0, 1000.0, 1000.0, 1003.0],
+                0,
+            ),
+            (
+                "full equity on a whole step is accepted",
+                sized,
+                BacktestSettings {
+                    initial_capital: 30.0,
+                    order_size: OrderSize::EquityFraction(1.0),
+                    liquidation_increment: 0.1,
+                    ..terms.clone()
+                },
+                flat(&[100.0, 100.0, 110.0]),
+                vec![trade(Buy, 0.3, 1, 100.0, Some((2, 110.0, 3.0)), "A / X")],
+                vec![30.0, 30.0, 30.0, 33.0],
                 0,
             ),
             (
