@@ -6,12 +6,11 @@
 //!
 //! # Rule
 //!
-//! The RSI is Wilder's RSI of the source, the close by default ([`RSI`](super::RSI)). Its pivot lows and highs are found
-//! with `left` and `right` bars on each side as in
+//! The RSI is Wilder's RSI of the chosen source, Close by default ([`RSI`](super::RSI)). Its pivots
+//! use `left` and `right` bars on each side as in
 //! [`PivotPointsHighLow`](super::PivotPointsHighLow), so a pivot is known `right` bars later.
-//! Each pivot low is compared with the previous pivot low `q` when `min_range <= p - q - 1 <=
-//! max_range` bars lie between them:
-//! Pivots compare the bars' highs and lows whatever the source.
+//! Pivots compare the bars' highs and lows whatever the source. Each pivot low is compared with
+//! the previous pivot low `q` when `min_range <= p - q - 1 <= max_range` bars lie between them:
 //!
 //! ```text
 //! Regular bullish: RSI[p] > RSI[q] and low[p] < low[q]
@@ -591,8 +590,8 @@ mod tests {
                 Bar::new(
                     chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
                     p - 0.4,
-                    p + 1.0,
-                    p - 2.0,
+                    p + 1.0 + (i / 30 % 2) as f64 * 8.0,
+                    p - 2.0 - (i / 30 % 3) as f64 * 8.0,
                     p,
                     1000.0,
                 )
@@ -637,6 +636,18 @@ mod tests {
             format!("{:?}", configured.values()),
             format!("{:?}", raw.values())
         );
+        // The varying wicks make replacing every price with the source observably wrong.
+        let expected = format!("{:?}", raw.values());
+        let flattened: Vec<_> = sourced
+            .iter()
+            .map(|bar| Bar {
+                high: bar.close,
+                low: bar.close,
+                ..bar.clone()
+            })
+            .collect();
+        raw.calculate(&flattened);
+        assert_ne!(format!("{:?}", raw.values()), expected);
     }
 
     /// A colour list names each of the nine plots in turn, so a saved study restores as it was
