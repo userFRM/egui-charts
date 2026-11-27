@@ -494,6 +494,11 @@ pub fn render_chart_type(
                 params.bullish_color(),
                 params.bearish_color(),
             );
+            let styles = &params.type_params.styles;
+            let mut style = styles.tpo_line.clone();
+            if style.color == egui::Color32::PLACEHOLDER {
+                style.color = painter.ctx().active_theme().ui.accent;
+            }
             line::render_line(
                 painter,
                 ctx.volume_ctx,
@@ -507,13 +512,9 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                &crate::model::LinePlotStyle {
-                    color: painter.ctx().active_theme().ui.accent,
-                    width: crate::tokens::DESIGN_TOKENS.stroke.hairline,
-                    ..Default::default()
-                },
+                &style,
                 None,
-                crate::model::PriceSource::Close,
+                styles.tpo_price_source,
             );
         }
     }
@@ -549,6 +550,7 @@ mod tests {
             &mut styles.area.line,
             &mut styles.baseline.above,
             &mut styles.baseline.below,
+            &mut styles.tpo_line,
         ] {
             line.color = color;
             line.width = 3.5;
@@ -578,6 +580,7 @@ mod tests {
             ChartType::LineWithMarkers,
             ChartType::Area,
             ChartType::Baseline,
+            ChartType::TimePriceOpportunity,
             ChartType::Candles,
             ChartType::Line,
         ] {
@@ -702,6 +705,91 @@ mod tests {
             ChartType::Line,
             "reset must keep the dialog's active type"
         );
+        // The TPO price line draws its source, by default the closes in the theme's accent at
+        // hairline width.
+        let bars: Vec<Bar> = [
+            (100.0, 104.0, 96.0, 102.0),
+            (102.0, 106.0, 98.0, 104.0),
+            (104.0, 108.0, 100.0, 103.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (o, h, l, c))| {
+            Bar::new(
+                time + chrono::Duration::minutes(30 * i as i64),
+                o,
+                h,
+                l,
+                c,
+                1.0,
+            )
+        })
+        .collect();
+        let mut picked = crate::model::ChartTypeStyles::default();
+        (picked.tpo_line.color, picked.tpo_line.width) = (color, 3.5);
+        picked.tpo_price_source = crate::model::PriceSource::High;
+        let (dark, light) = (crate::theme::Theme::dark(), crate::theme::Theme::light());
+        let hairline = crate::tokens::DESIGN_TOKENS.stroke.hairline;
+        for (theme, styles, stroke, prices) in [
+            (&dark, picked, (3.5, color), [104.0, 106.0, 108.0]),
+            (
+                &dark,
+                Default::default(),
+                (hairline, dark.ui.accent),
+                [102.0, 104.0, 103.0],
+            ),
+            (
+                &light,
+                Default::default(),
+                (hairline, light.ui.accent),
+                [102.0, 104.0, 103.0],
+            ),
+        ] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.config_mut().show_volume = false;
+            chart.set_timeframe(Timeframe::Min30);
+            chart.set_chart_type(ChartType::TimePriceOpportunity);
+            chart.set_chart_type_params(ChartTypeParams {
+                styles,
+                ..Default::default()
+            });
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, theme);
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            );
+            let lines: Vec<Vec<f32>> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Path(path)
+                        if (path.stroke.width, &path.stroke.color)
+                            == (stroke.0, &egui::epaint::ColorMode::Solid(stroke.1)) =>
+                    {
+                        Some(path.points.iter().map(|p| p.y).collect())
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let mapping = chart.get_chart_mapping();
+            let expected: Vec<f32> = prices.iter().map(|&p| mapping.price_to_y(p)).collect();
+            assert!(
+                lines.len() == 1
+                    && lines[0].len() == 3
+                    && lines[0]
+                        .iter()
+                        .zip(&expected)
+                        .all(|(y, e)| (y - e).abs() < 0.5),
+                "{lines:?} against {expected:?}"
+            );
+        }
     }
 
     #[test]
