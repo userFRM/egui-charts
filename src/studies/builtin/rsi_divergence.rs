@@ -142,11 +142,11 @@ pub(super) struct Pivots {
 /// A divergence found on bar `confirming`: its segment over `sources`, from one pivot's RSI to
 /// the other's, and its mark on the last of them.
 pub(super) struct Segment {
-    lines: (usize, usize),
+    pub(super) lines: (usize, usize),
     sources: Vec<usize>,
     from: f64,
     to: f64,
-    confirming: usize,
+    pub(super) confirming: usize,
 }
 
 impl Pivots {
