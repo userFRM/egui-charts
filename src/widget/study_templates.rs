@@ -262,13 +262,16 @@ impl Chart {
             };
             for (input, value) in &template.inputs {
                 if let InputValue::Source(StudySource::Study { id: parent, plot }) = value {
+                    let parent = ids.get(*parent).copied().flatten();
+                    let plot = self
+                        .indicators()
+                        .find(|(study, _)| Some(*study) == parent)
+                        .map_or(*plot, |(_, read)| {
+                            StudyTemplate::upgraded_output(read, *plot)
+                        });
                     let source = StudySource::Study {
-                        id: ids
-                            .get(*parent)
-                            .copied()
-                            .flatten()
-                            .map_or(usize::MAX, |parent| parent.0),
-                        plot: *plot,
+                        id: parent.map_or(usize::MAX, |parent| parent.0),
+                        plot,
                     };
                     let study = self.indicator_mut(id).expect("added study");
                     // An input restored on its default in place of the saved output keeps it.
