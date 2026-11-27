@@ -554,6 +554,9 @@ struct State {
     source: Source,
     /// Sides unknown executions by the tick rule when set.
     tick_rule: Option<TickRule>,
+    /// Tick rule before each retained bar, so replay survives raw tape retention.
+    #[cfg(all(feature = "studies", feature = "widget"))]
+    tick_rule_before: BTreeMap<DateTime<Utc>, TickRule>,
     trade_bars: super::inbox::TradeBars,
     /// These rows have no live allocation anchor. The first sink allocation replaces them.
     paged_rate: bool,
@@ -1085,6 +1088,8 @@ impl OrderFlowInput {
                 | OrderFlowKind::PriceRange { .. },
             ) => {
                 state.bars.retain(|bar, _| *bar > open);
+                #[cfg(all(feature = "studies", feature = "widget"))]
+                state.tick_rule_before.retain(|bar, _| *bar > open);
                 state.pending = PendingParts::default();
                 state.changes.retain(|bar, _| *bar > open);
                 state.cut = state.cut.max(Some(open));
@@ -1387,6 +1392,8 @@ impl OrderFlowInput {
                 }
                 let mut state = self.state();
                 state.bars.retain(|open, _| *open > cut);
+                #[cfg(all(feature = "studies", feature = "widget"))]
+                state.tick_rule_before.retain(|open, _| *open > cut);
                 state.pending = PendingParts::default();
                 state.changes.retain(|open, _| *open > cut);
                 state.cut = Some(cut);
@@ -1672,6 +1679,12 @@ impl OrderFlowInput {
                     },
                     |(parts, _)| parts,
                 );
+                #[cfg(feature = "studies")]
+                if let Some((_, bar, _)) = parts.first()
+                    && let Some(rule) = state.tick_rule_before.get(bar)
+                {
+                    part.tick_rule = Some(*rule);
+                }
                 let mut open = None;
                 let mut previous: Option<&Tick> = None;
                 for (trade, bar, size) in parts {
@@ -1761,9 +1774,13 @@ impl OrderFlowInput {
                             .is_none_or(|first| first < start)
                     {
                         let part = OrderFlowInput::new(kind).with_size_basis(state.basis);
-                        if state.tick_rule.is_some() {
+                        #[cfg(feature = "studies")]
+                        let before = state.tick_rule_before.get(&open).copied();
+                        #[cfg(not(feature = "studies"))]
+                        let before = None::<TickRule>;
+                        if state.tick_rule.is_some() && before.is_none() {
                             part.state().tick_rule = Some(TickRule::default());
-                            // Earlier prices seed the side of a zero tick in the cutoff bar.
+                            // Earlier held prices seed a bar this source has not seen.
                             for trade in trades
                                 .into_iter()
                                 .flat_map(|t| t.iter())
@@ -1772,6 +1789,7 @@ impl OrderFlowInput {
                                 part.push_trade(clock, trade);
                             }
                         } else {
+                            part.state().tick_rule = before;
                             // The store's executions are valid, and those held are the cutoff bar's.
                             held.for_each(|trade| {
                                 part.push_trade_part(clock, trade, open, trade.size, true)
@@ -2008,6 +2026,12 @@ impl State {
         let Source::Fixed(kind) = self.source else {
             return;
         };
+        #[cfg(all(feature = "studies", feature = "widget"))]
+        if let Some(rule) = self.tick_rule
+            && self.cut.is_none_or(|cut| open > cut)
+        {
+            self.tick_rule_before.entry(open).or_insert(rule);
+        }
         let classified = self.tick_rule.as_mut().map(|rule| rule.classify(trade));
         let trade = classified.as_ref().unwrap_or(trade);
         // Which size ranges count a size: three for SizeDelta, the first for FilteredCvd.
@@ -2181,6 +2205,8 @@ impl State {
         Self {
             source,
             tick_rule: None,
+            #[cfg(all(feature = "studies", feature = "widget"))]
+            tick_rule_before: BTreeMap::new(),
             trade_bars: super::inbox::TradeBars::default(),
             paged_rate: false,
             cut: None,
@@ -2446,6 +2472,8 @@ impl State {
             // `changes` names only retained bars, so it shares their bound.
             if let Some((&first, _)) = self.bars.first_key_value() {
                 self.changes.retain(|bar, _| *bar >= first);
+                #[cfg(all(feature = "studies", feature = "widget"))]
+                self.tick_rule_before.retain(|bar, _| *bar >= first);
             }
             self.dropped_revision = self.revision;
         }

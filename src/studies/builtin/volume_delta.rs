@@ -562,14 +562,29 @@ mod tests {
             // At 03:05 the unchanged price still takes the uptick from the preceding bar,
             // even though that price change lies outside the cutoff candle.
             let mut held = crate::data::trades::Trades::new(100);
-            for trade in trades {
-                held.push(trade);
+            for trade in &trades {
+                held.push(trade.clone());
             }
+            held.push(tick(190, 11.5, 2.0, None));
             input.replace_trades(&clock, &held, &chart, None);
             input.set_replay(
                 &clock,
                 Some(Utc.timestamp_opt(185, 0).unwrap()),
                 Some(&held),
+                &chart,
+            );
+            study.calculate(&chart);
+            assert_eq!(drawn(&study)[2], (3, 1, [1.0, 5.0, 1.0, 5.0]));
+            // The source remembers the preceding uptick after raw tape retention drops it.
+            let mut retained = crate::data::trades::Trades::new(2);
+            for trade in &trades {
+                retained.push(trade.clone());
+            }
+            retained.push(tick(190, 11.5, 2.0, None));
+            input.set_replay(
+                &clock,
+                Some(Utc.timestamp_opt(185, 0).unwrap()),
+                Some(&retained),
                 &chart,
             );
             study.calculate(&chart);
