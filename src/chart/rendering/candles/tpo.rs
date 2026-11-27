@@ -2865,6 +2865,87 @@ mod tests {
         }
     }
 
+    /// Guards #4265: with automatic rows, every level offered for an alert is a row the chart
+    /// draws for that view, whichever bars the view starts at.
+    #[test]
+    fn offered_levels_sit_on_painted_automatic_rows() {
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+        let map = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(95.0, 120.0),
+            0.0,
+            400.0,
+            false,
+        );
+        let bars = super::tpo_level_bars();
+        let tick = 0.01;
+        let params: crate::model::ChartTypeParams = serde_json::from_value(serde_json::json!({
+            "tpo_row_ticks": 0, "tpo_single_prints": true, "tpo_extend_poc": true,
+            "tpo_extend_vah": true, "tpo_extend_val": true, "tpo_extend_single_prints": true,
+            "tpo_poor_low": true, "tpo_extend_poor": true}))
+        .unwrap();
+        let config = params.tpo_config(Some(tick));
+        let clock: BarClock = Timeframe::Min30.into();
+        // Rows come from the bars up to the view's end, about 80 rows rounded up to 5 ticks:
+        // d0 spans 100 to 106 (7.5 ticks a row, so 10), d1 lifts the high to 116 (20 ticks).
+        let mut checked = [0, 0];
+        for start in 0..bars.len() {
+            for end in start + 1..=bars.len() {
+                let (row, slot) = if end <= 4 { (0.1, 0) } else { (0.2, 1) };
+                let ctx = egui::Context::default();
+                ctx.begin_pass(egui::RawInput::default());
+                render_live_tpo(
+                    &ctx.layer_painter(egui::LayerId::background()),
+                    rect,
+                    &bars,
+                    start..end,
+                    0,
+                    &map,
+                    &config,
+                    Some(tick),
+                    &clock,
+                    |i, _| (i as f32 - start as f32) * 30.0,
+                    0.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                );
+                let mut output = ctx.end_pass();
+                output.textures_delta.clear();
+                let painted: Vec<f32> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::LineSegment { points, stroke }
+                            if stroke.width == DESIGN_TOKENS.stroke.light
+                                && points[0].y == points[1].y =>
+                        {
+                            Some(points[0].y)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                for (open, level, price, _) in
+                    open_levels(&bars, start..end, 0, (&config, Some(tick)), &clock)
+                {
+                    // A profile opening after the view is not drawn yet.
+                    if end < bars.len() && open >= bars[end].time {
+                        continue;
+                    }
+                    let y = map.price_to_y(price + row / 2.0 - tick / 2.0);
+                    assert!(
+                        painted.iter().any(|p| (p - y).abs() < 0.01),
+                        "view {start}..{end}: {level:?} at {price} (y {y}) not painted: {painted:?}"
+                    );
+                    checked[slot] += 1;
+                }
+            }
+        }
+        assert!(
+            checked.iter().all(|&n| n > 0),
+            "levels checked per row height: {checked:?}"
+        );
+    }
+
     #[test]
     fn initial_balance_extensions_use_one_and_two_ranges_and_require_balance_bars() {
         use crate::model::{Session, SessionWindow, TimezoneId};
