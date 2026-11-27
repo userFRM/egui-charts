@@ -155,7 +155,7 @@ impl Indicator for UpDownVolume {
             width: 1.0,
             pattern: LineStyle::Solid,
             plot_type: if line == 2 {
-                PlotType::Crosses
+                PlotType::Dashes
             } else {
                 PlotType::Columns
             },
