@@ -73,8 +73,9 @@
 //! study's current behaviour: an Aroon tie counts the most recent bar, and Parabolic SAR takes its first direction from the first two closes (up
 //! on a tie), starts at the first bar's low or high and takes its first extreme point from the
 //! first two bars. The Chaikin volatility starts once its average and its change both have their full
-//! length; the windows of the Choppiness Index, Vortex indicator and Ultimate Oscillator start at the
-//! second bar, the first with a previous close. A bar of the Advance/Decline Ratio of bars that
+//! length; the windows of the Vortex indicator and Ultimate Oscillator start at the
+//! second bar, the first with a previous close; the Choppiness Index window starts at the first
+//! bar, whose true range is its high minus its low. A bar of the Advance/Decline Ratio of bars that
 //! closes at its open counts as up, and a window without a down bar gives its number of up bars.
 //! The Median takes the nearest-rank median (the lower middle value for an even length) and seeds its EMA
 //! with the mean of the first medians, the Chop Zone seeds its EMA with the mean of the first 34 closes,
@@ -83,6 +84,9 @@
 //! simple MACD signal averages the MACD values only, and an exponential one starts at the first; ATR's
 //! simple, exponential and weighted smoothings start on the period-th true range, the exponential one at
 //! their mean; a Chandelier Exit value needs a full lookback window.
+//! The Rank Correlation Index starts on the bar after its first full window; the RCI Ribbon
+//! starts on the full window itself.
+//! SuperTrend has no value on the first bar.
 
 use crate::model::Bar;
 use crate::studies::{
@@ -543,6 +547,51 @@ fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
         _ => None,
     }
     .filter(|v| !v.is_nan())
+}
+
+/// Each value is available on its own bar, even when no later bars have arrived yet.
+#[test]
+fn warm_ups_show_each_value_on_a_series_ending_at_its_bar() {
+    let bars = fixture();
+    type Case = (&'static str, fn() -> Box<dyn Indicator>);
+    let studies: [Case; 4] = [
+        ("Chop(14)", || Box::new(ChoppinessIndex::default())),
+        ("Mass(9,25)", || Box::new(MassIndex::default())),
+        ("SuperTrend(10,3)", || Box::new(SuperTrend::default())),
+        ("SuperTrend(10,1)", || Box::new(SuperTrend::new(10, 1.0))),
+    ];
+    let mut failures = Vec::new();
+    for (name, create) in studies {
+        let mut checked_lines = 0;
+        for row in EXPECTED.lines() {
+            let mut tokens = row.split_whitespace();
+            if tokens.next() != Some(name) {
+                continue;
+            }
+            checked_lines += 1;
+            let line = tokens.next().unwrap().parse().unwrap();
+            let expected: Vec<_> = tokens.collect();
+            assert_eq!(expected.len(), bars.len(), "{name}: one token per bar");
+            for end in 1..=bars.len() {
+                let mut study = create();
+                study.calculate(&bars[..end]);
+                let actual = line_value(&study.values().to_rows()[end - 1], line);
+                let token = expected[end - 1];
+                let want = (token != "-").then(|| token.parse::<f64>().unwrap());
+                let equal = match (actual, want) {
+                    (Some(a), Some(w)) => (a - w).abs() <= 1e-9 * w.abs() + 1e-12,
+                    (a, w) => a == w,
+                };
+                if !equal {
+                    failures.push(format!(
+                        "{name} line {line}, prefix {end}: expected {want:?}, got {actual:?}"
+                    ));
+                }
+            }
+        }
+        assert!(checked_lines > 0, "{name}: no expected lines");
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
 
 #[test]
@@ -1063,12 +1112,16 @@ fn staple_studies_match_published_definitions() {
         (
             "Rank-flat-hand",
             Box::new(RankCorrelationIndex::new(4)),
-            flat[..4].to_vec(),
+            flat[..5].to_vec(),
         ),
         (
             "Rank-ties-hand",
             Box::new(RankCorrelationIndex::new(4)),
-            ties,
+            [5.0, 1.0, 1.0, 2.0, 2.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
+                .collect(),
         ),
         (
             "StochRSI-hand",
