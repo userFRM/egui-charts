@@ -708,25 +708,38 @@ pub enum AlertCondition {
     /// with the same source name; `AlertEngine` saves the alert only once the host connects that
     /// source. Same source, rules and frequencies as `StrategyFills`.
     CustomEvents(String),
-    /// The previous value was strictly below or above the level and a value since reaches or
-    /// passes it, in either direction.
+    /// Crossing up or crossing down, as [`CrossingUp`](Self::CrossingUp) and
+    /// [`CrossingDown`](Self::CrossingDown) define them. One evaluation fires once, also when it
+    /// reads both.
     Crossing(f64),
-    /// The previous price was below the level and a price since is at or above it.
+    /// The previous value was below the level and a value since is at or above it. For the price,
+    /// a price since below the level with the current price at or above it also counts, so a dip
+    /// below the level and back crosses up on its way back whether the alert evaluates during the
+    /// dip or only after it.
     CrossingUp(f64),
-    /// The previous price was above the level and a price since is at or below it.
+    /// The previous value was above the level and a value since is at or below it. For the price,
+    /// a price since above the level with the current price at or below it also counts, so a rise
+    /// above the level and back crosses down on its way back whether the alert evaluates during
+    /// the rise or only after it.
     CrossingDown(f64),
     /// A price since the previous evaluation is above the level.
     Above(f64),
     /// A price since the previous evaluation is below the level.
     Below(f64),
-    /// The previous value was outside the inclusive channel and a value since is inside it.
+    /// The previous value was outside the inclusive channel and a value since is inside it. For
+    /// the price, a price since outside the channel with the current price inside it also counts,
+    /// and so do prices since below and above it, so a move out of the channel and back, or
+    /// through it, enters it whether the alert evaluates during the move or only after it.
     EnteringChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
         /// Inclusive upper boundary.
         upper: f64,
     },
-    /// The previous value was inside the inclusive channel and a value since is outside it.
+    /// The previous value was inside the inclusive channel and a value since is outside it. For
+    /// the price, a price since inside the channel with the current price outside it also counts,
+    /// and so do prices since below and above it, so a move into the channel and back out, or
+    /// through it, exits it whether the alert evaluates during the move or only after it.
     ExitingChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
@@ -1030,9 +1043,11 @@ impl Eq for AlertSourceName {}
 pub enum AlertComparison {
     /// Cross in either direction.
     Crossing,
-    /// Cross from below.
+    /// Cross from below, or back up from a price traded below, as [`AlertCondition::CrossingUp`]
+    /// describes.
     CrossingUp,
-    /// Cross from above.
+    /// Cross from above, or back down from a price traded above, as
+    /// [`AlertCondition::CrossingDown`] describes.
     CrossingDown,
     /// Strictly greater.
     Above,
@@ -1044,9 +1059,11 @@ pub enum AlertComparison {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertChannelComparison {
-    /// Previously outside, and a value since is inside.
+    /// Previously outside, and a value since is inside; also back inside from a price traded
+    /// outside, or through the channel, as [`AlertCondition::EnteringChannel`] describes.
     Entering,
-    /// Previously inside, and a value since is outside.
+    /// Previously inside, and a value since is outside; also back outside from a price traded
+    /// inside, or through the channel, as [`AlertCondition::ExitingChannel`] describes.
     Exiting,
     /// A value since the previous evaluation is inside, regardless of the previous value.
     Inside,
