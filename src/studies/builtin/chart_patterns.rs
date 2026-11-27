@@ -1145,6 +1145,14 @@ pub struct ChartPatterns {
 }
 
 impl ChartPatterns {
+    /// Whether a saved study name belongs to a built-in chart pattern study.
+    pub(crate) fn is_study(name: &str) -> bool {
+        name == "All Chart Patterns"
+            || PatternFamily::ALL.into_iter().any(|family| {
+                name == family.name() || family.kinds().iter().any(|kind| name == kind.label())
+            })
+    }
+
     /// Detect every formation of `family` with its conventional parameters.
     pub fn new(family: PatternFamily) -> Self {
         Self::scoped(Scope::Family(family))
