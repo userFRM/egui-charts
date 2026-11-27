@@ -260,6 +260,9 @@ struct Observation {
     /// Whether the rules that read this bar alone hold. Those that compare two evaluations are
     /// tested when the alert evaluates, see [`reads_previous`].
     holds: bool,
+    /// Whether they hold on the close alone, which they read once an evaluation read this
+    /// observation, as nothing traded on it since.
+    still_holds: bool,
     /// The values of `seen.rules` one bar earlier, read when this bar first arrived.
     before: Vec<[Option<f64>; 4]>,
     clock: BarClock,
@@ -276,8 +279,9 @@ struct Observation {
     /// bar close keeps it.
     earlier: Option<Box<Observation>>,
     /// The lowest and highest price known to have traded since the alert's previous evaluation
-    /// of this interval, see [`traded_since`], which its price rules read. `None` before the
-    /// alert's first evaluation and for an alert at bar close, whose price rules read the close.
+    /// of this interval, see [`traded_since`], which its price rules read on the first evaluation
+    /// that reads this observation. `None` before the alert's first evaluation and for an alert
+    /// at bar close, whose price rules read the close.
     traded: Option<[f64; 2]>,
 }
 
@@ -1214,23 +1218,26 @@ fn observe(
         .map(|last| traded_since(bars, index, last));
     let observed = |at: usize, seen: Seen, before, event, earlier| {
         let traded = traded.filter(|_| at == index);
-        let holds = rules
-            .iter()
-            .zip(&seen.rules)
-            .all(|((src, condition), &[current, a, b, c])| {
-                reads_previous(condition)
-                    || current.is_some_and(|current| {
-                        condition_holds(
-                            condition,
-                            current,
-                            range(traded, src, current),
-                            [None; 4],
-                            [a, b, c],
-                            &bars[..=at],
-                            |back| at.checked_sub(back as usize).and_then(|at| source(src, at)),
-                        )
-                    })
-            });
+        let held = |traded| {
+            rules
+                .iter()
+                .zip(&seen.rules)
+                .all(|((src, condition), &[current, a, b, c])| {
+                    reads_previous(condition)
+                        || current.is_some_and(|current| {
+                            condition_holds(
+                                condition,
+                                current,
+                                range(traded, src, current),
+                                [None; 4],
+                                [a, b, c],
+                                &bars[..=at],
+                                |back| at.checked_sub(back as usize).and_then(|at| source(src, at)),
+                            )
+                        })
+                })
+        };
+        let (holds, still_holds) = (held(traded), held(None));
         // Only the message knows the sources it names, so this expansion collects them.
         let values = std::cell::RefCell::new(Vec::new());
         if holds && timeframe == alert.timeframe.unwrap_or_default() {
@@ -1244,6 +1251,7 @@ fn observe(
             available: true,
             seen,
             holds,
+            still_holds,
             before,
             clock: clock.clone(),
             event,
@@ -1375,8 +1383,14 @@ fn evaluate(
             .zip(&intervals)
             .enumerate()
             .all(|(position, (observation, interval))| {
-                observation.holds
-                    && previous_rules_hold(alert, *interval, observation, run.joined.get(position))
+                let last = run.joined.get(position);
+                // An interval the previous evaluation read has traded nothing since.
+                let holds = if last == Some(&observation.seen) {
+                    observation.still_holds
+                } else {
+                    observation.holds
+                };
+                holds && previous_rules_hold(alert, *interval, observation, last)
             });
     run.joined = joined
         .iter()
@@ -1458,7 +1472,8 @@ fn evaluate(
 
 /// Whether the rules of `interval` that compare two evaluations hold between `last`, the inputs of
 /// the alert's previous evaluation, and `observation`. Without `last`, and for a moving channel
-/// on a new bar, the earlier side is the bar before the observed one.
+/// on a new bar, the earlier side is the bar before the observed one. An observation `last` read
+/// has traded nothing since, so its rules read the close.
 fn previous_rules_hold(
     alert: &Alert,
     interval: Timeframe,
@@ -1485,7 +1500,13 @@ fn previous_rules_hold(
                 condition_holds(
                     condition,
                     current,
-                    range(observation.traded, source, current),
+                    range(
+                        observation
+                            .traded
+                            .filter(|_| last != Some(&observation.seen)),
+                        source,
+                        current,
+                    ),
                     previous,
                     [a, b, c],
                     &[],
@@ -3616,6 +3637,81 @@ mod tests {
             fired.extend(poll(&slow, &fast, minute * 60));
         }
         assert_eq!(fired, [101.0], "one crossing fires once");
+    }
+
+    /// A five-minute bar that trades past a level or a channel boundary within one poll fires the
+    /// alert once, and not again while it stays unchanged and only one-minute bars arrive, whether
+    /// the host updates both intervals at once or one after the other.
+    #[test]
+    fn a_longer_interval_move_fires_once_however_often_the_shorter_one_updates() {
+        let (lower, upper) = (100.0, 110.0);
+        let (up_and_back, down_and_back) = ([105.0, 112.0, 105.5], [115.0, 108.0, 114.5]);
+        // The five-minute bar opens at the first price, trades to the second and closes at the third.
+        let rows = [
+            (AlertCondition::CrossingUp(upper), [105.0, 112.0, 109.0]),
+            (AlertCondition::CrossingUp(upper), down_and_back),
+            (AlertCondition::CrossingDown(upper), up_and_back),
+            (
+                AlertCondition::EnteringChannel { lower, upper },
+                up_and_back,
+            ),
+            (AlertCondition::Above(upper), [105.0, 112.0, 109.0]),
+            (AlertCondition::OutsideChannel { lower, upper }, up_and_back),
+        ];
+        let (five, one) = (
+            BarClock::new(Timeframe::Min5),
+            BarClock::new(Timeframe::Min1),
+        );
+        for (row, (condition, [open, extreme, close])) in rows.into_iter().enumerate() {
+            for together in [true, false] {
+                let mut watching = alert(condition.clone(), AlertFrequency::EveryTime);
+                watching.timeframe = Some(Timeframe::Min5);
+                watching
+                    .additional_conditions
+                    .push(crate::model::AlertRule::new(
+                        AlertSource::Price,
+                        AlertCondition::Above(50.0),
+                    ));
+                watching.additional_timeframes.push(Some(Timeframe::Min1));
+                let host = Host::new(Vec::new());
+                host.save(watching).unwrap();
+                host.events();
+                let poll = |slow: &[Bar], fast: &[Bar], now| {
+                    if together {
+                        host.engine.update_matching(
+                            None,
+                            "SYM",
+                            None,
+                            &[(&five, slow), (&one, fast)],
+                            time(now),
+                            |_, _, _| None,
+                        );
+                    } else {
+                        for (timeframe, bars) in [(Timeframe::Min1, fast), (Timeframe::Min5, slow)]
+                        {
+                            host.engine
+                                .update("SYM", None, timeframe, bars, time(now), |_, _| None);
+                        }
+                    }
+                    host.fired().len()
+                };
+                let older = bar(-5, open, 10.0);
+                let mut fired = vec![poll(
+                    &[older.clone(), bar(0, open, 10.0)],
+                    &[bar(1, open, 5.0), bar(2, open, 5.0)],
+                    150,
+                )];
+                let (high, low) = (open.max(extreme), open.min(extreme));
+                let slow = [older, Bar::new(time(0), open, high, low, close, 11.0)];
+                let mut fast = vec![bar(1, open, 5.0), bar(2, close, 6.0)];
+                fired.push(poll(&slow, &fast, 160));
+                for minute in [3, 4] {
+                    fast.push(bar(minute, close, 1.0));
+                    fired.push(poll(&slow, &fast, minute * 60));
+                }
+                assert_eq!(fired, [0, 1, 0, 0], "row {row}, together {together}");
+            }
+        }
     }
 
     #[test]
