@@ -727,6 +727,8 @@ fn derived_caption(study: &dyn Indicator) -> String {
         // source goes below.
         .filter(|input| {
             input.is_shown(&inputs)
+                // Leave the default Time aggregation out to keep earlier captions.
+                && (input.id != "aggregation" || input.value != input.default)
                 && !input.style
                 && !matches!(input.id.as_str(), "band_count" | "event_count" | "width")
                 && !matches!(input.kind, InputKind::Length(0, 1439))
@@ -2227,6 +2229,7 @@ mod tests {
         for (name, expected) in [
             ("RSI", "14 close SMA 14"),
             ("VWAP", "Session 1"),
+            ("Cumulative Volume Delta", "Session"),
             ("Vol Profile Session", "24 70 Up / down Trading day"),
             ("Time Weighted Average Price", "Session"),
             ("Trend Strength Index", "14 close"),
@@ -2260,5 +2263,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(chart.indicator_inputs(vwap), Some("Session close 1"));
+        let cvd = chart.add_indicator(factory.create("Cumulative Volume Delta").unwrap());
+        chart
+            .indicator_mut(cvd)
+            .unwrap()
+            .set_input("aggregation", InputValue::Choice(1))
+            .unwrap();
+        assert_eq!(chart.indicator_inputs(cvd), Some("Session Ticks"));
     }
 }

@@ -497,6 +497,19 @@ impl StudyTemplate {
         let mut template = self.clone();
         let mut changed = true;
         match study {
+            // Before the switch existed, a chosen lower interval was always in use, including
+            // in the input identity a drawing saved for its study pane.
+            "Up/Down Volume" | "Volume Delta" | "Cumulative Volume Delta"
+                if declares("custom_interval") && !has("custom_interval") =>
+            {
+                let custom = matches!(
+                    value("lower_interval"),
+                    Some(InputValue::Timeframe(Some(_)))
+                );
+                template
+                    .inputs
+                    .push(("custom_interval".to_owned(), InputValue::Toggle(custom)));
+            }
             // Older Knoxville saves drew only momentum and its confirmation marks, and saves
             // from before the window rule took pivot sides and the momentum pane's own scale.
             "Knoxville Divergence"
@@ -893,6 +906,13 @@ impl StudyTemplate {
                     crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
                         .plot_style(2),
                 );
+            }
+            // SuperTrend drew no background before it had a body middle; hidden, the bands keep
+            // the colours they take once shown.
+            "SuperTrend" if self.settings.plots.len() == 2 => {
+                let declared = crate::studies::SuperTrend::default();
+                template.settings.plots.push(declared.plot_style(2));
+                template.settings.fills = hidden_fills(&declared);
             }
             // The unused navy plot colour in older saves still drew rising columns green.
             "Accelerator Oscillator"
