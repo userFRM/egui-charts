@@ -1967,7 +1967,7 @@ mod tests {
         let last = events.last().unwrap().clone();
         let price = (events.iter().rev())
             .find_map(|event| match &event.event {
-                MarketEvent::Trade(trade) => Some(trade.price),
+                MarketEvent::Quote(quote) => Some(quote.ask),
                 _ => None,
             })
             .unwrap();
