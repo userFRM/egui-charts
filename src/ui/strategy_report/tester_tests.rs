@@ -678,6 +678,86 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
 }
 
 #[test]
+fn undo_and_redo_restore_finer_fill_edits_and_supersede_their_requests() {
+    let tester = StrategyTester {
+        tab: Tab::Properties,
+        ..Default::default()
+    };
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1440.0, 900.0))
+        .build_ui_state(
+            |ui, (tester, actions): &mut (StrategyTester, Vec<StrategyTesterAction>)| {
+                actions.extend(tester.show(ui, "TEST", Timeframe::Min1, &bars()));
+            },
+            (tester, Vec::new()),
+        );
+    h.run();
+    let fills = |h: &Harness<'_, (StrategyTester, Vec<StrategyTesterAction>)>| {
+        let tester = &h.state().0;
+        (
+            tester.lower,
+            tester.lower_timeframe,
+            tester.settings().initial_capital,
+        )
+    };
+    let click = |h: &mut Harness<'_, (StrategyTester, Vec<StrategyTesterAction>)>, label| {
+        h.get_by_role_and_label(Role::Button, label).click();
+        h.run();
+    };
+    let run = |h: &mut Harness<'_, (StrategyTester, Vec<StrategyTesterAction>)>| {
+        h.state_mut().1.clear();
+        h.get_by_role_and_label(Role::Button, "Run").click();
+        h.run();
+        let [StrategyTesterAction::RequestHistory(request)] = h.state().1.as_slice() else {
+            panic!("one history request, got {:?}", h.state().1);
+        };
+        request.clone()
+    };
+    h.get_by_role_and_label(Role::SpinButton, "Initial capital")
+        .set_value_accesskit(12345.0);
+    h.run();
+    h.get_by_role_and_label(Role::CheckBox, "Lower-interval fills")
+        .click();
+    h.run();
+    assert_eq!(fills(&h), (true, Timeframe::Sec1, 12345.0));
+    click(&mut h, "Undo settings");
+    assert_eq!(fills(&h), (false, Timeframe::Sec1, 12345.0));
+    click(&mut h, "Redo settings");
+    assert_eq!(fills(&h), (true, Timeframe::Sec1, 12345.0));
+    h.get_by_role_and_label(Role::ComboBox, "Fill interval")
+        .click();
+    h.run();
+    h.get_by_label("30s").click();
+    h.run();
+    assert_eq!(fills(&h), (true, Timeframe::Sec30, 12345.0));
+    let edited = run(&mut h);
+    assert_eq!(edited.lower_timeframe, Some(Timeframe::Sec30));
+    click(&mut h, "Undo settings");
+    assert_eq!(fills(&h), (true, Timeframe::Sec1, 12345.0));
+    assert_eq!(
+        h.state_mut().0.set_history(&edited, bars(), bars()),
+        Err("History request is no longer current")
+    );
+    let undone = run(&mut h);
+    assert_eq!(undone.lower_timeframe, Some(Timeframe::Sec1));
+    h.state_mut()
+        .0
+        .set_history(&undone, bars(), bars())
+        .unwrap();
+    h.run();
+    assert!(!h.state().0.is_stale());
+    // A completed run shows the report; reopen the form.
+    h.get_by_role_and_label(Role::Tab, "Backtest settings")
+        .click();
+    h.run();
+    click(&mut h, "Redo settings");
+    assert_eq!(fills(&h), (true, Timeframe::Sec30, 12345.0));
+    assert!(h.state().0.is_stale());
+    assert!(h.state().0.report().is_some());
+    assert_eq!(run(&mut h).lower_timeframe, Some(Timeframe::Sec30));
+}
+
+#[test]
 fn tick_slippage_follows_the_price_increment_until_a_size_is_typed() {
     // Three rising closes buy at market at bar 4's open of 100, two ticks higher.
     for (order, entry) in [
