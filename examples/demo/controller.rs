@@ -6189,14 +6189,16 @@ mod tests {
             .unwrap_or_else(|| panic!("missing control: {label}"))
     }
 
-    /// The demo's series settings reach the TPO chart type's statistics rows, hours, blocks,
+    /// The demo's series settings reach the TPO chart type's statistics rows, hours, Letters and Blocks,
     /// volume profile settings, profile length and price line, and the study settings the Time
     /// Price Opportunity study's statistics rows, profile period, value area edges and volume
-    /// profile levels.
+    /// profile levels and display.
     #[test]
     fn tpo_settings_reach_the_demo_chart() {
         use egui::accesskit::{Action, ActionData, ActionRequest, TreeId};
-        use egui_charts::model::{ChartType, PriceSource, ProfileSession, TPOProfilePeriod};
+        use egui_charts::model::{
+            ChartType, PriceSource, ProfileSession, TPODisplayMode, TPOProfilePeriod,
+        };
         use egui_charts::studies::{IndicatorFactory, InputValue};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
@@ -6260,6 +6262,7 @@ mod tests {
         }
         for label in [
             "Blocks",
+            "Letters",
             "Volume profile",
             "Volume point of control",
             "Volume placement",
@@ -6276,7 +6279,8 @@ mod tests {
         click(&mut app, "Ok");
         assert!(!app.series_settings.is_open);
         let params = app.chart.chart_type_params();
-        assert!(!params.tpo_blocks && params.tpo_volume_profile);
+        assert!(!params.tpo_letters && !params.tpo_blocks && params.tpo_volume_profile);
+        assert_eq!(params.tpo_config(None).display_mode, TPODisplayMode::Hidden);
         assert!(params.tpo_volume.poc && params.tpo_volume.left);
         assert_eq!(
             (params.tpo_profile_period, params.tpo_profile_periods),
@@ -6301,6 +6305,8 @@ mod tests {
             "Value area high",
             "Volume profile",
             "Volume point of control",
+            "Display",
+            "Hidden",
             "Apply",
         ] {
             click(&mut app, label);
@@ -6308,6 +6314,7 @@ mod tests {
         assert!(!app.indicator_settings.is_open());
         let inputs = app.chart.indicator_mut(id).unwrap().inputs();
         for (input, expected) in [
+            ("display", InputValue::Choice(3)),
             ("statistics", InputValue::Toggle(true)),
             ("statistics_total_volume", InputValue::Toggle(true)),
             ("profile_period", InputValue::Choice(1)),

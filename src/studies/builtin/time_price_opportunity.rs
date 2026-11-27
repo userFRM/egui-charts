@@ -10,10 +10,11 @@ use egui::Color32;
 use std::ops::RangeInclusive;
 
 /// Display choices of the study, in input order. Saved choices are indices, so new ones go last.
-const DISPLAYS: [TPODisplayMode; 3] = [
+const DISPLAYS: [TPODisplayMode; 4] = [
     TPODisplayMode::Letters,
     TPODisplayMode::Blocks,
     TPODisplayMode::Both,
+    TPODisplayMode::Hidden,
 ];
 
 /// Index of `mode` among [`DISPLAYS`].
@@ -528,6 +529,7 @@ impl Indicator for TimePriceOpportunity {
                     "Letters".into(),
                     "Blocks".into(),
                     "Letters and blocks".into(),
+                    "Hidden".into(),
                 ]),
             )
             .with_default(display_choice(defaults.display_mode)),
@@ -943,7 +945,7 @@ impl Indicator for TimePriceOpportunity {
                     }
                 }
             }
-            ("display", InputValue::Choice(choice @ 0..=2)) => {
+            ("display", InputValue::Choice(choice @ 0..=3)) => {
                 self.config.display_mode = DISPLAYS[choice]
             }
             ("sessions", InputValue::Choice(choice @ 0..=1)) => {

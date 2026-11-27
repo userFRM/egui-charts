@@ -605,6 +605,9 @@ pub enum TPODisplayMode {
     Blocks,
     /// Show both letters and blocks
     Both,
+    /// Neither letters nor blocks. The point of control stays underlined; value area, initial
+    /// balance, single prints, poor extremes, captions, volume and statistics follow their switches.
+    Hidden,
 }
 
 /// Color-mapping strategy for TPO letters/blocks.

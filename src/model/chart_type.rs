@@ -1346,8 +1346,9 @@ pub struct ChartTypeParams {
     #[serde(default)]
     pub tpo_letters: bool,
     /// TPO: paint each period's cell, on by default and in settings saved without the field. With
-    /// `tpo_letters` off it has no effect, since blocks are then the only display; with it off,
-    /// letters are painted alone in their period colours, and as blocks where they do not fit.
+    /// `tpo_letters` off the cells are painted alone, and with both off no letters or cells are
+    /// painted while the levels and overlays still are. With letters on and blocks off, letters
+    /// are painted alone in their period colours, and as blocks where they do not fit.
     pub tpo_blocks: bool,
     /// TPO: draw the session statistics table below each profile.
     pub tpo_statistics: bool,
@@ -1589,7 +1590,8 @@ impl ChartTypeParams {
             display_mode: match (self.tpo_letters, self.tpo_blocks) {
                 (true, true) => super::TPODisplayMode::Both,
                 (true, false) => super::TPODisplayMode::Letters,
-                (false, _) => super::TPODisplayMode::Blocks,
+                (false, true) => super::TPODisplayMode::Blocks,
+                (false, false) => super::TPODisplayMode::Hidden,
             },
             composites: self.tpo_composites.clone(),
             splits: self.tpo_splits.clone(),
