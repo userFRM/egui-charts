@@ -31,14 +31,15 @@ pub struct PitchforkConfig {
     /// Whether levels and bands run forward to the pane edge. Off ends each at the median's
     /// length past its start: from the median's origin to the second and third anchors' midpoint,
     /// or for the inside fork from the first leg's midpoint to the third anchor. Extend left and
-    /// right still reach back to the pane edge. The pitchfan ignores it. Older saves extend.
+    /// right still reach back to the pane edge. The pitchfan ignores it. New forks start with it
+    /// off; forks saved without it extend.
     #[serde(default = "super::drawing::enabled")]
     pub extend_lines: bool,
 }
 
 impl Default for PitchforkConfig {
     /// The median in red and nine levels in their own colours, of which 0.5 and 1 are shown,
-    /// with bands at 20%.
+    /// with bands at 20%, each line and band ending the median's length past its start.
     fn default() -> Self {
         use super::drawing::{BLUE, CYAN, PINK, PURPLE, RED, TEAL};
         let level = |value, color, visible| PitchforkLevel {
@@ -63,13 +64,14 @@ impl Default for PitchforkConfig {
             ],
             show_background: true,
             background_opacity: 51,
-            extend_lines: true,
+            extend_lines: false,
         }
     }
 }
 
 impl PitchforkConfig {
     /// The levels a new `tool` starts with: the defaults, with the pitchfan's 0.5 level in cyan.
+    /// The pitchfan ignores Extend lines and keeps it on, as earlier pitchfans were saved.
     pub(crate) fn for_tool(tool: super::DrawingToolType) -> Self {
         let mut config = Self::default();
         if tool == super::DrawingToolType::Pitchfan {
@@ -77,6 +79,7 @@ impl PitchforkConfig {
             if let Some(level) = half {
                 level.color = super::drawing::CYAN;
             }
+            config.extend_lines = true;
         }
         config
     }

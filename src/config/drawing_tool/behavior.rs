@@ -187,6 +187,9 @@ impl DrawingToolType {
                 | Self::Polyline
                 | Self::FlatTopBottom
                 | Self::DisjointChannel
+                | Self::Curve
+                | Self::DoubleCurve
+                | Self::Brush
         )
     }
 
