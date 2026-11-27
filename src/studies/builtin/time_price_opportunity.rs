@@ -47,11 +47,17 @@ fn picked(color: Color32) -> Option<Color32> {
     (color != Color32::PLACEHOLDER).then_some(color)
 }
 
-/// A merge or split list as its input holds it, after the period length and row size it was
-/// made for. The profiles take it only while the period length still matches: a merge joins
-/// whole sessions and a split falls at a period's start, whatever the rows. `None` is a list
-/// saved before the two were recorded, which applies whatever they are.
-type ProfileEdits<T> = (Option<(usize, usize)>, Vec<T>);
+/// What a merge or split list was made for: the period length, the row size, and the profile
+/// period (its index in [`PERIODS`]) with its count. Lists saved before the profile period was
+/// recorded have `None` there and apply under any profile period.
+type MadeFor = (usize, usize, Option<(usize, usize)>);
+
+/// A merge or split list as its input holds it, after what it was made for. The profiles take
+/// it only while the period length, and the profile period and count where recorded, still
+/// match: a merge joins whole sessions and a split falls at a period's start, whatever the
+/// rows. `None` is a list saved before any of them was recorded, which applies whatever they
+/// are.
+type ProfileEdits<T> = (Option<MadeFor>, Vec<T>);
 
 /// Each session's TPO profile on the price pane, starting at the session's first bar, with its
 /// point of control, value area and initial balance.
@@ -123,11 +129,11 @@ impl TimePriceOpportunity {
         }
     }
 
-    /// Input values that store the profile menu's merges and splits. With `made_for`, the
-    /// period length and row size the edits were made for, each list that holds any is saved
-    /// after them as `<minutes>,<ticks per row>|<list>`.
+    /// Input values that store the profile menu's merges and splits. With `made_for`, each
+    /// nonempty list follows its period length, row size and, where recorded, profile period
+    /// and count as `<minutes>,<ticks>,<period>,<count>|<list>`, or `<minutes>,<ticks>|<list>`.
     pub(crate) fn profile_edit_inputs(
-        made_for: Option<(usize, usize)>,
+        made_for: Option<MadeFor>,
         composites: &[RangeInclusive<DateTime<Utc>>],
         splits: &[DateTime<Utc>],
     ) -> [(String, InputValue); 2] {
@@ -135,7 +141,10 @@ impl TimePriceOpportunity {
         let text = |list: Vec<String>| {
             let list = list.join(";");
             match made_for {
-                Some((minutes, ticks)) if !list.is_empty() => {
+                Some((minutes, ticks, Some((period, count)))) if !list.is_empty() => {
+                    InputValue::Text(format!("{minutes},{ticks},{period},{count}|{list}"))
+                }
+                Some((minutes, ticks, None)) if !list.is_empty() => {
                     InputValue::Text(format!("{minutes},{ticks}|{list}"))
                 }
                 _ => InputValue::Text(list),
@@ -186,10 +195,21 @@ impl TimePriceOpportunity {
             .collect()
     }
 
-    /// Hands the profiles the edits made for the current period length.
+    /// Hands the profiles the edits made for the current period length and profile period.
     fn update_edits(&mut self) {
         let now = self.config.period_minutes as usize;
-        let live = |made_for: Option<(usize, usize)>| made_for.is_none_or(|made| made.0 == now);
+        let profile = (
+            PERIODS
+                .iter()
+                .position(|period| *period == self.config.profile_period)
+                .unwrap_or(0),
+            self.config.profile_periods as usize,
+        );
+        let live = |made_for: Option<MadeFor>| {
+            made_for.is_none_or(|(minutes, _, made)| {
+                minutes == now && made.is_none_or(|p| p == profile)
+            })
+        };
         self.config.composites = if live(self.composites.0) {
             self.composites.1.clone()
         } else {
@@ -824,7 +844,17 @@ impl Indicator for TimePriceOpportunity {
             .unwrap()
             + 1;
         inputs.splice(position..position, statistics_rows);
-        let made_for = (self.config.period_minutes as usize, self.row_ticks);
+        let made_for = (
+            self.config.period_minutes as usize,
+            self.row_ticks,
+            Some((
+                PERIODS
+                    .iter()
+                    .position(|period| *period == self.config.profile_period)
+                    .unwrap_or(0),
+                self.config.profile_periods as usize,
+            )),
+        );
         for (id, value) in
             Self::profile_edit_inputs(Some(made_for), &self.config.composites, &self.config.splits)
         {
@@ -978,9 +1008,19 @@ impl Indicator for TimePriceOpportunity {
                 let rejected = || crate::studies::StudyError::rejected(&self.inputs(), id);
                 let (made_for, text) = match text.split_once('|') {
                     Some((made_for, list)) => {
-                        let (minutes, ticks) = made_for.split_once(',').ok_or_else(rejected)?;
-                        let made_for = minutes.parse().ok().zip(ticks.parse().ok());
-                        (Some(made_for.ok_or_else(rejected)?), list)
+                        let fields = made_for
+                            .split(',')
+                            .map(str::parse::<usize>)
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|_| rejected())?;
+                        let made_for = match fields.as_slice() {
+                            [minutes, ticks] => (*minutes, *ticks, None),
+                            [minutes, ticks, period, count] => {
+                                (*minutes, *ticks, Some((*period, *count)))
+                            }
+                            _ => return Err(rejected()),
+                        };
+                        (Some(made_for), list)
                     }
                     None => (None, text.as_str()),
                 };

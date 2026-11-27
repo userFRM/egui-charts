@@ -394,39 +394,15 @@ mod tests {
                 vec![
                     (
                         "SuperTrend: Trend turns up",
-                        vec![
-                            None,
-                            Some(0.),
-                            Some(1.),
-                            Some(0.),
-                            Some(0.),
-                            Some(0.),
-                            Some(1.),
-                        ],
+                        vec![None, None, Some(1.), Some(0.), Some(0.), Some(0.), Some(1.)],
                     ),
                     (
                         "SuperTrend: Trend turns down",
-                        vec![
-                            None,
-                            Some(0.),
-                            Some(0.),
-                            Some(0.),
-                            Some(1.),
-                            Some(0.),
-                            Some(0.),
-                        ],
+                        vec![None, None, Some(0.), Some(0.), Some(1.), Some(0.), Some(0.)],
                     ),
                     (
                         "SuperTrend: Trend change",
-                        vec![
-                            None,
-                            Some(0.),
-                            Some(1.),
-                            Some(0.),
-                            Some(1.),
-                            Some(0.),
-                            Some(1.),
-                        ],
+                        vec![None, None, Some(1.), Some(0.), Some(1.), Some(0.), Some(1.)],
                     ),
                 ],
             ),
@@ -590,9 +566,9 @@ mod tests {
             id: id.0.to_string(),
             condition: 2,
         };
-        // Five-minute trends are down, down, up, up. Closed results reach minute bars
+        // Five-minute trends are none, down, up, up. Closed results reach minute bars
         // 4, 9 and 14; the change therefore holds at 14 and the forming minute 15.
-        let expected = [None, Some(0.0), Some(1.0)];
+        let expected = [None, None, Some(1.0)];
         for removed in [0, 2] {
             assert_eq!(
                 chart.remove_oldest_bars(SeriesId::MAIN, removed).len(),
