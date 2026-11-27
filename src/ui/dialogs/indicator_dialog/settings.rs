@@ -1373,7 +1373,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let mut study = ConfiguredStudy::new(Box::new(StochasticMomentumIndex::new(5, 2, 2, 3)));
-        let mut bars: Vec<_> = (0..6)
+        let mut bars: Vec<_> = (0..9)
             .map(|i| {
                 crate::model::Bar::new(
                     chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
@@ -1386,6 +1386,9 @@ mod tests {
             })
             .collect();
         bars[5].close = 104.0;
+        bars[6].close = 108.0;
+        bars[7].close = 105.0;
+        bars[8].close = 108.0;
         study.calculate(&bars);
         let defaults = study.settings();
         let before = study.snapshot_settings();
@@ -1503,19 +1506,19 @@ mod tests {
             defaults
         );
 
-        // Independent hand values at bar 5: SMI=475/9, signal=575/9.
+        // Independent hand values at bar 8: SMI=3400/81, signal=12100/243.
         // A 200 px pane from -100 to 100 maps a value v to y=100-v.
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 200.0));
         for (plots, guides, expected) in [
             (vec![], vec![], vec![]),
-            (vec![0], vec![], vec![475.0 / 9.0]),
-            (vec![1], vec![], vec![575.0 / 9.0]),
+            (vec![0], vec![], vec![3400.0 / 81.0]),
+            (vec![1], vec![], vec![12100.0 / 243.0]),
             (vec![], vec![0], vec![40.0]),
             (vec![], vec![1], vec![-40.0]),
             (
                 vec![0, 1],
                 vec![0, 1],
-                vec![475.0 / 9.0, 575.0 / 9.0, 40.0, -40.0],
+                vec![3400.0 / 81.0, 12100.0 / 243.0, 40.0, -40.0],
             ),
         ] {
             for (inverted, visible) in [(false, true), (true, true), (false, false), (true, false)]
@@ -1678,13 +1681,15 @@ mod tests {
         // Volume cases use highs of 20, lows of zero and volumes 1..=9. At bar 7 the
         // three-bar CMF is (3 + 1.4 + 4.8)/21 = 46/105; ADL sums to 13.
         // EFI(3) seeds from forces 4, -3, 12 (mean 13/3), then uses alpha 1/2.
+        // SMI(3, 2, 2, 2) seeds each EMA from two inputs, then uses alpha 2/3. Its first
+        // SMI is 100/17 on bar 4 and its first signal is (100/17 + 800/73)/2 = 10450/1241.
         let cases: [(&str, [&[f64]; 3]); 8] = [
             (
                 "SMI",
                 [
-                    &[24300.0 / 4577.0, -90248918812.0 / 92919667995.0],
-                    &[-72900.0 / 4253.0, -1376112074668.0 / 86342003055.0],
-                    &[92300.0 / 4969.0, 9100832864927708.0 / 1287100239540885.0],
+                    &[650.0 / 127.0, -89624350.0 / 72026399.0],
+                    &[-1025.0 / 59.0, -543351800.0 / 33461083.0],
+                    &[91900.0 / 4967.0, 3451318664800.0 / 498603597783.0],
                 ],
             ),
             (

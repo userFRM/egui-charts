@@ -331,6 +331,7 @@ struct State {
     /// Subscriptions by symbol, tracked or not.
     subscriptions: HashMap<String, Subscription>,
     delivery: Delivery,
+    footprint_events: VecDeque<crate::model::FootprintAlertEvent>,
 }
 
 struct Subscription {
@@ -440,6 +441,7 @@ impl OrderFlowDetectors {
             symbols,
             subscriptions,
             delivery,
+            footprint_events,
         } = &mut *state;
         let Some(tracked) = symbols.get_mut(symbol) else {
             return;
@@ -555,11 +557,41 @@ impl OrderFlowDetectors {
             &mut out,
         );
         tracked.stop_sweeps.advance(time, settings, &mut out);
+        if let Some(subscription) = subscriptions.get(symbol) {
+            for met in tracked.stop_sweeps.met.drain(..) {
+                footprint_events.push_back(crate::model::FootprintAlertEvent {
+                    symbol: symbol.to_owned(),
+                    exchange: tracked.instrument.exchange.clone(),
+                    timeframe: subscription.timeframe,
+                    condition: met.condition,
+                    bar: met.bar,
+                    closed: met.closed,
+                    time: met.time,
+                    price: met.price,
+                    message: met.message,
+                });
+                if footprint_events.len() > RETAINED {
+                    footprint_events.pop_front();
+                }
+            }
+        }
         tracked
             .counting
             .advance(time, settings, true, symbol, delivery);
         tracked.record(&out, time, true, settings, delivery, &mut HashSet::new());
         deliver(Some(tracked), subscriptions.get_mut(symbol), out);
+    }
+
+    /// Drains footprint conditions met by live bars, oldest first, for
+    /// `AlertEngine::footprint_events`. A forming bar reports each condition once, at the
+    /// execution that first meets it; a closed bar reports each condition it meets when the
+    /// event that closes it arrives. The footprint rule's ratio, comparison, minimum volume,
+    /// stack and rows apply even with the detector or its switches disabled: those choose
+    /// chart markers and panel alerts only. Loaded history, bars opened before the first live
+    /// event's bar, the first retained bar, trade-based intervals and interval rebuilds report
+    /// nothing. At most the newest 5,000 events are kept; drain them every frame.
+    pub fn take_footprint_events(&self) -> Vec<crate::model::FootprintAlertEvent> {
+        self.lock().footprint_events.drain(..).collect()
     }
 
     /// Detects on the loaded trade history of `symbol`, in time order, before the live trades
@@ -572,6 +604,7 @@ impl OrderFlowDetectors {
             symbols,
             subscriptions,
             delivery,
+            ..
         } = &mut *state;
         let Some(tracked) = symbols.get_mut(symbol) else {
             return;
@@ -593,6 +626,7 @@ impl OrderFlowDetectors {
                 &mut added,
             );
         }
+        tracked.stop_sweeps.met.clear();
         deliver(Some(tracked), subscriptions.get_mut(symbol), out);
     }
 }
@@ -1839,6 +1873,108 @@ mod tests {
         }
     }
 
+    /// The third adjacent diagonal buy row completes the stack at second 65, before close.
+    /// A sell imbalance disappears before close; repeated deliveries and recrosses stay silent.
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn footprint_alerts_fire_by_frequency_as_bars_form_and_close() {
+        use crate::model::{
+            Alert, AlertCondition, AlertFrequency as F, AlertStatus, FootprintCondition as C,
+        };
+        use crate::services::AlertEngine;
+        use OrderSide::{Buy, Sell};
+        let host = Host::new(None);
+        host.detectors.set_settings(DetectorSettings::default());
+        let engine = AlertEngine::new().with_alerts(
+            [
+                ("once", C::StackedBuyImbalance, F::Once),
+                ("bar", C::StackedBuyImbalance, F::OncePerBar),
+                ("close", C::StackedBuyImbalance, F::OncePerBarClose),
+                ("sell bar", C::SellImbalance, F::OncePerBar),
+                ("sell close", C::SellImbalance, F::OncePerBarClose),
+            ]
+            .map(|(name, condition, frequency)| {
+                let mut alert = Alert::new("ES", AlertCondition::Footprint(condition));
+                alert.name = name.into();
+                alert.frequency = frequency;
+                alert.timeframe = Some(Timeframe::Min1);
+                alert
+            })
+            .to_vec(),
+        );
+        let mut seen = HashSet::new();
+        let mut fired = 0;
+        for (second, price, size, side, names) in [
+            (0, 100.0, 1.0, Buy, &[][..]),
+            (60, 100.0, 1.0, Sell, &[][..]),
+            (61, 100.25, 1.0, Sell, &["sell bar"][..]),
+            (62, 100.5, 1.0, Sell, &[][..]),
+            (63, 100.25, 12.0, Buy, &[][..]),
+            (64, 100.5, 9.0, Buy, &[][..]),
+            (65, 100.75, 15.0, Buy, &["once", "bar"][..]),
+            (66, 100.5, 20.0, Sell, &[][..]),
+            (67, 100.75, 60.0, Buy, &[][..]),
+            (120, 100.0, 1.0, Sell, &["close"][..]),
+            (121, 100.25, 1.0, Sell, &["sell bar"][..]),
+            (122, 100.5, 1.0, Sell, &[][..]),
+            (123, 100.25, 12.0, Buy, &[][..]),
+            (124, 100.5, 9.0, Buy, &[][..]),
+            (125, 100.75, 15.0, Buy, &["bar"][..]),
+            (180, 100.5, 1.0, Sell, &["close"][..]),
+        ] {
+            host.detectors.push(
+                "ES",
+                time(second),
+                &MarketEvent::Trade(fill(second, price, size, side, None)),
+            );
+            let events = host.detectors.take_footprint_events();
+            for event in &events {
+                assert!(
+                    seen.insert((event.condition, event.bar, event.closed)),
+                    "duplicate event at {second}: {event:?}"
+                );
+            }
+            engine.footprint_events(&events, time(second));
+            engine.footprint_events(&events, time(second));
+            let triggers = engine.triggers();
+            let actual: Vec<_> = triggers[fired..]
+                .iter()
+                .map(|trigger| {
+                    (
+                        trigger.name.as_str(),
+                        trigger.time,
+                        trigger.price,
+                        trigger.message.as_str(),
+                    )
+                })
+                .collect();
+            let expected: Vec<_> = names
+                .iter()
+                .map(|&name| {
+                    let (price, message) = if name == "sell bar" {
+                        (100.25, "Sell imbalance on 1 row")
+                    } else {
+                        (100.75, "Stacked buy imbalance of 3 rows")
+                    };
+                    (name, time(second), Some(price), message)
+                })
+                .collect();
+            assert_eq!(actual, expected, "second {second}");
+            fired = triggers.len();
+        }
+        for alert in engine.alerts() {
+            assert_eq!(
+                alert.status,
+                if alert.name == "once" {
+                    AlertStatus::Triggered
+                } else {
+                    AlertStatus::Active
+                }
+            );
+        }
+        assert!(host.detectors.take_alerts().is_empty());
+    }
+
     #[test]
     fn footprint_conditions_alert_once_per_live_bar() {
         use OrderSide::{Buy, Sell};
@@ -2074,6 +2210,7 @@ mod tests {
                 assert_eq!(alerts(&host), expected, "{name}, second {second}");
             }
             if name == "stack" {
+                host.detectors.take_footprint_events();
                 host.events();
                 let (listener, events) = Listener::new(&host.inbox, 1);
                 host.listeners.push(listener);
@@ -2081,6 +2218,22 @@ mod tests {
                 let id = SignalId("footprint-stacked-buy-60000".into());
                 assert!(host.events().contains(&SignalEvent::Remove(id)), "{name}");
                 assert!(alerts(&host).is_empty(), "{name}: rebuilt five-minute bars");
+                assert!(
+                    host.detectors.take_footprint_events().is_empty(),
+                    "{name}: rebuilt bars report nothing"
+                );
+                let (listener, events) = Listener::new(&host.inbox, 1);
+                host.listeners.push(listener);
+                host.detectors.subscribe("ES", Timeframe::Min1, events);
+                host.detectors.push(
+                    "ES",
+                    time(121),
+                    &MarketEvent::Trade(fill(121, 100.5, 1.0, Buy, None)),
+                );
+                assert!(
+                    host.detectors.take_footprint_events().is_empty(),
+                    "{name}: rebuilding live minute bars reports nothing"
+                );
             }
         }
         // A closed bar skipped while disabled or after retention ends every active zone.
@@ -2175,6 +2328,24 @@ mod tests {
         let trade = MarketEvent::Trade(fill(120, 100.0, 1.0, Buy, None));
         host.detectors.push("ES", time(120), &trade);
         assert!(alerts(&host).is_empty());
+        assert!(host.detectors.take_footprint_events().is_empty());
+        // A history page overlapping a live bar must not leave queued live events.
+        host.detectors.push_history(
+            "ES",
+            &[
+                fill(121, 100.25, 1.0, Sell, None),
+                fill(122, 100.5, 1.0, Sell, None),
+            ],
+        );
+        host.detectors.push(
+            "ES",
+            time(123),
+            &MarketEvent::Trade(fill(123, 100.5, 1.0, Sell, None)),
+        );
+        assert!(
+            host.detectors.take_footprint_events().is_empty(),
+            "overlapping history reports nothing"
+        );
         let marked: Vec<_> = of_kind(host.events(), "Footprint conditions")
             .into_iter()
             .map(|signal| signal.id.0)
