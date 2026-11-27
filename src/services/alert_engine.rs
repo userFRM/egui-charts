@@ -232,6 +232,7 @@ struct Run {
     /// The sequence of the newest strategy fill or custom event received.
     last_sequence: u64,
     /// The sequence of the newest strategy alert received.
+    #[cfg(feature = "strategies")]
     last_alert: u64,
     /// The detector signals that fired, with their anchor times.
     signals: Vec<(crate::model::SignalId, DateTime<Utc>)>,
