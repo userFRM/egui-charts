@@ -353,9 +353,18 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             .iter()
             .map(|level| level.0)
             .eq([-20.0, -80.0, -50.0]);
+    // The built-in Choppiness Index, saved with its two bands before its middle line.
+    let chop = study.name() == "CHOP"
+        && study
+            .pane()
+            .levels
+            .iter()
+            .map(|level| level.0)
+            .eq([61.8, 38.2, 50.0]);
     if (study.name() == "Stochastic"
         || (study.name() == "MFI" && guides_since(study))
-        || williams_r)
+        || williams_r
+        || chop)
         && settings.levels.len() == 2
         && levels.len() == 3
     {
@@ -371,7 +380,13 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         settings.level_fill_color = color;
     } else if matches!(
         study.name(),
-        "KST" | "CMF" | "Force Index" | "Advance/Decline Ratio (Bars)"
+        "KST"
+            | "CMF"
+            | "Force Index"
+            | "Advance/Decline Ratio (Bars)"
+            | "Volume Delta"
+            | "Cumulative Volume Delta"
+            | "PVO"
     ) && settings.levels.is_empty()
         && levels.len() == 1
     {
@@ -4646,15 +4661,25 @@ mod tests {
             study.apply_settings(&[], absent).unwrap();
             assert_eq!(study.settings(), defaults);
         }
-        // Saved before the lower interval named its automatic choice, this template keeps
-        // its unset input and every plot style on the chart's interval.
+        // Saved before the lower interval named its automatic choice and before the zero level,
+        // this template keeps its unset input, every plot style on the chart's interval and draws
+        // no zero level.
         let saved = r#"{"name":"Volume Delta","inputs":[["lower_interval",{"Timeframe":null}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolumeDelta.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
         let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
         let mut older = template.create().unwrap();
         older.set_timeframe(Timeframe::Min5);
         let restored = crate::studies::StudyTemplate::from_study(older.as_ref());
         assert_eq!(restored.inputs, template.inputs);
-        assert_eq!(restored.settings, template.settings);
+        let mut expected = template.settings.clone();
+        expected.levels = vec![LevelStyle {
+            value: None,
+            color: crate::studies::palette::GRAY,
+            pattern: LineStyle::Dashed,
+            width: 1.0,
+            visible: false,
+            price_line: false,
+        }];
+        assert_eq!(restored.settings, expected);
         assert_eq!(restored.visible, template.visible);
         assert_eq!(restored.scale, template.scale);
         // Profiles saved with finer bars keep their presentation and both saved interval inputs.
@@ -4859,8 +4884,8 @@ mod tests {
         assert_eq!(values(&adx), [25.0]);
     }
 
-    /// The Aroon Oscillator, Bollinger Bands %b, CCI and Money Flow Index open with their usual
-    /// guides and bands. Older saves keep their guide styles and leave new guides and fills hidden;
+    /// The Aroon Oscillator, Bollinger Bands %b, CCI, Money Flow Index, Volume Delta, Cumulative
+    /// Volume Delta, PVO and Choppiness Index open with their usual guides and bands. Older saves keep their guide styles and leave new guides and fills hidden;
     /// a guide shown since keeps its style through a template. Awesome Oscillator opens as
     /// columns and keeps a saved histogram; Balance of Power keeps its saved smoothing.
     #[test]
@@ -4879,7 +4904,7 @@ mod tests {
         let (gray, faint) = (palette::MUTED, palette::MUTED.gamma_multiply_u8(128));
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 26);
         let (dashed, solid) = (LineStyle::Dashed, LineStyle::Solid);
-        let rows: [Row; 4] = [
+        let rows: [Row; 8] = [
             (
                 "Aroon Oscillator",
                 vec![
@@ -4957,6 +4982,46 @@ mod tests {
                 Some([0, 1]),
                 Some((0.0, 100.0)),
                 Color32::from_rgba_unmultiplied(126, 87, 194, 26),
+                vec![],
+            ),
+            (
+                "Volume Delta",
+                vec![(0.0, palette::GRAY, "Zero", dashed)],
+                false,
+                None,
+                None,
+                Color32::TRANSPARENT,
+                vec![],
+            ),
+            (
+                "Cumulative Volume Delta",
+                vec![(0.0, palette::GRAY, "Zero", dashed)],
+                false,
+                None,
+                None,
+                Color32::TRANSPARENT,
+                vec![],
+            ),
+            (
+                "PVO",
+                vec![(0.0, faint, "Zero Line", dashed)],
+                false,
+                None,
+                None,
+                Color32::TRANSPARENT,
+                vec![],
+            ),
+            (
+                "CHOP",
+                vec![
+                    (61.8, gray, "Upper Band", dashed),
+                    (38.2, gray, "Lower Band", dashed),
+                    (50.0, faint, "Middle Band", solid),
+                ],
+                true,
+                Some([0, 1]),
+                None,
+                Color32::from_rgba_unmultiplied(33, 150, 243, 26),
                 vec![],
             ),
         ];
@@ -5049,6 +5114,11 @@ mod tests {
                     ),
                     (Vec::new(), declared.iter().copied().map(hidden).collect()),
                 ]
+            } else if name == "CHOP" {
+                vec![(
+                    declared[..2].to_vec(),
+                    vec![declared[0], declared[1], hidden(declared[2])],
+                )]
             } else {
                 vec![(Vec::new(), declared.iter().copied().map(hidden).collect())]
             };

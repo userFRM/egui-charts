@@ -10,8 +10,8 @@ use egui::Color32;
 /// Values close to 100 = choppy market, values close to 0 = trending market
 ///
 /// The pane draws dashed levels at 61.8 and 38.2, with the band between them filled in light blue
-/// at a tenth of full opacity. A true range can reach back past the window to a gap, so a reading
-/// can pass 100.
+/// at a tenth of full opacity, and a solid middle line at 50 in `#787B86` at half opacity. A true
+/// range can reach back past the window to a gap, so a reading can pass 100.
 #[derive(Clone, Debug)]
 pub struct ChoppinessIndex {
     /// Lookback period (typically 14)
@@ -175,6 +175,20 @@ impl Indicator for ChoppinessIndex {
         palette::LIGHT_BLUE.gamma_multiply_u8(26)
     }
 
+    /// The band stays between the outer levels wherever the middle line is moved.
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
+        Some([0, 1])
+    }
+
+    /// The middle line is solid, the outer levels dashed.
+    fn level_style(&self, value: f64) -> crate::model::LineStyle {
+        if value == 50.0 {
+            crate::model::LineStyle::Solid
+        } else {
+            crate::model::LineStyle::Dashed
+        }
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             height: None,
@@ -182,6 +196,7 @@ impl Indicator for ChoppinessIndex {
             levels: vec![
                 (61.8, palette::MUTED, "Upper Band"),
                 (38.2, palette::MUTED, "Lower Band"),
+                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle Band"),
             ],
             fill_between_levels: true,
         }
@@ -226,8 +241,9 @@ mod tests {
             .collect()
     }
 
-    /// The study opens with dashed one-pixel levels at 61.8 and 38.2 and a light blue band between
-    /// them at a tenth of full opacity, undisplaced and reading to two decimals.
+    /// The study opens with dashed one-pixel levels at 61.8 and 38.2, a solid middle line at 50 at
+    /// half opacity and a light blue band between the outer levels at a tenth of full opacity,
+    /// undisplaced and reading to two decimals.
     #[test]
     fn opens_with_its_bands_background_and_no_offset() {
         let study = ConfiguredStudy::new(Box::new(ChoppinessIndex::default()));
@@ -237,12 +253,15 @@ mod tests {
             [
                 (61.8, palette::MUTED, "Upper Band"),
                 (38.2, palette::MUTED, "Lower Band"),
+                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle Band"),
             ]
         );
-        for level in &settings.levels {
+        let patterns = [LineStyle::Dashed, LineStyle::Dashed, LineStyle::Solid];
+        assert_eq!(settings.levels.len(), patterns.len());
+        for (level, pattern) in settings.levels.iter().zip(patterns) {
             assert_eq!(
                 (level.pattern, level.width, level.visible),
-                (LineStyle::Dashed, 1.0, true)
+                (pattern, 1.0, true)
             );
         }
         assert!(settings.fill_between_levels);

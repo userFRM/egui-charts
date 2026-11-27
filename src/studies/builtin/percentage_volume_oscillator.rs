@@ -19,6 +19,7 @@ use egui::Color32;
 /// [`OscillatorAverage`] independently. With lengths 12, 26 and 9 a bar has no value before
 /// bar 25, the PVO alone on bars 25 to 32, and all three lines from bar 33, under either
 /// formula. A bar with a non-finite volume has no value and is skipped by the averages.
+/// The pane draws a dashed zero line, as MACD does.
 #[derive(Clone, Debug)]
 pub struct PercentageVolumeOscillator {
     short_period: usize,
@@ -179,6 +180,13 @@ impl Indicator for PercentageVolumeOscillator {
 
     fn is_overlay(&self) -> bool {
         false
+    }
+
+    fn pane(&self) -> crate::studies::StudyPane {
+        crate::studies::StudyPane {
+            levels: vec![(0.0, palette::MUTED.gamma_multiply_u8(128), "Zero Line")],
+            ..Default::default()
+        }
     }
 
     fn is_visible(&self) -> bool {
