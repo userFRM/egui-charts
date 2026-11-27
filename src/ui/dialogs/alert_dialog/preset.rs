@@ -1,5 +1,5 @@
 //! Reusable alert settings, stored without the values that belong to one alert: symbols, levels,
-//! drawings, webhook addresses and plain-text email addresses.
+//! drawings, TPO levels, webhook addresses and plain-text email addresses.
 
 use std::collections::BTreeMap;
 
@@ -68,7 +68,7 @@ impl PresetFields {
 #[serde(default)]
 pub(super) struct AlertPreset {
     pub(super) fields: PresetFields,
-    /// The first rule and the additional ones, with zero thresholds and no drawings.
+    /// The first rule and the additional ones, with zero thresholds and no drawings or TPO levels.
     rules: Vec<AlertRule>,
     /// The saving chart's names for what `rules` test: studies are numbered per chart, so an id
     /// alone may name another study elsewhere. Presets saved without names have none.
@@ -113,7 +113,9 @@ impl AlertPreset {
                 .filter_map(|(source, condition)| {
                     Some(AlertRule {
                         source: match source {
-                            AlertSource::Drawing(_) => AlertSource::Price,
+                            AlertSource::Drawing(_) | AlertSource::TPOLevel(_) => {
+                                AlertSource::Price
+                            }
                             source => source.clone(),
                         },
                         condition: without_thresholds(condition)?,
@@ -282,8 +284,8 @@ impl AlertPreset {
     }
 }
 
-/// `condition`'s operator with zero thresholds. A drawing's relationship becomes the same
-/// relationship to a level. `None` when only one strategy run can use it.
+/// `condition`'s operator with zero thresholds. A drawing's or TPO level's relationship becomes
+/// the same relationship to a level. `None` when only one strategy run can use it.
 fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     use AlertCondition as C;
     let channel = |comparison| channel_condition(comparison, 0.0, 0.0);
@@ -310,7 +312,7 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
             bars: *bars,
         },
         C::Compare {
-            other: AlertSource::Drawing(_),
+            other: AlertSource::Drawing(_) | AlertSource::TPOLevel(_),
             comparison,
         } => level_condition(*comparison, 0.0),
         C::Compare { other, comparison } => C::Compare {
@@ -421,14 +423,17 @@ fn restored_condition(
     })
 }
 
-/// The stored source unless the alert watches a drawing or the chart does not offer it.
+/// The stored source unless the alert watches a drawing or a TPO level, or the chart does not
+/// offer it.
 fn restored_source(
     stored: &AlertSource,
     current: &AlertSource,
     names: &[(AlertSource, AlertSourceName)],
     sources: &[(AlertSource, AlertSourceName)],
 ) -> AlertSource {
-    if matches!(current, AlertSource::Drawing(_)) || !offered(stored, names, sources) {
+    if matches!(current, AlertSource::Drawing(_) | AlertSource::TPOLevel(_))
+        || !offered(stored, names, sources)
+    {
         current.clone()
     } else {
         stored.clone()
@@ -452,7 +457,7 @@ fn offered(
                 None => matching.count() == 1,
             }
         }
-        AlertSource::Drawing(_) => false,
+        AlertSource::Drawing(_) | AlertSource::TPOLevel(_) => false,
     }
 }
 
@@ -580,6 +585,17 @@ mod tests {
                     bars: 7,
                 },
             },
+            AlertRule {
+                source: AlertSource::Price,
+                condition: AlertCondition::Compare {
+                    other: AlertSource::TPOLevel(crate::model::TPOLevelSource::new(
+                        now,
+                        crate::model::TPOLevel::PointOfControl,
+                        123.456,
+                    )),
+                    comparison: AlertComparison::Crossing,
+                },
+            },
         ];
         let version_1 = serde_json::json!({"version": 1, "presets": {"Old": alert}}).to_string();
         for preset in [
@@ -608,6 +624,7 @@ mod tests {
                         percent: 0.0,
                         bars: 7
                     },
+                    AlertCondition::Crossing(0.0),
                 ]
             );
             assert!(preset.delivery.webhook && preset.delivery.plain_text);

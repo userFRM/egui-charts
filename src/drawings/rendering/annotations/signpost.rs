@@ -58,7 +58,7 @@ impl Drawing {
                     centre,
                     egui::Align2::CENTER_CENTER,
                     &self.marker.glyph,
-                    egui::FontId::proportional(GLYPH_SIZE),
+                    crate::drawings::glyphs::font_id(painter.ctx(), &self.marker.glyph, GLYPH_SIZE),
                     ink,
                 );
             }

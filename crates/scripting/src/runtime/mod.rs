@@ -68,6 +68,25 @@ pub(crate) struct CallSite {
     pub last: usize,
 }
 
+/// The last count on this bar of the values in a scope, the top level's or a function call's. A
+/// call written `f!()` runs in its caller's scope, so it adds to its caller's count.
+#[derive(Clone, Copy, Debug)]
+struct ScopeCount {
+    /// The call level of the call the scope belongs to, the top level's at 0.
+    level: usize,
+    /// The address of the scope, which stays the same while its call runs.
+    scope: usize,
+    /// The variables counted together, before the others: at the top level at the start of a
+    /// bar the declarations and the states, and otherwise none.
+    base: usize,
+    /// Where the bytes of the variables after `base` start in [`Run::slots`].
+    first: usize,
+    /// The bytes of the variables and of a method call's receiver, and those of them outside the
+    /// states.
+    bytes: usize,
+    outside: usize,
+}
+
 /// What the per-bar functions of a front end read and write while a run is installed.
 #[derive(Debug)]
 pub(crate) struct Run {
@@ -85,7 +104,8 @@ pub(crate) struct Run {
     /// calculated last.
     drawn_bytes: Vec<usize>,
     /// The bytes each value kept between bars holds after the last bar, with where it is
-    /// declared; the front end sets them after each bar.
+    /// declared; the front end sets them after each bar, and a restored snapshot sets those of
+    /// its bar.
     pub kept: Vec<(usize, Span)>,
     pub sites: HashMap<Site, CallSite>,
     occurrences: HashMap<Span, u32>,
@@ -94,13 +114,18 @@ pub(crate) struct Run {
     pub clock: Clock,
     /// The operations run so far.
     operations: u64,
-    /// Whether the values of the running scope are due to be counted, once per clock read.
+    /// Whether the values of the running scope are due to be counted whole, once per clock read.
     due: bool,
-    /// The bytes the values of the scope at each call level held at the last count there on this
-    /// bar, and those of them outside the states, zeros for a level without one, the running level
-    /// last. A caller's scope is out of reach while it waits, so the last count at its level stands
-    /// for it, without what the caller bound after that count.
-    levels: Vec<(usize, usize)>,
+    /// The last count on this bar of each scope in reach, the running one last. A caller's scope
+    /// is out of reach while it waits, so its last count stands for it, without what it assigned
+    /// to its variables after that count.
+    scopes: Vec<ScopeCount>,
+    /// The bytes of each variable the scopes counted one by one, scope by scope in scope order,
+    /// and whether it is outside the states.
+    slots: Vec<(usize, bool)>,
+    /// The call level, scope address and number of variables of the last variable read on this
+    /// bar, whose count is up to date until a clock read or a change of one of them.
+    read: (usize, usize, usize),
     /// The bytes the values of the running scope outside the states held when their count
     /// stopped the run, for its report.
     running: usize,
@@ -122,6 +147,9 @@ pub(crate) struct Run {
 }
 
 impl Run {
+    /// A [`Run::read`] that matches no read.
+    const NO_READ: (usize, usize, usize) = (usize::MAX, 0, 0);
+
     /// Count a runtime operation at `span` in the profile, charging it the time since the last
     /// one, when the run profiles.
     pub fn mark(&mut self, span: Span) {
@@ -160,25 +188,132 @@ impl Run {
         self.stop.is_some()
     }
 
-    /// Whether the front end is to count the values of the scope running at call level `level`
-    /// now, which it does once after each clock read. The counts of deeper levels, whose calls
-    /// have returned, are dropped.
-    pub fn count_due(&mut self, level: usize) -> bool {
-        self.levels.truncate(level + 1);
-        std::mem::take(&mut self.due)
+    /// Start the counts of a bar with the top level's scope, at address `scope`, holding its
+    /// `declared` declarations and states: the states count at the bytes they kept after the last
+    /// bar and the declarations at nothing, as between bars.
+    pub fn count_bar(&mut self, scope: usize, declared: usize) {
+        let bytes = self.kept.iter().map(|(bytes, _)| bytes).sum();
+        self.scopes.clear();
+        self.slots.clear();
+        self.read = Self::NO_READ;
+        self.scopes.push(ScopeCount {
+            level: 0,
+            scope,
+            base: declared,
+            first: 0,
+            bytes,
+            outside: 0,
+        });
     }
 
-    /// The count of the values of the scope running at call level `level`, `bytes` in all,
-    /// `outside` of them outside the states: a stop at the memory limit when the study holds
-    /// more with them and the last counts of its callers' scopes in place of the values kept
-    /// after the last bar, which the snapshot's copy may still hold.
-    pub fn count(&mut self, level: usize, bytes: usize, outside: usize) -> bool {
-        self.levels.resize(level, (0, 0));
-        self.levels.push((bytes, outside));
-        let bytes = self.levels.iter().map(|(bytes, _)| bytes).sum();
-        if self.stop.is_none() && self.holding(bytes) > self.clock.limits.memory {
-            self.stop = Some(Stop::Memory);
-            self.running = self.levels.iter().map(|(_, outside)| outside).sum();
+    /// Which variables of the scope at address `scope`, running at call level `level` and
+    /// holding `len` variables, the front end is to count now, from the one returned on, whether
+    /// a clock read was due and whether the scope is the top level's; `None` for none. It counts
+    /// all of them after a clock read and at the first read of a call with a scope of its own,
+    /// and otherwise those the scope did not hold at its last count, its caller's for a call
+    /// written `f!()`. The counts of the calls that have returned are dropped, and so are those
+    /// of the variables the scope no longer holds.
+    #[inline]
+    pub fn count_due(
+        &mut self,
+        level: usize,
+        scope: usize,
+        len: usize,
+    ) -> Option<(usize, bool, bool)> {
+        // Most reads come in the scope of the last one with nothing bound or released since, which
+        // leaves its count as it is.
+        if !self.due && self.read == (level, scope, len) {
+            return None;
+        }
+        self.read = (level, scope, len);
+        self.count_scope(level, scope, len)
+    }
+
+    /// [`count_due`](Self::count_due) for a read whose scope may have changed since the last.
+    fn count_scope(
+        &mut self,
+        level: usize,
+        scope: usize,
+        len: usize,
+    ) -> Option<(usize, bool, bool)> {
+        // The calls deeper than this one have returned, and so has one at this level in a scope
+        // that is not this one.
+        while let Some(last) = self.scopes.last()
+            && (last.level > level || (last.level == level && last.scope != scope))
+        {
+            self.slots.truncate(last.first);
+            self.scopes.pop();
+        }
+        let clock = std::mem::take(&mut self.due);
+        let Some(last) = self.scopes.last_mut().filter(|last| last.scope == scope) else {
+            // The first read of a call that does not share its caller's scope.
+            self.scopes.push(ScopeCount {
+                level,
+                scope,
+                base: 0,
+                first: self.slots.len(),
+                bytes: 0,
+                outside: 0,
+            });
+            return Some((0, clock, level == 0));
+        };
+        let top = last.level == 0;
+        if clock {
+            self.slots.truncate(last.first);
+            *last = ScopeCount {
+                base: 0,
+                bytes: 0,
+                outside: 0,
+                ..*last
+            };
+            return Some((0, true, top));
+        }
+        let counted = last.base + self.slots.len() - last.first;
+        if len < counted {
+            // The places of the variables a block released, which later variables take.
+            let released = last.first + len.max(last.base) - last.base;
+            for (bytes, outside) in self.slots.drain(released..) {
+                last.bytes -= bytes;
+                if outside {
+                    last.outside -= bytes;
+                }
+            }
+        }
+        (len > counted).then_some((counted, false, top))
+    }
+
+    /// Add to the count of the scope [`count_due`](Self::count_due) last named the bytes of the
+    /// variables it asked for, the last first as the engine lists them, with whether each is
+    /// outside the states, and `this`, those of a method call's receiver: a stop at the memory
+    /// limit when the study holds more with them and the last counts of its callers' scopes in
+    /// place of the values kept after the last bar, which the snapshot's copy may still hold.
+    /// Unless `clock`, a count that adds nothing leaves the check as it was.
+    pub fn count(
+        &mut self,
+        variables: impl Iterator<Item = (usize, bool)>,
+        this: usize,
+        clock: bool,
+    ) -> bool {
+        let first = self.slots.len();
+        let (mut added, mut outside) = (this, this);
+        for (bytes, out) in variables {
+            self.slots.push((bytes, out));
+            added += bytes;
+            if out {
+                outside += bytes;
+            }
+        }
+        self.slots[first..].reverse();
+        if let Some(last) = self.scopes.last_mut() {
+            last.bytes += added;
+            last.outside += outside;
+        }
+        if self.stop.is_none() && (clock || added > 0) {
+            let values = self.scopes.iter().map(|counted| counted.bytes).sum();
+            if self.holding(values) > self.clock.limits.memory {
+                self.stop = Some(Stop::Memory);
+                self.running = self.scopes.iter().map(|counted| counted.outside).sum();
+            }
         }
         self.stop.is_some()
     }
@@ -210,7 +345,9 @@ impl Run {
             }
         }
         self.occurrences.clear();
-        self.levels.clear();
+        self.scopes.clear();
+        self.slots.clear();
+        self.read = Self::NO_READ;
         self.clock.next_bar();
         for column in &mut self.columns.declared {
             column.push(f64::NAN);
@@ -431,7 +568,9 @@ impl<P: Program> RunState<P> {
             clock: Clock::start(limits),
             operations: 0,
             due: false,
-            levels: Vec::new(),
+            scopes: Vec::new(),
+            slots: Vec::new(),
+            read: Run::NO_READ,
             running: 0,
             stop: None,
             cancel,
@@ -515,6 +654,7 @@ impl<P: Program> RunState<P> {
                 Some(snapshot) => {
                     self.slots = snapshot.slots;
                     self.run.sites = snapshot.sites;
+                    self.run.kept = snapshot.kept;
                     self.run.instances.truncate(snapshot.studies);
                     self.failed = snapshot.failed;
                     self.done - 1
@@ -606,12 +746,14 @@ impl<P: Program> RunState<P> {
                     }
                 }
                 if i + 1 == len {
-                    let (sites, studies) =
-                        with(|run| (run.sites.clone(), run.instances.len())).unwrap_or_default();
+                    let (sites, studies, kept) =
+                        with(|run| (run.sites.clone(), run.instances.len(), run.kept.clone()))
+                            .unwrap_or_default();
                     self.snapshot = Some(Snapshot {
                         slots: self.slots.clone(),
                         sites,
                         studies,
+                        kept,
                         failed: self.failed,
                     });
                 }
@@ -741,7 +883,9 @@ impl Run {
             clock: Clock::start(Limits::default()),
             operations: 0,
             due: false,
-            levels: Vec::new(),
+            scopes: Vec::new(),
+            slots: Vec::new(),
+            read: Self::NO_READ,
             running: 0,
             stop: None,
             cancel: None,

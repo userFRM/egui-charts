@@ -723,9 +723,14 @@ impl Chart {
                     plot,
                 }) = value
                 {
+                    let parent = self.restored_studies[parent];
+                    let (_, read) = self
+                        .indicators()
+                        .find(|(study, _)| study.0 == parent)
+                        .expect("restored study");
                     let source = crate::studies::StudySource::Study {
-                        id: self.restored_studies[parent],
-                        plot: *plot,
+                        id: parent,
+                        plot: StudyTemplate::upgraded_output(read, *plot),
                     };
                     let study = self.indicator_mut(id).expect("restored study");
                     // An input restored on its default in place of the saved output keeps it.
@@ -1102,7 +1107,9 @@ fn check_source_links(
                         error: crate::studies::StudyError::UnknownSourceStudy(*id),
                     },
                 )?;
-                if *plot >= built[parent].line_count() {
+                if StudyTemplate::upgraded_output(built[parent].as_ref(), *plot)
+                    >= built[parent].line_count()
+                {
                     return Err(RestoreError::Study {
                         index: at,
                         error: crate::studies::StudyError::UnknownSourcePlot {
@@ -1839,6 +1846,76 @@ mod tests {
                 if interval.is_none() {
                     assert_eq!(echo.values().value(0, 2), Some(6.0));
                 }
+            }
+        }
+    }
+
+    /// A study saved reading the Down Trend output of a Parabolic SAR, before its two trend plots
+    /// became one, restores through a snapshot and a study template set reading the one plot.
+    #[test]
+    fn studies_saved_on_the_former_parabolic_sar_down_trend_read_its_one_plot() {
+        use crate::studies::{InputValue, ParabolicSAR, StudySource};
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                let close = 10.0 + (i as f64 * 0.4).sin() * 3.0;
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    close,
+                    close + 1.0,
+                    close - 1.0,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let sar = chart.add_indicator(Box::new(ParabolicSAR::default()));
+        let mean = chart.add_indicator(Box::new(SMA::new(1)));
+        chart
+            .set_indicator_source(mean, StudySource::Study { id: sar.0, plot: 0 })
+            .unwrap();
+        let mut snapshot = chart.snapshot().unwrap();
+        let mut set = chart.study_template_set();
+        let [saved_sar, saved_mean] = &mut snapshot.studies[..] else {
+            unreachable!()
+        };
+        let [set_sar, set_mean] = &mut set.studies[..] else {
+            unreachable!()
+        };
+        for (sar, mean) in [
+            (&mut saved_sar.study, &mut saved_mean.study),
+            (set_sar, set_mean),
+        ] {
+            // A default Parabolic SAR saved its Up Trend and Down Trend plots alike.
+            sar.settings.plots.push(sar.settings.plots[0]);
+            sar.settings.plot_variants.push(Vec::new());
+            for (_, value) in &mut mean.inputs {
+                if let InputValue::Source(StudySource::Study { plot, .. }) = value {
+                    *plot = 1;
+                }
+            }
+        }
+
+        let mut restored = Chart::new(BarData::from_bars(bars.clone()));
+        restored.restore(&snapshot).unwrap();
+        let mut applied = Chart::new(BarData::from_bars(bars.clone()));
+        applied.apply_study_template_set(&set).unwrap();
+        for chart in [&restored, &applied] {
+            let studies: Vec<_> = chart.indicators().collect();
+            let [(sar, psar), (_, mean)] = studies.as_slice() else {
+                unreachable!()
+            };
+            assert_eq!(
+                mean.source(),
+                Some(StudySource::Study { id: sar.0, plot: 0 })
+            );
+            assert!(mean.values().value(0, bars.len() - 1).is_some());
+            for bar in 0..bars.len() {
+                assert_eq!(
+                    mean.values().value(0, bar),
+                    psar.values().value(0, bar),
+                    "{bar}"
+                );
             }
         }
     }
