@@ -32,6 +32,16 @@ pub struct StrategyFill {
     pub alert_message: Option<String>,
 }
 
+impl StrategyFill {
+    /// [`price`](Self::price) as a fill alert's default message writes it: with at least
+    /// [`price_decimals`](Self::price_decimals), up to 12, and more where the price has them,
+    /// without binary rounding digits, such as `100.12` for an open of 100.1 with two increments
+    /// of 0.01 of slippage.
+    pub fn price_text(&self) -> String {
+        StrategyReport::price_text_with(self.price, self.price_decimals)
+    }
+}
+
 /// An alert a strategy raised through [`StrategyContext::alert`] in a live run.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
