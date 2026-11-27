@@ -121,6 +121,20 @@ impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
 }
 
 impl StudyTemplateSet {
+    /// Find a built-in set by its menu name or an earlier name kept by a host.
+    pub fn builtin_named(name: &str) -> Option<Self> {
+        let name = match name {
+            "Williams Alligator" => "Bill Williams' 3 Lines",
+            "Moving average ribbon" => "MA Exp Ribbon",
+            "Swing trading" => "Swing Trading",
+            "Volume analysis" => "Volume Based",
+            name => name,
+        };
+        Self::builtin()
+            .into_iter()
+            .find_map(|(label, set)| (label == name).then_some(set))
+    }
+
     /// The built-in sets with their names, in the order a menu lists them, for a host to offer
     /// beside the user's own sets and apply as it applies those, for example with
     /// `Chart::apply_chosen_study_template_set`:
