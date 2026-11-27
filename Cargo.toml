@@ -99,11 +99,6 @@ name = "backtesting"
 path = "examples/backtesting.rs"
 
 [[example]]
-name = "scripting"
-path = "examples/scripting.rs"
-required-features = ["widget"]
-
-[[example]]
 name = "synchronized_charts"
 path = "examples/synchronized_charts.rs"
 required-features = ["widget"]
