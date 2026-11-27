@@ -14988,6 +14988,76 @@ mod tests {
         }
     }
 
+    /// The paper account attaches exits to open positions, so a position line shows its TP and
+    /// SL buttons and its label menu offers Protect position.
+    #[test]
+    fn paper_positions_offer_their_exit_buttons_and_protect_position() {
+        use egui::accesskit::Role;
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType, TimeInForce};
+        use egui_kittest::kittest::NodeT as _;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let last = bars.iter().rfind(|bar| !bar.is_whitespace()).unwrap().close;
+        app.paper.set_price(&symbol, last);
+        let mut request = OrderRequest::new(&symbol, OrderSide::Buy, 2.0, OrderType::Market);
+        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+        egui_charts::services::Broker::place(&*app.paper, request, reply);
+        answer.take().expect("market reply").expect("filled");
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(3);
+        // A text on the row of the position line, which lies at the entry price.
+        let on_line = |h: &Harness<'_, Box<DemoApp>>, name: &str| {
+            let mapping = h.state().chart.get_chart_mapping();
+            let y = mapping.price_to_y(last);
+            h.output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == name => {
+                        let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                        (mapping.rect.contains(rect.center()) && (rect.center().y - y).abs() < 2.0)
+                            .then(|| rect.center())
+                    }
+                    _ => None,
+                })
+        };
+        let label = on_line(&h, "2").expect("the position's quantity on its label");
+        h.hover_at(label);
+        h.run_steps(2);
+        for button in ["TP", "SL"] {
+            assert!(on_line(&h, button).is_some(), "{button} button");
+        }
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: label,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run_steps(3);
+        let protect = h.get_by_role_and_label(Role::Button, "Protect position");
+        assert!(!protect.accesskit_node().is_disabled());
+    }
+
     /// A day picked in the dialog is a day on the chart's clock. New York is five hours behind
     /// UTC in November, so its 10 November starts at 05:00 UTC, and the days 9 and 10 November
     /// run from 05:00 UTC on the 9th to 05:00 UTC on the 11th.
