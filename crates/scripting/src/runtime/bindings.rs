@@ -340,7 +340,7 @@ impl Run {
         self.instances.push(Instance::new(&spec, site, args, span)?);
         self.columns.studies.push(Vec::new());
         if self.bytes() > self.clock.limits.memory {
-            self.stop = Some(Stop::Memory);
+            self.halt(Stop::Memory);
             return Err(stopped);
         }
         self.update_study(at, 0);
