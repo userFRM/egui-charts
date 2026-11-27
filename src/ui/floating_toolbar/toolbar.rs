@@ -489,68 +489,91 @@ impl FloatingSelectionToolbar {
                                 self.position += drag.drag_delta();
                             }
                             Self::render_separator(ui);
-                            ui.add_enabled_ui(!self.is_locked && self.user_edit_enabled, |ui| {
-                                ui.horizontal(|ui| {
-                                    for (idx, slot) in self.color_slots.iter_mut().enumerate() {
-                                        let picker = &mut self.pickers[idx];
-                                        picker.sel_color = slot.color;
-                                        let custom = picker.custom_mode;
-                                        let picked =
-                                            ColorPicker::new(picker, ("selection_color", idx))
-                                                .show(ui);
-                                        picked
-                                            .response
-                                            .on_hover_text(l10n::text(ui.ctx(), slot.label));
-                                        if let Some(color) = picked.inner {
-                                            self.last_pick =
-                                                Some((color, custom || picker.custom_mode));
-                                            let color = keep_opacity(
-                                                color,
-                                                slot.color,
-                                                custom || picker.custom_mode,
-                                            );
-                                            // The followed colour can already be the pick while others differ.
-                                            if color != slot.color || multiple {
-                                                slot.color = color;
-                                                action = Some(FloatingToolbarAction::ChangeColor(
-                                                    idx, color,
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    if let Some(width) = &mut self.width
-                                        && ui.combo_select_width(
-                                            "selection_width",
-                                            width,
-                                            [1.0, 2.0, 3.0, 4.0].map(Some),
-                                            |v| {
-                                                v.map_or_else(
-                                                    || "Mixed".to_owned(),
-                                                    |v| format!("{v} px"),
+                            // An empty group misaligns the row between two rules.
+                            if !self.color_slots.is_empty()
+                                || self.width.is_some()
+                                || self.line_style.is_some()
+                            {
+                                ui.add_enabled_ui(
+                                    !self.is_locked && self.user_edit_enabled,
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            for (idx, slot) in
+                                                self.color_slots.iter_mut().enumerate()
+                                            {
+                                                let picker = &mut self.pickers[idx];
+                                                picker.sel_color = slot.color;
+                                                let custom = picker.custom_mode;
+                                                let picked = ColorPicker::new(
+                                                    picker,
+                                                    ("selection_color", idx),
                                                 )
-                                            },
-                                            48.0,
-                                        )
-                                        && let Some(width) = *width
-                                    {
-                                        action = Some(FloatingToolbarAction::ChangeWidth(width));
-                                    }
-                                    let ctx = ui.ctx().clone();
-                                    if let Some(style) = &mut self.line_style
-                                        && ui.combo_select_width(
-                                            "selection_style",
-                                            style,
-                                            LineStyle::all().iter().copied().map(Some),
-                                            |v| l10n::text(&ctx, v.map_or("Mixed", |v| v.name())),
-                                            72.0,
-                                        )
-                                        && let Some(style) = *style
-                                    {
-                                        action = Some(FloatingToolbarAction::ChangeStyle(style));
-                                    }
-                                });
-                            });
-                            Self::render_separator(ui);
+                                                .show(ui);
+                                                picked.response.on_hover_text(l10n::text(
+                                                    ui.ctx(),
+                                                    slot.label,
+                                                ));
+                                                if let Some(color) = picked.inner {
+                                                    self.last_pick =
+                                                        Some((color, custom || picker.custom_mode));
+                                                    let color = keep_opacity(
+                                                        color,
+                                                        slot.color,
+                                                        custom || picker.custom_mode,
+                                                    );
+                                                    // The followed colour can already be the pick while others differ.
+                                                    if color != slot.color || multiple {
+                                                        slot.color = color;
+                                                        action = Some(
+                                                            FloatingToolbarAction::ChangeColor(
+                                                                idx, color,
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            if let Some(width) = &mut self.width
+                                                && ui.combo_select_width(
+                                                    "selection_width",
+                                                    width,
+                                                    [1.0, 2.0, 3.0, 4.0].map(Some),
+                                                    |v| {
+                                                        v.map_or_else(
+                                                            || "Mixed".to_owned(),
+                                                            |v| format!("{v} px"),
+                                                        )
+                                                    },
+                                                    48.0,
+                                                )
+                                                && let Some(width) = *width
+                                            {
+                                                action =
+                                                    Some(FloatingToolbarAction::ChangeWidth(width));
+                                            }
+                                            let ctx = ui.ctx().clone();
+                                            if let Some(style) = &mut self.line_style
+                                                && ui.combo_select_width(
+                                                    "selection_style",
+                                                    style,
+                                                    LineStyle::all().iter().copied().map(Some),
+                                                    |v| {
+                                                        l10n::text(
+                                                            &ctx,
+                                                            v.map_or("Mixed", |v| v.name()),
+                                                        )
+                                                    },
+                                                    72.0,
+                                                )
+                                                && let Some(style) = *style
+                                            {
+                                                action =
+                                                    Some(FloatingToolbarAction::ChangeStyle(style));
+                                            }
+                                        });
+                                    },
+                                );
+                                Self::render_separator(ui);
+                            }
                             if IconButton::new(&icons::SETTINGS)
                                 .size(ButtonSize::SM)
                                 .tooltip("Settings")
@@ -1441,54 +1464,69 @@ mod tests {
         }
     }
 
-    /// Floating surfaces and group rules follow each preset's popup and separator visuals.
+    /// Floating surfaces and group rules follow each preset's popup and separator visuals. With
+    /// no colour, width or style to offer, as for a sticker, the style group and its rule are
+    /// left out.
     #[test]
     fn surface_and_separators_follow_the_popup_theme() {
+        let line = ColorSlot {
+            label: "Line color",
+            color: Color32::BLUE,
+        };
         for (_, theme) in crate::theme::presets() {
-            let ctx = egui::Context::default();
-            crate::theme::apply_to_egui(&ctx, &theme);
-            ctx.global_style_mut(|style| style.animation_time = 0.0);
-            let style = ctx.global_style();
-            let mut toolbar = FloatingSelectionToolbar::new();
-            toolbar.show_at(Pos2::new(100.0, 100.0));
-            let raw = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                ..Default::default()
-            };
-            ctx.run_ui(raw.clone(), |ui| {
-                toolbar.show(ui);
-            })
-            .drop_without_applying_deltas();
-            let mut output = ctx.run_ui(raw, |ui| {
-                toolbar.show(ui);
-            });
-            let shapes = std::mem::take(&mut output.shapes);
-            output.drop_without_applying_deltas();
-            let shapes: Vec<_> = shapes
-                .into_iter()
-                .flat_map(|shape| match shape.shape {
-                    egui::Shape::Vec(shapes) => shapes,
-                    shape => vec![shape],
+            for (slots, width, rules) in [
+                (vec![], None, 2),
+                (vec![line.clone()], None, 3),
+                (vec![], Some(Some(2.0)), 3),
+            ] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.global_style_mut(|style| style.animation_time = 0.0);
+                let style = ctx.global_style();
+                let mut toolbar = FloatingSelectionToolbar::new();
+                toolbar.show_at(Pos2::new(100.0, 100.0));
+                toolbar.set_colors(slots);
+                toolbar.width = width;
+                let raw = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    ..Default::default()
+                };
+                ctx.run_ui(raw.clone(), |ui| {
+                    toolbar.show(ui);
                 })
-                .collect();
-            assert!(shapes.iter().any(|shape| matches!(shape,
-                egui::Shape::Rect(rect) if rect.fill == style.visuals.window_fill()
-                    && rect.stroke == style.visuals.window_stroke
-            )));
-            let shadow = style.visuals.popup_shadow;
-            if shadow != egui::epaint::Shadow::NONE {
+                .drop_without_applying_deltas();
+                let mut output = ctx.run_ui(raw, |ui| {
+                    toolbar.show(ui);
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                let shapes: Vec<_> = shapes
+                    .into_iter()
+                    .flat_map(|shape| match shape.shape {
+                        egui::Shape::Vec(shapes) => shapes,
+                        shape => vec![shape],
+                    })
+                    .collect();
                 assert!(shapes.iter().any(|shape| matches!(shape,
-                    egui::Shape::Rect(rect) if rect.fill == shadow.color
-                        && rect.blur_width == f32::from(shadow.blur)
+                    egui::Shape::Rect(rect) if rect.fill == style.visuals.window_fill()
+                        && rect.stroke == style.visuals.window_stroke
                 )));
+                let shadow = style.visuals.popup_shadow;
+                if shadow != egui::epaint::Shadow::NONE {
+                    assert!(shapes.iter().any(|shape| matches!(shape,
+                        egui::Shape::Rect(rect) if rect.fill == shadow.color
+                            && rect.blur_width == f32::from(shadow.blur)
+                    )));
+                }
+                let separators = shapes.iter().filter(|shape| matches!(shape,
+                    egui::Shape::LineSegment { points, stroke }
+                        if points[0].x == points[1].x
+                            && (points[1].y - points[0].y) == DESIGN_TOKENS.sizing.floating_toolbar.separator_height
+                            && *stroke == style.visuals.widgets.noninteractive.bg_stroke
+                )).count();
+                let slots = toolbar.color_slots.len();
+                assert_eq!(separators, rules, "{slots} colour slots, width {width:?}");
             }
-            let separators = shapes.iter().filter(|shape| matches!(shape,
-                egui::Shape::LineSegment { points, stroke }
-                    if points[0].x == points[1].x
-                        && (points[1].y - points[0].y) == DESIGN_TOKENS.sizing.floating_toolbar.separator_height
-                        && *stroke == style.visuals.widgets.noninteractive.bg_stroke
-            )).count();
-            assert_eq!(separators, 3);
         }
     }
 
