@@ -521,8 +521,8 @@ impl ChartSettingsState {
     /// choices that hold `None`, as in settings saved before they existed, keep the chart's,
     /// while the optional colours apply as they are: `None` gives the last price its candle
     /// direction colour, study values their plot colours and pane separators the theme's grid
-    /// line colour. A changed TPO period length, row size or profile period drops the TPO merges
-    /// and splits carried over from the chart, which were made for the old values;
+    /// line colour. A changed TPO period length, profile period or its count drops the TPO
+    /// merges and splits carried over from the chart, which were made for the old values;
     /// [`Chart::set_chart_type_params`] sets them as given.
     pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), ChartSettingsError> {
         let timezone = self.validate()?;
@@ -1948,6 +1948,65 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every TPO setting for blocks, profile length, the volume profile's levels, values, colours
+    /// and side, and the price line applies as one undoable step and restores from a saved
+    /// layout as edited.
+    #[test]
+    #[cfg(feature = "ui")]
+    fn tpo_settings_undo_and_restore_every_new_field() {
+        use crate::model::{ChartType, LineStyle, PriceSource, TPOProfilePeriod};
+        let bars = || {
+            BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                1.0,
+            )])
+        };
+        let mut chart = Chart::new(bars());
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        let before = chart.chart_type_params().clone();
+        let mut edited = before.clone();
+        edited.tpo_blocks = false;
+        edited.tpo_profile_period = TPOProfilePeriod::Week;
+        edited.tpo_profile_periods = 3;
+        edited.tpo_volume_profile = true;
+        let volume = &mut edited.tpo_volume;
+        (volume.poc, volume.value_area_high, volume.value_area_low) = (true, true, true);
+        (volume.values, volume.left) = (true, true);
+        volume.poc_color = Some(Color32::from_rgb(1, 2, 3));
+        volume.poc_style = LineStyle::Dashed;
+        volume.value_area_high_color = Some(Color32::from_rgb(4, 5, 6));
+        volume.value_area_high_style = LineStyle::Dotted;
+        volume.value_area_low_color = Some(Color32::from_rgb(7, 8, 9));
+        volume.value_area_low_style = LineStyle::Dashed;
+        volume.values_color = Some(Color32::from_rgb(10, 11, 12));
+        volume.color = Some(Color32::from_rgba_unmultiplied(200, 0, 0, 128));
+        volume.value_area_color = Some(Color32::from_rgb(0, 0, 200));
+        let line = &mut edited.styles.tpo_line;
+        (line.color, line.width, line.style) =
+            (Color32::from_rgb(13, 14, 15), 2.5, LineStyle::Dotted);
+        edited.styles.tpo_price_source = PriceSource::High;
+        chart.user_action(|chart| {
+            let mut settings = ChartSettingsState::from_chart(chart);
+            settings.chart_type_params = Some(edited.clone());
+            settings.apply_to_chart(chart).unwrap();
+        });
+        assert_eq!(chart.chart_type_params(), &edited);
+        assert!(chart.undo());
+        assert_eq!(chart.chart_type_params(), &before);
+        assert!(chart.redo());
+        assert_eq!(chart.chart_type_params(), &edited);
+        let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+        let mut restored = Chart::new(bars());
+        restored
+            .restore(&serde_json::from_str(&saved).unwrap())
+            .unwrap();
+        assert_eq!(restored.chart_type_params(), &edited);
     }
 
     /// A Heikin-Ashi layout without the chart type's style, or without any chart type styles,

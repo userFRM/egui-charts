@@ -1,6 +1,7 @@
 //! The relative strength index of 100,000 bars computed natively, restated in a script and read by
-//! a script with `study`. Prints a Markdown table: the fastest of 9 full calculations and the
-//! median of 501 updates by one new bar.
+//! a script with `study`, then the other examples and a state ring buffer read 200 times a bar.
+//! Prints a Markdown table: the fastest of 9 full calculations and the median of 501 updates by one
+//! new bar.
 
 use egui_charts::model::Bar;
 use egui_charts::studies::{Calculation, Indicator, IndicatorFactory, RSI};
@@ -9,6 +10,12 @@ use std::time::{Duration, Instant};
 
 const BARS: usize = 100_000;
 const UPDATES: usize = 501;
+
+/// A state ring buffer of the last 1,000 closes, read 200 times on every bar.
+const RING: &str = "state ring = 0;\nstate at = 0;\n\
+    if bar_index == 0 { ring = []; ring.pad(1000, 0.0); }\n\
+    ring[at] = close * 1.0;\nat = (at + 1) % 1000;\nlet sum = 0.0;\n\
+    for i in 0..200 { sum += ring[(at + i) % 1000]; }\nplot(\"Sum\", sum);";
 
 fn main() {
     let bars = bars();
@@ -19,6 +26,14 @@ fn main() {
     row("restated in a script", &bars, || Box::new(restated.study()));
     let called = compile("plot(\"RSI\", study(\"RSI\", period = 14));");
     row("read with `study`", &bars, || Box::new(called.study()));
+    for (name, source) in &examples()[1..] {
+        let script = compile(source);
+        row(name, &bars, || Box::new(script.study()));
+    }
+    let ring = compile(RING);
+    row("state ring buffer read 200 times a bar", &bars, || {
+        Box::new(ring.study())
+    });
 }
 
 fn compile(source: &str) -> Script {
