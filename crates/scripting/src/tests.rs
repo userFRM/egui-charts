@@ -1963,6 +1963,35 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
     // A label of 9,000 bytes on every bar, kept by the study once its bar is done.
     let drawn = "plot(\"x\", close);\nlet t = \"x\"; t.pad(9000, \"y\");\n\
                  label(\"x\", bar_index, close, t);";
+    // A map of 100 keys of about 10,000 bytes, which the size limits admit since they do not count
+    // keys, and which counts 1,000,790 bytes.
+    let map =
+        "let k = \"x\"; k.pad(9990, \"y\");\nlet m = #{}; for i in 0..100 { m[k + i] = 1; }\n";
+    // Two copies of the map at each call level, counted at the first read of each call; fails if a
+    // call is counted only after a clock read.
+    let deep = format!(
+        "{map}fn down(n, a0, a1) {{ if n > 0 {{ down(n - 1, a0, a1) }} else {{ 0 }} }}\n\
+         plot(\"x\", down(30, m, m));"
+    );
+    // Copies of the map bound after a block released 20 counted variables, each counted at the
+    // next read; fails if they wait for a clock read while `spin` runs, or if they are taken for
+    // the released variables.
+    let released: String = (0..20).map(|i| format!("let a{i} = 0; ")).collect();
+    let copies: String = (0..20).map(|i| format!("let b{i} = m; ")).collect();
+    let bound = format!(
+        "{map}{{ {released}a0 += a19; }}\n{copies}\n\
+         fn spin(x) {{ let z = 0; while z < 100000000 {{ z += 1; }} z }}\nplot(\"x\", spin(0));"
+    );
+    // Calls written `f!()` run in their caller's scope: `hold` holds a state map of 2.5 MB, counted
+    // once, under the limit, and `grow` grows it past the limit, counted while it runs, before it
+    // empties it; the state's declaration holds the most. Fails at line 7 if a call counts its
+    // caller's values again, and with no stop if it does not count those it grows.
+    let shared = "state m = 0;\nlet k = \"x\"; k.pad(9990, \"y\");\n\
+                  fn hold() { let z = 0; while z < 300 { z += 1; } m.len() }\n\
+                  fn grow(x) { for i in 0..1000 { m[x + i] = 1; } let n = m.len(); m = #{}; n }\n\
+                  m = #{}; for i in 0..250 { m[k + i] = 1; }\n\
+                  let w = 0; while w < 300 { w += 1; }\n\
+                  let h = hold!();\nplot(\"x\", h + grow!(k));";
     // The time limits are about 20 times what a row takes in a debug build, so a busy machine
     // stays clear of them and a row whose memory limit stops working fails in seconds.
     for (script, fixture, mib, line, full) in [
@@ -1975,6 +2004,9 @@ fn memory_cap_stops_scripts_whose_buffers_pass_it() {
         (levels, &fixture[..1], 8, 5, 10),
         (studies, &fixture[..1000], 1, 2, 10),
         (drawn, &fixture[..1000], 8, 3, 25),
+        (deep.as_str(), &fixture[..1], 16, 4, 10),
+        (bound.as_str(), &fixture[..1], 16, 4, 10),
+        (shared, &fixture[..1], 4, 1, 10),
     ] {
         let mut capped = limited(
             script,
