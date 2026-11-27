@@ -111,7 +111,8 @@ impl Script {
     }
 
     /// The latest runtime error or limit stop of any study or strategy built from this script,
-    /// cleared when one of them completes a calculation from bar 0 or a strategy prepares a run.
+    /// cleared when one of them completes a full recalculation on bars or a strategy prepares a
+    /// run.
     pub fn last_error(&self) -> Option<ScriptError> {
         self.last_error
             .lock()
