@@ -365,25 +365,40 @@ impl StudyTemplate {
         }
         // Studies saved before an input's range narrowed restore with the value they were saved
         // with, from the bottom of the range the input took then; only edits are bounded.
-        const NARROWED: [(&str, &str); 8] = [
-            ("BB", "std_dev"),
-            ("BBTrend", "multiplier"),
-            ("LinReg Slope", "period"),
-            ("MFI", "period"),
-            ("RCI", "smoothing_deviation"),
-            ("SuperTrend", "multiplier"),
-            ("Woodies CCI", "turbo_length"),
-            ("Woodies CCI", "cci_length"),
+        // The former input kind and finite-number contract still apply to those saved values.
+        use InputValue::{Integer, Length, Number};
+        const NARROWED: [(&str, &str, InputValue); 17] = [
+            ("BB", "std_dev", Number(0.0)),
+            ("BBTrend", "multiplier", Number(0.0)),
+            ("LinReg Slope", "period", Length(1)),
+            ("MFI", "period", Length(1)),
+            ("RCI", "smoothing_deviation", Number(0.0)),
+            ("SuperTrend", "multiplier", Number(0.0)),
+            ("Woodies CCI", "turbo_length", Length(1)),
+            ("Woodies CCI", "cci_length", Length(1)),
+            ("Vortex", "period", Length(1)),
+            ("C2C Vol", "period", Length(1)),
+            ("C2C Vol", "trading_days", Number(0.0)),
+            ("Volatility Stop", "length", Length(1)),
+            ("Volatility Stop", "multiplier", Number(0.0)),
+            ("ASI", "limit_move", Number(f64::EPSILON)),
+            ("Advance/Decline", "period", Length(1)),
+            ("VWAP", "plot_offset", Integer(i32::MIN)),
+            ("VWMA", "plot_offset", Integer(i32::MIN)),
         ];
         let saved = inputs
             .iter()
             .filter(|(id, value)| {
-                NARROWED.contains(&(study.name(), id.as_str()))
-                    && match value {
-                        InputValue::Length(value) => *value >= 1,
-                        InputValue::Number(value) => *value >= 0.0,
-                        _ => false,
-                    }
+                NARROWED.iter().any(|(name, input, bottom)| {
+                    *name == study.name()
+                        && *input == id
+                        && match (value, bottom) {
+                            (Length(value), Length(bottom)) => value >= bottom,
+                            (Number(value), Number(bottom)) => value.is_finite() && value >= bottom,
+                            (Integer(value), Integer(bottom)) => value >= bottom,
+                            _ => false,
+                        }
+                })
             })
             .cloned()
             .collect();
@@ -482,6 +497,19 @@ impl StudyTemplate {
         let mut template = self.clone();
         let mut changed = true;
         match study {
+            // Before the switch existed, a chosen lower interval was always in use, including
+            // in the input identity a drawing saved for its study pane.
+            "Up/Down Volume" | "Volume Delta" | "Cumulative Volume Delta"
+                if declares("custom_interval") && !has("custom_interval") =>
+            {
+                let custom = matches!(
+                    value("lower_interval"),
+                    Some(InputValue::Timeframe(Some(_)))
+                );
+                template
+                    .inputs
+                    .push(("custom_interval".to_owned(), InputValue::Toggle(custom)));
+            }
             // Older Knoxville saves drew only momentum and its confirmation marks, and saves
             // from before the window rule took pivot sides and the momentum pane's own scale.
             "Knoxville Divergence"
@@ -878,6 +906,13 @@ impl StudyTemplate {
                     crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
                         .plot_style(2),
                 );
+            }
+            // SuperTrend drew no background before it had a body middle; hidden, the bands keep
+            // the colours they take once shown.
+            "SuperTrend" if self.settings.plots.len() == 2 => {
+                let declared = crate::studies::SuperTrend::default();
+                template.settings.plots.push(declared.plot_style(2));
+                template.settings.fills = hidden_fills(&declared);
             }
             // The unused navy plot colour in older saves still drew rising columns green.
             "Accelerator Oscillator"
@@ -2046,7 +2081,7 @@ mod tests {
     /// limit above it that has one more decimal place, and their names write it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
-        use InputValue::{Choice, Length, Number, Text, Toggle};
+        use InputValue::{Choice, Integer, Length, Number, Text, Toggle};
         let rows = [
             (
                 "CCI",
@@ -2098,6 +2133,41 @@ mod tests {
                 "LinReg Slope",
                 vec![("period", Length(1))],
                 vec![("period", Length(1))],
+            ),
+            (
+                "Vortex",
+                vec![("period", Length(1))],
+                vec![("period", Length(1))],
+            ),
+            (
+                "C2C Vol",
+                vec![("period", Length(1)), ("trading_days", Number(0.0))],
+                vec![("period", Length(1)), ("trading_days", Number(0.0))],
+            ),
+            (
+                "Volatility Stop",
+                vec![("length", Length(1)), ("multiplier", Number(0.0))],
+                vec![("length", Length(1)), ("multiplier", Number(0.0))],
+            ),
+            (
+                "ASI",
+                vec![("limit_move", Number(0.05))],
+                vec![("limit_move", Number(0.05))],
+            ),
+            (
+                "Advance/Decline",
+                vec![("period", Length(5000))],
+                vec![("period", Length(5000))],
+            ),
+            (
+                "VWAP",
+                vec![("plot_offset", Integer(-3))],
+                vec![("plot_offset", Integer(-3))],
+            ),
+            (
+                "VWMA",
+                vec![("plot_offset", Integer(-600))],
+                vec![("plot_offset", Integer(-600))],
             ),
             // Saved under the earlier name.
             (
@@ -2481,6 +2551,20 @@ mod tests {
                 let input = inputs.iter().find(|input| input.id == id);
                 assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
             }
+            // Keeping a legacy value does not admit new values outside the declared range.
+            let refused = match name {
+                "C2C Vol" => Some(("trading_days", Number(0.5))),
+                "Volatility Stop" => Some(("multiplier", Number(0.125))),
+                "ASI" => Some(("limit_move", Number(0.075))),
+                "Advance/Decline" => Some(("period", Length(2001))),
+                _ => None,
+            };
+            if let Some((id, value)) = refused {
+                assert!(
+                    study.clone_box().set_input(id, value.clone()).is_err(),
+                    "{name}: a held value admitted {value:?}"
+                );
+            }
             // A style edit applies every input as it stands, which keeps its value.
             let values = |study: &dyn Indicator| {
                 let inputs = study.inputs().into_iter();
@@ -2509,6 +2593,16 @@ mod tests {
                 "{name}"
             );
         }
+        // Saved on main 7c5548b22 before VWMA's offset range narrowed. Its saved value,
+        // styles and input ids survive restoration unchanged.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"VWMA","inputs":[["period",{"Length":20}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":-600}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VWMA.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(
+            StudyTemplate::from_study(restored.as_ref()).inputs,
+            saved.inputs
+        );
+        assert_eq!(restored.settings(), saved.settings);
+
         // Literal study saved on main before Hours existed: all saved inputs and styles stay,
         // and the trading day remains selected with its extended hours split.
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":true}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
@@ -2981,6 +3075,15 @@ mod tests {
         ] {
             let saved: StudyTemplate = serde_json::from_str(saved).unwrap();
             let restored = saved.create().unwrap();
+            if saved.name == "Volatility Stop" {
+                assert_eq!(
+                    restored.source(),
+                    Some(crate::studies::StudySource::Price(
+                        crate::model::PriceSource::Close
+                    )),
+                    "a save without Source keeps Close"
+                );
+            }
             let mut plots = saved.settings.plots.clone();
             plots[0].color = plot;
             assert_eq!(restored.settings().plots, plots, "{}", saved.name);

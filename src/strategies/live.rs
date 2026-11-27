@@ -1078,6 +1078,81 @@ mod tests {
         }
     }
 
+    #[test]
+    #[cfg(feature = "alert-engine")]
+    fn fill_alerts_receive_the_strategy_events_they_select() {
+        use crate::data::inbox::Inbox;
+        use crate::model::{Alert, AlertCondition, StrategyEvents};
+        use crate::services::{AlertEngine, AlertEvent, Alerts};
+        use std::sync::{Arc, Mutex};
+        let time = DateTime::UNIX_EPOCH + TimeDelta::minutes(1);
+        let fill = StrategyFill {
+            sequence: 1,
+            time,
+            order_id: "Long".into(),
+            side: OrderSide::Buy,
+            price: 100.0,
+            price_decimals: None,
+            quantity: 1.0,
+            position: 1.0,
+            comment: None,
+            alert_message: Some("filled".into()),
+        };
+        let call = StrategyAlert {
+            sequence: 1,
+            time,
+            price: 100.0,
+            message: "called".into(),
+        };
+        let alerts = [
+            StrategyEvents::FillsAndAlerts,
+            StrategyEvents::Fills,
+            StrategyEvents::Alerts,
+        ]
+        .map(|events| {
+            let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+            alert.strategy_events = events;
+            alert
+        });
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine =
+            AlertEngine::new()
+                .with_alerts(alerts.to_vec())
+                .on_trigger(move |alert, event| {
+                    let AlertEvent::TriggeredForSymbol { message, .. } = event else {
+                        panic!("a symbol trigger");
+                    };
+                    sink.lock()
+                        .unwrap()
+                        .push((alert.strategy_events, message.clone()));
+                });
+        let send = || {
+            let fills = std::slice::from_ref(&fill);
+            engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, fills, time);
+            let calls = std::slice::from_ref(&call);
+            engine.strategy_alerts("run-1", "SYM", None, Timeframe::Min1, calls, time);
+        };
+        send();
+        assert_eq!(
+            *delivered.lock().unwrap(),
+            [
+                (StrategyEvents::FillsAndAlerts, "filled".to_owned()),
+                (StrategyEvents::Fills, "filled".to_owned()),
+                (StrategyEvents::FillsAndAlerts, "called".to_owned()),
+                (StrategyEvents::Alerts, "called".to_owned()),
+            ]
+        );
+        // Taking both kinds now must not deliver what each alert passed over.
+        let inbox = Arc::new(Inbox::default());
+        for mut alert in engine.alerts() {
+            alert.strategy_events = StrategyEvents::FillsAndAlerts;
+            engine.save(alert, inbox.reply(0));
+        }
+        send();
+        assert_eq!(delivered.lock().unwrap().len(), 4);
+    }
+
     /// Fill alerts write prices at the run's price decimals and sizes as the report does,
     /// without binary rounding digits, name the market position before and after each fill, and
     /// report the exact fill price; a strategy alert's price reads the same way.
