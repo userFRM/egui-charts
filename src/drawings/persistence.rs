@@ -37,7 +37,9 @@
 //! skips any drawing it cannot read
 //! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
-use crate::drawings::{ChartPoint, Drawing, DrawingToolType, ParseToolTypeError, PositionSize};
+use crate::drawings::{
+    ArrowStyle, ChartPoint, Drawing, DrawingToolType, ParseToolTypeError, PositionSize,
+};
 use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -403,11 +405,13 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 10 draws a price label without a border colour
-    /// with a border in its own colour; those saved before that change load with the border off,
-    /// as drawn. It also reads a long or short position's target and stop colour alpha as the
-    /// opacity of its zone; earlier versions load at the 20% their zones were drawn at on a dark
-    /// theme. Version 9 draws a callout's border at its stored width; those saved before that
+    /// Current storage format version. Version 11 draws the line start and end of curves, double
+    /// curves and brushes; those saved before that change load with plain ends, as drawn.
+    /// Version 10 draws a price label without a border colour with a border in its own colour;
+    /// those saved before that change load with the border off, as drawn. It also reads a long or
+    /// short position's target and stop colour alpha as the opacity of its zone; earlier versions
+    /// load at the 20% their zones were drawn at on a dark theme. Version 9 draws a callout's
+    /// border at its stored width; those saved before that
     /// change load with the fixed width they were drawn with: 1.5 px in version 1 and 1 px, the
     /// width just before version 9, in versions 2 to 8. Version 8 extends a trend line past the
     /// anchor its Left or Right names; those saved before that change load with the reach they
@@ -422,7 +426,7 @@ impl DrawingStorage {
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
     /// rendered reach when loaded. A version 1 ray drawn right to left, which ran from its first
     /// anchor to the right edge, loads with Left instead of Right.
-    pub const CURRENT_VERSION: u32 = 10;
+    pub const CURRENT_VERSION: u32 = 11;
 
     /// Create new storage for a symbol
     ///
@@ -737,6 +741,13 @@ impl DrawingStorage {
                             {
                                 color[3] = (f32::from(color[3]) * 0.2).round() as u8;
                             }
+                        }
+                        if version < 11 && matches!(tool, T::Curve | T::DoubleCurve | T::Brush) {
+                            // Earlier renderers drew no line ends on these tools, whatever was
+                            // stored, and early builds stored an arrow end on every new drawing.
+                            let settings = &mut drawing.drawing;
+                            settings.arrow_start_style = ArrowStyle::None;
+                            settings.arrow_end_style = ArrowStyle::None;
                         }
                         if ((version < 7
                             && matches!(tool, T::InfoLine | T::TrendAngle)
@@ -1653,6 +1664,7 @@ mod tests {
             });
             drawing.channel_midline = true;
             drawing.closed = true;
+            drawing.smoothing = 9;
             drawing.elliott_degree = ElliottDegree::Submicro;
             drawing.elliott_show_wave = false;
             drawing.selectable = false;
@@ -2024,15 +2036,19 @@ mod tests {
             ElliottDegree::Minor
         );
 
-        // A version 10 sticker saved before glyph angles still loads upright.
-        let mut value: serde_json::Value =
-            serde_json::from_str(include_str!("fixtures/storage_v10_channels.json")).unwrap();
-        let records = value["drawings"].as_array_mut().unwrap();
-        records.truncate(1);
-        records[0]["drawing"]["tool_type"] = "Sticker".into();
-        let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
-        assert!(skipped.is_empty(), "{skipped:?}");
-        assert_eq!(loaded.drawings[0].drawing.glyph_angle, 0.0);
+        // A version 10 sticker saved before glyph angles still loads upright, and a highlighter
+        // saved before smoothing still draws through every sample.
+        for tool in ["Sticker", "Highlighter"] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v10_channels.json")).unwrap();
+            let records = value["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            records[0]["drawing"]["tool_type"] = tool.into();
+            let (loaded, skipped) = DrawingStorage::from_json(&value.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool}: {skipped:?}");
+            let drawing = &loaded.drawings[0].drawing;
+            assert_eq!((drawing.glyph_angle, drawing.smoothing), (0.0, 0), "{tool}");
+        }
 
         let (v2, skipped) =
             DrawingStorage::from_json(include_str!("fixtures/storage_v2.json")).unwrap();
@@ -2319,6 +2335,32 @@ mod tests {
             assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
             let drawing = &loaded.drawings[0].drawing;
             assert!(!drawing.extend_left && !drawing.extend_right, "{tool:?}");
+        }
+
+        // Curves, double curves and brushes drew no line ends before version 11, whatever they
+        // stored, so those saved earlier load with plain ends.
+        for tool in [
+            DrawingToolType::Curve,
+            DrawingToolType::DoubleCurve,
+            DrawingToolType::Brush,
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            saved["drawings"].as_array_mut().unwrap().truncate(1);
+            let record = &mut saved["drawings"][0];
+            record["drawing"]["tool_type"] = serde_json::to_value(tool).unwrap();
+            if tool == DrawingToolType::DoubleCurve {
+                // Placed by its two ends, as earlier double curves were stored.
+                record["points"].as_array_mut().unwrap().truncate(2);
+            }
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "{tool:?}: {skipped:?}");
+            let drawing = &loaded.drawings[0].drawing;
+            assert_eq!(
+                (drawing.arrow_start_style, drawing.arrow_end_style),
+                (ArrowStyle::None, ArrowStyle::None),
+                "{tool:?}"
+            );
         }
 
         // Strokes saved before version 4 were drawn at twice (brush) and eight times
@@ -2633,10 +2675,10 @@ mod tests {
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
         let error =
-            DrawingStorage::from_json(&current.replace("\"version\": 10", "\"version\": 11"))
+            DrawingStorage::from_json(&current.replace("\"version\": 11", "\"version\": 12"))
                 .unwrap_err();
         assert!(
-            matches!(&error, LoadError::UnsupportedVersion { found: 11, supported } if *supported == (1..=10)),
+            matches!(&error, LoadError::UnsupportedVersion { found: 12, supported } if *supported == (1..=11)),
             "{error}"
         );
     }

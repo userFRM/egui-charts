@@ -525,7 +525,8 @@ impl Alert {
     /// and empty if it tests none. `value` gives the value of a source at
     /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
     /// shortest form that reads back the same. A strategy fill alert also fills `{{order_id}}`,
-    /// `{{side}}`, `{{quantity}}` and `{{position}}`, as `AlertEngine::strategy_fills` describes.
+    /// `{{side}}`, `{{quantity}}`, `{{position}}`, `{{comment}}` and `{{alert_message}}`, as
+    /// `AlertEngine::strategy_fills` describes.
     /// A placeholder the alert does not know stays as written.
     ///
     /// ```

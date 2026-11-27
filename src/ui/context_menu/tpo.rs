@@ -123,8 +123,8 @@ impl TpoMenu {
         for &(i, _, date) in &parts {
             let time = bars[i].time;
             let period = date.map_or_else(
-                || config.profile_period.key(&sessions, time),
-                |date| config.profile_period.date_key(date),
+                || config.period_key(&sessions, time),
+                |date| config.date_period_key(&sessions, date),
             );
             let previous = bars[..i]
                 .iter()
@@ -165,9 +165,7 @@ impl TpoMenu {
         };
         let split = period.filter(|time| *time > open).map(|time| {
             let mut splits = config.splits.clone();
-            if opens.binary_search(&time).is_err()
-                || config.profile_period != crate::model::TPOProfilePeriod::Session
-            {
+            if opens.binary_search(&time).is_err() || config.joins_sessions() {
                 splits.push(time);
                 splits.sort_unstable();
                 splits.dedup();
