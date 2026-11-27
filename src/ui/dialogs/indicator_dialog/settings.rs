@@ -3176,14 +3176,14 @@ mod tests {
                 15,
                 &["Call wall", "Put wall"],
             ),
-            // Developing only styles the boundaries of formations not yet confirmed.
+            // Developing and Target only style drawings.
             (
                 Box::new(ChartPatterns::all()),
                 None,
-                &["Bullish", "Bearish", "Developing"],
-                3,
+                &["Bullish", "Bearish", "Developing", "Target"],
+                4,
                 2,
-                3,
+                4,
                 &[],
             ),
             // The chart draws the targets dotted at a fixed width.

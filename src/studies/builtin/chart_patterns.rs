@@ -251,14 +251,22 @@ pub enum PatternDirection {
     Bearish,
 }
 
-/// Whether a formation has broken out.
+/// Where a formation stands before and after its breakout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FormationStatus {
     /// All its pivots are known but no close has broken its boundary yet.
     Developing,
-    /// A close broke its boundary, on bar [`Formation::confirmed_at`].
-    Confirmed,
+    /// A close broke out on [`Formation::confirmed_at`], without reaching the target or failing.
+    Awaiting,
+    /// The price reached [`Formation::target`] on [`Formation::resolved_at`].
+    Reached,
+    /// A close broke the guard before breakout, or price passed the opposite extreme before
+    /// reaching the target, on [`Formation::resolved_at`].
+    Failed,
+    /// A bar after breakout reached the target and passed the opposite extreme, with no known
+    /// order, on [`Formation::resolved_at`].
+    Indefinable,
 }
 
 /// A detected formation, with bar indices into the calculated bars.
@@ -267,18 +275,24 @@ pub enum FormationStatus {
 pub struct Formation {
     /// The formation's shape.
     pub kind: FormationKind,
-    /// Developing or confirmed.
+    /// Where the formation stands.
     pub status: FormationStatus,
-    /// The confirmed direction; for a developing formation the direction its kind resolves in,
-    /// `None` for a rectangle or symmetrical triangle.
+    /// The breakout direction; before a breakout, including a failure before one, the direction
+    /// its kind resolves in, `None` for a rectangle or symmetrical triangle.
     pub direction: Option<PatternDirection>,
     /// The pivots that form it, as bar index and price, oldest first.
     pub anchors: Vec<(usize, f64)>,
-    /// Boundary segments as bar index and price at each end. A confirmed formation's end at
-    /// its confirmation bar, a developing one's at the last bar.
+    /// Boundary segments as bar index and price at each end. They end at the breakout bar, the
+    /// failure bar for a failure before breakout, or the last bar while developing.
     pub boundaries: Vec<[(usize, f64); 2]>,
-    /// The bar whose close confirmed the formation.
+    /// The bar whose close broke out.
     pub confirmed_at: Option<usize>,
+    /// The breakout boundary on the breakout bar plus (bullish) or minus (bearish) the height.
+    /// `None` before a breakout, including a formation that failed before one.
+    pub target: Option<f64>,
+    /// The bar on which the target was reached, the formation failed or became indefinable;
+    /// `None` while developing or awaiting.
+    pub resolved_at: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -319,6 +333,7 @@ impl Line {
 enum Outcome {
     Confirm(PatternDirection),
     Fail,
+    Expire,
 }
 
 /// A formation whose pivots are known, waiting for a close beyond a boundary.
@@ -334,12 +349,16 @@ struct Candidate {
     on_down: Outcome,
     /// Whether the upper and lower line are reported as boundaries.
     shown: [bool; 2],
+    /// The height projected from the breakout boundary.
+    height: f64,
+    /// Failure below this price after a bullish breakout, above it after a bearish one.
+    fail: [f64; 2],
 }
 
 impl Candidate {
     fn resolve(&self, close: f64, seq: usize, max_length: usize) -> Option<Outcome> {
         if seq - self.anchors[0].position > max_length {
-            Some(Outcome::Fail)
+            Some(Outcome::Expire)
         } else if close > self.upper.at(seq) {
             Some(self.on_up)
         } else if close < self.lower.at(seq) {
@@ -352,17 +371,14 @@ impl Candidate {
     fn formation(
         &self,
         direction: Option<PatternDirection>,
-        confirmed: bool,
+        status: FormationStatus,
+        confirmed_at: Option<usize>,
         end: (usize, usize),
     ) -> Formation {
         let start = self.anchors[self.from];
         Formation {
             kind: self.kind,
-            status: if confirmed {
-                FormationStatus::Confirmed
-            } else {
-                FormationStatus::Developing
-            },
+            status,
             direction,
             anchors: self.anchors.iter().map(|p| (p.index, p.price)).collect(),
             boundaries: [self.upper, self.lower]
@@ -376,7 +392,9 @@ impl Candidate {
                     ]
                 })
                 .collect(),
-            confirmed_at: confirmed.then_some(end.1),
+            confirmed_at,
+            target: None,
+            resolved_at: None,
         }
     }
 }
@@ -425,6 +443,12 @@ fn flag(config: &Config, pivots: &VecDeque<Swing>, bull: bool, pennant: bool) ->
             (false, false) => FormationKind::BearFlag,
             (true, true) => FormationKind::BullPennant,
             (false, true) => FormationKind::BearPennant,
+        },
+        height: (w[1].price - w[0].price).abs(),
+        fail: if bull {
+            [w[2].price.min(w[4].price), f64::NAN]
+        } else {
+            [f64::NAN, w[2].price.max(w[4].price)]
         },
         anchors: w,
         from: 1,
@@ -496,6 +520,14 @@ fn channel(config: &Config, pivots: &VecDeque<Swing>) -> Option<Candidate> {
     let down = Outcome::Confirm(PatternDirection::Bearish);
     Some(Candidate {
         kind,
+        height: start,
+        fail: [
+            lows.iter().map(|p| p.price).fold(f64::INFINITY, f64::min),
+            highs
+                .iter()
+                .map(|p| p.price)
+                .fold(f64::NEG_INFINITY, f64::max),
+        ],
         anchors: w,
         from: 0,
         upper,
@@ -601,6 +633,12 @@ fn multiple(
     };
     Some(Candidate {
         kind,
+        height: if top { high - neckline } else { neckline - low },
+        fail: if top {
+            [f64::NAN, w[w.len() - 1].price]
+        } else {
+            [w[w.len() - 1].price, f64::NAN]
+        },
         anchors: w,
         from: 0,
         upper,
@@ -654,6 +692,12 @@ fn head_and_shoulders(config: &Config, pivots: &VecDeque<Swing>, top: bool) -> O
     };
     Some(Candidate {
         kind,
+        height: side * (head.price - neckline.at(head.position)),
+        fail: if top {
+            [f64::NAN, right.price]
+        } else {
+            [right.price, f64::NAN]
+        },
         anchors: w,
         from: 1,
         upper,
@@ -728,6 +772,16 @@ fn cup(
     };
     Some(Candidate {
         kind,
+        height: if bull {
+            left.price.max(right.price) - base.price
+        } else {
+            base.price - left.price.min(right.price)
+        },
+        fail: if bull {
+            [handle.price, f64::NAN]
+        } else {
+            [f64::NAN, handle.price]
+        },
         anchors: w,
         from: 0,
         upper,
@@ -736,6 +790,13 @@ fn cup(
         on_down,
         shown,
     })
+}
+
+/// A formation that broke out and the price beyond which it fails.
+#[derive(Clone, Debug)]
+struct Tracked {
+    formation: Formation,
+    fail: f64,
 }
 
 /// The detectors' state after a bar: the bars of the latest pivot test, the pivots,
@@ -751,7 +812,8 @@ struct State {
     /// span when the handle becomes known.
     extremes: VecDeque<[f64; 2]>,
     pending: Vec<Candidate>,
-    confirmed: Vec<Formation>,
+    confirmed: Vec<Tracked>,
+    failed: Vec<Formation>,
     /// Per kind, the last pivot of the latest formation found.
     used: [Option<usize>; 18],
 }
@@ -778,6 +840,25 @@ impl State {
         }
         let seq = self.swings.position;
         self.last = index;
+        for tracked in &mut self.confirmed {
+            let formation = &mut tracked.formation;
+            if formation.status != FormationStatus::Awaiting {
+                continue;
+            }
+            let target = formation.target.unwrap();
+            let (reached, failed) = match formation.direction.unwrap() {
+                PatternDirection::Bullish => (bar.high >= target, bar.low < tracked.fail),
+                PatternDirection::Bearish => (bar.low <= target, bar.high > tracked.fail),
+            };
+            let status = match (reached, failed) {
+                (true, true) => FormationStatus::Indefinable,
+                (true, false) => FormationStatus::Reached,
+                (false, true) => FormationStatus::Failed,
+                (false, false) => continue,
+            };
+            formation.status = status;
+            formation.resolved_at = Some(index);
+        }
         self.extremes.push_back([bar.high, bar.low]);
         if self.extremes.len()
             > config
@@ -797,13 +878,50 @@ impl State {
         while i < self.pending.len() {
             match self.pending[i].resolve(bar.close, seq, config.max_length) {
                 None => i += 1,
-                Some(Outcome::Fail) => {
+                Some(Outcome::Expire) => {
                     self.pending.remove(i);
+                }
+                Some(Outcome::Fail) => {
+                    let candidate = self.pending.remove(i);
+                    let mut formation = candidate.formation(
+                        candidate.kind.expected(),
+                        FormationStatus::Failed,
+                        None,
+                        (seq, index),
+                    );
+                    formation.resolved_at = Some(index);
+                    self.failed.push(formation);
+                    if self.failed.len() > share * MAX_CONFIRMED {
+                        self.failed.remove(0);
+                    }
                 }
                 Some(Outcome::Confirm(direction)) => {
                     let candidate = self.pending.remove(i);
-                    self.confirmed
-                        .push(candidate.formation(Some(direction), true, (seq, index)));
+                    let mut formation = candidate.formation(
+                        Some(direction),
+                        FormationStatus::Awaiting,
+                        Some(index),
+                        (seq, index),
+                    );
+                    let (target, reached) = match direction {
+                        PatternDirection::Bullish => {
+                            let target = candidate.upper.at(seq) + candidate.height;
+                            (target, bar.high >= target)
+                        }
+                        PatternDirection::Bearish => {
+                            let target = candidate.lower.at(seq) - candidate.height;
+                            (target, bar.low <= target)
+                        }
+                    };
+                    formation.target = Some(target);
+                    if reached {
+                        formation.status = FormationStatus::Reached;
+                        formation.resolved_at = Some(index);
+                    }
+                    self.confirmed.push(Tracked {
+                        formation,
+                        fail: candidate.fail[direction as usize],
+                    });
                     if self.confirmed.len() > share * MAX_CONFIRMED {
                         self.confirmed.remove(0);
                     }
@@ -902,9 +1020,9 @@ impl State {
 ///
 /// A line through two pivots is projected forward. A formation is confirmed on the first bar
 /// from the one that completes it onward whose close lies beyond its breakout boundary, and
-/// is dropped if the close first crosses the opposite guard or the formation is older than
-/// `max_length` bars. A bar with a non-finite price is skipped as if absent, and lengths
-/// count the other bars. Every rule reads bars up to the confirmation bar only, so results
+/// fails if the close first crosses the opposite guard. A formation still waiting for a break
+/// is dropped once older than `max_length` bars. A bar with a non-finite price is skipped as if absent, and lengths
+/// count the other bars. Every rule reads bars up to the current bar only, so results
 /// on a prefix of the history equal those of the full history up to that bar.
 ///
 /// | Formation | Pivots | Rule |
@@ -929,6 +1047,15 @@ impl State {
 /// | Head and shoulders | high, low, high, low, high | the shoulders differ by at most `tolerance` percent, the head is at least `depth` percent above each, each valley lies below its shoulder, the shoulders are between `min_length` and `max_length` bars apart; the neckline runs through the valleys and may slope; confirms bearish below it, fails above the head |
 /// | Inverse head and shoulders | mirror | confirms bullish above the neckline |
 ///
+/// After breakout, a target projects the formation's height from its breakout boundary:
+/// the pole for a flag or pennant, starting width for a rectangle, triangle or wedge,
+/// distance from tops to neckline for multiple tops or bottoms, head to neckline at the head
+/// for head and shoulders, and depth below the breakout rim for a cup. Bullish targets add
+/// that height; bearish targets subtract it. From the next bar, a high (low) reaching the
+/// target settles a bullish (bearish) formation as Reached; a low (high) passing the channel's
+/// opposite extreme, last top or bottom, right shoulder or handle settles it as Failed. A bar
+/// doing both leaves it Indefinable. The breakout bar can reach the target but cannot fail it.
+///
 /// A boundary is flat when it moves at most `tolerance` percent between the first and last
 /// pivot. A flag or pennant spans at least `min_length` bars from its pole's top and at most
 /// `max_length` bars from the pole's start; the others span between `min_length` and
@@ -938,8 +1065,9 @@ impl State {
 /// rectangle and a symmetrical triangle confirm in the direction of the break. A pennant's
 /// last four pivots also form a symmetrical triangle, and a narrowing flag's a wedge; neither is
 /// then reported. A triple top or bottom follows the double top or bottom of its first two tops.
-/// Each pivot belongs to at most one formation of a kind. At most 16 pivots, 8 developing and 64
-/// confirmed formations are kept, twice as many formations for every formation at once.
+/// Each pivot belongs to at most one formation of a kind. At most 16 pivots, 8 developing
+/// formations, 64 that broke out and 64 that failed before breakout are kept, twice as many
+/// formations for every formation at once.
 /// Wedges here follow these shared pivot, length and tolerance rules; the standalone
 /// [`RisingWedge`](crate::studies::RisingWedge) and [`FallingWedge`](crate::studies::FallingWedge)
 /// studies use their own touch and convergence rules and can find different wedges.
@@ -948,27 +1076,33 @@ impl State {
 ///
 /// Line 0 marks a bullish confirmation at the low of its bar, line 1 a bearish one at the
 /// high, each labelled with the abbreviations of the formations it confirms. Line 2,
-/// Developing, holds no values. The legend lists none of the three, and the price scale starts
+/// Developing, holds no values. The legend lists no outputs, and the price scale starts
 /// without their tags. Boundaries are also generated as drawings, each in the colour, width and
 /// pattern of its plot and hidden with it: Bullish or Bearish once its formation is confirmed,
 /// Developing, grey and dashed by default, until then. A reversal formation draws only its
 /// neckline or breakout level. Hovering a mark or a boundary shows the formation's name, such as
-/// "Bear Flag".
+/// "Bear Flag". Line 3, Target, styles dotted targets ending in a Target label: orange while
+/// Awaiting, green when Reached, red when Failed and grey when Indefinable. Hovering it shows
+/// the price and status. Patterns and Price targets choose the formations and targets drawn.
 #[derive(Clone, Debug)]
 pub struct ChartPatterns {
     scope: Scope,
     config: Config,
     enabled: [bool; 18],
+    pattern_filter: usize,
+    price_targets: usize,
     /// One bit per kind of the scope confirmed bullish and bearish on each bar.
     found: Vec<[u32; 2]>,
     values: IndicatorValues,
     stepper: Stepper<State>,
     #[cfg(feature = "drawings")]
     drawings: Vec<crate::drawings::Drawing>,
-    /// The plot that styles each of `drawings`: 0 Bullish, 1 Bearish, 2 Developing.
+    /// The plot that styles each drawing: Bullish, Bearish, Developing or Target.
     #[cfg(feature = "drawings")]
     drawing_plots: Vec<usize>,
-    colors: [Color32; 3],
+    colors: [Color32; 4],
+    precision: Option<usize>,
+    label_precision: Option<usize>,
     visible: bool,
 }
 
@@ -1034,6 +1168,8 @@ impl ChartPatterns {
                 },
             },
             enabled: [true; 18],
+            pattern_filter: 0,
+            price_targets: 0,
             found: Vec::new(),
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
@@ -1041,7 +1177,9 @@ impl ChartPatterns {
             drawings: Vec::new(),
             #[cfg(feature = "drawings")]
             drawing_plots: Vec::new(),
-            colors: [palette::BLUE, palette::RED, palette::GRAY],
+            colors: [palette::BLUE, palette::RED, palette::GRAY, palette::GRAY],
+            precision: None,
+            label_precision: None,
             visible: true,
         }
     }
@@ -1087,17 +1225,23 @@ impl ChartPatterns {
         self
     }
 
-    /// The confirmed formations, oldest first, then the developing ones, from the last
-    /// calculation. Developing formations are re-evaluated on every bar.
+    /// The formations that broke out, oldest first, then those that failed before a breakout,
+    /// then developing ones, from the last calculation, whatever the Patterns input shows.
+    /// Developing and awaiting formations are re-evaluated on every bar.
     pub fn formations(&self) -> Vec<Formation> {
         let state = self.stepper.state();
         let end = (state.swings.position.saturating_sub(1), state.last);
-        let mut formations = state.confirmed.clone();
+        let mut formations: Vec<_> = state
+            .confirmed
+            .iter()
+            .map(|tracked| tracked.formation.clone())
+            .collect();
+        formations.extend(state.failed.iter().cloned());
         formations.extend(
             state
                 .pending
                 .iter()
-                .map(|c| c.formation(c.kind.expected(), false, end)),
+                .map(|c| c.formation(c.kind.expected(), FormationStatus::Developing, None, end)),
         );
         formations
     }
@@ -1142,6 +1286,33 @@ impl Indicator for ChartPatterns {
         };
         let (c, d) = (&self.config, &defaults.config);
         let mut inputs = vec![
+            StudyInput::new(
+                "pattern_filter",
+                "Patterns",
+                InputValue::Choice(self.pattern_filter),
+                InputKind::Choice(
+                    [
+                        "All",
+                        "Awaiting and reached",
+                        "Only awaiting",
+                        "Last awaiting",
+                    ]
+                    .map(String::from)
+                    .into(),
+                ),
+            )
+            .with_default(InputValue::Choice(0)),
+            StudyInput::new(
+                "price_targets",
+                "Price targets",
+                InputValue::Choice(self.price_targets),
+                InputKind::Choice(
+                    ["All", "Only awaiting", "Awaiting and reached", "None"]
+                        .map(String::from)
+                        .into(),
+                ),
+            )
+            .with_default(InputValue::Choice(0)),
             length("strength", "Swing strength", c.strength, d.strength),
             length("min_length", "Minimum length", c.min_length, d.min_length),
             length("max_length", "Maximum length", c.max_length, d.max_length),
@@ -1205,6 +1376,8 @@ impl Indicator for ChartPatterns {
             ("pole", InputValue::Number(v)) => self.config.pole = v,
             ("depth", InputValue::Number(v)) => self.config.depth = v,
             ("handle", InputValue::Number(v)) => self.config.handle = v,
+            ("pattern_filter", InputValue::Choice(v)) => self.pattern_filter = v,
+            ("price_targets", InputValue::Choice(v)) => self.price_targets = v,
             (_, InputValue::Toggle(on)) => {
                 let slot = id
                     .strip_prefix("patterns[")
@@ -1221,12 +1394,12 @@ impl Indicator for ChartPatterns {
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
-            color: self.colors[line.min(2)],
+            color: self.colors[line.min(3)],
             width: 1.0,
-            pattern: if line >= 2 {
-                crate::model::LineStyle::Dashed
-            } else {
-                crate::model::LineStyle::Solid
+            pattern: match line {
+                2 => crate::model::LineStyle::Dashed,
+                3 => crate::model::LineStyle::Dotted,
+                _ => crate::model::LineStyle::Solid,
             },
             plot_type: match line {
                 0 => crate::studies::PlotType::TriangleUp,
@@ -1299,40 +1472,85 @@ impl Indicator for ChartPatterns {
             });
         #[cfg(feature = "drawings")]
         {
-            (self.drawings, self.drawing_plots) = self
-                .formations()
+            use crate::drawings::{ChartPoint, Drawing, DrawingToolType, LineTextHorizontalAlign};
+            use FormationStatus::*;
+            self.drawings.clear();
+            self.drawing_plots.clear();
+            let formations = self.formations();
+            let awaiting = |f: &Formation| matches!(f.status, Developing | Awaiting);
+            let last = formations
                 .iter()
-                .flat_map(|formation| {
-                    let confirmed = formation.status == FormationStatus::Confirmed;
-                    let plot = match formation.direction {
-                        Some(PatternDirection::Bullish) if confirmed => 0,
-                        Some(PatternDirection::Bearish) if confirmed => 1,
-                        _ => 2,
+                .enumerate()
+                .filter(|(_, f)| awaiting(f))
+                .max_by_key(|(_, f)| f.anchors[0].0)
+                .map(|(i, _)| i);
+            for (i, formation) in formations.iter().enumerate() {
+                let shown = match self.pattern_filter {
+                    1 => !matches!(formation.status, Failed | Indefinable),
+                    2 => awaiting(formation),
+                    3 => last == Some(i),
+                    _ => true,
+                };
+                if !shown {
+                    continue;
+                }
+                let plot = match formation.direction {
+                    Some(PatternDirection::Bullish) if formation.confirmed_at.is_some() => 0,
+                    Some(PatternDirection::Bearish) if formation.confirmed_at.is_some() => 1,
+                    _ => 2,
+                };
+                let name = formation.kind.label();
+                for segment in &formation.boundaries {
+                    let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+                    drawing.completed = true;
+                    drawing.stroke_width = 1.0;
+                    drawing.label = Some(name.to_owned());
+                    drawing.color = self.colors[plot].to_srgba_unmultiplied();
+                    drawing.line_style = self.plot_style(plot).pattern;
+                    drawing.chart_points = segment
+                        .iter()
+                        .map(|&(bar, price)| ChartPoint::new(bar as f32, price))
+                        .collect();
+                    self.drawings.push(drawing);
+                    self.drawing_plots.push(plot);
+                }
+                let target_shown = match self.price_targets {
+                    1 => formation.status == Awaiting,
+                    2 => matches!(formation.status, Awaiting | Reached),
+                    3 => false,
+                    _ => true,
+                };
+                if let Some(target) = formation.target.filter(|_| target_shown) {
+                    let (status, color) = match formation.status {
+                        Awaiting => ("Awaiting", palette::WARM_ORANGE),
+                        Reached => ("Reached", palette::UP),
+                        Failed => ("Failed", palette::DOWN),
+                        Indefinable => ("Indefinable", palette::GRAY),
+                        Developing => unreachable!(),
                     };
-                    let color = self.colors[plot];
-                    let name = formation.kind.label();
-                    formation.boundaries.iter().map(move |segment| {
-                        let mut drawing = crate::drawings::Drawing::new(
-                            0,
-                            crate::drawings::DrawingToolType::TrendLine,
-                        );
-                        drawing.completed = true;
-                        drawing.stroke_width = 1.0;
-                        drawing.label = Some(name.to_owned());
-                        drawing.color = color.to_srgba_unmultiplied();
-                        if !confirmed {
-                            drawing.line_style = crate::model::LineStyle::Dashed;
-                        }
-                        drawing.chart_points = segment
-                            .iter()
-                            .map(|&(bar, price)| {
-                                crate::drawings::ChartPoint::new(bar as f32, price)
-                            })
-                            .collect();
-                        (drawing, plot)
-                    })
-                })
-                .unzip();
+                    let price = crate::scales::StudyFormat::Price
+                        .format(target, self.label_precision.or(self.precision));
+                    let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+                    drawing.completed = true;
+                    drawing.stroke_width = 1.0;
+                    drawing.color = self.colors[3].to_srgba_unmultiplied();
+                    drawing.line_style = crate::model::LineStyle::Dotted;
+                    drawing.text = Some("Target".to_owned());
+                    drawing.text_color = Some(color.to_srgba_unmultiplied());
+                    drawing.line_measurements.text_horizontal_align =
+                        LineTextHorizontalAlign::Right;
+                    drawing.label = Some(format!("{name}\nTarget {price}\n{status}"));
+                    drawing.chart_points = vec![
+                        ChartPoint::new(formation.confirmed_at.unwrap() as f32, target),
+                        ChartPoint::new(
+                            formation.resolved_at.unwrap_or(self.stepper.state().last) as f32,
+                            target,
+                        ),
+                    ];
+                    self.drawings.push(drawing);
+                    self.drawing_plots.push(3);
+                }
+            }
         }
     }
 
@@ -1359,6 +1577,17 @@ impl Indicator for ChartPatterns {
         self.drawing_plots.get(index).copied()
     }
 
+    fn set_instrument(&mut self, instrument: Option<&crate::model::Instrument>) -> bool {
+        let precision = instrument
+            .and_then(crate::scales::instrument_price_precision)
+            .map(usize::from);
+        std::mem::replace(&mut self.precision, precision) != precision
+    }
+
+    fn set_label_precision(&mut self, precision: Option<usize>) {
+        self.label_precision = precision;
+    }
+
     fn colors(&self) -> Vec<Color32> {
         self.colors.to_vec()
     }
@@ -1374,7 +1603,9 @@ impl Indicator for ChartPatterns {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec!["Bullish".into(), "Bearish".into(), "Developing".into()]
+        ["Bullish", "Bearish", "Developing", "Target"]
+            .map(str::to_owned)
+            .into()
     }
 
     // A confirmation's value only places its mark at the bar's high or low, and Developing
@@ -1520,7 +1751,7 @@ mod tests {
             );
             let got: Vec<_> = formations
                 .iter()
-                .filter(|f| f.kind == kind && f.status == FormationStatus::Confirmed)
+                .filter(|f| f.kind == kind && f.confirmed_at.is_some())
                 .map(|f| (f.direction.unwrap(), f.confirmed_at.unwrap()))
                 .collect();
             assert_eq!(got, expected.into_iter().collect::<Vec<_>>(), "{label}");
@@ -1581,7 +1812,7 @@ mod tests {
             formations,
             [Formation {
                 kind: FormationKind::BullFlag,
-                status: FormationStatus::Confirmed,
+                status: FormationStatus::Awaiting,
                 direction: Some(PatternDirection::Bullish),
                 anchors: vec![
                     (5, 100.0),
@@ -1592,6 +1823,8 @@ mod tests {
                 ],
                 boundaries: vec![[(10, 130.0), (28, 124.6)], [(10, 123.5), (28, 118.1)]],
                 confirmed_at: Some(28),
+                target: Some(154.6),
+                resolved_at: None,
             }]
         );
         assert_eq!(study.plot_text(0, 28).as_deref(), Some("BF"));
@@ -1617,6 +1850,209 @@ mod tests {
     const CUP: [f64; 8] = [110.0, 120.0, 104.0, 100.0, 104.0, 119.0, 114.0, 130.0];
     const V_CUP: [f64; 8] = [110.0, 120.0, 110.0, 100.0, 109.5, 119.0, 114.0, 130.0];
     const NARROW_CUP: [f64; 7] = [110.0, 120.0, 101.0, 100.0, 119.0, 114.0, 130.0];
+
+    /// Targets use the pole, channel width, neckline height or cup depth; a settled outcome
+    /// stays on its first bar, while a wrong-way break before the breakout is retained.
+    #[test]
+    fn formations_report_targets_and_outcomes() {
+        use FormationKind::*;
+        use FormationStatus::*;
+        let extended = |end| path(&[BULL_FLAG.as_slice(), &[end]].concat());
+        let mut ambiguous = path(&BULL_FLAG);
+        ambiguous[29].high = 155.0;
+        ambiguous[29].low = 118.0;
+        let mut breakout_wick = path(&[105.0, 100.0, 130.0, 122.0, 127.0, 119.0, 123.0, 135.0]);
+        breakout_wick[31].low = 118.0;
+        // upper(28) = 130 - 0.3 * 18 = 124.6; pole = 30; target = 154.6.
+        // The double top projects 105 - (120 - 105) = 90.
+        // The head is 120 - 100.5 = 19.5 over its neckline, 101.8 on bar 28.
+        // The rectangle's starting width is 110 - 99.75 = 10.25, added to 110.95.
+        let cases = [
+            (
+                "flag awaiting",
+                BullFlag,
+                path(&BULL_FLAG),
+                Awaiting,
+                Some(28),
+                Some(154.6),
+                None,
+            ),
+            (
+                "flag reached",
+                BullFlag,
+                extended(160.0),
+                Reached,
+                Some(28),
+                Some(154.6),
+                Some(34),
+            ),
+            (
+                "flag failed",
+                BullFlag,
+                extended(110.0),
+                Failed,
+                Some(28),
+                Some(154.6),
+                Some(34),
+            ),
+            (
+                "flag indefinable",
+                BullFlag,
+                ambiguous,
+                Indefinable,
+                Some(28),
+                Some(154.6),
+                Some(29),
+            ),
+            (
+                "wrong-way flag",
+                BullFlag,
+                path(&[105.0, 100.0, 130.0, 122.0, 127.0, 119.0, 123.0, 100.0]),
+                Failed,
+                None,
+                None,
+                Some(32),
+            ),
+            (
+                "breakout wick cannot fail",
+                BullFlag,
+                breakout_wick,
+                Awaiting,
+                Some(31),
+                Some(153.7),
+                None,
+            ),
+            (
+                "double top on breakout",
+                DoubleTop,
+                path(&DOUBLE_TOP),
+                Reached,
+                Some(18),
+                Some(90.0),
+                Some(18),
+            ),
+            (
+                "head and shoulders",
+                HeadAndShoulders,
+                path(&HEAD_AND_SHOULDERS),
+                Reached,
+                Some(28),
+                Some(82.3),
+                Some(30),
+            ),
+            (
+                "rectangle up",
+                Rectangle,
+                path(&RECTANGLE),
+                Awaiting,
+                Some(24),
+                Some(121.2),
+                None,
+            ),
+            (
+                "rectangle down",
+                Rectangle,
+                path(&mirror(&RECTANGLE)),
+                Awaiting,
+                Some(24),
+                Some(138.8),
+                None,
+            ),
+            (
+                "cup",
+                CupAndHandle,
+                path(&CUP),
+                Awaiting,
+                Some(33),
+                Some(140.0),
+                None,
+            ),
+        ];
+        for (label, kind, bars, status, confirmed, target, resolved) in cases {
+            let mut study = ChartPatterns::only(kind);
+            let formations = found(&mut study, &bars);
+            assert_eq!(formations.len(), 1, "{label}");
+            let formation = &formations[0];
+            assert_eq!(
+                (
+                    formation.status,
+                    formation.confirmed_at,
+                    formation.resolved_at
+                ),
+                (status, confirmed, resolved),
+                "{label}"
+            );
+            match (formation.target, target) {
+                (Some(actual), Some(expected)) => {
+                    assert!((actual - expected).abs() < 1e-9, "{label}: {actual}")
+                }
+                (actual, expected) => assert_eq!(actual, expected, "{label}"),
+            }
+        }
+    }
+
+    /// Display filters select formations and their target drawings without altering outputs.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn patterns_and_price_targets_choose_the_drawings() {
+        let two = path(&[
+            105.0, 100.0, 130.0, 122.0, 127.0, 119.0, 135.0, 130.0, 140.0, 137.0, 139.0, 136.0,
+            137.0,
+        ]);
+        let failed = path(&[105.0, 100.0, 130.0, 122.0, 127.0, 119.0, 123.0, 100.0]);
+        let reached = path(&[BULL_FLAG.as_slice(), &[160.0]].concat());
+        for (bars, patterns, targets, expected) in [
+            (&two, 0, 0, [2, 0, 2, 1]),
+            (&two, 3, 0, [0, 0, 2, 0]),
+            (&two, 2, 3, [2, 0, 2, 0]),
+            (&failed, 0, 0, [0, 0, 2, 0]),
+            (&failed, 1, 0, [0, 0, 0, 0]),
+            (&reached, 0, 1, [2, 0, 0, 0]),
+            (&reached, 0, 2, [2, 0, 0, 1]),
+        ] {
+            let mut study = ChartPatterns::only(FormationKind::BullFlag);
+            study
+                .set_input("pattern_filter", InputValue::Choice(patterns))
+                .unwrap();
+            study
+                .set_input("price_targets", InputValue::Choice(targets))
+                .unwrap();
+            study.calculate(bars);
+            let mut counts = [0; 4];
+            for i in 0..study.drawings().len() {
+                counts[study.drawing_plot(i).unwrap()] += 1;
+            }
+            assert_eq!(counts, expected, "{patterns} {targets}");
+        }
+        for (bars, end, color, status) in [
+            (&two, 60, palette::WARM_ORANGE, "Awaiting"),
+            (&reached, 34, palette::UP, "Reached"),
+        ] {
+            let mut study = ChartPatterns::only(FormationKind::BullFlag);
+            study.calculate(bars);
+            let target = study
+                .drawings()
+                .iter()
+                .enumerate()
+                .find(|(i, _)| study.drawing_plot(*i) == Some(3))
+                .unwrap()
+                .1;
+            assert_eq!(
+                target
+                    .chart_points
+                    .iter()
+                    .map(|p| (p.bar_idx, p.price))
+                    .collect::<Vec<_>>(),
+                [(28.0, 154.6), (end as f32, 154.6)]
+            );
+            assert_eq!(target.text.as_deref(), Some("Target"));
+            assert_eq!(target.text_color, Some(color.to_srgba_unmultiplied()));
+            assert_eq!(
+                target.label.as_deref(),
+                Some(format!("Bull Flag\nTarget 154.60\n{status}").as_str())
+            );
+        }
+    }
 
     fn reversal_cases() -> Vec<Case> {
         use FormationKind::*;
@@ -1670,7 +2106,7 @@ mod tests {
             );
             let got: Vec<_> = formations
                 .iter()
-                .filter(|f| f.kind == kind && f.status == FormationStatus::Confirmed)
+                .filter(|f| f.kind == kind && f.confirmed_at.is_some())
                 .map(|f| (f.direction.unwrap(), f.confirmed_at.unwrap()))
                 .collect();
             assert_eq!(got, expected.into_iter().collect::<Vec<_>>(), "{label}");
@@ -1723,7 +2159,7 @@ mod tests {
         let confirmed = |study: &mut ChartPatterns, bars: &[Bar]| -> Vec<Formation> {
             found(study, bars)
                 .into_iter()
-                .filter(|f| f.status == FormationStatus::Confirmed)
+                .filter(|f| f.confirmed_at.is_some())
                 .collect()
         };
         for (family, cases) in [
@@ -1867,6 +2303,8 @@ mod tests {
                     .map(|input| input.id.as_str())
                     .collect::<Vec<_>>(),
                 [
+                    "pattern_filter",
+                    "price_targets",
                     "strength",
                     "min_length",
                     "max_length",
@@ -1899,6 +2337,7 @@ mod tests {
         use PatternFamily::{Continuation, Reversal};
         for (family, anchors) in [
             (Continuation, BULL_FLAG.to_vec()),
+            (Continuation, [BULL_FLAG.as_slice(), &[160.0]].concat()),
             (Continuation, RECTANGLE.to_vec()),
             (Continuation, mirror(&ASCENDING)),
             (Reversal, TRIPLE_TOP.to_vec()),
@@ -1913,13 +2352,20 @@ mod tests {
                 let confirmed = |formations: Vec<Formation>| -> Vec<Formation> {
                     formations
                         .into_iter()
-                        .filter(|f| f.status == FormationStatus::Confirmed)
+                        .filter(|f| f.confirmed_at.is_some())
                         .collect()
                 };
                 let replay = confirmed(found(&mut ChartPatterns::new(family), &bars[..k]));
                 let expected: Vec<_> = confirmed(full.clone())
                     .into_iter()
                     .filter(|f| f.confirmed_at.unwrap() < k)
+                    .map(|mut f| {
+                        if f.resolved_at.is_some_and(|bar| bar >= k) {
+                            f.status = FormationStatus::Awaiting;
+                            f.resolved_at = None;
+                        }
+                        f
+                    })
                     .collect();
                 assert_eq!(replay, expected, "prefix {k}");
                 live.update(&bars[..k], k - 1);

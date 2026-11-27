@@ -1204,6 +1204,19 @@ impl StudyTemplate {
                 .retain(|(id, _)| id != "call_wall" && id != "put_wall");
             changed |= template.inputs.len() != listed;
         }
+        // Chart patterns saved before targets were drawn keep them off.
+        if declares("price_targets") && !has("price_targets") {
+            template
+                .inputs
+                .push(("price_targets".to_owned(), InputValue::Choice(3)));
+            if template.settings.plots.len() == 3 {
+                template.settings.plots.push(
+                    crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                        .plot_style(3),
+                );
+            }
+            changed = true;
+        }
         // A single candlestick pattern study saved while it drew the bullish, bearish and
         // neutral lines of All Candlestick Patterns, and took the trend rule whatever its rule
         // reads, keeps the style of its side's line and drops a rule it now ignores.
@@ -1756,9 +1769,21 @@ mod tests {
                 plot_type: crate::studies::PlotType::Line,
                 visible: true,
             });
-            expected.plot_variants.push(Vec::new());
+            expected.plots.push(
+                crate::studies::ChartPatterns::new(crate::studies::PatternFamily::Reversal)
+                    .plot_style(3),
+            );
+            expected.plot_variants.extend([Vec::new(), Vec::new()]);
             assert_eq!(restored.settings(), expected, "{}", saved.name);
             let inputs = restored.inputs();
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == "price_targets")
+                    .unwrap()
+                    .value,
+                InputValue::Choice(3)
+            );
             if saved.name == "Missed Pivot Levels" {
                 assert_eq!(
                     inputs
@@ -1794,6 +1819,22 @@ mod tests {
                 );
             }
         }
+        let mut old = StudyTemplate::from_study(&crate::studies::ChartPatterns::only(
+            crate::studies::FormationKind::BullFlag,
+        ));
+        old.inputs
+            .retain(|(id, _)| !matches!(id.as_str(), "price_targets" | "pattern_filter"));
+        old.settings.plots.truncate(3);
+        old.settings.plot_variants.truncate(3);
+        let restored = old.create().unwrap();
+        for (id, expected) in [("price_targets", 3), ("pattern_filter", 0)] {
+            assert_eq!(
+                restored.inputs().iter().find(|i| i.id == id).unwrap().value,
+                InputValue::Choice(expected)
+            );
+        }
+        assert_eq!(&restored.settings().plots[..3], &old.settings.plots);
+        assert!(restored.settings().plots[3].visible);
     }
 
     /// Main templates without Symbol or Offset keep every saved input, style and value.
