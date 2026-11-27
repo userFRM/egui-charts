@@ -8,6 +8,46 @@ use egui_charts::ui::strategy_report::{
 };
 use std::sync::Arc;
 
+/// Synthetic units of each currency that one US dollar buys. Demo instruments are priced in
+/// dollars, so these convert their runs into each of these account currencies.
+// shortcut: constant synthetic rates, vary them per bar if the demo ever shows rate moves.
+const DOLLAR_RATES: [(&str, f64); 7] = [
+    ("USD", 1.0),
+    ("EUR", 0.9),
+    ("GBP", 0.8),
+    ("JPY", 150.0),
+    ("CHF", 0.88),
+    ("CAD", 1.35),
+    ("AUD", 1.5),
+];
+
+/// The synthetic rate of an `fx:{from}/{to}` request as one point that holds from 1970 on, or
+/// none when the demo has no rate for either currency, which the run reports unavailable.
+/// Codes match in upper or lower case; one that mixes them names a minor unit, such as `GBp`
+/// for pence, which has no rate here.
+pub(super) fn exchange_rates(request: Option<&egui_charts::data::StudyDataRequest>) -> Vec<Bar> {
+    let per_dollar = |code: &str| {
+        DOLLAR_RATES
+            .iter()
+            .find(|(known, _)| code == *known || code == known.to_ascii_lowercase())
+            .map(|&(_, rate)| rate)
+    };
+    request
+        .and_then(|request| {
+            request
+                .metric
+                .as_deref()?
+                .strip_prefix("fx:")?
+                .split_once('/')
+        })
+        .and_then(|(from, to)| Some(per_dollar(to)? / per_dollar(from)?))
+        .map(|rate| {
+            let time = chrono::DateTime::UNIX_EPOCH;
+            vec![Bar::new(time, rate, rate, rate, rate, 0.0)]
+        })
+        .unwrap_or_default()
+}
+
 /// Buys two units every 40 bars, holds for 20 and pays one currency unit per fill.
 /// Fills use opens; equity uses completed closes at their source bar timestamps.
 fn sample_backtest(symbol: &str, timeframe: Timeframe, bars: &[Bar]) -> StrategyReport {
@@ -294,7 +334,7 @@ impl DemoApp {
                                         &request,
                                         bars,
                                         lower,
-                                        Vec::new(),
+                                        exchange_rates(request.exchange_rate.as_ref()),
                                         calculation,
                                     )
                                 {
@@ -656,6 +696,20 @@ mod tests {
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text().starts_with("Decision history at"))));
         output.drop_without_applying_deltas();
         assert_eq!(app.strategy_report.report(), Some(&report));
+        // An account in euros receives the demo's dollar rate with the requested history.
+        let mut settings = app.strategy_report.settings().clone();
+        settings.start_time = Some(start);
+        settings.currency = Some("EUR".into());
+        app.strategy_report.set_settings(settings).unwrap();
+        click(&mut app, "Run");
+        for _ in 0..100 {
+            frame(&mut app, vec![]).drop_without_applying_deltas();
+        }
+        let report = app.strategy_report.report().unwrap();
+        assert_eq!(report.currency.as_deref(), Some("EUR"));
+        assert_eq!(report.unavailable, None);
+        assert!(!report.trades.is_empty());
+        assert!(report.trades.iter().all(|trade| trade.exchange_rate == 0.9));
     }
 
     #[test]

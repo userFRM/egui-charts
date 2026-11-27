@@ -126,6 +126,7 @@ impl DemoApp {
             .chart
             .instrument()
             .and_then(|instrument| instrument.currency.clone());
+        run.exchange_rates = super::strategy::exchange_rates(run.exchange_rate_request().as_ref());
         let source = &bars[bars.partition_point(|bar| bar.time < first.time)..];
         // Prime history before any alert watches the run, so only subsequent executions notify.
         run.update(script.as_mut(), source, &[]);
@@ -583,11 +584,9 @@ mod tests {
         let report = run.report().unwrap();
         assert_eq!(run.instrument_currency.as_deref(), Some("USD"));
         assert_eq!(report.currency.as_deref(), Some("EUR"));
-        assert_eq!(
-            report.unavailable.as_deref(),
-            Some("Exchange rates from USD to EUR are unavailable")
-        );
-        assert!(report.trades.is_empty() && report.equity.is_empty());
+        assert_eq!(report.unavailable, None);
+        assert!(!report.trades.is_empty());
+        assert!(report.trades.iter().all(|trade| trade.exchange_rate == 0.9));
 
         let restored = restart(&mut app, &ctx);
         let alerts = restored.alert_host.engine().alerts();

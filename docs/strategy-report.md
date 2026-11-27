@@ -60,8 +60,9 @@ let report = engine.run(&mut Long, &bars, &lower);
 An entry's explicit positive quantity overrides the default size. `None` uses fixed units,
 a fraction of current marked equity, or cash divided by the absolute execution price.
 Cash and equity sizing reject a zero execution price. The default pyramiding limit is one
-open entry; zero disables entries. A partial exit retains its entry slot until that lot is
-fully closed. An opposite entry reverses the position and starts a new entry count.
+open entry per direction; zero counts as one, so a strategy can always open one position. A
+partial exit retains its entry slot until that lot is fully closed. An opposite entry
+reverses the position and starts a new entry count.
 [`Strategy::default_order_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.default_order_size) suggests the strategy's usual size; the tester applies it on selection,
 while [`Backtest::run`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.run) uses its settings alone. Select the strategy before restoring saved settings.
 
