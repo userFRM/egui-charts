@@ -14,7 +14,7 @@
 //! [`TPOProfile`]s.
 
 use crate::model::bar::{bar_level_keys, level_grid, level_key};
-use crate::model::{Bar, BarClock, ProfileSession, SessionProvider};
+use crate::model::{Bar, BarClock, LineStyle, ProfileSession, SessionProvider};
 use chrono::{DateTime, Datelike, Utc};
 use std::collections::HashMap;
 use std::ops::{Range, RangeInclusive};
@@ -131,13 +131,25 @@ pub struct TPOConfig {
     pub period_colors: [egui::Color32; 4],
     /// Colour of every entry under [`TPOColorMode::Solid`], kept readable in the same way.
     pub solid_color: egui::Color32,
+    /// Colour of every letter, letters in cells included. `None`, the default, keeps the entry
+    /// colours for letters alone and white or black, whichever reads, in cells. Letters alone
+    /// stay readable as entry colours do.
+    pub letter_color: Option<egui::Color32>,
     /// Opacity of blocks outside the value area over the chart background, clamped to 0..=1.
     /// Zero paints the background colour; one leaves blocks undimmed. NaN reads 0.45.
     pub outside_value_area_opacity: f32,
     /// Colour the point of control row, underline it under letters and caption it.
     pub show_poc: bool,
-    /// Draw and caption the value area high and low and dim blocks outside the value area.
+    /// Colour of the point of control row, underline and caption, kept readable on the
+    /// background as entries are. `None`, the default, keeps the theme's text colours.
+    pub poc_color: Option<egui::Color32>,
+    /// Dim blocks outside the value area and allow its edges, which `show_value_area_high` and
+    /// `show_value_area_low` draw and caption.
     pub show_value_area: bool,
+    /// Draw the value area high and caption it, while `show_value_area` is on. On by default.
+    pub show_value_area_high: bool,
+    /// Draw the value area low and caption it, while `show_value_area` is on. On by default.
+    pub show_value_area_low: bool,
     /// Show the caption and marker at the middle of the profile's range, with
     /// [`TPOLabels::midpoint`].
     pub show_midpoint: bool,
@@ -179,12 +191,15 @@ pub struct TPOConfig {
     /// Mark the closing price right of its row, in the bullish colour when it closes at or above
     /// its open, otherwise in the bearish colour.
     pub show_closing_price: bool,
-    /// Draw row volumes beside each profile, up to 40 px for the busiest row. Each bar shares
-    /// its volume equally among the rows its range touches; nonpositive or nonfinite volume adds none.
+    /// Draw row volumes beside each profile, right of it unless [`TPOVolumeProfile::left`], up
+    /// to 40 px for the busiest row. Each bar shares its volume equally among the rows its range
+    /// touches; nonpositive or nonfinite volume adds none.
     pub show_volume_profile: bool,
+    /// Levels, values, colours and side of the volume profile; see [`TPOVolumeProfile`].
+    pub volume_profile: TPOVolumeProfile,
     /// Split each session where it moves between regular, extended and overnight hours, giving
     /// separate overnight, pre-market, regular and post-market profiles.
-    /// Session profiles only; see [`TPOProfilePeriod`].
+    /// One-day profiles only; see [`TPOProfilePeriod`].
     pub split_sessions: bool,
     /// Which bars of each trading day of the clock the profiles keep: every bar for
     /// `ProfileSession::Chart`, otherwise those of the hours the choice picks, read from a clock
@@ -193,8 +208,13 @@ pub struct TPOConfig {
     pub(crate) session: ProfileSession,
     /// Regular instrument hours used only when custom sessions request clipping.
     pub(crate) regular_hours: Option<BarClock>,
-    /// Length of each profile: a session, the default, or a week or month of sessions.
+    /// Unit of each profile's length: the default `Session`, a trading day, or a week or month
+    /// of sessions; `profile_periods` sets how many.
     pub profile_period: TPOProfilePeriod,
+    /// How many of `profile_period` each profile covers: consecutive trading days of the clock,
+    /// ISO weeks or calendar months, counted on a grid fixed from 1970 so that a profile keeps
+    /// its days while history loads (see [`TPOProfilePeriod`]). One by default; zero reads one.
+    pub profile_periods: u32,
     /// Custom letters sequence; an empty string uses the default letters
     pub custom_letters: Option<String>,
     /// Sessions to combine: the profiles whose sessions open within one range form a single
@@ -235,9 +255,13 @@ impl Default for TPOConfig {
                 egui::Color32::from_rgb(93, 36, 245),
             ],
             solid_color: crate::tokens::DESIGN_TOKENS.semantic.tpo.letter_default,
+            letter_color: None,
             outside_value_area_opacity: OUTSIDE_VALUE_AREA_OPACITY,
             show_poc: true,
+            poc_color: None,
             show_value_area: true,
+            show_value_area_high: true,
+            show_value_area_low: true,
             show_midpoint: false,
             show_initial_balance: true,
             show_initial_balance_extensions: false,
@@ -255,10 +279,12 @@ impl Default for TPOConfig {
             labels: TPOLabels::default(),
             show_closing_price: false,
             show_volume_profile: false,
+            volume_profile: TPOVolumeProfile::default(),
             split_sessions: false,
             session: ProfileSession::Chart,
             regular_hours: None,
             profile_period: TPOProfilePeriod::Session,
+            profile_periods: 1,
             custom_letters: None,
             composites: Vec::new(),
             splits: Vec::new(),
@@ -270,9 +296,10 @@ impl Default for TPOConfig {
 
 /// Level captions beside a TPO profile, with optional prices.
 ///
-/// Each switch requires its level to be drawn by [`TPOConfig`]: `show_poc`,
-/// `show_value_area`, `show_midpoint`, `show_initial_balance`, `show_opening_range`, `show_closing_price`,
-/// `show_poor_high`, `show_poor_low` or `show_single_prints`. Initial balance and poor extremes
+/// Each switch requires its level to be drawn by [`TPOConfig`]: `show_poc`, `show_value_area`
+/// with `show_value_area_high` or `show_value_area_low`, `show_midpoint`,
+/// `show_initial_balance`, `show_opening_range`, `show_closing_price`, `show_poor_high`,
+/// `show_poor_low` or `show_single_prints`. Initial balance and poor extremes
 /// also require that level to exist. The midpoint has no mark apart from its caption,
 /// so hiding its caption hides the midpoint. Coinciding captions occupy separate rows,
 /// with earlier fields keeping the level's row. Defaults keep the point of control,
@@ -501,6 +528,74 @@ impl TPOStatisticsRows {
     }
 }
 
+/// Levels, values, colours and side of the volume profile drawn beside each TPO profile with
+/// [`TPOConfig::show_volume_profile`]. Its point of control is the row with the most volume, the
+/// lower one on a tie; its value area grows from there over the row volumes, two rows at a time
+/// toward the heavier side as [`TPOProfile::value_area_high`] describes, until it holds
+/// [`TPOConfig::value_area_pct`] of the profile's volume.
+///
+/// ```
+/// use egui_charts::model::{ChartTypeParams, TPOVolumeProfile};
+///
+/// let mut volume = TPOVolumeProfile::default();
+/// volume.poc = true;
+/// volume.left = true;
+/// volume.value_area_color = Some(egui::Color32::BLUE);
+/// let params = ChartTypeParams { tpo_volume: volume, ..Default::default() };
+/// assert!(params.tpo_config(None).volume_profile.left);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct TPOVolumeProfile {
+    /// Draw a line across the volume profile at its point of control. Off by default.
+    pub poc: bool,
+    /// Colour of that line. `None`, the default, takes the TPO point of control's colour.
+    pub poc_color: Option<egui::Color32>,
+    /// Pattern of that line, solid by default.
+    pub poc_style: LineStyle,
+    /// Draw a line across it at its value area high. Off by default.
+    pub value_area_high: bool,
+    /// Colour of that line. `None`, the default, takes the theme's text colour.
+    pub value_area_high_color: Option<egui::Color32>,
+    /// Pattern of that line, solid by default.
+    pub value_area_high_style: LineStyle,
+    /// Draw a line across it at its value area low. Off by default.
+    pub value_area_low: bool,
+    /// Colour of that line. `None`, the default, takes the theme's text colour.
+    pub value_area_low_color: Option<egui::Color32>,
+    /// Pattern of that line, solid by default.
+    pub value_area_low_style: LineStyle,
+    /// Write each row's volume inside its bar, with K, M and B suffixes, where the text fits.
+    /// Off by default.
+    pub values: bool,
+    /// Colour of those values. `None`, the default, writes white or black, whichever reads on
+    /// the bar.
+    pub values_color: Option<egui::Color32>,
+    /// Colour of the rows outside the volume value area, including opacity. `None`, the
+    /// default, fades `value_area_color` toward the background by
+    /// [`TPOConfig::outside_value_area_opacity`].
+    pub color: Option<egui::Color32>,
+    /// Colour of the rows inside the volume value area, including opacity. `None`, the
+    /// default, uses the chart's secondary axis text colour.
+    pub value_area_color: Option<egui::Color32>,
+    /// Draw the volume profile left of the TPO profile instead of right of it, the default.
+    pub left: bool,
+    /// Rows fade outside the TPO value area instead, and only while blocks and the value area
+    /// are drawn, while both colours are `None`: how profiles saved before these settings drew.
+    pub(crate) tpo_value_area_rows: bool,
+}
+
+impl TPOVolumeProfile {
+    /// The settings of a document saved before the volume profile had settings of its own.
+    pub(crate) fn saved_without_settings() -> Self {
+        Self {
+            tpo_value_area_rows: true,
+            ..Self::default()
+        }
+    }
+}
+
 /// How to render TPO entries on the chart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TPODisplayMode {
@@ -525,60 +620,86 @@ pub enum TPOColorMode {
     ByInitialBalance,
 }
 
-/// Length of a TPO profile.
+/// Unit of a TPO profile's length; [`TPOConfig::profile_periods`] counts how many each profile
+/// covers.
 ///
-/// Week and month profiles combine sessions by the trading date of each session's first bar.
-/// Their letters, point of control, value area and statistics cover all those sessions; the open
-/// and initial balance remain those of the first session. They hold whole sessions, ignoring
+/// Profiles longer than one session (a week, a month, or more than one day with
+/// [`TPOConfig::profile_periods`]) combine sessions by the trading date of each session's first
+/// bar. Their letters, point of control, value area and statistics cover all those sessions; the
+/// open and initial balance remain those of the first session. They hold whole sessions, ignoring
 /// [`TPOConfig::split_sessions`]. Explicit [`TPOConfig::splits`] still divide them, also at a
-/// session's open, and subsequent sessions of the period join the last part. [`TPOConfig::composites`] still join profiles whose
-/// first sessions open in a range. On daily and longer bars, a period no longer than the session
-/// changes nothing.
+/// session's open, and subsequent sessions of the period join the last part.
+/// [`TPOConfig::composites`] still join profiles whose first sessions open in a range. On daily
+/// and longer bars, a period no longer than the session changes nothing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum TPOProfilePeriod {
-    /// One profile per session.
+    /// Trading days: one profile per session, or per run of `profile_periods` trading dates.
     #[default]
     Session,
-    /// One profile per ISO week, Monday to Sunday, of the sessions' trading dates.
+    /// ISO weeks, Monday to Sunday, of the sessions' trading dates.
     Week,
-    /// One profile per calendar month of the sessions' trading dates.
+    /// Calendar months of the sessions' trading dates.
     Month,
 }
 
-impl TPOProfilePeriod {
-    /// The week or month of the bar's trading date; sessions never join by period.
-    pub(crate) fn key(
-        self,
+impl TPOConfig {
+    /// Whether profiles join sessions: a week or month period, or more than one day.
+    pub(crate) fn joins_sessions(&self) -> bool {
+        self.profile_period != TPOProfilePeriod::Session || self.profile_periods > 1
+    }
+
+    /// The profile period holding the bar at `time`, by its trading date.
+    pub(crate) fn period_key(
+        &self,
         sessions: &crate::model::ExchangeSessionProvider,
         time: DateTime<Utc>,
-    ) -> Option<(i32, u32)> {
-        match self {
-            Self::Session => None,
-            Self::Week | Self::Month => self.date_key(sessions.trading_date(time)),
-        }
+    ) -> Option<i64> {
+        self.joins_sessions()
+            .then(|| sessions.trading_date(time))
+            .and_then(|date| self.date_period_key(sessions, date))
     }
 
-    /// Calendar period of a custom session's own trading date.
-    pub(crate) fn date_key(self, date: chrono::NaiveDate) -> Option<(i32, u32)> {
-        match self {
-            Self::Session => None,
-            Self::Week => {
-                let week = date.iso_week();
-                Some((week.year(), week.week()))
+    /// The profile period holding trading date `date`, or `None` for one-day profiles, which
+    /// never join by period. Days: the first date, in days after 1970-01-01, of the run of
+    /// `profile_periods` trading dates of `sessions` that holds it, or of the run of as many
+    /// calendar days when nothing trades on or before it. Weeks: the run of ISO weeks counted
+    /// from Monday 1970-01-05. Months: the run of calendar months counted from January of year 0.
+    pub(crate) fn date_period_key(
+        &self,
+        sessions: &crate::model::ExchangeSessionProvider,
+        date: chrono::NaiveDate,
+    ) -> Option<i64> {
+        if !self.joins_sessions() {
+            return None;
+        }
+        let count = i64::from(self.profile_periods.max(1));
+        let epoch = DateTime::<Utc>::UNIX_EPOCH.date_naive();
+        Some(match self.profile_period {
+            TPOProfilePeriod::Session => sessions.trading_run(date, count, 0).map_or_else(
+                || {
+                    let day = (date - epoch).num_days();
+                    day - day.rem_euclid(count)
+                },
+                |first| (first - epoch).num_days(),
+            ),
+            TPOProfilePeriod::Week => {
+                let monday = chrono::NaiveDate::from_ymd_opt(1970, 1, 5).unwrap();
+                (date - monday).num_days().div_euclid(7).div_euclid(count)
             }
-            Self::Month => Some((date.year(), date.month())),
-        }
+            TPOProfilePeriod::Month => {
+                (i64::from(date.year()) * 12 + i64::from(date.month0())).div_euclid(count)
+            }
+        })
     }
-}
 
-impl TPOConfig {
     /// Whether a caption is enabled for a level the profiles draw.
     #[cfg(feature = "widget")]
     pub(crate) fn shows_captions(&self) -> bool {
         let labels = &self.labels;
         (labels.poc && self.show_poc)
-            || ((labels.value_area_high || labels.value_area_low) && self.show_value_area)
+            || (labels.value_area_high && self.show_value_area && self.show_value_area_high)
+            || (labels.value_area_low && self.show_value_area && self.show_value_area_low)
             || (labels.midpoint && self.show_midpoint)
             || ((labels.initial_balance_high || labels.initial_balance_low)
                 && self.show_initial_balance)
@@ -598,9 +719,9 @@ impl TPOConfig {
             || (self.extend_single_prints && self.show_single_prints)
     }
 
-    /// Only session profiles split at transitions between regular, extended and overnight hours.
+    /// Only one-day profiles split at transitions between regular, extended and overnight hours.
     pub(crate) fn split_hours(&self) -> bool {
-        self.split_sessions && self.profile_period == TPOProfilePeriod::Session
+        self.split_sessions && !self.joins_sessions()
     }
 
     /// The length of the periods on bars of `interval`: `period_minutes`, at least one minute, or
@@ -931,7 +1052,7 @@ fn row_ticks(grid: f64, instrument_tick: Option<f64>, extreme: f64) -> (f64, u64
 }
 
 /// Convert integer key back to price
-fn key_to_price(key: i64, tick_size: f64) -> f64 {
+pub(crate) fn key_to_price(key: i64, tick_size: f64) -> f64 {
     key as f64 * tick_size
 }
 
@@ -1077,8 +1198,8 @@ pub(crate) fn profile_parts(
 
 /// Transform bars into TPO profiles
 ///
-/// With `config.profile_period` a week or month, sessions opening in one form a single profile,
-/// as [`TPOProfilePeriod`] describes.
+/// With `config.profile_period` a week or month, or `config.profile_periods` above one, sessions
+/// opening in one period form a single profile, as [`TPOProfilePeriod`] describes.
 ///
 /// Sessions are the trading days of `clock`: the exchange sessions it carries,
 /// or calendar days in its time zone, split further at the moves between
@@ -1321,8 +1442,8 @@ fn profiles_for_parts(
     };
     let period = |profile: &TPOProfile, date: Option<chrono::NaiveDate>| {
         date.map_or_else(
-            || config.profile_period.key(&sessions, profile.session_date),
-            |date| config.profile_period.date_key(date),
+            || config.period_key(&sessions, profile.session_date),
+            |date| config.date_period_key(&sessions, date),
         )
     };
     for (profile, (opens, date)) in profiles.into_iter().zip(opened) {
@@ -1889,7 +2010,8 @@ mod tests {
         // 2024-03-05 is a Tuesday, 13:00 UTC is 08:00 in New York
         let start = Utc.with_ymd_and_hms(2024, 3, 5, 13, 0, 0).unwrap();
         let both_days = start..=start + Duration::days(1);
-        // (case, clock, bar minutes from `start`, split, composites, splits, period, profiles as (open, letters))
+        // (case, clock, bar minutes from `start`, split, composites, splits, period and count,
+        // profiles as (open, letters))
         type Case<'a> = (
             &'a str,
             BarClock,
@@ -1897,10 +2019,10 @@ mod tests {
             bool,
             Vec<RangeInclusive<DateTime<Utc>>>,
             Vec<i64>,
-            TPOProfilePeriod,
+            (TPOProfilePeriod, u32),
             &'a [(i64, &'a str)],
         );
-        let cases: [Case; 19] = [
+        let cases: [Case; 23] = [
             (
                 "exchange day across UTC midnight",
                 overnight,
@@ -1908,7 +2030,7 @@ mod tests {
                 false,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(600, "ABDt"), (2040, "A")],
             ),
             (
@@ -1919,7 +2041,7 @@ mod tests {
                 vec![],
                 vec![],
                 // Pre-market opens at 04:00, eight periods before the first bar at 08:00
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(0, "IJKLMNOPQRSTUVWXYZa")],
             ),
             (
@@ -1929,7 +2051,7 @@ mod tests {
                 true,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(0, "IJK"), (90, "ABCDEFGHIJKLM"), (480, "ABC")],
             ),
             (
@@ -1952,7 +2074,7 @@ mod tests {
                 true,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(720, "AB"), (1200, "AB"), (1530, "A")],
             ),
             // Post-market opens where regular hours close, inside its all-day extended window
@@ -1968,7 +2090,7 @@ mod tests {
                 true,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(540, "CD")],
             ),
             // No extended hours divide a lunch break, so 13:00 counts from the 09:00 open
@@ -1986,7 +2108,7 @@ mod tests {
                 true,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(300, "I")],
             ),
             (
@@ -1996,7 +2118,7 @@ mod tests {
                 false,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(0, "ABC")],
             ),
             (
@@ -2006,7 +2128,7 @@ mod tests {
                 false,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(0, "AB"), (1440, "AB")],
             ),
             (
@@ -2016,7 +2138,7 @@ mod tests {
                 false,
                 vec![both_days],
                 vec![],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(0, "ABAB")],
             ),
             (
@@ -2026,7 +2148,7 @@ mod tests {
                 false,
                 vec![],
                 vec![60],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(0, "AB"), (60, "CD")],
             ),
             (
@@ -2036,7 +2158,7 @@ mod tests {
                 false,
                 vec![],
                 vec![60],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(0, "AB"), (90, "D")],
             ),
             (
@@ -2046,7 +2168,7 @@ mod tests {
                 false,
                 vec![],
                 vec![1000],
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 &[(0, "AB"), (1440, "AB")],
             ),
             (
@@ -2056,7 +2178,7 @@ mod tests {
                 false,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Week,
+                (TPOProfilePeriod::Week, 1),
                 &[(0, "ABAA"), (8640, "A")],
             ),
             (
@@ -2066,7 +2188,7 @@ mod tests {
                 false,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Month,
+                (TPOProfilePeriod::Month, 1),
                 &[(0, "AA"), (38880, "A")],
             ),
             (
@@ -2076,7 +2198,7 @@ mod tests {
                 false,
                 vec![],
                 vec![30],
-                TPOProfilePeriod::Week,
+                (TPOProfilePeriod::Week, 1),
                 &[(0, "A"), (30, "BCA")],
             ),
             (
@@ -2086,7 +2208,7 @@ mod tests {
                 false,
                 vec![],
                 vec![1440],
-                TPOProfilePeriod::Week,
+                (TPOProfilePeriod::Week, 1),
                 &[(0, "AB"), (1440, "ABA")],
             ),
             (
@@ -2096,7 +2218,7 @@ mod tests {
                 false,
                 vec![],
                 vec![1440],
-                TPOProfilePeriod::Month,
+                (TPOProfilePeriod::Month, 1),
                 &[(0, "AB"), (1440, "ABA")],
             ),
             (
@@ -2106,8 +2228,49 @@ mod tests {
                 false,
                 vec![start..=start + Duration::minutes(8640)],
                 vec![],
-                TPOProfilePeriod::Week,
+                (TPOProfilePeriod::Week, 1),
                 &[(0, "AA")],
+            ),
+            // Runs of days, weeks and months are counted from 1970, whatever bars are loaded.
+            (
+                "two UTC days",
+                Timeframe::Min30.into(),
+                vec![1440, 1470, 2880, 4320],
+                false,
+                vec![],
+                vec![],
+                (TPOProfilePeriod::Session, 2),
+                &[(1440, "ABA"), (4320, "A")],
+            ),
+            (
+                "two trading days span a weekend",
+                stock.clone(),
+                vec![4320, 8640, 10080],
+                false,
+                vec![],
+                vec![],
+                (TPOProfilePeriod::Session, 2),
+                &[(4320, "II"), (10080, "I")],
+            ),
+            (
+                "two ISO weeks",
+                Timeframe::Min30.into(),
+                vec![0, 8640, 20160],
+                false,
+                vec![],
+                vec![],
+                (TPOProfilePeriod::Week, 2),
+                &[(0, "AA"), (20160, "A")],
+            ),
+            (
+                "a quarter of months",
+                Timeframe::Min30.into(),
+                vec![0, 40320, 82080, 169920],
+                false,
+                vec![],
+                vec![],
+                (TPOProfilePeriod::Month, 3),
+                &[(0, "A"), (40320, "AA"), (169920, "A")],
             ),
             (
                 "week profiles keep whole sessions",
@@ -2116,12 +2279,20 @@ mod tests {
                 true,
                 vec![],
                 vec![],
-                TPOProfilePeriod::Week,
+                (TPOProfilePeriod::Week, 1),
                 &[(0, "IJKLMNOPQRSTUVWXYZa")],
             ),
         ];
-        for (case, clock, minutes, split_sessions, composites, splits, profile_period, expected) in
-            cases
+        for (
+            case,
+            clock,
+            minutes,
+            split_sessions,
+            composites,
+            splits,
+            (profile_period, profile_periods),
+            expected,
+        ) in cases
         {
             let bars: Vec<_> = minutes
                 .iter()
@@ -2131,6 +2302,7 @@ mod tests {
                 tick_size: 1.0,
                 split_sessions,
                 profile_period,
+                profile_periods,
                 composites,
                 splits: splits
                     .into_iter()

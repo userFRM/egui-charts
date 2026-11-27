@@ -194,10 +194,12 @@ mod tests {
                         assert!(mesh.vertices.iter().all(|v| v.pos.x <= coords.idx_to_x(1)));
                         let outer_y = map.price_to_y(sign * 100.0);
                         let inner_y = map.price_to_y(sign * 40.0);
+                        // The ramp ends at ±120, so 100 is three quarters of the end colour:
+                        // 128 * (100 - 40) / (120 - 40) = 96.
                         assert!(
                             mesh.vertices
                                 .iter()
-                                .any(|v| (v.pos.y - outer_y).abs() < 1e-4 && v.color.a() == 128)
+                                .any(|v| (v.pos.y - outer_y).abs() < 1e-4 && v.color.a() == 96)
                         );
                         assert!(
                             mesh.vertices

@@ -11,6 +11,7 @@ use egui::Color32;
 ///
 /// The `period` and `adx_smoothing` inputs are independent; setting either leaves the other.
 /// A template saved before the smoothing had an input of its own restores it equal to `period`.
+/// Values read to four decimals.
 #[derive(Clone, Debug)]
 pub struct DirectionalMovement {
     /// Period of the directional indicators (typically 14)
@@ -107,6 +108,10 @@ impl Indicator for DirectionalMovement {
 
     fn values(&self) -> &IndicatorValues {
         &self.values
+    }
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Fixed(4)
     }
 
     fn colors(&self) -> Vec<Color32> {

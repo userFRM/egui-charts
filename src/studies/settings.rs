@@ -311,6 +311,7 @@ pub(super) fn declared_settings<S: Indicator + ?Sized>(study: &S) -> StudySettin
         fill_between_levels,
         level_fill_color,
         mfi_auto_range: false,
+        tsi_unit_range: false,
         untagged_plots: (0..study.line_count())
             .filter(|&line| !study.plot_tagged(line))
             .collect(),
@@ -353,9 +354,28 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             .iter()
             .map(|level| level.0)
             .eq([-20.0, -80.0, -50.0]);
+    // The built-in Trend Strength Index, saved with its zero guide alone (or none) before it
+    // drew guides at 1 and -1, shading and two decimals.
+    let older_tsi = study.name() == "Trend Strength Index"
+        && study
+            .pane()
+            .levels
+            .iter()
+            .map(|level| level.0)
+            .eq([0.0, 1.0, -1.0])
+        && settings.levels.len() < 2;
+    // The built-in Choppiness Index, saved with its two bands before its middle line.
+    let chop = study.name() == "CHOP"
+        && study
+            .pane()
+            .levels
+            .iter()
+            .map(|level| level.0)
+            .eq([61.8, 38.2, 50.0]);
     if (study.name() == "Stochastic"
         || (study.name() == "MFI" && guides_since(study))
-        || williams_r)
+        || williams_r
+        || chop)
         && settings.levels.len() == 2
         && levels.len() == 3
     {
@@ -371,7 +391,13 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         settings.level_fill_color = color;
     } else if matches!(
         study.name(),
-        "KST" | "CMF" | "Force Index" | "Advance/Decline Ratio (Bars)"
+        "KST"
+            | "CMF"
+            | "Force Index"
+            | "Advance/Decline Ratio (Bars)"
+            | "Volume Delta"
+            | "Cumulative Volume Delta"
+            | "PVO"
     ) && settings.levels.is_empty()
         && levels.len() == 1
     {
@@ -395,6 +421,22 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             },
         ];
         settings.fill_between_levels = false;
+    } else if older_tsi {
+        // Keep the saved zero style, add the band guides hidden and keep reading three decimals.
+        let zero = settings.levels.first().copied().unwrap_or(levels[0]);
+        settings.levels = vec![
+            zero,
+            LevelStyle {
+                visible: false,
+                ..levels[1]
+            },
+            LevelStyle {
+                visible: false,
+                ..levels[2]
+            },
+        ];
+        settings.precision.get_or_insert(3);
+        settings.tsi_unit_range = true;
     } else if settings.levels.is_empty() && guides_since(study) {
         // Older saves drew no guides or band; showing them later uses the declared styles.
         settings.levels = levels
@@ -446,7 +488,8 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         .gradients
         .extend(gradients[saved..].iter().map(|fill| GradientStyle {
             colors: fill.colors,
-            visible: true,
+            // Older Trend Strength Index saves drew no shading.
+            visible: !older_tsi,
         }));
     let fills = study.fills();
     let saved = settings.fills.len().min(fills.len());
@@ -602,6 +645,10 @@ pub struct StudySettings {
     /// Keep automatic fitting for an MFI saved before it declared a fixed range.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) mfi_auto_range: bool,
+    /// Keep the -1 to 1 range of a Trend Strength Index saved before its band guides while
+    /// both stay hidden.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) tsi_unit_range: bool,
     /// Plots, as indices into [`plots`](Self::plots), whose last value has no tag on the price
     /// scale while the chart shows study values; the legend still shows it. A study starts
     /// with the plots its [`Indicator::plot_tagged`] leaves out, every plot of a study with more
@@ -652,6 +699,7 @@ impl Default for StudySettings {
             fill_between_levels: false,
             level_fill_color: Color32::TRANSPARENT,
             mfi_auto_range: false,
+            tsi_unit_range: false,
             untagged_plots: Vec::new(),
             price_line_plots: Vec::new(),
             plot_variants: Vec::new(),
@@ -922,6 +970,16 @@ impl ConfiguredStudy {
             && guides_since(self.study.as_ref())
         {
             pane.range = None;
+        }
+        if self.settings.tsi_unit_range
+            && self.study.name() == "Trend Strength Index"
+            && self
+                .settings
+                .levels
+                .get(1..3)
+                .is_some_and(|bands| bands.iter().all(|band| !band.visible))
+        {
+            pane.range = Some((-1.0, 1.0));
         }
         pane
     }
@@ -2971,6 +3029,14 @@ mod tests {
             (Box::new(super::super::Stochastic::default()), Some(2)),
             (Box::new(super::super::OnBalanceVolume::default()), None),
             (
+                Box::new(super::super::DirectionalMovement::default()),
+                Some(4),
+            ),
+            (
+                Box::new(super::super::TrendStrengthIndex::default()),
+                Some(2),
+            ),
+            (
                 Box::new(
                     super::super::CustomIndicator::new("Small", |_| Vec::new())
                         .with_value_format(crate::scales::StudyFormat::Fixed(4)),
@@ -4646,15 +4712,25 @@ mod tests {
             study.apply_settings(&[], absent).unwrap();
             assert_eq!(study.settings(), defaults);
         }
-        // Saved before the lower interval named its automatic choice, this template keeps
-        // its unset input and every plot style on the chart's interval.
+        // Saved before the lower interval named its automatic choice and before the zero level,
+        // this template keeps its unset input, every plot style on the chart's interval and draws
+        // no zero level.
         let saved = r#"{"name":"Volume Delta","inputs":[["lower_interval",{"Timeframe":null}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VolumeDelta.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
         let template = serde_json::from_str::<crate::studies::StudyTemplate>(saved).unwrap();
         let mut older = template.create().unwrap();
         older.set_timeframe(Timeframe::Min5);
         let restored = crate::studies::StudyTemplate::from_study(older.as_ref());
         assert_eq!(restored.inputs, template.inputs);
-        assert_eq!(restored.settings, template.settings);
+        let mut expected = template.settings.clone();
+        expected.levels = vec![LevelStyle {
+            value: None,
+            color: crate::studies::palette::GRAY,
+            pattern: LineStyle::Dashed,
+            width: 1.0,
+            visible: false,
+            price_line: false,
+        }];
+        assert_eq!(restored.settings, expected);
         assert_eq!(restored.visible, template.visible);
         assert_eq!(restored.scale, template.scale);
         // Profiles saved with finer bars keep their presentation and both saved interval inputs.
@@ -4859,8 +4935,9 @@ mod tests {
         assert_eq!(values(&adx), [25.0]);
     }
 
-    /// The Aroon Oscillator, Bollinger Bands %b, CCI and Money Flow Index open with their usual
-    /// guides and bands. Older saves keep their guide styles and leave new guides and fills hidden;
+    /// The Aroon Oscillator, Bollinger Bands %b, CCI, Money Flow Index, Volume Delta, Cumulative
+    /// Volume Delta, PVO, Choppiness Index and Trend Strength Index open with their usual guides
+    /// and bands. Older saves keep their guide styles and leave new guides and fills hidden;
     /// a guide shown since keeps its style through a template. Awesome Oscillator opens as
     /// columns and keeps a saved histogram; Balance of Power keeps its saved smoothing.
     #[test]
@@ -4879,7 +4956,7 @@ mod tests {
         let (gray, faint) = (palette::MUTED, palette::MUTED.gamma_multiply_u8(128));
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 26);
         let (dashed, solid) = (LineStyle::Dashed, LineStyle::Solid);
-        let rows: [Row; 4] = [
+        let rows: [Row; 9] = [
             (
                 "Aroon Oscillator",
                 vec![
@@ -4959,6 +5036,59 @@ mod tests {
                 Color32::from_rgba_unmultiplied(126, 87, 194, 26),
                 vec![],
             ),
+            (
+                "Volume Delta",
+                vec![(0.0, palette::GRAY, "Zero", dashed)],
+                false,
+                None,
+                None,
+                Color32::TRANSPARENT,
+                vec![],
+            ),
+            (
+                "Cumulative Volume Delta",
+                vec![(0.0, palette::GRAY, "Zero", dashed)],
+                false,
+                None,
+                None,
+                Color32::TRANSPARENT,
+                vec![],
+            ),
+            (
+                "PVO",
+                vec![(0.0, faint, "Zero Line", dashed)],
+                false,
+                None,
+                None,
+                Color32::TRANSPARENT,
+                vec![],
+            ),
+            (
+                "CHOP",
+                vec![
+                    (61.8, gray, "Upper Band", dashed),
+                    (38.2, gray, "Lower Band", dashed),
+                    (50.0, faint, "Middle Band", solid),
+                ],
+                true,
+                Some([0, 1]),
+                None,
+                Color32::from_rgba_unmultiplied(33, 150, 243, 26),
+                vec![],
+            ),
+            (
+                "Trend Strength Index",
+                vec![
+                    (0.0, palette::GRAY.gamma_multiply_u8(128), "Zero", dashed),
+                    (1.0, palette::UP, "Bullish Band", dashed),
+                    (-1.0, palette::DOWN, "Bearish Band", dashed),
+                ],
+                false,
+                None,
+                Some((-1.1, 1.1)),
+                Color32::TRANSPARENT,
+                vec![],
+            ),
         ];
         let hidden = |level: LevelStyle| LevelStyle {
             visible: false,
@@ -5023,9 +5153,26 @@ mod tests {
                     "{name}"
                 );
             }
-            // The Aroon Oscillator drew its zero guide before; the others drew none.
+            // The Aroon Oscillator and Trend Strength Index drew their zero guide before, the
+            // Choppiness Index its outer bands; the others drew none.
             let declared = defaults.levels.clone();
-            let older: Vec<(Vec<LevelStyle>, Vec<LevelStyle>)> = if name == "Aroon Oscillator" {
+            let older: Vec<(Vec<LevelStyle>, Vec<LevelStyle>)> = if name == "Trend Strength Index" {
+                let moved = LevelStyle {
+                    value: Some(0.25),
+                    width: 2.0,
+                    ..declared[0]
+                };
+                vec![
+                    (
+                        vec![moved],
+                        vec![moved, hidden(declared[1]), hidden(declared[2])],
+                    ),
+                    (
+                        Vec::new(),
+                        vec![declared[0], hidden(declared[1]), hidden(declared[2])],
+                    ),
+                ]
+            } else if name == "Aroon Oscillator" {
                 let moved = LevelStyle {
                     value: Some(5.0),
                     width: 2.0,
@@ -5049,6 +5196,11 @@ mod tests {
                     ),
                     (Vec::new(), declared.iter().copied().map(hidden).collect()),
                 ]
+            } else if name == "CHOP" {
+                vec![(
+                    declared[..2].to_vec(),
+                    vec![declared[0], declared[1], hidden(declared[2])],
+                )]
             } else {
                 vec![(Vec::new(), declared.iter().copied().map(hidden).collect())]
             };
@@ -5062,7 +5214,12 @@ mod tests {
                 assert!(!study.pane().fill_between_levels, "{name}");
                 assert_eq!(
                     study.pane().range,
-                    if name == "MFI" && empty { None } else { range },
+                    match name {
+                        "MFI" if empty => None,
+                        // Older saves keep the range they drew with while the band guides stay hidden.
+                        "Trend Strength Index" => Some((-1.0, 1.0)),
+                        _ => range,
+                    },
                     "{name}"
                 );
                 let shown: Vec<_> = study.pane().levels.iter().map(|level| level.1).collect();
