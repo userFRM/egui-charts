@@ -2867,6 +2867,7 @@ mod tests {
 
     /// Guards #4265: with automatic rows, every level offered for an alert is a row the chart
     /// draws for that view, whichever bars the view starts at.
+    #[cfg(feature = "drawings")]
     #[test]
     fn offered_levels_sit_on_painted_automatic_rows() {
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
