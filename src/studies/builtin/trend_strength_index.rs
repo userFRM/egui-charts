@@ -17,7 +17,10 @@ use std::collections::VecDeque;
 /// the same period.
 ///
 /// Values below zero are drawn in the plot's Below zero colour, the down colour by default, and
-/// other values in the plot colour, the up colour by default.
+/// other values in the plot colour, the up colour by default. The pane draws a zero guide and
+/// guides at 1 and -1 in the up and down colours, and shades between the line and zero from
+/// transparent at 0 to the up colour at 10% opacity at 1 and the down colour at -1. Values read
+/// to two decimals.
 #[derive(Clone, Debug)]
 pub struct TrendStrengthIndex {
     period: usize,
@@ -143,15 +146,44 @@ impl Indicator for TrendStrengthIndex {
     }
 
     fn value_format(&self) -> crate::scales::StudyFormat {
-        crate::scales::StudyFormat::Fixed(3)
+        crate::scales::StudyFormat::Fixed(2)
     }
 
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
-            range: Some((-1.0, 1.0)),
-            levels: vec![(0.0, palette::GRAY.gamma_multiply_u8(128), "Zero")],
+            // A margin keeps the guides at 1 and -1 inside the pane.
+            range: Some((-1.1, 1.1)),
+            levels: vec![
+                (0.0, palette::GRAY.gamma_multiply_u8(128), "Zero"),
+                (1.0, palette::UP, "Bullish Band"),
+                (-1.0, palette::DOWN, "Bearish Band"),
+            ],
             ..Default::default()
         }
+    }
+
+    fn gradients(&self) -> Vec<crate::studies::StudyGradient> {
+        [
+            (
+                "Bullish shading",
+                [1.0, 0.0],
+                [palette::UP.gamma_multiply_u8(26), Color32::TRANSPARENT],
+            ),
+            (
+                "Bearish shading",
+                [0.0, -1.0],
+                [Color32::TRANSPARENT, palette::DOWN.gamma_multiply_u8(26)],
+            ),
+        ]
+        .into_iter()
+        .map(|(name, range, colors)| crate::studies::StudyGradient {
+            name,
+            plot: 0,
+            baseline: 0.0,
+            range,
+            colors,
+        })
+        .collect()
     }
 
     fn is_overlay(&self) -> bool {
@@ -279,11 +311,129 @@ mod tests {
         assert_eq!(colours(restored.as_ref()), [gold; 5]);
     }
 
+    /// A new study shades both sides of zero; a save from before the band guides and shading keeps
+    /// its zero guide and three decimals, with the new guides and shading hidden.
+    #[test]
+    fn older_saves_keep_their_zero_guide_decimals_and_no_shading() {
+        use crate::studies::{ConfiguredStudy, LevelStyle, StudyTemplate};
+        let ramps = |study: &dyn Indicator| -> Vec<_> {
+            study
+                .gradients()
+                .iter()
+                .map(|fill| (fill.name, fill.plot, fill.baseline, fill.range, fill.colors))
+                .collect()
+        };
+        let (bull, bear) = (
+            palette::UP.gamma_multiply_u8(26),
+            palette::DOWN.gamma_multiply_u8(26),
+        );
+        let clear = Color32::TRANSPARENT;
+        let study = ConfiguredStudy::new(Box::new(TrendStrengthIndex::default()));
+        assert_eq!(
+            ramps(&study),
+            [
+                ("Bullish shading", 0, 0.0, [1.0, 0.0], [bull, clear]),
+                ("Bearish shading", 0, 0.0, [0.0, -1.0], [clear, bear]),
+            ]
+        );
+        assert!(study.settings().gradients.iter().all(|fill| fill.visible));
+        // Saved in gold before the study had a Below zero colour, band guides or shading.
+        let saved = r#"{"name":"Trend Strength Index","inputs":[["period",{"Length":3}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TrendStrengthIndex.html","plots":[{"color":[255,215,0,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":3,"hidden_intervals":[],"interval_range":"All","levels":[{"value":null,"color":[60,62,67,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[16,13,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#;
+        let template = serde_json::from_str::<StudyTemplate>(saved).unwrap();
+        let declared = study.settings().levels;
+        let hidden = |level: LevelStyle| LevelStyle {
+            visible: false,
+            ..level
+        };
+        let restored = template.create().unwrap();
+        assert_eq!(
+            restored.settings().levels,
+            [
+                template.settings.levels[0],
+                hidden(declared[1]),
+                hidden(declared[2])
+            ]
+        );
+        assert!(
+            restored
+                .settings()
+                .gradients
+                .iter()
+                .all(|fill| !fill.visible)
+        );
+        assert!(
+            restored
+                .gradients()
+                .iter()
+                .all(|fill| fill.colors == [clear; 2])
+        );
+        assert_eq!(restored.precision(), Some(3));
+        // It keeps its range until a band guide is shown, which then opens a margin around it.
+        assert_eq!(study.pane().range, Some((-1.1, 1.1)));
+        assert_eq!(restored.pane().range, Some((-1.0, 1.0)));
+        let mut restored = StudyTemplate::from_study(restored.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(restored.pane().range, Some((-1.0, 1.0)));
+        let mut shown = restored.settings();
+        shown.levels[2].visible = true;
+        restored.apply_settings(&[], shown).unwrap();
+        assert_eq!(restored.pane().range, Some((-1.1, 1.1)));
+        let unset = saved.replace(r#""precision":3"#, r#""precision":null"#);
+        let restored = serde_json::from_str::<StudyTemplate>(&unset)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(restored.precision(), Some(3));
+    }
+
     /// A missing price blanks every window that holds it and keeps later bar positions true.
     #[test]
     fn missing_price_blanks_its_windows() {
         let got = rolling(&[1.0, 2.0, f64::NAN, 4.0, 5.0, 6.0], 3);
         assert_eq!(got[..5], [None; 5]);
         assert!((got[5].unwrap() - 1.0).abs() < 1e-12);
+    }
+
+    /// A new study's pane draws its guides at 1 and -1 whole inside the pane, in both themes.
+    #[test]
+    #[cfg(feature = "widget")]
+    fn band_guides_paint_inside_the_pane() {
+        use crate::widget::test_frames::{chart, run};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = egui::Context::default();
+            // Closes that cycle keep the line near zero, away from the guides.
+            let mut chart = chart(&[100.0, 108.0, 104.0], &[110.0, 115.0, 113.0]);
+            chart.set_theme(&ctx, &theme);
+            chart.add_indicator(Box::new(TrendStrengthIndex::default()));
+            run(&ctx, &mut chart, 0.0, Vec::new());
+            let (shapes, _) = run(&ctx, &mut chart, 0.1, Vec::new());
+            let pane = chart.get_rendered_indicator_panes()[0].clone();
+            let rect = pane.chart_rect;
+            for (value, color) in [(1.0, palette::UP), (-1.0, palette::DOWN)] {
+                let y = rect.bottom()
+                    - ((value - pane.y_min) / (pane.y_max - pane.y_min)) as f32 * rect.height();
+                let dashes: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|(clip, shape)| match shape {
+                        egui::Shape::LineSegment { points, stroke }
+                            if stroke.color == color
+                                && points[0].y == points[1].y
+                                && (points[0].y - y).abs() < 0.5 =>
+                        {
+                            Some((*clip, points[0].y, stroke.width))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!dashes.is_empty(), "{value}");
+                for (clip, y, width) in dashes {
+                    assert!(
+                        y - width / 2.0 >= clip.top() && y + width / 2.0 <= clip.bottom(),
+                        "{value}: {y} in {clip:?}"
+                    );
+                }
+            }
+        }
     }
 }

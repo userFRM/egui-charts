@@ -47,17 +47,34 @@ impl SymbolTab {
         );
         ui.space_sm();
         FormGrid::new("symbol_style_grid").show(ui, |ui| {
-            if !settings.chart_type.uses_ohlc() {
+            let tpo = settings.chart_type == ChartType::TimePriceOpportunity;
+            if !settings.chart_type.uses_ohlc() || tpo {
                 let label = ui.label(l10n::text(ui.ctx(), "Price source"));
                 ui.label_inputs_by(label.id, |ui| {
-                    let source = if settings.chart_type == ChartType::Columns {
-                        &mut settings.chart_type_params.styles.columns.price_source
-                    } else {
-                        &mut settings.price_source
+                    let styles = &mut settings.chart_type_params.styles;
+                    let source = match settings.chart_type {
+                        ChartType::Columns => &mut styles.columns.price_source,
+                        ChartType::TimePriceOpportunity => &mut styles.tpo_price_source,
+                        _ => &mut settings.price_source,
                     };
                     Self::price_source_dropdown(ui, source);
                 });
                 ui.end_row();
+            }
+            if tpo {
+                let line = &mut settings.chart_type_params.styles.tpo_line;
+                ui.label(l10n::text(ui.ctx(), "Line colour"));
+                // The theme's default shows as the colour it draws, until one is picked.
+                let mut shown = if line.color == Color32::PLACEHOLDER {
+                    ui.active_theme().ui.accent
+                } else {
+                    line.color
+                };
+                if Self::color_picker(ui, &mut shown) {
+                    line.color = shown;
+                }
+                ui.end_row();
+                Self::line_width_and_style(ui, line, "tpo_line_style");
             }
             Self::parameters(ui, settings);
             let styles = &mut settings.chart_type_params.styles;
@@ -1165,14 +1182,23 @@ impl SymbolTab {
                         ],
                         |period| {
                             match period {
-                                TPOProfilePeriod::Session => "Session",
-                                TPOProfilePeriod::Week => "Week",
-                                TPOProfilePeriod::Month => "Month",
+                                TPOProfilePeriod::Session => "Days",
+                                TPOProfilePeriod::Week => "Weeks",
+                                TPOProfilePeriod::Month => "Months",
                             }
                             .to_owned()
                         },
                     );
                 });
+                ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Profile length"));
+                // A host count above the range survives an unedited Ok.
+                ui.add(
+                    egui::DragValue::new(&mut params.tpo_profile_periods)
+                        .range(1..=100)
+                        .clamp_existing_to_range(false),
+                )
+                .labelled_by(label.id);
                 ui.end_row();
                 let label = ui.label(l10n::text(ui.ctx(), "Initial balance"));
                 ui.label_inputs_by(label.id, |ui| {
@@ -1201,6 +1227,7 @@ impl SymbolTab {
                     ui.checkbox(enabled, "").labelled_by(label.id);
                     ui.end_row();
                 }
+                Self::tpo_volume(ui, params);
                 let mut poor = [
                     params.tpo_poor_high || params.tpo_poor_highs_lows,
                     params.tpo_poor_low || params.tpo_poor_highs_lows,
@@ -1265,7 +1292,7 @@ impl SymbolTab {
                 .labelled_by(label.id);
                 ui.end_row();
                 // One-day profiles choose their hours as session volume profiles do.
-                if params.tpo_profile_period == TPOProfilePeriod::Session {
+                if !params.tpo_joins_sessions() {
                     let mut hours = params.tpo_hours();
                     Self::profile_session(ui, "Hours", &mut hours);
                     if hours != params.tpo_hours() {
@@ -1290,6 +1317,14 @@ impl SymbolTab {
                 let label = ui.label(l10n::text(ui.ctx(), "Letters"));
                 ui.checkbox(&mut params.tpo_letters, "")
                     .labelled_by(label.id);
+                ui.end_row();
+                // Without letters, blocks are the only display.
+                let label = ui.label(l10n::text(ui.ctx(), "Blocks"));
+                ui.add_enabled(
+                    params.tpo_letters,
+                    egui::Checkbox::without_text(&mut params.tpo_blocks),
+                )
+                .labelled_by(label.id);
                 ui.end_row();
                 ui.checkbox(
                     &mut params.tpo_colored_blocks,
@@ -1492,6 +1527,58 @@ impl SymbolTab {
                 ui.end_row();
             }
         }
+    }
+
+    /// The TPO volume profile's levels, values, colours and side, editable while it is drawn.
+    fn tpo_volume(ui: &mut Ui, params: &mut ChartTypeParams) {
+        let enabled = params.tpo_volume_profile;
+        let opacity = f32::from(params.tpo_outside_value_area_opacity.min(100)) / 100.0;
+        let volume = &mut params.tpo_volume;
+        for (name, shown) in [
+            ("Volume point of control", &mut volume.poc),
+            ("Volume value area high", &mut volume.value_area_high),
+            ("Volume value area low", &mut volume.value_area_low),
+            ("Volume values", &mut volume.values),
+        ] {
+            let label = ui.label(l10n::text(ui.ctx(), name));
+            ui.add_enabled(enabled, egui::Checkbox::without_text(shown))
+                .labelled_by(label.id);
+            ui.end_row();
+        }
+        // Defaults show as the colours they draw, until one is picked.
+        let chart = ui.active_theme().chart;
+        let inside = volume.value_area_color.unwrap_or(chart.axis_text_secondary);
+        let outside = chart.bg.lerp_to_gamma(inside, opacity);
+        for (name, color, default) in [
+            ("Volume colour", &mut volume.color, outside),
+            (
+                "Volume value area colour",
+                &mut volume.value_area_color,
+                inside,
+            ),
+        ] {
+            ui.label(l10n::text(ui.ctx(), name));
+            let mut shown = color.unwrap_or(default);
+            if ui
+                .add_enabled_ui(enabled, |ui| Self::color_picker(ui, &mut shown))
+                .inner
+            {
+                *color = Some(shown);
+            }
+            ui.end_row();
+        }
+        let label = ui.label(l10n::text(ui.ctx(), "Volume placement"));
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "tpo_volume_placement",
+                    &mut volume.left,
+                    [true, false],
+                    |left| if *left { "Left" } else { "Right" }.to_owned(),
+                );
+            })
+        });
+        ui.end_row();
     }
 
     fn price_source_dropdown(ui: &mut Ui, source: &mut PriceSource) {

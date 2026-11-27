@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 
 #[path = "live.rs"]
 mod live;
-pub use live::StrategyFill;
 #[cfg(feature = "ui")]
 pub(crate) use live::same_bars;
+pub use live::{StrategyAlert, StrategyFill};
 
 use crate::data::StudyDataRequest;
 use crate::model::range_bar::price_path;
@@ -434,17 +434,121 @@ pub trait Strategy {
     }
 }
 
+/// The id of a strategy order with the comment and alert message its fills carry. Every order
+/// call of [`StrategyContext`] takes one where it takes an id, and a `&str` or `String` converts
+/// into an id without texts, so `context.entry("Long", ..)` places the same order as before.
+///
+/// ```
+/// use egui_charts::model::{Bar, OrderSide, OrderType, Timeframe};
+/// use egui_charts::strategies::{
+///     Backtest, OrderTag, Strategy, StrategyAlertFrequency, StrategyContext,
+/// };
+///
+/// struct Breakout;
+///
+/// impl Strategy for Breakout {
+///     fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+///         if context.position() == 0.0 {
+///             let tag = OrderTag::new("Long")
+///                 .with_comment("Breakout")
+///                 .with_alert_message("Bought the breakout");
+///             context.entry(tag, OrderSide::Buy, 1.0, OrderType::Market);
+///         } else {
+///             context.alert("Holding the breakout", StrategyAlertFrequency::OncePerBar);
+///         }
+///     }
+/// }
+///
+/// let time = |minute: i64| chrono::DateTime::from_timestamp(minute * 60, 0).unwrap();
+/// let bars: Vec<_> = (0..3)
+///     .map(|minute| Bar::new(time(minute), 100.0, 101.0, 99.0, 100.0, 1.0))
+///     .collect();
+/// let mut run = Backtest::new("Breakout", "SYM", Timeframe::Min1, 10_000.0);
+/// // The last bar is still forming: the first bar's entry fills as the second opens.
+/// let fills = run.update(&mut Breakout, &bars, &[]);
+/// assert_eq!(fills[0].comment.as_deref(), Some("Breakout"));
+/// assert_eq!(fills[0].alert_message.as_deref(), Some("Bought the breakout"));
+/// assert_eq!(run.new_alerts()[0].message, "Holding the breakout");
+/// assert_eq!(run.new_alerts()[0].time, bars[1].time);
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OrderTag {
+    /// The order's id, as [`StrategyContext::cancel`] and [`StrategyFill::order_id`] name it.
+    pub id: String,
+    /// Text the order's fills carry in [`StrategyFill::comment`].
+    pub comment: Option<String>,
+    /// Text the order's fills carry in [`StrategyFill::alert_message`], which an alert on the
+    /// fills shows when it has no message of its own.
+    pub alert_message: Option<String>,
+}
+
+impl OrderTag {
+    /// An id without texts.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            ..Self::default()
+        }
+    }
+
+    /// The tag with `comment`.
+    pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
+        self.comment = Some(comment.into());
+        self
+    }
+
+    /// The tag with `alert_message`.
+    pub fn with_alert_message(mut self, alert_message: impl Into<String>) -> Self {
+        self.alert_message = Some(alert_message.into());
+        self
+    }
+}
+
+impl From<&str> for OrderTag {
+    fn from(id: &str) -> Self {
+        Self::new(id)
+    }
+}
+
+impl From<String> for OrderTag {
+    fn from(id: String) -> Self {
+        Self::new(id)
+    }
+}
+
+impl From<&String> for OrderTag {
+    fn from(id: &String) -> Self {
+        Self::new(id.as_str())
+    }
+}
+
+/// How often [`StrategyContext::alert`] notifies on one bar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StrategyAlertFrequency {
+    /// On any decision of the bar, forming or closed, and after its fills.
+    #[default]
+    OncePerBar,
+    /// Only on the decision of the closed bar, never on a forming bar or after a fill.
+    OncePerBarClose,
+}
+
 /// What a [`Strategy`] sees at a decision: the bars up to it and the open position. It places
 /// and cancels working orders by id.
 ///
 /// An order placed with the id of a working order replaces it, keeping its original place
 /// among orders reached at the same point; an identical request leaves the working order as it
 /// is. Working orders stay until they fill or are cancelled. A quantity must be positive and
-/// finite and a price finite; an order with any other is ignored.
+/// finite and a price finite; an order with any other is ignored. Each order call takes an id or
+/// an [`OrderTag`] with a comment and an alert message for the order's fills; placing an order
+/// again with only other texts keeps it working with the new texts.
 pub struct StrategyContext<'a> {
     bars: &'a [Bar],
     position: f64,
     orders: &'a mut Vec<Working>,
+    /// The alert requests of this decision.
+    alerts: &'a mut Vec<(String, StrategyAlertFrequency)>,
     price: f64,
     equity: f64,
     after_fill: bool,
@@ -529,7 +633,7 @@ impl StrategyContext<'_> {
     /// entries are ignored; [`exit_trailing`](Self::exit_trailing) trails exits.
     pub fn entry(
         &mut self,
-        id: impl Into<String>,
+        id: impl Into<OrderTag>,
         side: OrderSide,
         quantity: impl Into<Option<f64>>,
         order_type: OrderType,
@@ -552,7 +656,7 @@ impl StrategyContext<'_> {
     /// closed or reversed, the exit is cancelled.
     pub fn exit(
         &mut self,
-        id: impl Into<String>,
+        id: impl Into<OrderTag>,
         quantity: Option<f64>,
         take_profit: Option<f64>,
         stop_loss: Option<f64>,
@@ -579,7 +683,7 @@ impl StrategyContext<'_> {
     /// a queued entry it is cancelled when the position closes or reverses.
     pub fn exit_relative(
         &mut self,
-        id: impl Into<String>,
+        id: impl Into<OrderTag>,
         side: OrderSide,
         take_profit: f64,
         stop_loss: f64,
@@ -607,7 +711,7 @@ impl StrategyContext<'_> {
     /// `stop_loss` finite and positive. Other requests are ignored.
     pub fn exit_trailing(
         &mut self,
-        id: impl Into<String>,
+        id: impl Into<OrderTag>,
         side: OrderSide,
         stop_loss: Option<f64>,
         activation: f64,
@@ -632,7 +736,19 @@ impl StrategyContext<'_> {
         }
     }
 
-    fn place(&mut self, id: String, quantity: Option<f64>, kind: Kind) {
+    /// Raises an alert with `message` in a live run, also on a bar where the strategy places no
+    /// order. [`Backtest::new_alerts`] returns it after the update, and
+    /// `services::AlertEngine::strategy_alerts` delivers it to the run's strategy-fill alerts. A
+    /// message notifies at most once per bar, however many decisions of the bar raise it: with
+    /// [`StrategyAlertFrequency::OncePerBar`] the first decision that raises it notifies, with
+    /// [`StrategyAlertFrequency::OncePerBarClose`] only the decision of the closed bar. Alerts are
+    /// ignored before [`BacktestSettings::start_time`], with an empty message, in [`Backtest::run`]
+    /// and the other historical runs, and when no bar precedes the decision.
+    pub fn alert(&mut self, message: impl Into<String>, frequency: StrategyAlertFrequency) {
+        self.alerts.push((message.into(), frequency));
+    }
+
+    fn place(&mut self, tag: OrderTag, quantity: Option<f64>, kind: Kind) {
         if !self.trading {
             return;
         }
@@ -640,7 +756,9 @@ impl StrategyContext<'_> {
             return;
         }
         let order = Working {
-            id,
+            id: tag.id,
+            comment: tag.comment,
+            alert_message: tag.alert_message,
             quantity,
             kind,
             deferred: (self.after_fill || self.forming).then_some(self.tick),
@@ -656,7 +774,12 @@ impl StrategyContext<'_> {
         {
             Some(working)
                 if working.quantity == order.quantity
-                    && (working.kind == order.kind || working.triggered == Some(order.kind)) => {}
+                    && (working.kind == order.kind || working.triggered == Some(order.kind)) =>
+            {
+                // New texts do not make a new request: the order keeps its place, delay and trigger.
+                working.comment = order.comment;
+                working.alert_message = order.alert_message;
+            }
             Some(working) => {
                 let best = match (working.kind, order.kind) {
                     (Kind::TrailingExit { side: a, .. }, Kind::TrailingExit { side: b, .. })
@@ -677,6 +800,9 @@ impl StrategyContext<'_> {
 #[derive(Clone, Debug, PartialEq)]
 struct Working {
     id: String,
+    /// The texts the order's fills carry, see [`OrderTag`].
+    comment: Option<String>,
+    alert_message: Option<String>,
     /// `None` for an exit of the whole position or an entry using the default size.
     quantity: Option<f64>,
     kind: Kind,
@@ -933,6 +1059,9 @@ impl Backtest {
             tick: 0,
             open_tick: 0,
             fills: None,
+            alerts: None,
+            raised: Vec::new(),
+            requested: Vec::new(),
             forming: false,
             margin_calls: Vec::new(),
             peak_margin: 0.0,
@@ -1273,6 +1402,13 @@ struct Run<'a> {
     /// The tick of the last bar open, which tells a gap from a price reached during the bar.
     open_tick: u64,
     fills: Option<&'a mut Vec<StrategyFill>>,
+    /// Alerts of a live run, collected like `fills`; `None` in historical runs.
+    alerts: Option<&'a mut Vec<StrategyAlert>>,
+    /// The bar time and message of each alert raised on the two newest bars, so a message
+    /// notifies once per bar across decisions and live updates.
+    raised: Vec<(DateTime<Utc>, String)>,
+    /// The alert requests of the current decision.
+    requested: Vec<(String, StrategyAlertFrequency)>,
     forming: bool,
     /// Time and quantity of each filled margin call.
     margin_calls: Vec<(DateTime<Utc>, f64)>,
@@ -1585,6 +1721,7 @@ impl<'a> Run<'a> {
             bars: &self.history,
             position,
             orders: &mut self.orders,
+            alerts: &mut self.requested,
             price,
             equity,
             after_fill,
@@ -1595,6 +1732,33 @@ impl<'a> Run<'a> {
             price_increment: self.settings.price_increment,
             bar_clock: self.bar_clock,
         });
+        let at_close = !after_fill && !self.forming;
+        match (self.alerts.as_deref_mut(), self.history.last()) {
+            (Some(alerts), Some(bar)) if self.trading => {
+                let time = bar.time;
+                // Only the bar before the newest can still be decided again, by a fill callback.
+                let keep = (self.history.len().checked_sub(2))
+                    .map_or(time, |before| self.history[before].time);
+                self.raised.retain(|(raised, _)| *raised >= keep);
+                for (message, frequency) in self.requested.drain(..) {
+                    if message.is_empty()
+                        || (frequency == StrategyAlertFrequency::OncePerBarClose && !at_close)
+                        || (self.raised.iter())
+                            .any(|(raised, text)| *raised == time && *text == message)
+                    {
+                        continue;
+                    }
+                    self.raised.push((time, message.clone()));
+                    alerts.push(StrategyAlert {
+                        sequence: 0,
+                        time,
+                        price,
+                        message,
+                    });
+                }
+            }
+            _ => self.requested.clear(),
+        }
         // A strategy that stopped deciding leaves no order working, so nothing of it fills later.
         if self.strategy.failure().is_some() {
             self.orders.clear();
@@ -1733,6 +1897,8 @@ impl<'a> Run<'a> {
                 let average = self.average_price();
                 let exit = Working {
                     id: String::new(),
+                    comment: None,
+                    alert_message: None,
                     quantity: None,
                     kind: Kind::Exit(
                         Some(average + sign(side) * profit),
@@ -1775,6 +1941,8 @@ impl<'a> Run<'a> {
                 };
                 let exit = Working {
                     id: String::new(),
+                    comment: None,
+                    alert_message: None,
                     quantity: None,
                     kind: Kind::Exit(None, Some(stop), exit_side(quantity)),
                     deferred: None,
@@ -1995,6 +2163,8 @@ impl<'a> Run<'a> {
                 self.fill(
                     Working {
                         id: "Margin call".into(),
+                        comment: None,
+                        alert_message: None,
                         quantity: Some(quantity),
                         kind: Kind::Exit(None, None, exit_side(self.position())),
                         deferred: None,
@@ -2071,7 +2241,13 @@ impl<'a> Run<'a> {
             Pricing::Market => mark,
         };
         let held = self.position().abs();
-        let order_id = self.fills.as_ref().map(|_| order.id.clone());
+        let texts = self.fills.as_ref().map(|_| {
+            (
+                order.id.clone(),
+                order.comment.clone(),
+                order.alert_message.clone(),
+            )
+        });
         let filled_quantity;
         match order.kind {
             Kind::Entry(..) => {
@@ -2152,14 +2328,17 @@ impl<'a> Run<'a> {
         self.note_margin(mark);
         let position = self.position();
         if let Some(fills) = &mut self.fills {
+            let (order_id, comment, alert_message) = texts.unwrap_or_default();
             fills.push(StrategyFill {
                 sequence: 0,
                 time,
-                order_id: order_id.unwrap_or_default(),
+                order_id,
                 side,
                 price,
                 quantity: filled_quantity,
                 position,
+                comment,
+                alert_message,
             });
         }
         let pending = [OrderSide::Buy, OrderSide::Sell].map(|side| {
@@ -2732,6 +2911,10 @@ mod tests {
         fn stop_105(_: usize, context: &mut StrategyContext<'_>) {
             context.entry("A", OrderSide::Buy, 1.0, OrderType::Stop(105.0));
         }
+        fn renamed_stop_105(bar: usize, context: &mut StrategyContext<'_>) {
+            let tag = OrderTag::new("A").with_comment(format!("Requested at bar {bar}"));
+            context.entry(tag, OrderSide::Buy, 1.0, OrderType::Stop(105.0));
+        }
         fn stop_103(_: usize, context: &mut StrategyContext<'_>) {
             context.entry("A", OrderSide::Buy, 1.0, OrderType::Stop(103.0));
         }
@@ -2764,6 +2947,15 @@ mod tests {
             // second close; the last bar opens through it at 107.
             (
                 &mut Script(stop_105) as &mut dyn Strategy,
+                4,
+                false,
+                gap(),
+                Some((hour(3), 107.0)),
+            ),
+            // Other texts at every close keep the order working: as the first row, it fills at
+            // the last bar's open.
+            (
+                &mut Script(renamed_stop_105),
                 4,
                 false,
                 gap(),

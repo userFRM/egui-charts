@@ -6183,12 +6183,14 @@ mod tests {
             .unwrap_or_else(|| panic!("missing control: {label}"))
     }
 
-    /// The demo's series settings reach the TPO chart type's statistics rows and hours, and the
-    /// study settings the Time Price Opportunity study's statistics rows.
+    /// The demo's series settings reach the TPO chart type's statistics rows, hours, blocks,
+    /// volume profile settings, profile length and price line, and the study settings the Time
+    /// Price Opportunity study's statistics rows, profile period, value area edges and volume
+    /// profile levels.
     #[test]
-    fn tpo_statistics_and_hours_reach_the_demo_chart() {
-        use egui::accesskit::{Action, ActionRequest, TreeId};
-        use egui_charts::model::{ChartType, ProfileSession};
+    fn tpo_settings_reach_the_demo_chart() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, TreeId};
+        use egui_charts::model::{ChartType, PriceSource, ProfileSession, TPOProfilePeriod};
         use egui_charts::studies::{IndicatorFactory, InputValue};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
@@ -6231,6 +6233,52 @@ mod tests {
         assert!(params.tpo_statistics && params.tpo_statistics_rows.total_volume);
         assert_eq!(params.tpo_session, ProfileSession::Regular);
 
+        // Numbers are typed through AccessKit's set value.
+        let set = |app: &mut DemoApp, label: &str, value: f64| {
+            let nodes = draw(&ctx, app, vec![]);
+            let target_node = control(&nodes, label).0;
+            draw(
+                &ctx,
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::SetValue,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: Some(ActionData::NumericValue(value)),
+                })],
+            );
+        };
+        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in [
+            "Blocks",
+            "Volume profile",
+            "Volume point of control",
+            "Volume placement",
+            "Left",
+            "Price source",
+            "High",
+            "Profile period",
+            "Weeks",
+        ] {
+            click(&mut app, label);
+        }
+        set(&mut app, "Profile length", 2.0);
+        set(&mut app, "Line width", 3.0);
+        click(&mut app, "Ok");
+        assert!(!app.series_settings.is_open);
+        let params = app.chart.chart_type_params();
+        assert!(!params.tpo_blocks && params.tpo_volume_profile);
+        assert!(params.tpo_volume.poc && params.tpo_volume.left);
+        assert_eq!(
+            (params.tpo_profile_period, params.tpo_profile_periods),
+            (TPOProfilePeriod::Week, 2)
+        );
+        assert_eq!(params.styles.tpo_price_source, PriceSource::High);
+        assert_eq!(params.styles.tpo_line.width, 3.0);
+
         let study = IndicatorFactory::new()
             .create("Time Price Opportunity")
             .unwrap();
@@ -6239,15 +6287,30 @@ mod tests {
         for _ in 0..3 {
             draw(&ctx, &mut app, vec![]);
         }
-        for label in ["Statistics", "Total volume", "Apply"] {
+        for label in [
+            "Statistics",
+            "Total volume",
+            "Profile period",
+            "Weeks",
+            "Value area high",
+            "Volume profile",
+            "Volume point of control",
+            "Apply",
+        ] {
             click(&mut app, label);
         }
         assert!(!app.indicator_settings.is_open());
         let inputs = app.chart.indicator_mut(id).unwrap().inputs();
-        for input in ["statistics", "statistics_total_volume"] {
+        for (input, expected) in [
+            ("statistics", InputValue::Toggle(true)),
+            ("statistics_total_volume", InputValue::Toggle(true)),
+            ("profile_period", InputValue::Choice(1)),
+            ("value_area_high", InputValue::Toggle(false)),
+            ("volume_poc", InputValue::Toggle(true)),
+        ] {
             assert_eq!(
                 inputs.iter().find(|i| i.id == input).map(|i| &i.value),
-                Some(&InputValue::Toggle(true)),
+                Some(&expected),
                 "{input}"
             );
         }
@@ -13575,6 +13638,78 @@ mod tests {
         );
     }
 
+    /// The demo's drawing dialog offers line ends for curves, double curves and brushes, and
+    /// smoothing for highlighters; what is picked there lands on the drawing.
+    #[test]
+    fn curve_line_ends_and_highlighter_smoothing_apply_through_the_demo_dialog() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, TreeId};
+        use egui_charts::drawings::{ArrowStyle, ChartPoint, Drawing, DrawingToolType as Tool};
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let click = |app: &mut DemoApp, node: &egui::accesskit::Node| {
+            let bounds = node.bounds().unwrap();
+            let at = egui::pos2(
+                ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                ((bounds.y0 + bounds.y1) / 2.0) as f32,
+            );
+            ui_click(&ctx, egui::vec2(1440.0, 900.0), at, |ui| {
+                app.show_dialogs(ui.ctx());
+            });
+        };
+        let open = |app: &mut DemoApp, tool: Tool| {
+            app.chart.drawings_mut().drawings.clear();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = vec![
+                ChartPoint::new(0.0, 100.0),
+                ChartPoint::new(2.0, 120.0),
+                ChartPoint::new(1.0, 95.0),
+            ];
+            app.chart.drawings_mut().drawings.push(drawing);
+            app.open_drawing_props_for(7);
+            for _ in 0..3 {
+                draw(&ctx, app, vec![]);
+            }
+            let nodes = draw(&ctx, app, vec![]);
+            click(app, &control(&nodes, "Style").1);
+        };
+        for tool in [Tool::Curve, Tool::DoubleCurve, Tool::Brush] {
+            open(&mut app, tool);
+            let nodes = draw(&ctx, &mut app, vec![]);
+            assert_eq!(
+                control(&nodes, "Line start").1.value(),
+                Some("Plain"),
+                "{tool:?}"
+            );
+            click(&mut app, &control(&nodes, "Line end").1);
+            for label in ["Arrow", "Ok"] {
+                let nodes = draw(&ctx, &mut app, vec![]);
+                click(&mut app, &control(&nodes, label).1);
+            }
+            let drawing = &app.chart.drawings().drawings[0];
+            assert_eq!(drawing.arrow_end_style, ArrowStyle::Arrow, "{tool:?}");
+            assert_eq!(drawing.arrow_start_style, ArrowStyle::None, "{tool:?}");
+        }
+
+        open(&mut app, Tool::Highlighter);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        let (smoothing, node) = control(&nodes, "Smoothing");
+        assert_eq!(node.numeric_value(), Some(5.0));
+        let request = egui::Event::AccessKitActionRequest(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: *smoothing,
+            data: Some(ActionData::NumericValue(9.0)),
+        });
+        draw(&ctx, &mut app, vec![request]);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Ok").1);
+        assert_eq!(app.chart.drawings().drawings[0].smoothing, 9);
+    }
+
     /// Turning Lock all off preserves each drawing's own lock, including through undo and redo.
     #[test]
     fn lock_all_drawings_returns_each_drawing_to_its_own_lock() {
@@ -14986,6 +15121,172 @@ mod tests {
             );
             assert!(!app.symbol_search.is_open(), "{letter} was not typed");
         }
+    }
+
+    /// The paper account attaches exits to open positions, so a position line shows its TP and
+    /// SL buttons and its label menu offers Protect position.
+    #[test]
+    fn paper_positions_offer_their_exit_buttons_and_protect_position() {
+        use egui::accesskit::Role;
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType, TimeInForce};
+        use egui_kittest::kittest::NodeT as _;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let last = bars.iter().rfind(|bar| !bar.is_whitespace()).unwrap().close;
+        app.paper.set_price(&symbol, last);
+        let mut request = OrderRequest::new(&symbol, OrderSide::Buy, 2.0, OrderType::Market);
+        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+        egui_charts::services::Broker::place(&*app.paper, request, reply);
+        answer.take().expect("market reply").expect("filled");
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(3);
+        // A text on the row of the position line, which lies at the entry price.
+        let on_line = |h: &Harness<'_, Box<DemoApp>>, name: &str| {
+            let mapping = h.state().chart.get_chart_mapping();
+            let y = mapping.price_to_y(last);
+            h.output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == name => {
+                        let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                        (mapping.rect.contains(rect.center()) && (rect.center().y - y).abs() < 2.0)
+                            .then(|| rect.center())
+                    }
+                    _ => None,
+                })
+        };
+        let label = on_line(&h, "2").expect("the position's quantity on its label");
+        h.hover_at(label);
+        h.run_steps(2);
+        for button in ["TP", "SL"] {
+            assert!(on_line(&h, button).is_some(), "{button} button");
+        }
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: label,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run_steps(3);
+        let protect = h.get_by_role_and_label(Role::Button, "Protect position");
+        assert!(!protect.accesskit_node().is_disabled());
+    }
+
+    /// The depth ladder opens a working order for modifying, and a saved preset of another order
+    /// type applied to it is named above the form as a type the order cannot change to, while the
+    /// order keeps its own type.
+    #[test]
+    fn a_preset_the_working_order_cannot_take_is_named_in_the_ticket() {
+        use egui::accesskit::Role;
+        use egui_charts::model::{OrderId, OrderRequest, OrderSide, OrderType, TimeInForce};
+        use egui_charts::ui::trading::{OrderKind, OrderPreset};
+        use egui_kittest::kittest::NodeT as _;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let last = bars.iter().rfind(|bar| !bar.is_whitespace()).unwrap().close;
+        let tick = app
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.tick_size)
+            .unwrap_or(0.01);
+        app.paper.set_price(&symbol, last);
+        // A few ticks under the price, so the buy limit keeps working in a row of the ladder.
+        let mut request = OrderRequest::new(
+            &symbol,
+            OrderSide::Buy,
+            1.0,
+            OrderType::Limit(last - 5.0 * tick),
+        );
+        request.time_in_force = TimeInForce::GoodTillCancelled;
+        let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
+        egui_charts::services::Broker::place(&*app.paper, request, reply);
+        answer.take().expect("limit reply").expect("working limit");
+        let mut stop = OrderPreset::new("Stop entry", 1.0);
+        stop.order_type = Some(OrderKind::Stop);
+        app.trading.presets.insert(String::new(), vec![stop]);
+        app.trading.toggle_ticket(symbol);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, "DOM")
+            .click_accesskit();
+        h.run_steps(2);
+        let tag = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "LIMIT" => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()).center())
+                }
+                _ => None,
+            })
+            .expect("the order's tag on the ladder");
+        // A click on the tag opens its menu.
+        h.hover_at(tag);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: tag,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "Edit order")
+            .click_accesskit();
+        h.run_steps(2);
+        h.get_by_label("More").click_accesskit();
+        h.run_steps(2);
+        h.get_by_label("Stop entry").click_accesskit();
+        h.run_steps(2);
+        let notice = h
+            .get_by_label("Order type Stop cannot be applied to a working order")
+            .rect();
+        // Modifying offers only the order's own type, near the top of the form.
+        let kind = h.get_by_role_and_label(Role::Button, "Limit");
+        assert_eq!(
+            kind.accesskit_node().toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert!(notice.bottom() <= kind.rect().top(), "{notice:?}");
     }
 
     /// A day picked in the dialog is a day on the chart's clock. New York is five hours behind

@@ -399,6 +399,7 @@ fn apply_to_other_chart(
             tpo_single_prints: source.tpo_single_prints,
             tpo_midpoint: source.tpo_midpoint,
             tpo_letters: source.tpo_letters,
+            tpo_blocks: source.tpo_blocks,
             tpo_statistics: source.tpo_statistics,
             tpo_statistics_rows: source.tpo_statistics_rows,
             tpo_colored_blocks: source.tpo_colored_blocks,
@@ -414,6 +415,7 @@ fn apply_to_other_chart(
             tpo_open_price: source.tpo_open_price,
             tpo_close_price: source.tpo_close_price,
             tpo_volume_profile: source.tpo_volume_profile,
+            tpo_volume: source.tpo_volume,
             // Row sizes, value area shares, volumes, sessions and the way price-based elements
             // are built suit the chart's own instrument.
             footprint_row_ticks: own.footprint_row_ticks,
@@ -445,6 +447,7 @@ fn apply_to_other_chart(
             tpo_split_sessions: own.tpo_split_sessions,
             tpo_session: own.tpo_session,
             tpo_profile_period: own.tpo_profile_period,
+            tpo_profile_periods: own.tpo_profile_periods,
             tpo_composites: own.tpo_composites,
             tpo_splits: own.tpo_splits,
         };

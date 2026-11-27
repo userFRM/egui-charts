@@ -413,6 +413,17 @@ mod tests {
     use egui_charts::widget::ShortcutRequest;
 
     #[test]
+    fn placed_emoji_font_is_bundled_with_terminal_egui() {
+        // Placed emoji and Magic cursor bursts draw through egui's emoji fallback fonts, which
+        // exist only when egui's `monochrome_emoji_fonts` feature is enabled for this crate.
+        let fonts = egui::FontDefinitions::default();
+        assert!(
+            fonts.font_data.contains_key("NotoEmoji-Regular"),
+            "terminal egui build has no monochrome emoji font"
+        );
+    }
+
+    #[test]
     fn intercepted_actions_are_returned_not_performed() {
         let is_undo =
             |action: &Action| matches!(action, Action::TopToolbar(TopToolbarAction::Undo));

@@ -249,8 +249,8 @@ impl Trading {
             modify: capabilities.modify,
             close: capabilities.close,
             reverse: display.reverse_button && capabilities.reverse,
-            take_profit: capabilities.limit,
-            stop_loss: capabilities.stop,
+            take_profit: capabilities.position_exits && capabilities.limit,
+            stop_loss: capabilities.position_exits && capabilities.stop,
             order_exits: capabilities.brackets && capabilities.modify,
             menu: Some(capabilities),
             order_appearance: &[],
@@ -608,7 +608,11 @@ impl Trading {
         };
         let held = held_exits(position, &self.orders);
         let capabilities = self.capabilities();
-        let offers = [capabilities.limit && !held.0, capabilities.stop && !held.1];
+        let exits = capabilities.position_exits;
+        let offers = [
+            exits && capabilities.limit && !held.0,
+            exits && capabilities.stop && !held.1,
+        ];
         if !offers[0] && !offers[1] {
             self.protecting = None;
             return;
@@ -1330,6 +1334,97 @@ mod tests {
                 );
                 assert!(harness.state().0.account_panel.editing.is_none());
             }
+        }
+    }
+
+    /// An account that takes limit and stop orders but cannot attach them to a position shows
+    /// no exit buttons on the position line, disables Protect position with its reason and sends
+    /// nothing.
+    #[test]
+    fn positions_offer_exits_only_with_the_position_exits_capability() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        for without_position_exits in [false, true] {
+            let broker = Arc::new(Recorder {
+                brackets: true,
+                without_position_exits,
+                state: vec![AccountEvent::Position(Position::new("SYM", 2.0, 105.0))],
+                ..Recorder::default()
+            });
+            let mut trading = Trading::default();
+            trading.set_service(broker.clone());
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
+            trading.display.label_alignment = crate::chart::TradingLabelAlignment::Left;
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[115.0]);
+            chart.symbol = "SYM".into();
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1000.0, 800.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, (trading, chart): &mut (Trading, Chart)| {
+                        trading.poll(ui.ctx(), &mut Toasts::new());
+                        chart.show(ui);
+                        trading.show(ui, chart);
+                    },
+                    (trading, chart),
+                );
+            harness.run();
+            broker
+                .rules
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("symbol rules")
+                .1
+                .send(Ok(TradingRules::new("SYM")));
+            harness.run();
+            let painted = |harness: &Harness<'_, (Trading, Chart)>, name: &str| {
+                harness
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == name => {
+                            Some(text.visual_bounding_rect().center())
+                        }
+                        _ => None,
+                    })
+            };
+            let point = painted(&harness, "2").expect("position label");
+            harness.hover_at(point);
+            harness.run();
+            for button in ["TP", "SL"] {
+                assert_eq!(
+                    painted(&harness, button).is_some(),
+                    !without_position_exits,
+                    "{button}"
+                );
+            }
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            harness.run();
+            let protect = harness.get_by_role_and_label(egui::Role::Button, "Protect position");
+            if !without_position_exits {
+                assert!(!protect.accesskit_node().is_disabled());
+                continue;
+            }
+            assert!(protect.accesskit_node().is_disabled());
+            protect.hover();
+            harness.run();
+            harness.get_by_label("The account does not support exits on positions");
+            // The dialog, however it opens, closes at once and sends nothing.
+            let position = Position::new("SYM", 2.0, 105.0);
+            harness.state_mut().0.protecting = Some((position, Some(110.0), Some(100.0)));
+            harness.run();
+            assert!(harness.state().0.protecting.is_none());
+            assert!(harness.state().0.pending.is_none());
+            assert!(broker.placed.lock().unwrap().is_empty());
         }
     }
 
