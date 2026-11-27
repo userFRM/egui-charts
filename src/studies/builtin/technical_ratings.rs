@@ -1330,12 +1330,12 @@ mod tests {
         full.calculate(&bars);
         // Stochastic RSI waits for an RSI window with a range, which this rise never has.
         for (at, expected) in [
-            (0, [6. / 15., 0., 6. / 26.]),
-            (34, [11. / 15., 8. / 11., 19. / 26.]),
-            (35, [11. / 15., 9. / 11., 20. / 26.]),
-            (75, [12. / 15., 10. / 11., 22. / 26.]),
-            (76, [13. / 15., 10. / 11., 23. / 26.]),
-            (198, [14. / 15., 10. / 11., 24. / 26.]),
+            (0, [0.; 3]),
+            (34, [8. / 15., 8. / 11., 16. / 26.]),
+            (35, [8. / 15., 9. / 11., 17. / 26.]),
+            (75, [10. / 15., 10. / 11., 20. / 26.]),
+            (76, [11. / 15., 10. / 11., 21. / 26.]),
+            (198, [13. / 15., 10. / 11., 23. / 26.]),
             (199, [1., 10. / 11., 25. / 26.]),
         ] {
             for (i, value) in expected.into_iter().enumerate() {
@@ -1347,7 +1347,7 @@ mod tests {
             }
         }
         assert_eq!(full.values.value(1, 0), None);
-        assert_eq!(full.values.value(2, 0), Some(0.0));
+        assert_eq!(full.values.value(2, 0), None);
         let mut stream = TechnicalRatings::new();
         stream.calculate(&bars[..1]);
         for n in 2..=bars.len() {
@@ -1466,8 +1466,9 @@ mod tests {
         }
     }
 
-    /// Table slots choose unique intervals by label, including shorter ones. Two closes
-    /// 10 and 12 put all six seeded EMAs below the last close: 6/15 averages, 6/26 overall.
+    /// Table slots choose unique intervals by label, including shorter ones. Ten closes of 10
+    /// and a last close of 12 (8) put SMA(10), EMA(10) and HMA(9) below (above) it:
+    /// 3/15 averages, 3/26 overall.
     #[test]
     fn table_rates_the_chosen_intervals() {
         use InputValue::{Choice, Color, Timeframe as Interval, Toggle};
@@ -1500,7 +1501,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(study.data_requests(), requests);
-        let (rising, falling) = (bars(&[10., 12.]), bars(&[10., 8.]));
+        let (rising, falling) = (
+            bars(&[vec![10.; 10], vec![12.]].concat()),
+            bars(&[vec![10.; 10], vec![8.]].concat()),
+        );
         let source = |request: &StudyDataRequest, bars| StudyData {
             request: request.clone(),
             bars,
@@ -1540,11 +1544,11 @@ mod tests {
             table(&study),
             vec![
                 row(
-                    &["1h", "Strong Buy", "N/A", "Strong Buy", "23%"],
+                    &["1h", "Strong Buy", "N/A", "Strong Buy", "12%"],
                     &[h, b, n, b]
                 ),
                 row(
-                    &["4h", "Strong Sell", "N/A", "Strong Sell", "23%"],
+                    &["4h", "Strong Sell", "N/A", "Strong Sell", "12%"],
                     &[h, Color32::GOLD, n, Color32::GOLD]
                 ),
                 row(&["5min", "N/A", "N/A", "N/A", "N/A"], &[h, n, n, n]),
@@ -1552,15 +1556,15 @@ mod tests {
         );
         assert_eq!(
             study.data_start(&requests[0]),
-            Some(rising[1].time - TimeDelta::hours(8000))
+            Some(rising[10].time - TimeDelta::hours(8000))
         );
         assert_eq!(
             study.data_start(&requests[1]),
-            Some(rising[1].time - TimeDelta::minutes(10000))
+            Some(rising[10].time - TimeDelta::minutes(10000))
         );
         assert_eq!(study.data_start(&request(Timeframe::Day1)), None);
         for (basis, label, rating, coverage, fill) in [
-            (1, "Moving averages", "Strong Buy", "40%", b),
+            (1, "Moving averages", "Strong Buy", "20%", b),
             (2, "Oscillators", "N/A", "0%", n),
         ] {
             study.set_input("basis", Choice(basis)).unwrap();
@@ -1593,7 +1597,7 @@ mod tests {
         assert_eq!(table(&study), vec![row(&["1h", "N/A", "0%"], &[h, n])]);
         // A trailing unusable bar has no latest rating, even if an earlier bar is usable.
         let mut missing = rising.clone();
-        missing[1].close = f64::NAN;
+        missing[10].close = f64::NAN;
         assert!(study.latest(&missing).is_none());
     }
 }

@@ -763,21 +763,26 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             inputs: vec![("atr_period", Length(1)), ("multiplier", Number(1.))],
             expected: vec![(3, Sell, 14.), (4, Buy, 7.), (5, Sell, 15.), (6, Buy, 15.)],
         },
-        // Only the six EMAs vote: scores 0, -1, +1, +1, -1, -1, +1, +1. Every bar after 0 is
-        // strong; the repeats at 3 and 5 add nothing at pyramiding 1.
+        // SMA(10), EMA(10) and, from bar 10, HMA(9) vote: summaries 0, -1, 1, 1,
+        // -2/3, -1, 1, 1 on bars 9 to 16; repeats at 12 and 14 add nothing at pyramiding 1.
         Case {
             name: "Technical Ratings",
-            prices: closes(),
-            inputs: vec![],
-            expected: vec![(2, Sell, 10.), (3, Buy, 12.), (5, Sell, 8.), (7, Buy, 10.)],
+            prices: points(&[vec![10.; 9], vec![10., 8., 10., 12., 10., 8., 10., 10.]].concat()),
+            inputs: vec![("basis", Choice(1))],
+            expected: vec![
+                (11, Sell, 10.),
+                (12, Buy, 12.),
+                (14, Sell, 8.),
+                (16, Buy, 10.),
+            ],
         },
-        // Each EMA votes by the close against its previous value: summaries 0, -1, 1/3, 2/3,
-        // -2/3, -2/3. Only -1, 2/3 and -2/3 are strong; each fills at the next open.
+        // The same three averages give 0, -1, -1/3, 1, -1, 1/3, 1 on bars 9 to 15.
+        // -1/3 on bar 11 and 1/3 on bar 14 are not strong and place nothing.
         Case {
             name: "Technical Ratings",
-            prices: points(&[10., 8., 9.94, 9.97, 9.8, 9.8]),
-            inputs: vec![],
-            expected: vec![(2, Sell, 9.94), (4, Buy, 9.8), (5, Sell, 9.8)],
+            prices: points(&[vec![10.; 9], vec![10., 8., 9., 12., 9., 10., 11.]].concat()),
+            inputs: vec![("basis", Choice(1))],
+            expected: vec![(11, Sell, 9.), (13, Buy, 9.), (14, Sell, 10.)],
         },
     ];
     for case in cases {
@@ -987,6 +992,45 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             ),
         ];
         for (name, chart, interval, clock, bars, calculation, expected) in rows {
+            // Nine earlier calculation bars seed the first ten-bar averages before chart bars.
+            let first = calculation[0].time;
+            let earlier = match interval {
+                Timeframe::Hour4 => [
+                    "2025-12-29T13:30:00Z",
+                    "2025-12-30T09:30:00Z",
+                    "2025-12-30T13:30:00Z",
+                    "2025-12-31T09:30:00Z",
+                    "2025-12-31T13:30:00Z",
+                    "2026-01-01T09:30:00Z",
+                    "2026-01-01T13:30:00Z",
+                    "2026-01-02T09:30:00Z",
+                    "2026-01-02T13:30:00Z",
+                ]
+                .map(at)
+                .to_vec(),
+                Timeframe::Day1 => [
+                    "2025-12-23T00:00:00Z",
+                    "2025-12-24T00:00:00Z",
+                    "2025-12-25T00:00:00Z",
+                    "2025-12-26T00:00:00Z",
+                    "2025-12-29T00:00:00Z",
+                    "2025-12-30T00:00:00Z",
+                    "2025-12-31T00:00:00Z",
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-02T00:00:00Z",
+                ]
+                .map(at)
+                .to_vec(),
+                Timeframe::Month1 => (1..=9)
+                    .rev()
+                    .map(|back| first.checked_sub_months(chrono::Months::new(back)).unwrap())
+                    .collect(),
+                _ => (1..=9)
+                    .rev()
+                    .map(|back| first - interval.duration() * back)
+                    .collect(),
+            };
+            let calculation = [priced(earlier, vec![[10.; 4]; 9]), calculation].concat();
             let inputs = [("timeframe", InputValue::Timeframe(Some(interval)))];
             let mut backtest = Backtest::new("Technical Ratings", "TEST", chart, 10_000.);
             backtest.bar_clock = clock;
@@ -1021,14 +1065,14 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             );
         }
     }
-    // The histories agree through minute 9's open. Its 5-minute close cannot cause an entry
+    // The histories agree through minute 54's open. Its 5-minute close cannot cause an entry
     // before that minute closes, including when historical fills refresh the calculations.
     for (historical, after_fills) in [(false, false), (true, false), (true, true)] {
         let mut early = Vec::new();
         for last in [8., 10.] {
             let source = bars(
                 &[
-                    vec![[10.; 4]; 9],
+                    vec![[10.; 4]; 54],
                     vec![[10., 10., last, last]],
                     vec![[last; 4]; 5],
                     vec![[12.; 4]; 6],
@@ -1051,13 +1095,13 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 found
                     .iter()
                     .copied()
-                    .filter(|entry| entry.0 <= 9)
+                    .filter(|entry| entry.0 <= 54)
                     .collect::<Vec<_>>(),
             );
             if last == 8. {
                 assert_eq!(
                     found.first(),
-                    Some(&(10, Sell, 8.)),
+                    Some(&(55, Sell, 8.)),
                     "historical: {historical}, after fills: {after_fills}"
                 );
             }
@@ -1070,11 +1114,11 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             assert_eq!(
                 continued
                     .into_iter()
-                    .filter(|entry| entry.0 <= 10)
+                    .filter(|entry| entry.0 <= 55)
                     .collect::<Vec<_>>(),
                 found
                     .into_iter()
-                    .filter(|entry| entry.0 <= 10)
+                    .filter(|entry| entry.0 <= 55)
                     .collect::<Vec<_>>(),
                 "live replay, historical: {historical}, after fills: {after_fills}"
             );
@@ -1140,13 +1184,13 @@ fn technical_ratings_exits_at_atr_stops() {
     };
     let backtest = Backtest::new("Technical Ratings", "TEST", Timeframe::Min1, 10_000.);
     for (count, last, exit_price, profit) in [
-        // Entry at bar 2's open 100.5; fixed stop 100.5 - 6 = 94.5.
+        // Entry at bar 11's open 100.5; fixed stop 100.5 - 6 = 94.5.
         (14, [106.5, 106.5, 94., 95.], 94.5, -6.),
-        // Bar 19 reaches activation 110.5 exactly. Best 111 at bar 20 gives stop 107.
+        // Bar 28 reaches activation 110.5 exactly. Best 111 at bar 29 gives stop 107.
         (21, [110., 110., 100., 101.], 107., 6.5),
     ] {
         for short in [false, true] {
-            let mut prices = rising(count);
+            let mut prices = [vec![[99.5, 101., 99., 100.]; 9], rising(count)].concat();
             prices.push(last);
             if short {
                 for bar in &mut prices {
@@ -1166,10 +1210,10 @@ fn technical_ratings_exits_at_atr_stops() {
                 }
             );
             assert_eq!(first.quantity, 1.);
-            assert_eq!(first.entry_time, time(2));
+            assert_eq!(first.entry_time, time(11));
             assert_eq!(first.entry_price, if short { 99.5 } else { 100.5 });
             let exit = first.exit.as_ref().expect("protective exit");
-            assert_eq!(exit.time, time(count));
+            assert_eq!(exit.time, time(count + 9));
             assert_eq!(
                 exit.price,
                 if short { 200. - exit_price } else { exit_price }

@@ -15,7 +15,8 @@ use egui::Color32;
 pub enum AverageType {
     /// Arithmetic mean of a complete window.
     Simple,
-    /// Exponential smoothing with alpha 2/(period+1), seeded by the first price.
+    /// Exponential smoothing with alpha 2/(period+1), seeded by the mean of the first
+    /// `period` prices, with no value before it.
     Exponential,
     /// Linear weights 1 through period, newest heaviest.
     Weighted,
@@ -759,5 +760,60 @@ mod tests {
             .map(|marker| (marker.bar, marker.direction, marker.value))
             .collect();
         assert_eq!(markers, [(70, CrossDirection::Down, 54.0)]);
+    }
+
+    /// Each EMA starts at its simple seed; no crossing is marked before both exist.
+    /// EMA(3) seeds at 24/3 on bar 2 and EMA(7) at 56/7 on bar 6. The fast line stays below
+    /// the slow one until bar 8, where 339/32 exceeds 149/16.
+    #[test]
+    fn ema_cross_starts_each_average_from_its_simple_seed() {
+        use crate::studies::{CrossDirection, EMACross, Indicator};
+        let bars: Vec<_> = [7., 5., 12., 10., 4., 13., 5., 7., 14.]
+            .into_iter()
+            .map(make_bar)
+            .collect();
+        let mut study = EMACross::new(3, 7);
+        study.calculate(&bars);
+        for (line, expected) in [
+            [
+                None,
+                None,
+                Some(8.),
+                Some(9.),
+                Some(13. / 2.),
+                Some(39. / 4.),
+                Some(59. / 8.),
+                Some(115. / 16.),
+                Some(339. / 32.),
+            ],
+            [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(8.),
+                Some(31. / 4.),
+                Some(149. / 16.),
+            ],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (bar, expected) in expected.into_iter().enumerate() {
+                assert_eq!(
+                    study.values().value(line, bar),
+                    expected,
+                    "line {line}, bar {bar}"
+                );
+            }
+        }
+        let markers: Vec<_> = study
+            .markers()
+            .iter()
+            .map(|marker| (marker.bar, marker.direction, marker.value))
+            .collect();
+        assert_eq!(markers, [(8, CrossDirection::Up, 339. / 32.)]);
     }
 }

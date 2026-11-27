@@ -57,7 +57,7 @@
 //!   simple, exponential and weighted averages.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
-//! documents (EMA and MACD seed with the first close, PPO and the Percentage Volume Oscillator
+//! documents (EMA seeds with the mean of its first closes, MACD with the first close, PPO and the Percentage Volume Oscillator
 //! seed their EMAs with the mean of the first values and their signal with the mean of the first
 //! values of the oscillator, Force Index, Elder Ray, Bull Bear Power, TRIX and the Mass Index seed their EMAs with the mean of
 //! their first values, the Envelopes EMA and the Chaikin volatility and Chaikin Oscillator EMAs seed with their first input, an
@@ -216,15 +216,11 @@ fn bollinger_basis_replaces_the_middle_and_keeps_the_deviation() {
         (a - b).abs() < 1e-12
     });
     // Middles at bars 1 and 2, then at bar 2 once its close is 10. WMA(2) weighs 1 and 2:
-    // (2 + 8) / 3, (4 + 16) / 3, (4 + 20) / 3. EMA(2) has alpha 2/3 and the first close as
-    // seed: 10/3, 10/3 + (8 - 10/3) * 2/3 = 58/9, 10/3 + (10 - 10/3) * 2/3 = 70/9.
+    // (2 + 8) / 3, (4 + 16) / 3, (4 + 20) / 3. EMA(2) has alpha 2/3 and the mean of the
+    // first two closes, 3, as seed on bar 1: 3 + (8 - 3) * 2/3 = 19/3, 3 + (10 - 3) * 2/3 = 23/3.
     let cases = [
         (AverageType::Weighted, 2, [10.0 / 3.0, 20.0 / 3.0, 8.0]),
-        (
-            AverageType::Exponential,
-            1,
-            [10.0 / 3.0, 58.0 / 9.0, 70.0 / 9.0],
-        ),
+        (AverageType::Exponential, 1, [3.0, 19.0 / 3.0, 23.0 / 3.0]),
     ];
     for (basis, choice, [first, second, corrected]) in cases {
         let mut study = BollingerBands::new(2, 2.0).with_basis(basis);

@@ -39,9 +39,9 @@ on the retained chart instead.
 
 The chart recalculates after source bars change and places the study according
 to [`Indicator::is_overlay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.is_overlay).
-The EMA seeds from the first close and smooths with `2 / (period + 1)`;
-it has no missing warm-up values. RSI needs 14 price changes before its first
-value and uses Wilder's smoothing. Neither needs a second feed. See
+The EMA starts on bar `period - 1` at the simple average of the first `period`
+closes and then smooths with `2 / (period + 1)`. RSI needs 14 price changes
+before its first value and uses Wilder's smoothing. Neither needs a second feed. See
 [pane placement and resizing](panes.mdx) and the [built-in catalogue](api-reference.mdx).
 
 ## Write a custom study

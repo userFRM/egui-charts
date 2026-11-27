@@ -12,12 +12,11 @@
 //! EMA(t) = (Close[t] - EMA[t-1]) * multiplier + EMA[t-1]
 //! ```
 //!
-//! # Seeding convention
+//! # First value
 //!
-//! The first output value equals the first closing price (`values[0] ==
-//! data[0].close`); recursive smoothing begins at the second bar. There is no
-//! `None` warmup. This matches the seeding used by the EMAs inside [`MACD`],
-//! so the standalone indicator and the composite agree bar-for-bar.
+//! The first value is on the bar of the `period`-th finite close and equals the simple average
+//! of the first `period` finite closes; earlier bars have no value. Smoothing starts on the
+//! next bar.
 //!
 //! # Interpretation
 //!
@@ -39,6 +38,7 @@
 //! ema.calculate(&bars);
 //! ```
 
+use super::smoothing::Smoothing;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
@@ -53,8 +53,8 @@ use egui::Color32;
 pub struct EMA {
     period: usize,
     values: IndicatorValues,
-    /// The EMA of the bars stepped so far, `None` before the first bar.
-    stepper: Stepper<Option<f64>>,
+    /// The exponential average of the finite closes stepped so far.
+    stepper: Stepper<Smoothing>,
     color: Color32,
     visible: bool,
 }
@@ -117,19 +117,10 @@ impl Indicator for EMA {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let multiplier = 2.0 / (self.period as f64 + 1.0);
+        let (period, alpha) = (self.period, 2.0 / (self.period as f64 + 1.0));
+        // A bar without a finite close has no value and leaves the average as it was.
         self.stepper.run(data, from, &mut self.values, |ema, bar| {
-            // A bar without a finite close has no value and leaves the average as it was.
-            if !bar.close.is_finite() {
-                return IndicatorValue::None;
-            }
-            // Seed with the first close, then smooth from the second bar onward.
-            let next = match *ema {
-                None => bar.close,
-                Some(prev) => (bar.close - prev) * multiplier + prev,
-            };
-            *ema = Some(next);
-            IndicatorValue::Single(next)
+            IndicatorValue::Single(ema.next(bar.close, period, alpha))
         });
     }
 
@@ -195,35 +186,33 @@ mod tests {
             .collect()
     }
 
-    /// Reference values from pandas 3.0.2, `Series.ewm(span=4, adjust=False).mean()`,
-    /// which seeds with the first value and applies `alpha = 2 / (span + 1)`.
+    /// EMA(4) seeds with the mean of its first four finite closes on the bar of the fourth;
+    /// the NaN close neither counts nor has a value.
     #[test]
-    fn matches_pandas_reference() {
-        let closes = [
-            22.27, 22.19, 22.08, 22.17, 22.18, 22.13, 22.23, 22.43, 22.24, 22.29,
-        ];
+    fn seeds_with_the_mean_of_its_first_finite_closes() {
+        let closes = [22.27, 22.19, f64::NAN, 22.08, 22.17, 22.18, 22.13];
         let expected = [
-            22.27,
-            22.238,
-            22.1748,
-            22.17288,
-            22.175728,
-            22.1574368,
-            22.18646208,
-            22.283877248,
-            22.2663263488,
-            22.27579580928,
+            None,
+            None,
+            None,
+            None,
+            Some(22.1775),
+            Some(22.1785),
+            Some(22.1591),
         ];
         let bars = bars_from_closes(&closes);
-
         let mut ema = EMA::new(4);
         ema.calculate(&bars);
 
         assert_eq!(ema.values().len(), expected.len());
-        for (i, (v, e)) in ema.values().to_rows().iter().zip(expected).enumerate() {
-            match v {
-                IndicatorValue::Single(v) => assert!((v - e).abs() < 1e-9, "bar {i}: {v} != {e}"),
-                _ => panic!("bar {i} must carry a value"),
+        for (i, expected) in expected.into_iter().enumerate() {
+            let actual = ema.values().value(0, i);
+            match (actual, expected) {
+                (Some(actual), Some(expected)) => assert!(
+                    (actual - expected).abs() < 1e-9,
+                    "bar {i}: {actual} != {expected}"
+                ),
+                _ => assert_eq!(actual, expected, "bar {i}"),
             }
         }
     }
