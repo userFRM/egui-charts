@@ -251,6 +251,9 @@ struct Run {
 struct Occurrence {
     time: DateTime<Utc>,
     price: Option<f64>,
+    /// The price the message's `{{value}}` and bar placeholders read where it differs from
+    /// `price`, as a fill price without binary rounding digits.
+    shown_price: Option<f64>,
     message: String,
     /// Placeholders only this occurrence fills, as a fill's `{{order_id}}`.
     fields: Vec<(&'static str, String)>,
@@ -675,13 +678,21 @@ impl AlertEngine {
     /// on the same run and when multiple fills share a timestamp.
     /// `now` gates expiry and notification schedules; event times are the source fill times.
     /// Empty messages use the order's alert message, as written, or without one the execution
-    /// side, quantity, price and resulting signed position.
-    /// Custom messages expand the usual placeholders using a flat bar at the fill price, with
-    /// its source time and zero volume, and `exchange` as [`Alert::expand_message`] takes it. A
-    /// fill carries no study values, so `{{plot_ID_N}}` reads `NaN`. Strategy-fill alerts need no
+    /// side, quantity, price and resulting signed position, written as the list of trades writes
+    /// them: the price with at least the run's
+    /// [`price_decimals`](crate::strategies::StrategyFill::price_decimals) and more where it has
+    /// them, the quantity and position with their own decimals up to eight, all without binary
+    /// rounding digits, such as `Buy 1 at 100.12, position 1`.
+    /// Custom messages expand the usual placeholders using a flat bar at the fill price at 15
+    /// significant digits, with its source time and zero volume, and `exchange` as
+    /// [`Alert::expand_message`] takes it; the trigger reports the exact fill price. A fill
+    /// carries no study values, so `{{plot_ID_N}}` reads `NaN`. Strategy-fill alerts need no
     /// price-reader subscription. `{{order_id}}`, `{{side}}` (`Buy` or `Sell`), `{{quantity}}`,
-    /// `{{position}}`, the signed position after the fill, `{{comment}}` and `{{alert_message}}`,
-    /// the order's texts or empty without them, read the fill; other alerts leave them as
+    /// `{{position}}`, the signed position after the fill, `{{market_position}}` (`long`, `flat`
+    /// or `short` after the fill), `{{market_position_size}}`, its absolute size,
+    /// `{{prev_market_position}}` and `{{prev_market_position_size}}`, the same before the fill,
+    /// `{{comment}}`, the order's comment or without one its id, and `{{alert_message}}`, the
+    /// order's alert message or empty without one, read the fill; other alerts leave them as
     /// written.
     /// Delivery callbacks run after unlocking, as they do for price alerts.
     #[cfg(feature = "strategies")]
@@ -694,6 +705,7 @@ impl AlertEngine {
         fills: &[crate::strategies::StrategyFill],
         now: DateTime<Utc>,
     ) {
+        use crate::model::StrategyReport;
         let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
         self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
             fills
@@ -712,21 +724,48 @@ impl AlertEngine {
                         crate::model::OrderSide::Buy => "Buy",
                         crate::model::OrderSide::Sell => "Sell",
                     };
-                    let mut price = fill.price.to_string();
-                    match price.split_once('.') {
-                        None => price.push_str(".00"),
-                        Some((_, fraction)) if fraction.len() == 1 => price.push('0'),
-                        _ => {}
-                    }
+                    let signed = match fill.side {
+                        crate::model::OrderSide::Buy => fill.quantity,
+                        crate::model::OrderSide::Sell => -fill.quantity,
+                    };
+                    let market = |position: f64| {
+                        let direction = if position > 0.0 {
+                            "long"
+                        } else if position < 0.0 {
+                            "short"
+                        } else {
+                            "flat"
+                        };
+                        (
+                            direction.to_owned(),
+                            StrategyReport::quantity_text(position.abs()),
+                        )
+                    };
+                    let (after, after_size) = market(fill.position);
+                    let (before, before_size) = market(fill.position - signed);
+                    let quantity = StrategyReport::quantity_text(fill.quantity);
+                    let position = StrategyReport::quantity_text(fill.position);
+                    let price = StrategyReport::price_text_with(fill.price, fill.price_decimals);
                     Some(Occurrence {
                         time: fill.time,
                         price: Some(fill.price),
+                        shown_price: Some(StrategyReport::without_rounding_digits(fill.price)),
                         fields: vec![
                             ("order_id", fill.order_id.clone()),
                             ("side", side.into()),
-                            ("quantity", fill.quantity.to_string()),
-                            ("position", fill.position.to_string()),
-                            ("comment", fill.comment.clone().unwrap_or_default()),
+                            ("quantity", quantity.clone()),
+                            ("position", position.clone()),
+                            ("market_position", after),
+                            ("market_position_size", after_size),
+                            ("prev_market_position", before),
+                            ("prev_market_position_size", before_size),
+                            (
+                                "comment",
+                                fill.comment
+                                    .clone()
+                                    .filter(|comment| !comment.is_empty())
+                                    .unwrap_or_else(|| fill.order_id.clone()),
+                            ),
                             (
                                 "alert_message",
                                 fill.alert_message.clone().unwrap_or_default(),
@@ -737,10 +776,7 @@ impl AlertEngine {
                             .clone()
                             .filter(|message| !message.is_empty())
                             .unwrap_or_else(|| {
-                                format!(
-                                    "{side} {} at {price}, position {}",
-                                    fill.quantity, fill.position
-                                )
+                                format!("{side} {quantity} at {price}, position {position}")
                             }),
                     })
                 })
@@ -754,7 +790,7 @@ impl AlertEngine {
     /// one already received are ignored, counted apart from fills. A trigger reports the alert's
     /// bar time and finite price, and the strategy's message when the alert has none; custom
     /// messages expand as for `strategy_fills`, with `{{alert_message}}` the strategy's message
-    /// and `{{order_id}}`, `{{side}}`, `{{quantity}}`, `{{position}}` and `{{comment}}` empty.
+    /// and the other fill placeholders empty.
     #[cfg(feature = "strategies")]
     pub fn strategy_alerts(
         &self,
@@ -765,6 +801,7 @@ impl AlertEngine {
         alerts: &[crate::strategies::StrategyAlert],
         now: DateTime<Utc>,
     ) {
+        use crate::model::StrategyReport;
         let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
         self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
             alerts
@@ -774,15 +811,21 @@ impl AlertEngine {
                         return None;
                     }
                     seen.last_alert = alert.sequence;
+                    let price = Some(alert.price).filter(|price| price.is_finite());
                     Some(Occurrence {
                         time: alert.time,
-                        price: Some(alert.price).filter(|price| price.is_finite()),
+                        price,
+                        shown_price: price.map(StrategyReport::without_rounding_digits),
                         message: alert.message.clone(),
                         fields: vec![
                             ("order_id", String::new()),
                             ("side", String::new()),
                             ("quantity", String::new()),
                             ("position", String::new()),
+                            ("market_position", String::new()),
+                            ("market_position_size", String::new()),
+                            ("prev_market_position", String::new()),
+                            ("prev_market_position_size", String::new()),
                             ("comment", String::new()),
                             ("alert_message", alert.message.clone()),
                         ],
@@ -858,6 +901,7 @@ impl AlertEngine {
                         Some(Occurrence {
                             time,
                             price: price.filter(|price| price.is_finite()),
+                            shown_price: None,
                             fields: Vec::new(),
                             message: text.map_or_else(
                                 || detector.clone(),
@@ -905,6 +949,7 @@ impl AlertEngine {
                     Some(Occurrence {
                         time: event.time,
                         price: event.price.filter(|price| price.is_finite()),
+                        shown_price: None,
                         message: event.message.clone(),
                         fields: Vec::new(),
                     })
@@ -969,13 +1014,15 @@ impl AlertEngine {
                 let Occurrence {
                     time,
                     price,
+                    shown_price,
                     message,
                     fields,
                 } = occurrence;
                 let message = if alert.message.is_empty() {
                     message
                 } else {
-                    let flat = price.unwrap_or(f64::NAN);
+                    let shown = shown_price.or(price);
+                    let flat = shown.unwrap_or(f64::NAN);
                     let bar = Bar::new(time, flat, flat, flat, flat, 0.0);
                     alert.expand_message_with(
                         symbol,
@@ -983,7 +1030,7 @@ impl AlertEngine {
                         timeframe,
                         &bar,
                         time,
-                        |source| price.filter(|_| *source == AlertSource::Price),
+                        |source| shown.filter(|_| *source == AlertSource::Price),
                         &fields,
                     )
                 };
