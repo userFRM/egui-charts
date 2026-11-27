@@ -728,7 +728,10 @@ fn derived_caption(study: &dyn Indicator) -> String {
         .filter(|input| {
             input.is_shown(&inputs)
                 && !input.style
-                && !matches!(input.id.as_str(), "band_count" | "event_count" | "width")
+                && !matches!(
+                    input.id.as_str(),
+                    "band_count" | "event_count" | "width" | "profile_width"
+                )
                 && !matches!(input.kind, InputKind::Length(0, 1439))
                 && (source.is_none() || input.id != "source")
         })
@@ -2248,6 +2251,63 @@ mod tests {
                     && !caption.split(' ').any(|item| item == "None"),
                 "{name}: {caption}"
             );
+        }
+        // A chain profile names its layout or expiry, measure, display, strike count and side,
+        // and its move method only while Expected move is on (#3568).
+        use crate::data::{
+            Datafeed, HistoryPage, HistoryRequest, OptionChain, OptionChainQuery, OptionChainSink,
+            OptionKind, OptionQuote, Reply,
+        };
+        struct Feed(chrono::NaiveDate);
+        impl Datafeed for Feed {
+            fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+                reply.send(Ok(HistoryPage::default()));
+            }
+            fn option_chain(&self, _: OptionChainQuery, sink: OptionChainSink) {
+                let mut call = OptionQuote::new(
+                    "SAMPLE-C100",
+                    self.0,
+                    100.0,
+                    OptionKind::Call,
+                    chrono::Utc::now(),
+                );
+                call.volume = Some(20.0);
+                sink.push(vec![call]).unwrap();
+            }
+        }
+        let expiry = chrono::NaiveDate::from_ymd_opt(2099, 12, 18).unwrap();
+        let chain = OptionChain::new(
+            &Feed(expiry),
+            OptionChainQuery::new("SAMPLE", expiry..=expiry),
+            || {},
+        )
+        .unwrap();
+        let profile =
+            crate::studies::OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry])
+                .unwrap();
+        let id = chart.add_indicator(Box::new(profile));
+        assert_eq!(
+            chart.indicator_inputs(id),
+            Some("At expiration 10 Each expiration Volume Split 10 Right")
+        );
+        for (input, value, expected) in [
+            (
+                "layout",
+                InputValue::Choice(0),
+                "Edge of plot Nearest Volume Split 10 Right",
+            ),
+            (
+                "expected_move",
+                InputValue::Toggle(true),
+                "Edge of plot Nearest Volume Split 10 Right ATM straddle",
+            ),
+        ] {
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .set_input(input, value)
+                .unwrap();
+            assert_eq!(chart.indicator_inputs(id), Some(expected), "{input}");
         }
         let vwap = chart.add_indicator(factory.create("VWAP").unwrap());
         assert_eq!(chart.indicator_inputs(vwap), Some("Session 1"));

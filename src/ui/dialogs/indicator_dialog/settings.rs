@@ -3161,7 +3161,7 @@ mod tests {
                 &[],
             ),
             (Box::new(SMA::new(2)), None, &["SMA(2)"], 1, 1, 1, &[]),
-            // Nine plot colours and six bar colours.
+            // Nine plot colours, six bar colours and the figure colour.
             (
                 Box::new(profile),
                 None,
@@ -3178,7 +3178,7 @@ mod tests {
                 ],
                 7,
                 7,
-                15,
+                16,
                 &["Call wall", "Put wall"],
             ),
             // Developing only styles the boundaries of formations not yet confirmed.
