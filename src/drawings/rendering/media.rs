@@ -485,7 +485,7 @@ impl Drawing {
         }
 
         // Optional background circle
-        let has_bg = self.stroke_width > 2.0;
+        let has_bg = self.font_icon_ring();
         if has_bg {
             painter.circle_filled(
                 pos,
@@ -530,8 +530,9 @@ pub(super) mod tests {
     use egui::{ColorImage, Context, LayerId, Painter, RawInput, Shape, SizeHint};
     use std::sync::Arc;
 
-    /// Stickers retain their palette, while icons and emoji follow the drawing colour
-    /// and font glyphs have no extra anchor dot.
+    /// Stickers keep their palette and icons follow the drawing colour, compared on tessellated
+    /// vertex colours. An emoji drawn from the colour emoji font keeps its own colours; without
+    /// the font it follows the drawing colour. Font glyphs have no extra anchor dot.
     #[test]
     fn glyph_colours_and_anchor_free_rendering() {
         let mut results = Vec::new();
@@ -559,30 +560,38 @@ pub(super) mod tests {
                 });
                 let shapes = std::mem::take(&mut output.shapes);
                 output.drop_without_applying_deltas();
-                shapes
+                let text_only = shapes
+                    .iter()
+                    .all(|s| matches!(s.shape, Shape::Text(_) | Shape::Noop));
+                let colours: Vec<Color32> = ctx
+                    .tessellate(shapes, 1.0)
+                    .into_iter()
+                    .flat_map(|p| match p.primitive {
+                        egui::epaint::Primitive::Mesh(mesh) => mesh.vertices,
+                        egui::epaint::Primitive::Callback(_) => Vec::new(),
+                    })
+                    .map(|v| v.color)
+                    .collect();
+                (colours, text_only)
             };
-            let red = render(Color32::RED);
-            let blue = render(Color32::BLUE);
+            // The first pass installs the colour emoji font, which draws from the next one.
+            render(Color32::RED);
+            let (red, text_only) = render(Color32::RED);
+            let (blue, _) = render(Color32::BLUE);
             let font_only = id == "😀" || id == "*";
-            results.push((
-                id,
-                red == blue,
-                !font_only
-                    || red
-                        .iter()
-                        .all(|s| matches!(s.shape, Shape::Text(_) | Shape::Noop)),
-            ));
+            results.push((id, !red.is_empty(), red == blue, !font_only || text_only));
         }
+        let colour_font = cfg!(feature = "color-emoji");
         assert_eq!(
             results,
             [
-                ("sticker:bull", true, true),
-                ("sticker:bear", true, true),
-                ("sticker:rocket", true, true),
-                ("sticker:idea", true, true),
-                ("icon:check", false, true),
-                ("😀", false, true),
-                ("*", false, true),
+                ("sticker:bull", true, true, true),
+                ("sticker:bear", true, true, true),
+                ("sticker:rocket", true, true, true),
+                ("sticker:idea", true, true, true),
+                ("icon:check", true, false, true),
+                ("😀", true, colour_font, true),
+                ("*", true, false, true),
             ]
         );
     }

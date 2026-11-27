@@ -973,6 +973,30 @@ impl Drawing {
         }
     }
 
+    /// Whether the renderer paints this drawing's colour, so the Style tab and the floating
+    /// toolbar offer it: as its tool's [`DrawingToolType::supports_color`], except for an emoji
+    /// drawn from the colour emoji font, which keeps the emoji's own colours and takes only the
+    /// opacity. A font icon with a background ring still paints the ring in the colour.
+    #[cfg(feature = "ui")]
+    pub(crate) fn supports_color(&self) -> bool {
+        #[cfg(feature = "color-emoji")]
+        if self.tool_type == DrawingToolType::FontIcon
+            && !self.font_icon_ring()
+            && self
+                .text
+                .as_deref()
+                .is_some_and(crate::drawings::glyphs::is_color_emoji)
+        {
+            return false;
+        }
+        self.tool_type.supports_color()
+    }
+
+    /// Whether a font icon draws a background disc with a ring in its colour.
+    pub(crate) fn font_icon_ring(&self) -> bool {
+        self.stroke_width > 2.0
+    }
+
     /// The text colour of Text and Anchored text that has one. Their colour controls show and
     /// edit it, as the drawing colour then paints at most a border left to follow it.
     #[cfg(feature = "ui")]

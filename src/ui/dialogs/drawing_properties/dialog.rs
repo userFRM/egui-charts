@@ -345,12 +345,19 @@ impl DrawingPropertiesDialog {
         Some(template)
     }
 
-    fn load_template(&mut self, template: DrawingTemplate) {
+    fn load_template(&mut self, mut template: DrawingTemplate) {
         if self.props.tool_settings.as_ref().is_none_or(|current| {
             current.settings.tool_type != template.settings.tool_type
                 || current.settings.custom_tool != template.settings.custom_tool
         }) {
             return;
+        }
+        // A tool without text keeps its own picture, sticker or icon, as Ok does: the Style tab
+        // offers what that one paints.
+        if let Some(current) = &self.props.tool_settings
+            && !current.settings.tool_type.supports_text()
+        {
+            template.settings.text.clone_from(&current.settings.text);
         }
         let d = &template.settings;
         self.props.color = d.color32();
@@ -763,7 +770,8 @@ mod tests {
         }
     }
 
-    /// Unsupported settings never appear, including when reusing the dialog after a text tool.
+    /// Unsupported settings never appear, including when reusing the dialog after a text tool,
+    /// and an emoji drawn in its own colours offers no colour, also after loading a template.
     #[test]
     fn properties_rows_follow_the_tool_renderer() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
@@ -857,6 +865,33 @@ mod tests {
                         "{tool:?}: {label}"
                     );
                 }
+                dialog.close();
+                frame(&mut dialog, &mut chart, &ctx, vec![]);
+            }
+            // An icon takes the colour; an emoji drawn from the colour emoji font keeps its own,
+            // also when a template made from an icon is loaded, as the drawing keeps its emoji.
+            let coloured = !cfg!(feature = "color-emoji");
+            for (glyph, template, offered) in [
+                ("icon:check", None, true),
+                ("😀", None, coloured),
+                ("😀", Some("icon:check"), coloured),
+            ] {
+                let mut drawing = Drawing::new(7, Tool::FontIcon);
+                drawing.text = Some(glyph.into());
+                drawing.chart_points = vec![ChartPoint::new(1.0, 100.0)];
+                chart.drawings_mut().drawings = vec![drawing.clone()];
+                dialog.open_for_chart(&chart, DrawingId(7));
+                if let Some(template) = template {
+                    drawing.text = Some(template.into());
+                    dialog.load_template(DrawingTemplate::from_drawing(&drawing));
+                }
+                frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                assert_eq!(
+                    labels.iter().any(|(text, _)| text == "Color"),
+                    offered,
+                    "{glyph} {template:?}"
+                );
                 dialog.close();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
             }

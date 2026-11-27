@@ -273,8 +273,8 @@ impl FloatingSelectionToolbar {
         let editable = chart.drawings().accepts_user_edits(drawing);
         self.set_object_visible(drawing.visible);
         // Without a colour slot, the fill is the first slot.
-        let fill_slot = usize::from(drawing.tool_type.supports_color());
-        self.set_colors(if drawing.tool_type.supports_color() {
+        let fill_slot = usize::from(drawing.supports_color());
+        self.set_colors(if drawing.supports_color() {
             vec![ColorSlot {
                 // A flag mark and a pin paint their marker in it. Text always paints its text in
                 // the slot's colour; a note or callout does until its text has its own colour.
@@ -349,7 +349,7 @@ impl FloatingSelectionToolbar {
                     if fill {
                         d.tool_type.supports_fill() && d.fill_color != Some(rgba)
                     } else {
-                        d.tool_type.supports_color()
+                        d.supports_color()
                             && d.text_color_override().map_or(d.color != rgba, |text| {
                                 text != rgba || d.color[..3] != rgba[..3]
                             })
@@ -892,10 +892,26 @@ mod tests {
     /// white text, a pin's text and a table's cells do not take it. A label on a line does not
     /// make the line's colour a text colour, although the colour paints both. A sticker, a ghost
     /// feed and a pitchfork keep their own colours, and a post card's first slot is its fill.
-    /// Width and style are offered apart, each where the tool draws it.
+    /// An emoji drawn from the colour emoji font keeps its colours. Width and style are offered
+    /// apart, each where the tool draws it.
     #[test]
     fn colour_slot_names_what_the_colour_paints() {
         use crate::drawings::{Drawing, DrawingToolType as Tool};
+        let slots = |drawing: Drawing| {
+            let mut chart = Chart::new(crate::model::BarData::new());
+            chart.drawings_mut().drawings = vec![drawing];
+            chart.drawings_mut().select(7);
+            let mut toolbar = FloatingSelectionToolbar::new();
+            egui::Context::default()
+                .run_ui(Default::default(), |ui| {
+                    toolbar.show_and_apply(ui, &mut chart);
+                })
+                .drop_without_applying_deltas();
+            (
+                toolbar.color_slots.first().map(|slot| slot.label),
+                (toolbar.width.is_some(), toolbar.line_style.is_some()),
+            )
+        };
         let red = Some([242, 54, 69, 255]);
         for (tool, text_color, label, offers) in [
             (Tool::TrendLine, None, Some("Line color"), (true, true)),
@@ -915,31 +931,29 @@ mod tests {
             (Tool::Sticker, None, None, (false, false)),
             (Tool::GhostFeed, None, None, (false, false)),
         ] {
-            let mut chart = Chart::new(crate::model::BarData::new());
             let mut drawing = Drawing::new(7, tool);
             if text_color.is_some() {
                 drawing.text_color = text_color;
             }
             drawing.completed = true;
             drawing.points = vec![Pos2::new(100.0, 100.0)];
-            chart.drawings_mut().drawings = vec![drawing];
-            chart.drawings_mut().select(7);
-            let mut toolbar = FloatingSelectionToolbar::new();
-            egui::Context::default()
-                .run_ui(Default::default(), |ui| {
-                    toolbar.show_and_apply(ui, &mut chart);
-                })
-                .drop_without_applying_deltas();
-            assert_eq!(
-                toolbar.color_slots.first().map(|slot| slot.label),
-                label,
-                "{tool:?} {text_color:?}"
-            );
-            assert_eq!(
-                (toolbar.width.is_some(), toolbar.line_style.is_some()),
-                offers,
-                "{tool:?}"
-            );
+            let (slot, offered) = slots(drawing);
+            assert_eq!(slot, label, "{tool:?} {text_color:?}");
+            assert_eq!(offered, offers, "{tool:?}");
+        }
+        // An icon takes the colour; an emoji drawn from the colour emoji font keeps its own.
+        for (glyph, label) in [
+            ("icon:check", Some("Line color")),
+            (
+                "😀",
+                (!cfg!(feature = "color-emoji")).then_some("Line color"),
+            ),
+        ] {
+            let mut drawing = Drawing::new(7, Tool::FontIcon);
+            drawing.text = Some(glyph.into());
+            drawing.completed = true;
+            drawing.points = vec![Pos2::new(100.0, 100.0)];
+            assert_eq!(slots(drawing), (label, (false, false)), "{glyph}");
         }
     }
 
