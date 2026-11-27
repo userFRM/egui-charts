@@ -3734,9 +3734,7 @@ mod tests {
                     .display_mode;
                     #[cfg(feature = "studies")]
                     {
-                        use crate::studies::{
-                            Indicator, InputValue, builtin::TimePriceOpportunity,
-                        };
+                        use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
                         let mut study = TimePriceOpportunity::default();
                         let choice = match (tpo_letters, tpo_blocks) {
                             (true, false) => 0,
