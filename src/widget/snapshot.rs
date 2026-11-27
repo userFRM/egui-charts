@@ -2,7 +2,7 @@
 //! documents.
 
 use super::{
-    Chart, ChartLayoutMode, ChartLayoutSizing, ChartLinkGroups, PaneId, SeriesOptions,
+    Chart, ChartLayoutMode, ChartLayoutSizing, ChartLinkGroups, PaneId, SeriesOptions, TabSplit,
     trade_profile::TradeProfiles,
 };
 use crate::drawings::persistence::{DrawingStorage, SaveError, SkippedDrawing};
@@ -196,10 +196,13 @@ pub struct ChartSnapshot {
     /// With drawing storage, [`Chart::restore`] shows the stored drawings and brings back only
     /// some of these (see there).
     pub drawings: Option<serde_json::Value>,
-    /// With drawing storage, the drawings the chart keeps aside for each other symbol it showed
-    /// that storage does not hold, those in a top-level folder kept on the chart or in the layout,
-    /// as one drawings document per symbol. Empty without drawing storage and in layouts saved
-    /// before it was recorded.
+    /// The drawings the chart keeps aside for each other symbol it showed, as one drawings
+    /// document per symbol in symbol order: all its saveable drawings of those symbols without
+    /// drawing storage, and with storage those it does not hold, the ones in a top-level folder
+    /// kept on the chart or in the layout. [`Chart::restore`] puts them back for their symbols,
+    /// in place of those the chart keeps aside, and they show when the chart shows their symbol
+    /// again. Empty in layouts saved before it was recorded, and in those saved without storage
+    /// before it was recorded there too.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub other_symbol_drawings: Vec<serde_json::Value>,
     /// The chart that took the snapshot, by an identifier no other chart has, also in another
@@ -471,6 +474,10 @@ impl Chart {
     /// snapshot's drawings are kept, and stored but for those in such a folder. The drawings in
     /// such a folder that the chart keeps aside for other symbols are replaced by those of
     /// [`ChartSnapshot::other_symbol_drawings`], which show when the chart shows their symbol.
+    ///
+    /// Without drawing storage, the drawings the chart keeps aside for every other symbol are
+    /// replaced by those of [`ChartSnapshot::other_symbol_drawings`], which show when the chart
+    /// shows their symbol again.
     ///
     /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
     /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].
@@ -1147,6 +1154,12 @@ pub struct SavedLayout {
     /// setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_groups: Option<Vec<ChartLinkGroups>>,
+    /// The chart of the tab preset shown on its own beside the others, as
+    /// [`ChartLayout::tab_split`](super::ChartLayout::tab_split) gives it; restore it with
+    /// [`ChartLayout::set_tab_split`](super::ChartLayout::set_tab_split). `None`, also read from
+    /// documents saved before splits were kept, shows the tabs unsplit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_split: Option<TabSplit>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1161,14 +1174,16 @@ impl SavedLayout {
     pub const VERSION: u32 = 3;
 
     /// `charts` in the order of their slots, arranged as `mode` in the preset proportions and
-    /// following the layout setting: assign [`sizing`](Self::sizing) and
-    /// [`link_groups`](Self::link_groups) to keep other sizes and groups.
+    /// following the layout setting, without a split tab: assign [`sizing`](Self::sizing),
+    /// [`link_groups`](Self::link_groups) and [`tab_split`](Self::tab_split) to keep other
+    /// sizes, groups and splits.
     pub fn new(mode: ChartLayoutMode, charts: Vec<ChartSnapshot>) -> Self {
         Self {
             mode,
             charts,
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
     }
 
@@ -1225,6 +1240,52 @@ mod tests {
                 .any(|action| matches!(action, DrawingSyncAction::Delete(_))),
             "{queued:?}"
         );
+    }
+
+    /// A chart without drawing storage saves the drawings it keeps for another symbol in its
+    /// layout, and a chart restored from it shows them on that symbol again, in place of the
+    /// drawings it kept aside itself.
+    #[test]
+    fn a_layout_saved_without_storage_keeps_other_symbols_drawings() {
+        fn line(chart: &mut Chart, price: f64) {
+            let mut line = Drawing::new(0, DrawingToolType::HorizontalLine);
+            line.chart_points = vec![ChartPoint::new(50.0, price)];
+            chart.drawings_mut().add_drawing(line).unwrap();
+        }
+        fn prices(chart: &Chart) -> Vec<f64> {
+            let mut prices: Vec<f64> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|drawing| drawing.chart_points[0].price)
+                .collect();
+            prices.sort_by(f64::total_cmp);
+            prices
+        }
+        let mut original = crate::widget::test_frames::chart(&[10.0], &[11.0]);
+        original.set_symbol("A");
+        line(&mut original, 104.0);
+        original.set_symbol("B");
+        line(&mut original, 99.0);
+        let saved: ChartSnapshot =
+            serde_json::from_str(&serde_json::to_string(&original.snapshot().unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(saved.other_symbol_drawings.len(), 1);
+        assert_eq!(saved.other_symbol_drawings[0]["symbol"], "A");
+
+        let mut restored = crate::widget::test_frames::chart(&[10.0], &[11.0]);
+        restored.set_symbol("Z");
+        line(&mut restored, 1.0);
+        restored.restore(&saved).unwrap();
+        assert_eq!(restored.symbol(), "B");
+        assert_eq!(prices(&restored), [99.0]);
+        restored.set_symbol("A");
+        assert_eq!(prices(&restored), [104.0]);
+        restored.set_symbol("Z");
+        assert_eq!(prices(&restored), [] as [f64; 0]);
+
+        original.set_symbol("A");
+        assert_eq!(prices(&original), [104.0]);
     }
 
     /// Studies created under host names retain edited inputs, styles and source links through
@@ -1310,6 +1371,7 @@ mod tests {
             charts: vec![chart.snapshot_with(&factory).unwrap()],
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
         .to_json()
         .unwrap();
@@ -1661,6 +1723,7 @@ mod tests {
             charts: vec![chart.snapshot().unwrap()],
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
         .to_json()
         .unwrap();
@@ -1849,6 +1912,7 @@ mod tests {
             charts: vec![chart.snapshot().unwrap()],
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
         .to_json()
         .unwrap();
@@ -2092,6 +2156,7 @@ mod tests {
             charts: vec![original.snapshot().unwrap()],
             sizing: None,
             link_groups: None,
+            tab_split: None,
         }
         .to_json()
         .unwrap();
@@ -2189,6 +2254,7 @@ mod tests {
                     charts: vec![snapshot],
                     sizing: None,
                     link_groups: None,
+                    tab_split: None,
                 }
                 .to_json()
                 .unwrap();
@@ -2488,12 +2554,15 @@ mod tests {
         );
     }
 
-    /// Symbol and interval groups come back with the layout. A layout without them writes the
-    /// document it wrote before they were kept, which opens with every chart following the
-    /// layout setting.
+    /// Symbol and interval groups and a split tab come back with the layout. A layout without
+    /// them writes the document it wrote before they were kept, which opens with every chart
+    /// following the layout setting and the tabs unsplit; a split saved without its share
+    /// takes half the area.
     #[test]
-    fn saved_layout_keeps_symbol_and_interval_groups() {
-        use crate::widget::{ChartLayoutMode, ChartLink, ChartLinkGroups, SavedLayout};
+    fn saved_layout_keeps_groups_and_the_tab_split() {
+        use crate::widget::{
+            ChartLayoutMode, ChartLink, ChartLinkGroups, SavedLayout, TabSplit, TabSplitSide,
+        };
         let chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
         let mut layout = SavedLayout::new(
             ChartLayoutMode::TwoHorizontal,
@@ -2515,6 +2584,23 @@ mod tests {
         layout.link_groups = Some(groups.clone());
         let restored = SavedLayout::from_json(&layout.to_json().unwrap()).unwrap();
         assert_eq!(restored.link_groups, Some(groups));
+        // A tab layout as releases before splits saved it.
+        let older = r#"{"version":3,"mode":"Tabs","charts":[]}"#;
+        assert_eq!(SavedLayout::from_json(older).unwrap().tab_split, None);
+        let mut split = TabSplit::new(1, TabSplitSide::Bottom);
+        split.ratio = 0.3;
+        layout.tab_split = Some(split);
+        let json = layout.to_json().unwrap();
+        assert!(json.contains(r#""tab_split":{"slot":1,"side":"Bottom","ratio":0.3}"#));
+        assert_eq!(
+            SavedLayout::from_json(&json).unwrap().tab_split,
+            Some(split)
+        );
+        let without_share = json.replace(r#","ratio":0.3"#, "");
+        assert_eq!(
+            SavedLayout::from_json(&without_share).unwrap().tab_split,
+            Some(TabSplit::new(1, TabSplitSide::Bottom))
+        );
     }
 
     /// Missing axis label switches inherit their saved lines through restore and resave.
@@ -2582,6 +2668,7 @@ mod tests {
                 charts: vec![chart.snapshot().unwrap()],
                 sizing: None,
                 link_groups: None,
+                tab_split: None,
             };
             let mut document: serde_json::Value =
                 serde_json::from_str(&layout.to_json().unwrap()).unwrap();
@@ -2598,7 +2685,8 @@ mod tests {
         );
     }
 
-    /// Chosen time labels survive layouts; older layouts keep the labels they showed.
+    /// Chosen time label and left edge choices survive layouts; older layouts keep the ones they
+    /// showed.
     #[test]
     fn layouts_keep_the_time_label_choices() {
         use crate::scales::{TickMarkType, WeekdayNames};
@@ -2618,6 +2706,7 @@ mod tests {
         settings.scales_and_lines.date_format = Some(DateFormat::Pattern("%d.%m.%Y".into()));
         settings.scales_and_lines.use_24_hour = Some(false);
         settings.scales_and_lines.weekday_names = Some(WeekdayNames::Always);
+        settings.scales_and_lines.keep_left_edge_on_interval_change = Some(true);
         settings.apply_to_chart(&mut source).unwrap();
         let json = SavedLayout::new(ChartLayoutMode::Single, vec![source.snapshot().unwrap()])
             .to_json()
@@ -2630,14 +2719,29 @@ mod tests {
             labels(&restored),
             ["Wed 13.03.2024 02:30 PM", "Wed 13.03.2024", "02:30 PM"]
         );
+        let keeps = |chart: &Chart| {
+            chart
+                .chart_options()
+                .time_scale
+                .keep_left_edge_on_interval_change
+        };
+        assert!(keeps(&restored));
 
         let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
         for (group, choice) in [
             ("/charts/0/settings/scales_and_lines", "date_format"),
             ("/charts/0/settings/scales_and_lines", "use_24_hour"),
             ("/charts/0/settings/scales_and_lines", "weekday_names"),
+            (
+                "/charts/0/settings/scales_and_lines",
+                "keep_left_edge_on_interval_change",
+            ),
             ("/charts/0/options/time_scale", "use_24_hour"),
             ("/charts/0/options/time_scale", "weekday_names"),
+            (
+                "/charts/0/options/time_scale",
+                "keep_left_edge_on_interval_change",
+            ),
         ] {
             older
                 .pointer_mut(group)
@@ -2649,11 +2753,16 @@ mod tests {
         }
         let older = SavedLayout::from_json(&older.to_string()).unwrap();
         let mut restored = chart(&[100.0], &[110.0]);
+        let mut options = restored.chart_options().clone();
+        options.time_scale.keep_left_edge_on_interval_change = true;
+        restored.set_chart_options(options);
         restored.restore(&older.charts[0]).unwrap();
         assert_eq!(
             labels(&restored),
             ["Wed 13 Mar '24 14:30", "Mar 13, 2024", "14:30"]
         );
+        // An older layout restored over a chart that keeps the left edge leaves it off.
+        assert!(!keeps(&restored));
         // Older saves never stored host date patterns, so restoring one still keeps that pattern.
         restored.set_date_format(Some("%Y-%m-%d".into()));
         restored.restore(&older.charts[0]).unwrap();

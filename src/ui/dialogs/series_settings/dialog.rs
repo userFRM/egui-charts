@@ -603,6 +603,137 @@ mod tests {
         }
     }
 
+    /// With the default range of 1, the closes 100, 102 and 101.5 complete the rising bars 100 to
+    /// 101 and 101 to 102, and 101.5 reaches neither 103 nor 101: the bar from 102 falling to
+    /// 101.5 is in progress and takes the light red forming colour of new charts. A layout or
+    /// template saved before the forming bar colours, with its Range entry as then saved, without
+    /// one, or without chart type styles, draws it in its falling body colour, as it was drawn.
+    #[test]
+    fn range_bar_in_progress_keeps_the_look_of_layouts_saved_before_its_colours() {
+        let candles = [
+            egui::Color32::from_rgb(8, 153, 129),
+            egui::Color32::from_rgb(242, 54, 69),
+        ];
+        let saved = [
+            egui::Color32::from_rgb(1, 100, 2),
+            egui::Color32::from_rgb(101, 2, 3),
+        ];
+        let fills = |chart: &mut crate::Chart, known: &[egui::Color32]| {
+            let (bodies, _) = painted_candles(chart, known);
+            bodies.into_iter().map(|(fill, _)| fill).collect::<Vec<_>>()
+        };
+        let forming_down = egui::Color32::from_rgb(245, 166, 174);
+        let mut chart = price_based_chart(ChartType::Range, candles);
+        let known = [candles[0], candles[1], forming_down];
+        assert_eq!(
+            fills(&mut chart, &known),
+            [candles[0], candles[0], forming_down]
+        );
+
+        let former: serde_json::Value =
+            serde_json::from_str(r#"{"thin_bars":false,"phantom_bars":false}"#).unwrap();
+        for what in ["range", "no range", "no styles"] {
+            // The chart type parameters as such a document holds them.
+            let strip = |params: &mut serde_json::Value| {
+                let params = params.as_object_mut().unwrap();
+                if what == "no styles" {
+                    params.remove("styles").unwrap();
+                    return;
+                }
+                let styles = params["styles"].as_object_mut().unwrap();
+                if what == "range" {
+                    styles.insert("range".to_owned(), former.clone());
+                } else {
+                    styles.remove("range").unwrap();
+                }
+            };
+            for template in [false, true] {
+                let saved_chart = price_based_chart(ChartType::Range, saved);
+                let mut restored = price_based_chart(ChartType::Range, candles);
+                if template {
+                    let state =
+                        crate::widget::settings::ChartSettingsState::from_chart(&saved_chart);
+                    let mut json = serde_json::to_value(state).unwrap();
+                    strip(&mut json["chart_type_params"]);
+                    let state: crate::widget::settings::ChartSettingsState =
+                        serde_json::from_value(json).unwrap();
+                    state.apply_to_chart(&mut restored).unwrap();
+                } else {
+                    let snapshot = saved_chart.snapshot().unwrap();
+                    let mut json = serde_json::to_value(snapshot).unwrap();
+                    for params in ["/chart_type_params", "/settings/chart_type_params"] {
+                        strip(json.pointer_mut(params).unwrap());
+                    }
+                    let snapshot: crate::widget::ChartSnapshot =
+                        serde_json::from_value(json).unwrap();
+                    restored.restore(&snapshot).unwrap();
+                }
+                assert_eq!(
+                    fills(&mut restored, &saved),
+                    [saved[0], saved[0], saved[1]],
+                    "{what}, template {template}"
+                );
+            }
+        }
+    }
+
+    /// The Symbol tab of a Range chart edits the rising and falling colours of the bar in
+    /// progress in the draft, and Ok applies the colour picked for each.
+    #[test]
+    fn range_forming_bar_colours_apply_on_ok() {
+        use egui::Color32;
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let picked = Color32::from_rgb(49, 27, 146);
+        // Colour wells are found by their seeded colour.
+        let seeded = [Color32::from_rgb(10, 20, 30), Color32::from_rgb(40, 50, 60)];
+        for (well, expected) in [
+            ("#0A141E", [picked, seeded[1]]),
+            ("#28323C", [seeded[0], picked]),
+        ] {
+            let mut chart = price_based_chart(ChartType::Range, [Color32::GREEN, Color32::RED]);
+            let mut params = chart.chart_type_params().clone();
+            let style = &mut params.styles.range;
+            [style.forming_up, style.forming_down] = seeded;
+            chart.set_chart_type_params(params);
+            let mut dialog = SeriesSettingsDialog::new();
+            dialog.open(SeriesId::MAIN, chart.series_settings());
+            let mut harness = Harness::builder()
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::dark());
+                })
+                .with_size(Vec2::new(1440.0, 900.0))
+                .build_ui_state(
+                    |ui, (dialog, chart): &mut (SeriesSettingsDialog, crate::Chart)| {
+                        if let SeriesSettingsAction::Apply(_, settings) = dialog.show(ui.ctx()) {
+                            chart.apply_series_settings(&settings);
+                        }
+                    },
+                    (dialog, chart),
+                );
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::ColorWell, well)
+                .scroll_to_me();
+            harness.run();
+            harness.get_by_role_and_label(Role::ColorWell, well).click();
+            harness.run();
+            harness
+                .get_by_role_and_label(Role::ColorWell, "#311B92")
+                .click();
+            harness.run();
+            let forming = |chart: &crate::Chart| {
+                let style = &chart.chart_type_params().styles.range;
+                [style.forming_up, style.forming_down]
+            };
+            assert_eq!(forming(&harness.state().1), seeded, "{well}: draft only");
+            harness.get_by_label("Ok").click();
+            harness.run();
+            assert_eq!(forming(&harness.state().1), expected, "{well}");
+        }
+    }
+
     /// Every setting of the price-based chart types accepted in the dialog comes back from a
     /// saved layout.
     #[test]
@@ -622,6 +753,8 @@ mod tests {
         [styles.point_figure.up_color, styles.point_figure.down_color] = point_figure;
         styles.range.thin_bars = true;
         styles.range.phantom_bars = true;
+        [styles.range.forming_up, styles.range.forming_down] =
+            [color(20), color(21)].map(Option::unwrap);
         styles.renko = crate::model::RenkoStyle {
             border_visible: false,
             border_up: color(14),

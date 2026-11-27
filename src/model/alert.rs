@@ -519,10 +519,10 @@ impl Alert {
     /// `bar`, `{{value}}` the value of the alert's source, `{{output_N}}` the value of output `N`
     /// of the study the source names (empty if the source is not a study), `{{plot_ID_N}}` the
     /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the English
-    /// name that [`AlertInputs::sources`] gives the drawing level the first condition tests: the source
-    /// if it is a drawing, otherwise the drawing it compares with or those bounding its channel,
-    /// joined by `, `, for a position the level reached last (the entry until its exit),
-    /// and empty if it tests no drawing. `value` gives the value of a source at
+    /// name that [`AlertInputs::sources`] gives the drawing or TPO level the first condition tests:
+    /// the source if it is one, otherwise the level it compares with or the drawings bounding its
+    /// channel, joined by `, `, for a position the level reached last (the entry until its exit),
+    /// and empty if it tests none. `value` gives the value of a source at
     /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
     /// shortest form that reads back the same. A strategy fill alert also fills `{{order_id}}`,
     /// `{{side}}`, `{{quantity}}` and `{{position}}`, as `AlertEngine::strategy_fills` describes.
@@ -601,14 +601,18 @@ impl Alert {
                             None,
                             None,
                         ],
-                        (AlertSource::Drawing(_), _) => [Some(&self.source), None, None],
+                        (AlertSource::Drawing(_) | AlertSource::TPOLevel(_), _) => {
+                            [Some(&self.source), None, None]
+                        }
                         _ => self.condition.partners(),
                     };
                     let saved = self.inputs.as_ref().map_or(&[][..], |i| &i.sources);
                     let labels: Vec<_> = tested
                         .into_iter()
                         .flatten()
-                        .filter(|source| matches!(source, AlertSource::Drawing(_)))
+                        .filter(|source| {
+                            matches!(source, AlertSource::Drawing(_) | AlertSource::TPOLevel(_))
+                        })
                         .filter_map(|source| saved.iter().find(|(s, _)| s == source))
                         .map(|(_, label)| label.to_string())
                         .collect();
@@ -676,11 +680,13 @@ fn fill_placeholders(message: &str, mut field: impl FnMut(&str) -> Option<String
 /// Each variant states its rule so that a host and a server evaluate it alike. Levels are finite
 /// and in the symbol's price units.
 ///
-/// On the price, the crossing, above and below rules, also against a drawing in
-/// [`Compare`](Self::Compare), read every price known to have traded since the alert's previous
-/// evaluation: the close, and the high and low of the bars received where they moved past what
-/// that evaluation saw. A level reached and left between two evaluations therefore counts. The
-/// first evaluation, and an alert at bar close, read the close alone.
+/// On the price, the crossing, above, below and channel rules, also against a drawing in
+/// [`Compare`](Self::Compare) and between two drawings in [`Channel`](Self::Channel), read every
+/// price known to have traded since the alert's previous evaluation: the close, and the high and
+/// low of the bars received where they moved past what that evaluation saw. A level or boundary
+/// reached and left between two evaluations therefore counts, and a channel can then be both
+/// inside and outside on one evaluation. The first evaluation, and an alert at bar close, read
+/// the close alone.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertCondition {
@@ -709,30 +715,30 @@ pub enum AlertCondition {
     Above(f64),
     /// A price since the previous evaluation is below the level.
     Below(f64),
-    /// Previous value was outside the inclusive channel, current value is inside it.
+    /// The previous value was outside the inclusive channel and a value since is inside it.
     EnteringChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
         /// Inclusive upper boundary.
         upper: f64,
     },
-    /// Previous value was inside the inclusive channel, current value is outside it.
+    /// The previous value was inside the inclusive channel and a value since is outside it.
     ExitingChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
         /// Inclusive upper boundary.
         upper: f64,
     },
-    /// The current value is inside the inclusive channel, `lower <= value <= upper`, whatever the
-    /// previous value was.
+    /// A value since the previous evaluation is inside the inclusive channel,
+    /// `lower <= value <= upper`, whatever the previous value was.
     InsideChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
         /// Inclusive upper boundary.
         upper: f64,
     },
-    /// The current value is outside the inclusive channel, below `lower` or above `upper`,
-    /// whatever the previous value was.
+    /// A value since the previous evaluation is outside the inclusive channel, below `lower` or
+    /// above `upper`, whatever the previous value was.
     OutsideChannel {
         /// Inclusive lower boundary, strictly below `upper`.
         lower: f64,
@@ -769,7 +775,9 @@ pub enum AlertCondition {
     /// order; their minimum and maximum define the inclusive channel. Missing, non-finite or
     /// coincident boundaries cannot satisfy the condition. On a new bar, transitions resolve the
     /// source and both boundaries at the preceding bar again. Within a bar they compare with the
-    /// previous evaluation, just as a crossing does.
+    /// previous evaluation, just as a crossing does. Between two drawings the price reads every
+    /// price traded since the previous evaluation; a study boundary is known only at the close,
+    /// so a channel with one reads the close.
     Channel {
         /// Stable sources of the two boundary lines, retained through drawing edits and storage.
         boundaries: Box<[AlertSource; 2]>,
@@ -837,7 +845,57 @@ pub enum AlertSource {
     Drawing(String),
     /// The bar's volume.
     Volume,
+    /// A level of a completed TPO profile at the price it had when chosen; nothing resolves it.
+    TPOLevel(TPOLevelSource),
 }
+
+/// A level of a completed TPO profile, kept at the price it had when the alert was made.
+/// Merging, splitting or resetting profiles later, or a restart without the chart, leaves the
+/// alert on that price. `Chart::alert_sources` offers one for each extended level that no later
+/// bar has reached; with automatic rows the price is that of the rows drawn at the time.
+///
+/// ```
+/// use egui_charts::model::{AlertSource, TPOLevel, TPOLevelSource};
+///
+/// let profile = "2024-01-03T10:00:00Z".parse().unwrap();
+/// let poc = TPOLevelSource::new(profile, TPOLevel::PointOfControl, 112.0);
+/// assert_eq!(AlertSource::TPOLevel(poc), AlertSource::TPOLevel(poc));
+/// assert_eq!(poc.price, 112.0);
+/// ```
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct TPOLevelSource {
+    /// Open time of the profile's first bar, its
+    /// [`TPOProfile::session_date`](super::TPOProfile::session_date).
+    pub profile: DateTime<Utc>,
+    /// The level of that profile.
+    pub level: super::TPOLevel,
+    /// The level's price as its caption writes it: the lowest tick of its row, or the profile's
+    /// high or low for a poor high or low.
+    pub price: f64,
+}
+
+impl TPOLevelSource {
+    /// The level `level` of the profile opening at `profile`, at `price`.
+    pub fn new(profile: DateTime<Utc>, level: super::TPOLevel, price: f64) -> Self {
+        Self {
+            profile,
+            level,
+            price,
+        }
+    }
+}
+
+// Prices compare by their bits, so a stored source equals the one it was saved from.
+impl PartialEq for TPOLevelSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.profile == other.profile
+            && self.level == other.level
+            && self.price.to_bits() == other.price.to_bits()
+    }
+}
+
+impl Eq for TPOLevelSource {}
 
 /// The name an alert source is shown with: English text, translated only when shown.
 ///
@@ -982,13 +1040,13 @@ pub enum AlertComparison {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertChannelComparison {
-    /// Previously outside, currently inside.
+    /// Previously outside, and a value since is inside.
     Entering,
-    /// Previously inside, currently outside.
+    /// Previously inside, and a value since is outside.
     Exiting,
-    /// Currently inside, regardless of the previous value.
+    /// A value since the previous evaluation is inside, regardless of the previous value.
     Inside,
-    /// Currently outside, regardless of the previous value.
+    /// A value since the previous evaluation is outside, regardless of the previous value.
     Outside,
 }
 
@@ -1066,6 +1124,7 @@ impl AlertSource {
             Self::Study { id, .. } | Self::StudyCondition { id, .. } | Self::Drawing(id) => {
                 !id.trim().is_empty()
             }
+            Self::TPOLevel(level) => level.price.is_finite(),
             _ => true,
         }
     }
@@ -1558,6 +1617,11 @@ mod tests {
         let drawing = |id: &str| AlertSource::Drawing(id.into());
         let time = DateTime::from_timestamp(0, 0).unwrap();
         let bar = Bar::new(time, 123.0, 124.0, 122.0, 123.6, 10.0);
+        let tpo = AlertSource::TPOLevel(TPOLevelSource::new(
+            time,
+            crate::model::TPOLevel::PointOfControl,
+            123.5,
+        ));
         for (condition, expected) in [
             (
                 AlertCondition::Compare {
@@ -1594,12 +1658,20 @@ mod tests {
                 },
                 "SAMPLE crossed Fib Retracement 7: 0.236",
             ),
+            (
+                AlertCondition::Compare {
+                    other: tpo.clone(),
+                    comparison: AlertComparison::Crossing,
+                },
+                "SAMPLE crossed TPO 1 Jan: Point of control 123.5",
+            ),
         ] {
             let mut alert = Alert::new("SAMPLE", condition);
             alert.inputs = Some(Box::new(AlertInputs {
                 sources: vec![
                     (drawing("fib#1"), "Fib Retracement 7: 0.236".into()),
                     (drawing("fib#2"), "Fib Retracement 7: 0.382".into()),
+                    (tpo.clone(), "TPO 1 Jan: Point of control 123.5".into()),
                 ],
                 ..AlertInputs::default()
             }));
@@ -1624,7 +1696,7 @@ mod tests {
             a.delivery.plain_text = true;
             a.delivery.plain_text_address = address.into();
         }
-        let rows: [(Edit, bool); 57] = [
+        let rows: [(Edit, bool); 58] = [
             (
                 |a| {
                     a.source = AlertSource::StudyCondition {
@@ -1994,6 +2066,19 @@ mod tests {
                         source: AlertSource::Drawing(String::new()),
                         condition: AlertCondition::Above(1.0),
                     })
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::Compare {
+                        other: AlertSource::TPOLevel(TPOLevelSource::new(
+                            DateTime::UNIX_EPOCH,
+                            crate::model::TPOLevel::PointOfControl,
+                            f64::NAN,
+                        )),
+                        comparison: AlertComparison::Crossing,
+                    }
                 },
                 false,
             ),

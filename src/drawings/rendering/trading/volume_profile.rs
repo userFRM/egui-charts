@@ -1,7 +1,8 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
 use crate::data::{
-    FootprintBarView, FootprintView, StudyDataRequest, VolumeProfile, VolumeProfileConfig,
+    FootprintBarView, FootprintView, ProfileSource, StudyDataRequest, VolumeProfile,
+    VolumeProfileConfig,
 };
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
@@ -340,7 +341,8 @@ impl Drawing {
 
     /// Renders the volume profile of the bars between the two anchors, or from the earlier one to
     /// the last bar when extended right, from half a bar before the first bar to half a bar after
-    /// the last, with the point of control and the value area.
+    /// the last, with the point of control and the value area and, where its switches show them,
+    /// the developing point of control and value area.
     pub(crate) fn render_fixed_range_volume_profile(
         &self,
         painter: &egui::Painter,
@@ -363,7 +365,7 @@ impl Drawing {
     }
 
     /// Renders the volume profile from half a bar before the anchor bar to half a bar after the
-    /// last bar.
+    /// last bar and, where its switches show them, the developing point of control and value area.
     pub(crate) fn render_anchored_volume_profile(&self, painter: &egui::Painter, view: &ChartView) {
         let Some(anchor) = self.chart_points.first() else {
             return;
@@ -414,7 +416,8 @@ impl Drawing {
 
     /// Draws the profile of `bars`, the span that starts at bar `first`, as
     /// rows beside the first anchor, or at the pane's right edge when anchored,
-    /// with a tint over the measured bars' price and time range.
+    /// with a tint over the measured bars' price and time range and, where its switches show
+    /// them, the developing point of control and value area over the bars.
     fn draw_volume_profile(
         &self,
         painter: &egui::Painter,
@@ -438,9 +441,16 @@ impl Drawing {
             ProfileStyle::Drawing {
                 anchored: self.tool_type == DrawingToolType::AnchoredVolumeProfile,
                 poc_width: self.stroke_width,
+                volume_decimals: view
+                    .instrument
+                    .and_then(|instrument| instrument.volume_decimals),
             },
             view.price_to_y,
         );
+        if config.show_developing_poc || config.show_developing_value_area {
+            let levels = self.developing_levels(view, first, bars, profile);
+            paint_developing(painter, view, first, profile, &levels, config);
+        }
     }
 
     /// The drawing's row layout on the view's instrument: rows of its ticks per row where the
@@ -512,6 +522,40 @@ impl Drawing {
             return Rc::new(Some(estimate));
         }
         profile
+    }
+
+    /// The developing point of control and value area after each of `bars`, the span that starts
+    /// at bar `first`, in the rows of `profile`, the span's profile, from the inputs it was built
+    /// from: each bar's executions for an executed profile, else the finer bars inside each bar
+    /// where the view holds them, else the bar.
+    fn developing_levels(
+        &self,
+        view: &ChartView,
+        first: usize,
+        bars: &[Bar],
+        profile: &VolumeProfile,
+    ) -> Vec<Option<(usize, (usize, usize))>> {
+        // shortcut: recomputed each frame, bars times rows; cache it by span as PROFILES does if
+        // long spans with fine rows stall frames.
+        let share = self.volume_profile.unwrap_or_default().value_area();
+        if let ProfileSource::Executions { .. } = profile.source() {
+            return view.executions.map_or_else(Vec::new, |flow| {
+                profile.developing_executions(
+                    share,
+                    flow.price_step(),
+                    bars.iter().map(|bar| flow.profile(bar.time, bar.time)),
+                )
+            });
+        }
+        match finer_inputs(view, first, bars) {
+            Some((_, _, inside, end)) => profile.developing_estimate(
+                share,
+                VolumeProfile::finer_parts(bars, end, inside)
+                    .zip(bars)
+                    .map(|(part, bar)| part.unwrap_or(std::slice::from_ref(bar))),
+            ),
+            None => profile.developing_estimate(share, bars.iter().map(std::slice::from_ref)),
+        }
     }
 
     /// The profile that a fixed range or anchored volume profile shows over the view's bars,
@@ -813,6 +857,72 @@ fn paint_vwap_line(
     }
 }
 
+/// Step lines through the centres of the bars from `first` at the developing `levels` of
+/// `profile` that `config` shows: the point of control at its row's middle, as the profile draws
+/// it, and the value area's high and low edges. A bar before any volume, or a level off the
+/// scale, breaks a line.
+fn paint_developing(
+    painter: &egui::Painter,
+    view: &ChartView,
+    first: usize,
+    profile: &VolumeProfile,
+    levels: &[Option<(usize, (usize, usize))>],
+    config: VolumeProfileConfig,
+) {
+    use crate::data::ProfileLevelKind as Kind;
+    let y_at_row = |row: usize| (view.price_to_y)(profile.low + row as f64 * profile.row_height);
+    let [high_color, low_color] = config.developing_value_area_colors;
+    for (shown, color, kind) in [
+        (
+            config.show_developing_poc,
+            config.developing_poc_color,
+            Kind::PointOfControl,
+        ),
+        (
+            config.show_developing_value_area,
+            high_color,
+            Kind::ValueAreaHigh,
+        ),
+        (
+            config.show_developing_value_area,
+            low_color,
+            Kind::ValueAreaLow,
+        ),
+    ] {
+        if !shown {
+            continue;
+        }
+        let y = |(poc, (low, high)): (usize, (usize, usize))| match kind {
+            Kind::PointOfControl => (y_at_row(poc) + y_at_row(poc + 1)) / 2.0,
+            Kind::ValueAreaHigh => y_at_row(high + 1),
+            Kind::ValueAreaLow => y_at_row(low),
+        };
+        let stroke = Stroke::new(crate::styles::stroke::HAIRLINE, rgba(color));
+        let mut run: Vec<Pos2> = Vec::new();
+        // The break after the last bar paints the last run.
+        for (i, level) in levels.iter().copied().chain([None]).enumerate() {
+            let point = level
+                .map(|level| Pos2::new((view.bar_to_x)((first + i) as f32), y(level)))
+                .filter(|point| point.is_finite());
+            match point {
+                Some(point) => {
+                    // Level until the bar, then a step to its new level.
+                    if let Some(last) = run.last().copied()
+                        && last.y != point.y
+                    {
+                        run.push(Pos2::new(point.x, last.y));
+                    }
+                    run.push(point);
+                }
+                None if run.len() > 1 => {
+                    painter.add(Shape::line(std::mem::take(&mut run), stroke));
+                }
+                None => run.clear(),
+            }
+        }
+    }
+}
+
 fn rgba([r, g, b, a]: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, a)
 }
@@ -876,14 +986,14 @@ fn finer_interval(
     ProfileResolution::suggested(resolutions, timeframe, end - first.time, (first.time, end))
 }
 
-/// Replaces chart bars by the suggested finer bars inside them, when any are held in the span.
-fn finer_profile(
-    view: &ChartView,
-    rows: usize,
-    row_size: Option<f64>,
-    first: usize,
-    bars: &[Bar],
-) -> Option<Rc<Option<VolumeProfile>>> {
+/// A finer history, the index of its first bar opening in a span, the bars opening in the span,
+/// and the span's end.
+type FinerInputs<'a> = (&'a [Bar], usize, &'a [Bar], DateTime<Utc>);
+
+/// The suggested finer history for `bars`, the span that starts at bar `first`, the index of its
+/// first bar opening in the span, the bars opening in the span, and the span's end: the next chart
+/// bar's open or the last bar's close. `None` without finer bars inside the span.
+fn finer_inputs<'a>(view: &ChartView<'a>, first: usize, bars: &[Bar]) -> Option<FinerInputs<'a>> {
     if view.finer.is_empty() {
         return None;
     }
@@ -904,6 +1014,18 @@ fn finer_profile(
     if inside.is_empty() {
         return None;
     }
+    Some((finer, at, inside, end))
+}
+
+/// Replaces chart bars by the suggested finer bars inside them, when any are held in the span.
+fn finer_profile(
+    view: &ChartView,
+    rows: usize,
+    row_size: Option<f64>,
+    first: usize,
+    bars: &[Bar],
+) -> Option<Rc<Option<VolumeProfile>>> {
+    let (finer, at, inside, end) = finer_inputs(view, first, bars)?;
     // shortcut: a host correction of a finer bar inside the span that keeps its fingerprint
     // shows at the next span change; key on a history revision if feeds need it at once.
     let key = (
@@ -1744,6 +1866,206 @@ mod tests {
                 estimated,
                 "{name}"
             );
+        }
+    }
+
+    /// The point of control, the value area high and low lines, the row values and the box of
+    /// both profile drawings paint in the colours set on them, or as before while none is set in
+    /// either theme, and not at all when switched off. Anchored values measure their room from
+    /// the rows at the pane's edge, and values follow the instrument's volume decimals.
+    #[test]
+    fn volume_profile_drawing_styles_paint_in_their_colours() {
+        use crate::data::VolumeProfileConfig;
+        use crate::model::Instrument;
+        use crate::theme::ThemeExt;
+        let bars = sample_bars();
+        let price_to_y = |price: f64| (16.0 - price) as f32 * 50.0;
+        let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+        let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let one_decimal = Instrument::new("TEST").with_volume_decimals(1);
+        let mut on = VolumeProfileConfig::new(4, 0.7).unwrap();
+        on.show_value_area_high = true;
+        on.show_value_area_low = true;
+        on.show_values = true;
+        let mut set = on;
+        set.poc_color = Some([200, 0, 0, 255]);
+        set.value_area_line_colors = [[0, 200, 0, 255], [0, 0, 200, 255]];
+        set.values_color = Some([250, 200, 0, 255]);
+        set.box_color = Some([10, 20, 30, 60]);
+        let mut off = set;
+        off.show_poc = false;
+        off.show_value_area_high = false;
+        off.show_value_area_low = false;
+        off.show_values = false;
+        off.show_box = false;
+        // Four 1.5-price rows have totals 83 1/3, 350, 619 1/6 and 397.5.
+        let two = ["83.33", "350.00", "619.17", "397.50"];
+        let one = ["83.3", "350.0", "619.2", "397.5"];
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for tool in [
+                DrawingToolType::FixedRangeVolumeProfile,
+                DrawingToolType::AnchoredVolumeProfile,
+            ] {
+                let anchored = tool == DrawingToolType::AnchoredVolumeProfile;
+                for (case, config, width, instrument, values) in [
+                    (
+                        "defaults",
+                        VolumeProfileConfig::new(4, 0.7).unwrap(),
+                        400.0,
+                        None,
+                        None,
+                    ),
+                    ("on", on, 400.0, None, Some(two)),
+                    ("set", set, 400.0, None, Some(two)),
+                    ("off", off, 400.0, None, None),
+                    (
+                        "set, one decimal",
+                        set,
+                        400.0,
+                        Some(&one_decimal),
+                        Some(one),
+                    ),
+                    // Anchored rows sit at the pane's edge, where the values fit.
+                    ("set, narrow", set, 24.0, None, anchored.then_some(two)),
+                ] {
+                    let mut drawing = Drawing::new(1, tool);
+                    drawing.color = [40, 90, 200, 255];
+                    drawing.volume_profile = Some(config);
+                    let view = ChartView {
+                        price_formatter: None,
+                        thousands_sep: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
+                        instrument,
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|x| x,
+                        bar_spacing: 1.0,
+                        price_to_y: &price_to_y,
+                        y_to_price: &|y| 16.0 - f64::from(y) / 50.0,
+                        time_axis: true,
+                        executions: None,
+                        timeframe: None,
+                        finer: &[],
+                    };
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut text = Color32::PLACEHOLDER;
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        text = ui.ctx().active_theme().ui.text;
+                        let painter =
+                            egui::Painter::new(ui.ctx().clone(), egui::LayerId::background(), clip);
+                        drawing.draw_volume_profile(
+                            &painter,
+                            &view,
+                            0,
+                            &bars,
+                            100.0,
+                            100.0 + width,
+                        );
+                    });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let name = format!("{case}, {tool:?}, dark {}", theme.dark);
+                    // Placeholder bytes take the drawing's colour at alpha 200.
+                    let line = |set: [u8; 4]| {
+                        if set == Color32::PLACEHOLDER.to_srgba_unmultiplied() {
+                            rgba([40, 90, 200, 200])
+                        } else {
+                            rgba(set)
+                        }
+                    };
+                    let box_rect =
+                        Rect::from_min_max(Pos2::new(100.0, 50.0), Pos2::new(100.0 + width, 350.0));
+                    let mut boxes = Vec::new();
+                    let mut pocs = Vec::new();
+                    let mut edges = Vec::new();
+                    let mut labels = Vec::new();
+                    let mut figures = Vec::new();
+                    for shape in &shapes {
+                        match &shape.shape {
+                            egui::Shape::Rect(r) if r.rect == box_rect => boxes.push(r.fill),
+                            egui::Shape::Path(path) => {
+                                let egui::epaint::ColorMode::Solid(color) = path.stroke.color
+                                else {
+                                    panic!("{name}: POC is one colour");
+                                };
+                                pocs.push((path.points[0], path.points[1].x, color));
+                            }
+                            egui::Shape::LineSegment { points, stroke } => {
+                                edges.push((points[0].y, stroke.color));
+                            }
+                            egui::Shape::Text(t) => {
+                                let label = t.galley.job.text.clone();
+                                let color = t.galley.job.sections[0].format.color;
+                                if ["VAH", "VAL"].contains(&label.as_str()) {
+                                    labels.push((label, color));
+                                } else if label != "Estimated from bars" {
+                                    figures.push((label, color, t.visual_bounding_rect()));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let shown = config
+                        .show_box
+                        .then(|| rgba(config.box_color.unwrap_or([40, 90, 200, 15])));
+                    assert_eq!(boxes.first().copied(), shown, "{name}: box");
+                    let reach = if anchored {
+                        [0.0, 800.0]
+                    } else {
+                        [100.0, 100.0 + width]
+                    };
+                    let poc = config.poc_color.map_or(text, rgba);
+                    assert_eq!(
+                        pocs,
+                        if config.show_poc {
+                            vec![(Pos2::new(reach[0], 162.5), reach[1], poc)]
+                        } else {
+                            Vec::new()
+                        },
+                        "{name}: POC"
+                    );
+                    let [high, low] = config.value_area_line_colors;
+                    let want = if config.show_value_area_high {
+                        vec![(125.0, line(high)), (350.0, line(low))]
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(edges, want, "{name}: value area lines");
+                    if width >= 50.0 {
+                        assert_eq!(
+                            labels,
+                            want.iter()
+                                .zip(["VAH", "VAL"])
+                                .map(|(&(_, color), label)| (label.to_owned(), color))
+                                .collect::<Vec<_>>(),
+                            "{name}: value area labels"
+                        );
+                    }
+                    let figure = config.values_color.map_or(text, rgba);
+                    let bounds = if anchored {
+                        clip.x_range()
+                    } else {
+                        (102.0..=100.0 + width).into()
+                    };
+                    assert_eq!(
+                        figures
+                            .iter()
+                            .map(|(label, ..)| label.as_str())
+                            .collect::<Vec<_>>(),
+                        values.map_or(Vec::new(), Vec::from),
+                        "{name}: values"
+                    );
+                    for (label, color, rect) in &figures {
+                        assert_eq!(*color, figure, "{name}: {label}");
+                        assert!(
+                            bounds.contains(rect.min.x) && bounds.contains(rect.max.x),
+                            "{name}: {label} at {rect:?}"
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -3181,6 +3503,307 @@ mod tests {
                 failures.push(format!(
                     "{case}: up and down {sides:?}, expected ({up}, {down})"
                 ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// The developing point of control and value area step through the drawing's bars at the
+    /// levels of the bars up to each one, in the rows the drawing draws, from the executions or
+    /// finer bars its profile reads, through the last bar while the range extends right, each
+    /// switch drawing its own lines in their own colours. Over three bars the point of control
+    /// moves up one row at the third, and the value area reaches the top row at the second.
+    #[test]
+    fn developing_levels_step_after_each_bar() {
+        use crate::data::{Footprint, StudyData, VolumeProfileConfig};
+        use crate::drawings::ChartPoint;
+        use crate::model::{BarClock, Instrument, OrderSide, Tick};
+        #[derive(Clone, Copy, PartialEq)]
+        enum Source {
+            Bars,
+            Executions,
+            Finer,
+        }
+        type Points<'a> = &'a [(f32, f32)];
+        type Row<'a> = (
+            &'a str,
+            &'a [f32],
+            bool,
+            Option<f64>,
+            Source,
+            [bool; 2],
+            [Points<'a>; 3],
+        );
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let at = |seconds| start + chrono::TimeDelta::seconds(seconds);
+        // 10 traded in 100..101, then 6 in 102..103 and 12 in 101..102.
+        let bars = [
+            Bar::new(at(0), 100.25, 100.75, 100.25, 100.75, 10.0),
+            Bar::new(at(60), 102.25, 102.75, 102.25, 102.75, 6.0),
+            Bar::new(at(120), 101.25, 101.75, 101.25, 101.75, 12.0),
+        ];
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (bar, price, size) in [(0, 100.0, 10.0), (1, 102.0, 6.0), (2, 101.0, 12.0)] {
+            flow.push(&Tick::new(
+                bars[bar].time,
+                price,
+                size,
+                Some(OrderSide::Buy),
+            ))
+            .unwrap();
+        }
+        // Finer bars put 30 in the second bar in place of its 6.
+        let finer_bars = [Bar::new(at(60), 102.25, 102.75, 102.25, 102.75, 30.0)];
+        let finer = [StudyData {
+            request: StudyDataRequest {
+                symbol: "A".into(),
+                timeframe: Some(Timeframe::Sec30),
+                metric: None,
+            },
+            bars: &finer_bars,
+            clock: BarClock::new(Timeframe::Sec30),
+            instrument: None,
+            timeframe: Timeframe::Sec30,
+            chart: None,
+        }];
+        let instrument = Instrument::new("A")
+            .with_profile_resolutions([ProfileResolution::new(Timeframe::Sec30, None)]);
+        // Rows of 1 from 100: bar centres at x 100, 110, 120 and row edges at y 200 - 20 * row.
+        // 70% of the volume after each bar, [10, 0, 0], [10, 0, 6], [10, 12, 6]: POC rows 0, 0,
+        // 1 and value areas 0..=0, 0..=2 (only rows above are left), 0..=1 (10 below beats 6).
+        let fixed: [Points; 3] = [
+            &[
+                (100.0, 190.0),
+                (110.0, 190.0),
+                (120.0, 190.0),
+                (120.0, 170.0),
+            ],
+            &[
+                (100.0, 180.0),
+                (110.0, 180.0),
+                (110.0, 140.0),
+                (120.0, 140.0),
+                (120.0, 160.0),
+            ],
+            &[(100.0, 200.0), (110.0, 200.0), (120.0, 200.0)],
+        ];
+        // The same rows of volume in three equal rows over 100.25..102.75, edges 16 2/3 apart
+        // from y 195: each prefix is binned in them, not in a layout of its own.
+        let equal: [Points; 3] = [
+            &[
+                (100.0, 186.667),
+                (110.0, 186.667),
+                (120.0, 186.667),
+                (120.0, 170.0),
+            ],
+            &[
+                (100.0, 178.333),
+                (110.0, 178.333),
+                (110.0, 145.0),
+                (120.0, 145.0),
+                (120.0, 161.667),
+            ],
+            &[(100.0, 195.0), (110.0, 195.0), (120.0, 195.0)],
+        ];
+        // Executed rows of 1 centred on 100, 101 and 102, so edges at y 210 - 20 * row; the
+        // second bar leaves 101 untraded, which the value area still crosses.
+        let executed: [Points; 3] = [
+            &[
+                (100.0, 200.0),
+                (110.0, 200.0),
+                (120.0, 200.0),
+                (120.0, 180.0),
+            ],
+            &[
+                (100.0, 190.0),
+                (110.0, 190.0),
+                (110.0, 150.0),
+                (120.0, 150.0),
+                (120.0, 170.0),
+            ],
+            &[(100.0, 210.0), (110.0, 210.0), (120.0, 210.0)],
+        ];
+        // [10, 0, 0], [10, 0, 30], [10, 12, 30]: POC rows 0, 2, 2 and value areas 0..=0, 2..=2
+        // and 1..=2.
+        let finer_levels: [Points; 3] = [
+            &[
+                (100.0, 190.0),
+                (110.0, 190.0),
+                (110.0, 150.0),
+                (120.0, 150.0),
+            ],
+            &[
+                (100.0, 180.0),
+                (110.0, 180.0),
+                (110.0, 140.0),
+                (120.0, 140.0),
+            ],
+            &[
+                (100.0, 200.0),
+                (110.0, 200.0),
+                (110.0, 160.0),
+                (120.0, 160.0),
+                (120.0, 180.0),
+            ],
+        ];
+        let rows: [Row; 8] = [
+            (
+                "fixed",
+                &[0.0, 2.0],
+                false,
+                Some(1.0),
+                Source::Bars,
+                [true; 2],
+                fixed,
+            ),
+            (
+                "extended",
+                &[0.0, 1.0],
+                true,
+                Some(1.0),
+                Source::Bars,
+                [true; 2],
+                fixed,
+            ),
+            (
+                "anchored",
+                &[0.0],
+                false,
+                Some(1.0),
+                Source::Bars,
+                [true; 2],
+                fixed,
+            ),
+            (
+                "equal rows",
+                &[0.0, 2.0],
+                false,
+                None,
+                Source::Bars,
+                [true; 2],
+                equal,
+            ),
+            (
+                "executions",
+                &[0.0, 2.0],
+                false,
+                Some(1.0),
+                Source::Executions,
+                [true; 2],
+                executed,
+            ),
+            (
+                "finer bars",
+                &[0.0, 2.0],
+                false,
+                Some(1.0),
+                Source::Finer,
+                [true; 2],
+                finer_levels,
+            ),
+            (
+                "POC only",
+                &[0.0, 2.0],
+                false,
+                Some(1.0),
+                Source::Bars,
+                [true, false],
+                [fixed[0], &[], &[]],
+            ),
+            (
+                "VA only",
+                &[0.0, 2.0],
+                false,
+                Some(1.0),
+                Source::Bars,
+                [false, true],
+                [&[], fixed[1], fixed[2]],
+            ),
+        ];
+        let colors = [[200, 0, 0, 255], [0, 0, 200, 255], [0, 150, 0, 255]];
+        let mut failures = Vec::new();
+        // One anchor is an anchored profile, two a fixed range.
+        for (name, anchors, extend_right, row_size, source, [poc, va], want) in rows {
+            let view = ChartView {
+                price_formatter: None,
+                thousands_sep: None,
+                time_formatter: None,
+                bar_seconds: 60,
+                instrument: (source == Source::Finer).then_some(&instrument),
+                bars: &bars,
+                revision: 0,
+                bar_to_x: &|i| 100.0 + 10.0 * i,
+                bar_spacing: 10.0,
+                price_to_y: &|price| ((110.0 - price) * 20.0) as f32,
+                y_to_price: &|y| 110.0 - f64::from(y) / 20.0,
+                time_axis: true,
+                executions: (source == Source::Executions).then_some((&flow).into()),
+                timeframe: Some(Timeframe::Min1),
+                finer: if source == Source::Finer { &finer } else { &[] },
+            };
+            let mut config = VolumeProfileConfig::new(3, 0.7)
+                .and_then(|config| config.with_row_size(row_size))
+                .unwrap();
+            config.extend_right = extend_right;
+            config.show_developing_poc = poc;
+            config.show_developing_value_area = va;
+            config.developing_poc_color = colors[0];
+            config.developing_value_area_colors = [colors[1], colors[2]];
+            let anchored = anchors.len() == 1;
+            let mut drawing = Drawing::new(
+                1,
+                if anchored {
+                    DrawingToolType::AnchoredVolumeProfile
+                } else {
+                    DrawingToolType::FixedRangeVolumeProfile
+                },
+            );
+            drawing.volume_profile = Some(config);
+            drawing.chart_points = anchors
+                .iter()
+                .map(|&bar| ChartPoint::new(bar, 100.0))
+                .collect();
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+                let painter =
+                    egui::Painter::new(ui.ctx().clone(), egui::LayerId::background(), clip);
+                if anchored {
+                    drawing.render_anchored_volume_profile(&painter, &view);
+                } else {
+                    drawing.render_fixed_range_volume_profile(&painter, &view);
+                }
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            for ((line, [r, g, b, a]), want) in ["POC", "VA high", "VA low"]
+                .into_iter()
+                .zip(colors)
+                .zip(want)
+            {
+                let color =
+                    egui::epaint::ColorMode::Solid(Color32::from_rgba_unmultiplied(r, g, b, a));
+                let paths: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Path(path) if path.stroke.color == color => Some(&path.points),
+                        _ => None,
+                    })
+                    .collect();
+                let matches = match paths.as_slice() {
+                    [] => want.is_empty(),
+                    [points] => {
+                        points.len() == want.len()
+                            && points.iter().zip(want).all(|(point, &(x, y))| {
+                                (point.x - x).abs() < 1e-3 && (point.y - y).abs() < 1e-3
+                            })
+                    }
+                    _ => false,
+                };
+                if !matches {
+                    failures.push(format!(
+                        "{name}: developing {line} {paths:?}, expected {want:?}"
+                    ));
+                }
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");

@@ -249,6 +249,23 @@ impl SymbolTab {
                     Self::switch(ui, "Thin bars", &mut style.thin_bars);
                     Self::switch(ui, "Phantom bars", &mut style.phantom_bars);
                     Self::candle_colors_section(ui, settings);
+                    let body = [settings.bullish_color, settings.bearish_color];
+                    let style = &mut settings.chart_type_params.styles.range;
+                    ui.label(l10n::text(ui.ctx(), "Forming bar"));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        for (color, body) in [&mut style.forming_up, &mut style.forming_down]
+                            .into_iter()
+                            .zip(body)
+                        {
+                            // A style saved before shows the body colour it draws in until picked.
+                            let mut shown = crate::model::or_candle(*color, body);
+                            if Self::color_picker(ui, &mut shown) {
+                                *color = shown;
+                            }
+                        }
+                    });
+                    ui.end_row();
                 }
                 _ => Self::candle_colors_section(ui, settings),
             }
@@ -266,6 +283,23 @@ impl SymbolTab {
     fn switch(ui: &mut Ui, name: &str, value: &mut bool) {
         let label = ui.label(l10n::text(ui.ctx(), name));
         ui.checkbox(value, "").labelled_by(label.id);
+        ui.end_row();
+    }
+
+    /// A switch whose long name wraps in the label column, usable while `enabled`.
+    fn wrapped_switch(ui: &mut Ui, name: &str, enabled: bool, value: &mut bool) {
+        let label = ui
+            .vertical(|ui| {
+                ui.set_width(160.0);
+                ui.add(
+                    egui::Label::new(l10n::text(ui.ctx(), name))
+                        .wrap()
+                        .halign(egui::Align::Min),
+                )
+            })
+            .inner;
+        ui.add_enabled(enabled, egui::Checkbox::without_text(value))
+            .labelled_by(label.id);
         ui.end_row();
     }
 
@@ -1210,25 +1244,31 @@ impl SymbolTab {
                     }
                     ui.end_row();
                 }
-                let label = ui
-                    .vertical(|ui| {
-                        ui.set_width(160.0);
-                        ui.add(
-                            egui::Label::new(l10n::text(
-                                ui.ctx(),
-                                "Extend poor highs and lows until repaired",
-                            ))
-                            .wrap()
-                            .halign(egui::Align::Min),
-                        )
-                    })
-                    .inner;
-                ui.add_enabled(
+                Self::wrapped_switch(
+                    ui,
+                    "Extend poor highs and lows until repaired",
                     poor[0] || poor[1],
-                    egui::Checkbox::without_text(&mut params.tpo_extend_poor),
-                )
-                .labelled_by(label.id);
-                ui.end_row();
+                    &mut params.tpo_extend_poor,
+                );
+                for (name, enabled, value) in [
+                    (
+                        "Extend point of control until touched",
+                        params.tpo_poc,
+                        &mut params.tpo_extend_poc,
+                    ),
+                    (
+                        "Extend value area high until touched",
+                        params.tpo_value_area_levels,
+                        &mut params.tpo_extend_vah,
+                    ),
+                    (
+                        "Extend value area low until touched",
+                        params.tpo_value_area_levels,
+                        &mut params.tpo_extend_val,
+                    ),
+                ] {
+                    Self::wrapped_switch(ui, name, enabled, value);
+                }
                 let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_row_ticks)
@@ -1264,6 +1304,12 @@ impl SymbolTab {
                 ui.checkbox(&mut params.tpo_single_prints, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::wrapped_switch(
+                    ui,
+                    "Extend single prints until touched",
+                    params.tpo_single_prints,
+                    &mut params.tpo_extend_single_prints,
+                );
                 let label = ui.label(l10n::text(ui.ctx(), "TPO Midpoint"));
                 ui.checkbox(&mut params.tpo_midpoint, "")
                     .labelled_by(label.id);

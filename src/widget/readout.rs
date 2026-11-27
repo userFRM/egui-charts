@@ -3,10 +3,10 @@
 use super::{Chart, CursorDataPolicy, SeriesId};
 use crate::chart::rendering::StudyValue;
 
-/// What the data table reads of a visible added series: id, title, bar revision and last bar
-/// (time in nanoseconds, close bits).
+/// What the data table reads of a visible added series: id, title, whether it lists its open,
+/// high and low, bar revision and last bar (time in nanoseconds, open, high, low and close bits).
 #[cfg(feature = "ui")]
-pub(crate) type SeriesFingerprint = (usize, String, u64, Option<(i64, u64)>);
+pub(crate) type SeriesFingerprint = (usize, String, bool, u64, Option<(i64, [u64; 4])>);
 
 impl Chart {
     /// The table is current while this is unchanged: the history revision, a revision moved
@@ -21,8 +21,9 @@ impl Chart {
         )
     }
 
-    /// What the table lists of each visible added series: its id, title, bar revision and last
-    /// bar, which the revision leaves out. The table is current while this is unchanged too.
+    /// What the table lists of each visible added series: its id, title, whether it lists its
+    /// open, high and low, bar revision and last bar, which the revision leaves out. The table is
+    /// current while this is unchanged too.
     #[cfg(feature = "ui")]
     pub(crate) fn data_table_series(&self) -> Vec<SeriesFingerprint> {
         self.price_series
@@ -32,10 +33,16 @@ impl Chart {
                 let last = item.bars.last().map(|bar| {
                     (
                         bar.time.timestamp_nanos_opt().unwrap_or_default(),
-                        bar.close.to_bits(),
+                        [bar.open, bar.high, bar.low, bar.close].map(f64::to_bits),
                     )
                 });
-                (item.id.0, item.options.name.clone(), item.revision, last)
+                (
+                    item.id.0,
+                    item.options.name.clone(),
+                    item.options.chart_type.uses_ohlc(),
+                    item.revision,
+                    last,
+                )
             })
             .collect()
     }

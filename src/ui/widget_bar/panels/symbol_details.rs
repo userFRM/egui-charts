@@ -1,5 +1,5 @@
 //! Facts about the chart's symbol: its quote, the key statistics and profile the feed supplies,
-//! and the user's notes, kept through the storage service.
+//! the detail sections the host lists, and the user's notes, kept through the storage service.
 
 use crate::localization as l10n;
 use std::collections::{HashMap, HashSet};
@@ -11,7 +11,9 @@ use egui::text::LayoutJob;
 use egui::{Align, Color32, Label, Layout, RichText, Sense, Stroke, Ui, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
-use super::market_details::{MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality};
+use super::market_details::{
+    DetailRow, DetailSection, MarketDetail, MarketDetailRequest, PeriodReturn, Seasonality,
+};
 use super::news::NewsAction;
 use super::price_decimals;
 use super::{HEADER_HEIGHT, weighted};
@@ -40,7 +42,7 @@ const HEADLINES: usize = 3;
 /// Days ahead the Upcoming events section looks for the next earnings and dividend.
 const EVENT_DAYS: i64 = 366;
 /// The sections the layout menu shows or hides, in panel order.
-const SECTIONS: [&str; 9] = [
+const SECTIONS: [&str; 16] = [
     "Volume",
     "Key statistics",
     "Profile",
@@ -49,6 +51,13 @@ const SECTIONS: [&str; 9] = [
     "Technicals",
     "Upcoming events",
     "News",
+    DetailSection::AnalystEstimates.title(),
+    DetailSection::Options.title(),
+    DetailSection::EarningsCalls.title(),
+    DetailSection::Documents.title(),
+    DetailSection::FundHoldings.title(),
+    DetailSection::CreditRatings.title(),
+    DetailSection::Bonds.title(),
     "Notes",
 ];
 const MONTHS: [&str; 12] = [
@@ -119,6 +128,8 @@ enum Request {
     News(String),
     Load(String),
     Save(String, String),
+    /// The names of the stored notes documents, for All notes.
+    List,
 }
 
 /// Details of the chart's symbol, fed by the host's [`Datafeed`] and [`Storage`].
@@ -162,6 +173,23 @@ enum Request {
 /// with [`set_period_returns`](Self::set_period_returns) and
 /// [`set_seasonality`](Self::set_seasonality). A host that never calls it sees neither section.
 /// Each section says whether it is loading, empty, unavailable or failed.
+///
+/// The sections from analyst estimates to bonds list the [`DetailRow`]s the host writes for the
+/// [`DetailSection`]s it offers with [`set_detail_sections`](Self::set_detail_sections), none by
+/// default: [`take_market_requests`](Self::take_market_requests) asks for each once per symbol,
+/// [`set_detail_rows`](Self::set_detail_rows) answers, and a chosen row with a link is reported by
+/// [`take_opened_row`](Self::take_opened_row) for the host to open its document, recording or
+/// page. A section the host does not offer is neither drawn nor listed in the Layout menu, and one
+/// it answers as unavailable is not drawn.
+///
+/// After [`set_expand_visible`](Self::set_expand_visible) the header's Expand button reports the
+/// shown symbol through [`take_expand_request`](Self::take_expand_request), for the host to show
+/// the panel larger, such as in place of the chart. All notes, beside the Notes title, lists every
+/// symbol with notes, those typed and, when it is opened, those in the storage service, and shows
+/// the chosen symbol's notes in place of the shown symbol's until its back button or a new symbol.
+/// [`focus_notes`](Self::focus_notes) opens a symbol's notes in the same way with the field
+/// focused, for a note started elsewhere, such as from the chart menu, a watchlist row or
+/// [`KeyboardAction::AddNote`](crate::config::KeyboardAction::AddNote).
 pub struct SymbolDetailsPanel {
     instrument: Option<Instrument>,
     quote: Option<Quote>,
@@ -173,6 +201,14 @@ pub struct SymbolDetailsPanel {
     financials: Option<CompanyFinancials>,
     returns: Option<MarketDetail<Vec<PeriodReturn>>>,
     seasonality: Option<MarketDetail<Seasonality>>,
+    /// The listed sections the host answers.
+    offered: HashSet<DetailSection>,
+    /// The shown symbol's rows of each offered section, from its first request on.
+    rows: HashMap<DetailSection, MarketDetail<Vec<DetailRow>>>,
+    opened_row: Option<DetailRow>,
+    expand_visible: bool,
+    /// The symbol shown when Expand was chosen.
+    expand_request: Option<String>,
     /// `None` until bars of the shown symbol arrive.
     technicals: Option<Technicals>,
     /// The next earnings and the next ex-dividend event of the shown symbol.
@@ -182,6 +218,10 @@ pub struct SymbolDetailsPanel {
     news_action: NewsAction,
     error: Option<String>,
     notes: HashMap<String, Notes>,
+    /// The symbol whose notes the Notes section shows instead of the shown symbol's.
+    notes_symbol: Option<String>,
+    /// Focuses the notes field once its notes are read.
+    notes_focus: bool,
     feed: Option<Arc<dyn Datafeed>>,
     storage: Option<Arc<dyn Storage>>,
     /// The revisions the notes were read or written at, and the writes the host refused.
@@ -205,12 +245,19 @@ impl Default for SymbolDetailsPanel {
             financials: None,
             returns: None,
             seasonality: None,
+            offered: HashSet::new(),
+            rows: HashMap::new(),
+            opened_row: None,
+            expand_visible: false,
+            expand_request: None,
             technicals: None,
             events: [None, None],
             headlines: Vec::new(),
             news_action: NewsAction::None,
             error: None,
             notes: HashMap::new(),
+            notes_symbol: None,
+            notes_focus: false,
             feed: None,
             storage: None,
             revisions: Revisions::new(StoreKind::SymbolNotes),
@@ -235,6 +282,11 @@ impl std::fmt::Debug for SymbolDetailsPanel {
             .field("financials", &self.financials)
             .field("returns", &self.returns)
             .field("seasonality", &self.seasonality)
+            .field("offered", &self.offered)
+            .field("rows", &self.rows)
+            .field("opened_row", &self.opened_row)
+            .field("expand_visible", &self.expand_visible)
+            .field("expand_request", &self.expand_request)
             .field(
                 "technicals",
                 &self.technicals.as_ref().map(|t| (t.timeframe, t.len)),
@@ -243,6 +295,8 @@ impl std::fmt::Debug for SymbolDetailsPanel {
             .field("headlines", &self.headlines)
             .field("news_action", &self.news_action)
             .field("error", &self.error)
+            .field("notes_symbol", &self.notes_symbol)
+            .field("notes_focus", &self.notes_focus)
             .field("next", &self.next)
             .field("financials_requested", &self.financials_requested)
             .field("hide_financials", &self.hide_financials)
@@ -259,8 +313,12 @@ impl SymbolDetailsPanel {
     /// Ask `feed` for the details, financials, upcoming events and headlines of each symbol from
     /// now on, starting with the shown one. Replies from the previous feed are ignored.
     pub fn set_feed(&mut self, feed: Arc<dyn Datafeed>) {
-        self.requests
-            .retain(|_, request| matches!(request, Request::Load(_) | Request::Save(..)));
+        self.requests.retain(|_, request| {
+            matches!(
+                request,
+                Request::Load(_) | Request::Save(..) | Request::List
+            )
+        });
         self.feed = Some(feed);
         if let Some(symbol) = self.symbol().map(str::to_owned) {
             self.request_details(symbol);
@@ -272,9 +330,16 @@ impl SymbolDetailsPanel {
         self.storage = Some(storage);
         self.revisions = Revisions::new(StoreKind::SymbolNotes);
         self.notes.clear();
-        self.requests
-            .retain(|_, request| !matches!(request, Request::Load(_) | Request::Save(..)));
+        self.requests.retain(|_, request| {
+            !matches!(
+                request,
+                Request::Load(_) | Request::Save(..) | Request::List
+            )
+        });
         if let Some(symbol) = self.symbol().map(str::to_owned) {
+            self.load_notes(symbol);
+        }
+        if let Some(symbol) = self.notes_symbol.clone() {
             self.load_notes(symbol);
         }
     }
@@ -292,23 +357,17 @@ impl SymbolDetailsPanel {
             self.financials = None;
             self.returns = None;
             self.seasonality = None;
+            self.rows.clear();
             self.technicals = None;
             self.events = [None, None];
             self.headlines.clear();
             self.error = None;
-            self.request_details(instrument.symbol.clone());
-            // Notes not read yet and not being read, such as after a failed read, are read again.
-            let loading = self.requests.values().any(
-                |request| matches!(request, Request::Load(symbol) if *symbol == instrument.symbol),
-            );
-            if !loading
-                && self
-                    .notes
-                    .get(&instrument.symbol)
-                    .is_none_or(|notes| notes.written.is_none())
-            {
-                self.load_notes(instrument.symbol.clone());
+            // Another symbol's notes, and a focus asked for, end here unless they are the new one's.
+            if self.notes_symbol.take().as_deref() != Some(instrument.symbol.as_str()) {
+                self.notes_focus = false;
             }
+            self.request_details(instrument.symbol.clone());
+            self.read_notes_once(&instrument.symbol);
         }
     }
 
@@ -341,7 +400,8 @@ impl SymbolDetailsPanel {
 
     /// Hides exactly `sections`, by the titles [`hidden_sections`](Self::hidden_sections) returns,
     /// and shows the others. Names that are not section titles, compared exactly, are ignored, so a
-    /// layout saved by another version restores what it can. The edit button shows Notes again.
+    /// layout saved by another version restores what it can. The edit button and
+    /// [`focus_notes`](Self::focus_notes) show Notes again.
     pub fn set_hidden_sections<S: AsRef<str>>(&mut self, sections: impl IntoIterator<Item = S>) {
         self.hidden = sections
             .into_iter()
@@ -372,10 +432,35 @@ impl SymbolDetailsPanel {
         std::mem::take(&mut self.financials_requested)
     }
 
+    /// Shows or hides the header's Expand button, hidden by default. Show it when the host can
+    /// draw the details larger, such as in place of the chart, and hide it while it does.
+    pub fn set_expand_visible(&mut self, visible: bool) {
+        self.expand_visible = visible;
+        if !visible {
+            self.expand_request = None;
+        }
+    }
+
+    /// The symbol shown when the user chose Expand since the last call, for the host to draw the
+    /// panel larger with [`show`](Self::show).
+    pub fn take_expand_request(&mut self) -> Option<String> {
+        self.expand_request.take()
+    }
+
+    /// Shows the notes on `symbol` with their field focused once they are read, in place of the
+    /// shown symbol's when it is another. Those stay until the back button beside them; showing
+    /// a symbol other than `symbol` ends them and a focus not yet given.
+    pub fn focus_notes(&mut self, symbol: &str) {
+        self.notes_symbol = (self.symbol() != Some(symbol)).then(|| symbol.to_owned());
+        self.notes_focus = true;
+        self.hidden.remove("Notes");
+        self.read_notes_once(symbol);
+    }
+
     /// The market detail the sections still lack for the shown symbol, each returned once; it
     /// marks them loading. Call it every frame and answer with
-    /// [`set_period_returns`](Self::set_period_returns) and
-    /// [`set_seasonality`](Self::set_seasonality).
+    /// [`set_period_returns`](Self::set_period_returns),
+    /// [`set_seasonality`](Self::set_seasonality) and [`set_detail_rows`](Self::set_detail_rows).
     pub fn take_market_requests(&mut self) -> Vec<MarketDetailRequest> {
         let Some(symbol) = self.symbol().map(str::to_owned) else {
             return Vec::new();
@@ -387,7 +472,13 @@ impl SymbolDetailsPanel {
         }
         if self.seasonality.is_none() {
             self.seasonality = Some(MarketDetail::Loading);
-            requests.push(MarketDetailRequest::Seasonality(symbol));
+            requests.push(MarketDetailRequest::Seasonality(symbol.clone()));
+        }
+        for section in DetailSection::ALL {
+            if self.offered.contains(&section) && !self.rows.contains_key(&section) {
+                self.rows.insert(section, MarketDetail::Loading);
+                requests.push(MarketDetailRequest::Section(section, symbol.clone()));
+            }
         }
         requests
     }
@@ -406,6 +497,36 @@ impl SymbolDetailsPanel {
         if self.symbol() == Some(symbol) {
             self.seasonality = Some(seasonality);
         }
+    }
+
+    /// Offers `sections`, the [`DetailSection`]s the host answers, none by default. Only these are
+    /// asked for by [`take_market_requests`](Self::take_market_requests), listed in the Layout
+    /// menu and drawn; the rows of a section left out are dropped.
+    pub fn set_detail_sections(&mut self, sections: impl IntoIterator<Item = DetailSection>) {
+        self.offered = sections.into_iter().collect();
+        self.rows
+            .retain(|section, _| self.offered.contains(section));
+    }
+
+    /// Answers the [`MarketDetailRequest::Section`] of `section` for `symbol`. An answer for a
+    /// symbol the panel no longer shows, or for a section not offered, is ignored.
+    /// [`MarketDetail::Unavailable`] hides the section for this symbol; an empty list says that
+    /// there is nothing to list.
+    pub fn set_detail_rows(
+        &mut self,
+        symbol: &str,
+        section: DetailSection,
+        rows: MarketDetail<Vec<DetailRow>>,
+    ) {
+        if self.symbol() == Some(symbol) && self.offered.contains(&section) {
+            self.rows.insert(section, rows);
+        }
+    }
+
+    /// The row with a [`url`](DetailRow::url) the user chose since the last call, for the host to
+    /// open its document, recording or page.
+    pub fn take_opened_row(&mut self) -> Option<DetailRow> {
+        self.opened_row.take()
     }
 
     /// Rates `bars`, the shown symbol's bars on `timeframe`, oldest first, with the
@@ -498,6 +619,36 @@ impl SymbolDetailsPanel {
             query.symbols.push(symbol.clone());
             let key = self.key(Request::News(symbol));
             feed.news(query, self.inbox.reply(key));
+        }
+    }
+
+    /// Reads the notes on `symbol` unless they are read or being read; notes whose read failed are
+    /// read again.
+    fn read_notes_once(&mut self, symbol: &str) {
+        let loading = self
+            .requests
+            .values()
+            .any(|request| matches!(request, Request::Load(of) if of == symbol));
+        if !loading
+            && self
+                .notes
+                .get(symbol)
+                .is_none_or(|notes| notes.written.is_none())
+        {
+            self.load_notes(symbol.to_owned());
+        }
+    }
+
+    /// Asks the storage service for the names of the stored notes, once at a time.
+    fn list_notes(&mut self) {
+        if let Some(storage) = self.storage.clone()
+            && !self
+                .requests
+                .values()
+                .any(|request| matches!(request, Request::List))
+        {
+            let key = self.key(Request::List);
+            storage.list(StoreKind::SymbolNotes, self.inbox.reply(key));
         }
     }
 
@@ -694,6 +845,35 @@ impl SymbolDetailsPanel {
                             Err(_) => {}
                         }
                     }
+                    Request::List => {
+                        let result = *answer
+                            .downcast::<Result<Vec<String>, FeedError>>()
+                            .expect("notes list");
+                        match result {
+                            // shortcut: reads every listed notes document to skip the empty ones;
+                            // list with sizes if hosts keep thousands of notes.
+                            Ok(names) => {
+                                for name in names {
+                                    // A kept local copy is not the notes on a symbol.
+                                    let copy = name.rfind(" (local copy").is_some_and(|at| {
+                                        crate::services::document::copy_number(&name[..at], &name)
+                                            .is_some()
+                                    });
+                                    if !copy {
+                                        self.read_notes_once(&name);
+                                    }
+                                }
+                            }
+                            Err(FeedError::NotSupported) => {}
+                            Err(error) => {
+                                self.error = Some(l10n::format_text(
+                                    ctx,
+                                    "Notes list unavailable: {error}",
+                                    &[("error", error.to_string().as_str())],
+                                ));
+                            }
+                        }
+                    }
                     Request::Save(symbol, text) => {
                         let storage = storage.as_deref().expect("notes storage");
                         let Some(written) = self.revisions.saved(
@@ -823,12 +1003,19 @@ impl SymbolDetailsPanel {
             details,
             returns,
             seasonality,
+            offered,
+            rows,
+            opened_row,
+            expand_visible,
+            expand_request,
             technicals,
             events,
             headlines,
             news_action,
             error,
             notes,
+            notes_symbol,
+            notes_focus,
             revisions,
             financials_requested,
             hide_financials,
@@ -839,6 +1026,10 @@ impl SymbolDetailsPanel {
         };
         let theme = ui.active_theme();
         let mut edit_notes = false;
+        // What All notes and the back button beside other notes chose: the symbol whose notes to
+        // show, `None` for the shown symbol's.
+        let mut browse = None;
+        let mut list_notes = false;
         let header = vec2(ui.available_width(), HEADER_HEIGHT);
         ui.allocate_ui_with_layout(header, Layout::right_to_left(Align::Center), |ui| {
             ui.set_min_height(header.y);
@@ -865,6 +1056,13 @@ impl SymbolDetailsPanel {
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show(|ui| {
                     for section in SECTIONS {
+                        // A listed section the host does not offer has nothing to show.
+                        if DetailSection::ALL
+                            .into_iter()
+                            .any(|listed| listed.title() == section && !offered.contains(&listed))
+                        {
+                            continue;
+                        }
                         let mut shown = !hidden.contains(section);
                         if ui
                             .checkbox(&mut shown, l10n::text(ui.ctx(), section))
@@ -878,6 +1076,14 @@ impl SymbolDetailsPanel {
                         }
                     }
                 });
+            if *expand_visible
+                && IconButton::new(&icons::MAXIMIZE)
+                    .tooltip("Expand")
+                    .show(ui)
+                    .clicked()
+            {
+                *expand_request = Some(instrument.symbol.clone());
+            }
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 let title = LayoutJob::single_section(
                     l10n::text(ui.ctx(), instrument.symbol.clone()),
@@ -888,6 +1094,7 @@ impl SymbolDetailsPanel {
         });
         if edit_notes {
             hidden.remove("Notes");
+            *notes_symbol = None;
         }
         let shown = |section| !hidden.contains(section);
         let ctx = ui.ctx().clone();
@@ -1121,6 +1328,8 @@ impl SymbolDetailsPanel {
                                 .num_columns(4)
                                 .spacing(vec2(theme.spacing.md, theme.spacing.sm))
                                 .show(ui, |ui| {
+                                    // A cell sized on an earlier frame must not break a figure.
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                                     for (index, month) in seasonality
                                         .months
                                         .iter()
@@ -1270,19 +1479,95 @@ impl SymbolDetailsPanel {
                         }
                     }
                 }
+                for section in DetailSection::ALL {
+                    let Some(state) = rows.get(&section) else {
+                        continue;
+                    };
+                    if matches!(state, MarketDetail::Unavailable) || !shown(section.title()) {
+                        continue;
+                    }
+                    detail_section(
+                        ui,
+                        section.title(),
+                        state,
+                        |list| list.is_empty(),
+                        |ui, list| {
+                            for row in list {
+                                detail_row(ui, row, opened_row);
+                            }
+                        },
+                    );
+                }
                 if shown("Notes") {
                     ui.add_space(theme.spacing.md);
-                    ui.label(RichText::new(l10n::text(ui.ctx(), "Notes")).strong());
-                    let notes = notes.entry(instrument.symbol.clone()).or_default();
+                    let symbol = notes_symbol.as_ref().unwrap_or(&instrument.symbol).clone();
+                    ui.horizontal(|ui| {
+                        if notes_symbol.is_some()
+                            && IconButton::new(&icons::UI_ARROW_BACK)
+                                .tooltip(l10n::format_text(
+                                    ui.ctx(),
+                                    "Back to {symbol}",
+                                    &[("symbol", instrument.symbol.as_str())],
+                                ))
+                                .show(ui)
+                                .clicked()
+                        {
+                            browse = Some(None);
+                        }
+                        ui.label(RichText::new(l10n::text(ui.ctx(), "Notes")).strong());
+                        if notes_symbol.is_some() {
+                            ui.label(
+                                RichText::new(l10n::text(ui.ctx(), symbol.as_str()))
+                                    .color(theme.ui.text_secondary),
+                            );
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let all = ui.add(
+                                egui::Button::new(
+                                    RichText::new(l10n::text(ui.ctx(), "All notes"))
+                                        .size(theme.text.small),
+                                )
+                                .frame(false),
+                            );
+                            list_notes = all.clicked();
+                            egui::Popup::menu(&all).show(|ui| {
+                                let mut noted: Vec<&String> = notes
+                                    .iter()
+                                    .filter(|(_, kept)| !kept.text.trim().is_empty())
+                                    .map(|(symbol, _)| symbol)
+                                    .collect();
+                                noted.sort();
+                                if noted.is_empty() {
+                                    ui.label(
+                                        RichText::new(l10n::text(ui.ctx(), "No notes yet"))
+                                            .color(theme.ui.text_secondary),
+                                    );
+                                }
+                                for noted in noted {
+                                    if ui.button(l10n::text(ui.ctx(), noted.as_str())).clicked() {
+                                        browse = Some(
+                                            (*noted != instrument.symbol).then(|| noted.clone()),
+                                        );
+                                    }
+                                }
+                            });
+                        });
+                    });
+                    let notes = notes.entry(symbol.clone()).or_default();
                     // Refused notes stay as typed until the user's choice settles them.
+                    let writable = notes.written.is_some() && !revisions.refused(&symbol);
                     let field = ui.add_enabled(
-                        notes.written.is_some() && !revisions.refused(&instrument.symbol),
+                        writable,
+                        // Each symbol keeps its own cursor, so typing lands where it was left.
                         egui::TextEdit::multiline(&mut notes.text)
+                            .id_salt(("notes", symbol.as_str()))
                             .hint_text(l10n::text(ui.ctx(), "Add a note"))
                             .desired_width(f32::INFINITY)
                             .desired_rows(4),
                     );
-                    if edit_notes {
+                    // A focus asked for before the notes are read waits for them.
+                    if edit_notes || (*notes_focus && writable) {
+                        *notes_focus = false;
                         field.request_focus();
                         field.scroll_to_me(None);
                     }
@@ -1291,6 +1576,12 @@ impl SymbolDetailsPanel {
                     status_message(ui, MessageKind::Error, error);
                 }
             });
+        if let Some(symbol) = browse {
+            self.notes_symbol = symbol;
+        }
+        if list_notes {
+            self.list_notes();
+        }
     }
 }
 
@@ -1332,6 +1623,57 @@ pub(super) fn detail_section<T>(
         MarketDetail::Failed(message) => status_message(ui, MessageKind::Error, message),
         MarketDetail::Ready(value) if is_empty(value) => note(ui, "No data"),
         MarketDetail::Ready(value) => body(ui, value),
+    }
+}
+
+/// One host-written row: its label on the left, its value on the right and its note under them.
+/// A row with a link reports itself through `opened` when clicked.
+fn detail_row(ui: &mut Ui, row: &DetailRow, opened: &mut Option<DetailRow>) {
+    let theme = ui.active_theme();
+    let sense = if row.url.is_some() {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let response = ui
+        .scope_builder(egui::UiBuilder::new().sense(sense), |ui| {
+            let label = RichText::new(l10n::text(ui.ctx(), &row.label));
+            let label = if row.url.is_some() {
+                ui.style_mut().interaction.selectable_labels = false;
+                label.strong()
+            } else {
+                label.color(theme.ui.text_secondary)
+            };
+            ui.horizontal(|ui| {
+                ui.label(label);
+                if !row.value.is_empty() {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add(Label::new(l10n::text(ui.ctx(), &row.value)).truncate());
+                    });
+                }
+            });
+            if !row.note.is_empty() {
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), &row.note))
+                        .size(theme.text.small)
+                        .color(theme.ui.text_secondary),
+                );
+            }
+        })
+        .response;
+    let Some(url) = &row.url else {
+        return;
+    };
+    let translated_label = l10n::text(ui.ctx(), &row.label);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Link, ui.is_enabled(), &translated_label)
+    });
+    if response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(l10n::text(ui.ctx(), url))
+        .clicked()
+    {
+        *opened = Some(row.clone());
     }
 }
 
@@ -1541,8 +1883,11 @@ mod tests {
     }
 
     impl Storage for Store {
-        fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
-            reply.send(Ok(Vec::new()));
+        fn list(&self, kind: StoreKind, reply: Reply<Vec<String>>) {
+            assert_eq!(kind, StoreKind::SymbolNotes);
+            let mut names: Vec<String> = self.documents.lock().unwrap().keys().cloned().collect();
+            names.sort();
+            reply.send(Ok(names));
         }
 
         fn load(&self, kind: StoreKind, name: &str, reply: Reply<Option<String>>) {
@@ -2118,6 +2463,223 @@ mod tests {
         assert!(!shown.contains(&"Upcoming events".into()), "{shown:?}");
         assert!(!shown.contains(&"News".into()), "{shown:?}");
         assert_eq!(panel.error, None);
+    }
+
+    /// Sections the host lists are asked for, listed in the Layout menu and drawn only once the
+    /// host offers them, each once per symbol. Answers for another symbol or a section not
+    /// offered are dropped, an unavailable one hides, and a click on a linked row is reported
+    /// once. A regression leaves hosts that never answer on "Loading…", shows the previous
+    /// symbol's rows, lists sections the host cannot fill or reports a click every frame.
+    #[test]
+    fn detail_sections_are_asked_listed_and_drawn_only_when_offered() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let painted = |panel: &mut SymbolDetailsPanel| texts(&egui::Context::default(), panel);
+        let mut panel = SymbolDetailsPanel::new();
+        panel.set_instrument(&Instrument::new("AAA"));
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 900.0))
+            .build_ui_state(|ui, panel: &mut SymbolDetailsPanel| panel.show(ui), panel);
+        let layout_lists = |h: &Harness<'_, SymbolDetailsPanel>| {
+            ["Documents", "Bonds", "Credit ratings"].map(|title| {
+                h.query_by_role_and_label(egui::Role::CheckBox, title)
+                    .is_some()
+            })
+        };
+        // The menu opens and closes from its button, so it never covers the rows clicked below.
+        let layout = |h: &mut Harness<'_, SymbolDetailsPanel>| {
+            h.get_by_label("Layout").click();
+            h.run();
+        };
+        layout(&mut h);
+        assert_eq!(
+            layout_lists(&h),
+            [false; 3],
+            "nothing listed without an offer"
+        );
+        layout(&mut h);
+        assert_eq!(
+            h.state_mut().take_market_requests(),
+            [
+                MarketDetailRequest::PeriodReturns("AAA".into()),
+                MarketDetailRequest::Seasonality("AAA".into())
+            ]
+        );
+        h.state_mut()
+            .set_detail_sections([DetailSection::Bonds, DetailSection::Documents]);
+        assert_eq!(
+            h.state_mut().take_market_requests(),
+            [
+                MarketDetailRequest::Section(DetailSection::Documents, "AAA".into()),
+                MarketDetailRequest::Section(DetailSection::Bonds, "AAA".into())
+            ]
+        );
+        assert!(h.state_mut().take_market_requests().is_empty());
+        let shown = painted(h.state_mut());
+        assert_eq!(shown.iter().filter(|t| *t == "Loading…").count(), 4);
+
+        let report = DetailRow::new("Annual report", "PDF")
+            .with_note("Filed Mar 2, 2026")
+            .with_url("https://example.com/report.pdf");
+        let panel = h.state_mut();
+        let answer = |rows: &[&str]| {
+            MarketDetail::Ready(rows.iter().map(|row| DetailRow::new(*row, "A")).collect())
+        };
+        panel.set_detail_rows(
+            "AAA",
+            DetailSection::Documents,
+            MarketDetail::Ready(vec![report.clone()]),
+        );
+        panel.set_detail_rows("AAA", DetailSection::Bonds, MarketDetail::Unavailable);
+        panel.set_detail_rows("BBB", DetailSection::Documents, answer(&["Other"]));
+        panel.set_detail_rows("AAA", DetailSection::CreditRatings, answer(&["Agency"]));
+        let shown = painted(panel);
+        for text in ["Documents", "Annual report", "PDF", "Filed Mar 2, 2026"] {
+            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        for text in ["Bonds", "Other", "Credit ratings", "Agency"] {
+            assert!(!shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        h.run();
+        h.get_by_role_and_label(egui::Role::Link, "Annual report")
+            .click();
+        h.run();
+        assert_eq!(h.state_mut().take_opened_row(), Some(report));
+        assert_eq!(h.state_mut().take_opened_row(), None);
+
+        layout(&mut h);
+        assert_eq!(layout_lists(&h), [true, true, false]);
+        h.get_by_role_and_label(egui::Role::CheckBox, "Documents")
+            .click();
+        h.run();
+        assert_eq!(h.state().hidden_sections(), ["Documents"]);
+        assert!(!painted(h.state_mut()).contains(&"Annual report".into()));
+        h.state_mut().set_instrument(&Instrument::new("BBB"));
+        assert_eq!(
+            h.state_mut().take_market_requests(),
+            [
+                MarketDetailRequest::PeriodReturns("BBB".into()),
+                MarketDetailRequest::Seasonality("BBB".into()),
+                MarketDetailRequest::Section(DetailSection::Documents, "BBB".into()),
+                MarketDetailRequest::Section(DetailSection::Bonds, "BBB".into())
+            ]
+        );
+    }
+
+    /// Writing a note on a symbol shows its notes, even with the section hidden and in place of
+    /// the shown symbol's when it is another, and focuses their field once they are read; the
+    /// back button returns, and showing another symbol ends a request not yet given. A
+    /// regression types into the shown symbol's notes, into notes not yet read, or takes the
+    /// focus for an old request.
+    #[test]
+    fn focus_notes_shows_the_symbols_notes_once_they_are_read() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut panel = SymbolDetailsPanel::new();
+        panel.set_storage(Arc::new(Store::default()));
+        panel.set_instrument(&Instrument::new("AAA"));
+        panel.focus_notes("DDD");
+        panel.set_instrument(&Instrument::new("CCC"));
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 800.0))
+            .build_ui_state(|ui, panel: &mut SymbolDetailsPanel| panel.show(ui), panel);
+        let ctx = h.ctx.clone();
+        let read = |h: &mut Harness<'_, SymbolDetailsPanel>| {
+            h.state_mut().poll(&ctx);
+            h.run();
+        };
+        let typed = |h: &mut Harness<'_, SymbolDetailsPanel>| {
+            h.event(egui::Event::Text("x".into()));
+            h.run();
+            let mut typed: Vec<_> = h
+                .state()
+                .notes
+                .iter()
+                .filter(|(_, notes)| !notes.text.is_empty())
+                .map(|(symbol, notes)| format!("{symbol}: {}", notes.text))
+                .collect();
+            typed.sort();
+            typed
+        };
+        read(&mut h);
+        assert!(typed(&mut h).is_empty(), "no field has the focus");
+
+        h.state_mut().set_hidden_sections(["Notes"]);
+        h.run();
+        assert!(h.query_by_label("Notes").is_none());
+        h.state_mut().focus_notes("BBB");
+        h.run();
+        assert!(h.query_by_label("Notes").is_some());
+        assert!(h.query_by_label("BBB").is_some());
+        assert!(typed(&mut h).is_empty(), "the field waits for the read");
+        read(&mut h);
+        assert_eq!(typed(&mut h), ["BBB: x"]);
+        assert_eq!(h.state().symbol(), Some("CCC"));
+        h.get_by_label("Back to CCC").click();
+        h.run();
+        assert!(h.query_by_label("BBB").is_none());
+    }
+
+    /// All notes lists the symbols with notes, stored or typed, leaving out empty documents and
+    /// kept local copies, and shows the chosen symbol's notes without changing the shown symbol.
+    /// A regression lists empty or copied documents, misses notes not opened yet, or replaces
+    /// the shown symbol. Expand waits for the host to offer it.
+    #[test]
+    fn all_notes_list_the_symbols_with_notes_and_show_the_chosen_ones() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let store = Arc::new(Store::default());
+        for (name, text) in [
+            ("AAA", "alpha"),
+            ("BBB", ""),
+            ("AAA (local copy)", "copied"),
+            ("DDD", "delta"),
+        ] {
+            store
+                .documents
+                .lock()
+                .unwrap()
+                .insert(name.into(), document(text));
+        }
+        let mut panel = SymbolDetailsPanel::new();
+        panel.set_storage(store.clone());
+        panel.set_instrument(&Instrument::new("EEE"));
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(300.0, 800.0))
+            .build_ui_state(|ui, panel: &mut SymbolDetailsPanel| panel.show(ui), panel);
+        let ctx = h.ctx.clone();
+        h.state_mut().poll(&ctx);
+        h.run();
+        assert!(h.query_by_label("Expand").is_none());
+        h.get_by_label("Edit notes").click();
+        h.run();
+        h.event(egui::Event::Text("echo".into()));
+        h.run();
+        h.get_by_label("All notes").click();
+        h.run();
+        // The list, then the reads of the listed documents.
+        h.state_mut().poll(&ctx);
+        h.state_mut().poll(&ctx);
+        h.run();
+        // The listed symbols from the top: the kept copy and the empty document are left out.
+        let mut listed: Vec<(f32, &str)> = ["AAA", "AAA (local copy)", "BBB", "DDD", "EEE"]
+            .into_iter()
+            .filter_map(|name| {
+                let node = h.query_by_role_and_label(egui::Role::Button, name)?;
+                Some((node.rect().top(), name))
+            })
+            .collect();
+        listed.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let listed: Vec<&str> = listed.into_iter().map(|(_, name)| name).collect();
+        assert_eq!(listed, ["AAA", "DDD", "EEE"]);
+        h.get_by_role_and_label(egui::Role::Button, "DDD").click();
+        h.run();
+        assert_eq!(h.state().symbol(), Some("EEE"));
+        let shown = texts(&egui::Context::default(), h.state_mut());
+        for text in ["EEE", "DDD", "delta"] {
+            assert!(shown.contains(&text.into()), "{text}: {shown:?}");
+        }
+        assert!(!shown.contains(&"echo".into()), "{shown:?}");
     }
 
     /// The layout menu hides the Technicals, Upcoming events and News sections like the others,

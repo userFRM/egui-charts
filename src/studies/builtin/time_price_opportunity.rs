@@ -67,6 +67,12 @@ type ProfileEdits<T> = (Option<(usize, usize)>, Vec<T>);
 /// whole periods on the period grid. Split extended hours divides the trading day into its
 /// pre-market, regular and post-market profiles. Profiles longer than one day keep the trading
 /// day, whatever Hours says.
+///
+/// Ticks per row 0 sizes rows automatically: from the price range of the latest 300 bars up to
+/// the last visible bar, aiming at about 80 rows, with the ticks per row rounded up to a multiple
+/// of 5 below 100 ticks, of 50 below 1,000, of 500 below 10,000 and so on. Without an instrument
+/// tick size the row is a 1, 2, 2.5 or 5 step. Zooming or scrolling the price scale keeps the
+/// rows.
 #[derive(Clone, Debug)]
 pub struct TimePriceOpportunity {
     row_ticks: usize,
@@ -107,7 +113,7 @@ impl TimePriceOpportunity {
             composites: (None, Vec::new()),
             splits: (None, Vec::new()),
             config: TPOConfig {
-                // A zero row lets the chart fit the rows to the visible range.
+                // A zero row lets the chart size the rows from its bars.
                 tick_size: 0.0,
                 period_minutes: period_minutes.max(1),
                 ..Default::default()
@@ -681,6 +687,34 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Toggle(defaults.extend_poor_extremes)),
             StudyInput::new(
+                "extend_poc",
+                "Extend point of control until touched",
+                InputValue::Toggle(self.config.extend_poc),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.extend_poc)),
+            StudyInput::new(
+                "extend_vah",
+                "Extend value area high until touched",
+                InputValue::Toggle(self.config.extend_value_area_high),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.extend_value_area_high)),
+            StudyInput::new(
+                "extend_val",
+                "Extend value area low until touched",
+                InputValue::Toggle(self.config.extend_value_area_low),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.extend_value_area_low)),
+            StudyInput::new(
+                "extend_single_prints",
+                "Extend single prints until touched",
+                InputValue::Toggle(self.config.extend_single_prints),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.extend_single_prints)),
+            StudyInput::new(
                 "volume_profile",
                 "Volume profile",
                 InputValue::Toggle(self.config.show_volume_profile),
@@ -928,6 +962,12 @@ impl Indicator for TimePriceOpportunity {
             ("poor_high", InputValue::Toggle(show)) => self.config.show_poor_high = show,
             ("poor_low", InputValue::Toggle(show)) => self.config.show_poor_low = show,
             ("extend_poor", InputValue::Toggle(show)) => self.config.extend_poor_extremes = show,
+            ("extend_poc", InputValue::Toggle(show)) => self.config.extend_poc = show,
+            ("extend_vah", InputValue::Toggle(show)) => self.config.extend_value_area_high = show,
+            ("extend_val", InputValue::Toggle(show)) => self.config.extend_value_area_low = show,
+            ("extend_single_prints", InputValue::Toggle(show)) => {
+                self.config.extend_single_prints = show
+            }
             ("volume_profile", InputValue::Toggle(show)) => self.config.show_volume_profile = show,
             (volume, value) if volume.starts_with("volume_") => {
                 if !self.set_volume_input(volume, value) {

@@ -1648,6 +1648,9 @@ impl AlertsPanel {
                                                         AlertSource::Drawing(_) => {
                                                             &icons::TREND_LINE
                                                         }
+                                                        AlertSource::TPOLevel(_) => {
+                                                            &icons::CHART_TPO
+                                                        }
                                                     };
                                                     ui.add(icon.as_image_tinted(
                                                         egui::Vec2::splat(16.0),

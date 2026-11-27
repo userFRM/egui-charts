@@ -243,13 +243,18 @@ pub(crate) fn render_crosshair_lines(
         }
     }
     // Above the lines, where they cross.
-    if options.style == CrosshairStyle::Dot && context.rect.contains(pos) {
+    if paints_dot(options, context.rect, pos) {
         context.painter.circle_filled(
             pos,
             DESIGN_TOKENS.sizing.crosshair.dot_radius,
             options.vert_line_color,
         );
     }
+}
+
+/// Whether [`render_crosshair_lines`] paints the Dot style's dot at `pos` in `rect`.
+pub(crate) fn paints_dot(options: &CrosshairOptions, rect: Rect, pos: Pos2) -> bool {
+    options.style == CrosshairStyle::Dot && rect.contains(pos)
 }
 
 pub(crate) fn render_crosshair_price_tag(

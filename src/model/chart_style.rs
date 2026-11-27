@@ -768,7 +768,7 @@ impl Default for RenkoStyle {
 }
 
 /// The Range chart's bars.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct RangeStyle {
@@ -780,6 +780,39 @@ pub struct RangeStyle {
     /// bars stay elements of the chart: studies, the legend and the data window read them as
     /// they read the bars that traded.
     pub phantom_bars: bool,
+    /// Colour of the bar in progress, the newest bar until its range is complete, while its close
+    /// is above its open. [`Color32::PLACEHOLDER`] draws it in the chart's rising candle body
+    /// colour, as completed bars and documents saved before this colour are drawn.
+    #[serde(default = "candle_body_color")]
+    pub forming_up: Color32,
+    /// Colour of the bar in progress while its close is at or below its open.
+    /// [`Color32::PLACEHOLDER`] draws it in the chart's falling candle body colour, as completed
+    /// bars and documents saved before this colour are drawn.
+    #[serde(default = "candle_body_color")]
+    pub forming_down: Color32,
+}
+
+impl Default for RangeStyle {
+    fn default() -> Self {
+        Self {
+            thin_bars: false,
+            phantom_bars: false,
+            // Light green and light red, apart from the completed bars on dark and light charts.
+            forming_up: Color32::from_rgb(169, 220, 195),
+            forming_down: Color32::from_rgb(245, 166, 174),
+        }
+    }
+}
+
+impl RangeStyle {
+    /// How a Range chart drew before it had forming bar colours: in the candle body colours.
+    fn saved_without_style() -> Self {
+        Self {
+            forming_up: Color32::PLACEHOLDER,
+            forming_down: Color32::PLACEHOLDER,
+            ..Self::default()
+        }
+    }
 }
 
 /// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, column, high-low, line,
@@ -822,6 +855,7 @@ pub struct RangeStyle {
 /// styles.point_figure = point_figure;
 /// let mut range = RangeStyle::default();
 /// range.thin_bars = true;
+/// range.forming_up = egui::Color32::BLUE;
 /// styles.range = range;
 /// let mut renko = RenkoStyle::default();
 /// renko.border_visible = false;
@@ -916,7 +950,9 @@ pub struct ChartTypeStyles {
     /// colours, as they were drawn.
     #[serde(default = "PointFigureStyle::saved_without_style")]
     pub point_figure: PointFigureStyle,
-    /// Range chart.
+    /// Range chart. Documents saved before its forming bar colours draw the bar in progress in
+    /// the candle body colours, as they were drawn.
+    #[serde(default = "RangeStyle::saved_without_style")]
     pub range: RangeStyle,
     /// Line the TPO chart draws through its bars. Its colour defaults to
     /// [`Color32::PLACEHOLDER`], which draws the theme's accent colour, at hairline width.
@@ -1039,6 +1075,7 @@ impl ChartTypeStyles {
             high_low: HighLowStyle::saved_without_style(),
             kagi: KagiStyle::saved_without_colors(),
             point_figure: PointFigureStyle::saved_without_style(),
+            range: RangeStyle::saved_without_style(),
             ..Self::default()
         }
     }

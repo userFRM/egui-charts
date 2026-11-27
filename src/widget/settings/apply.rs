@@ -370,6 +370,8 @@ impl ChartSettingsState {
         let time_scale = &chart.chart_options().time_scale;
         settings.scales_and_lines.use_24_hour = Some(time_scale.use_24_hour);
         settings.scales_and_lines.weekday_names = Some(time_scale.weekday_names);
+        settings.scales_and_lines.keep_left_edge_on_interval_change =
+            Some(time_scale.keep_left_edge_on_interval_change);
         settings.scales_and_lines.date_format = Some(match &chart.date_format {
             Some(pattern) => DateFormat::Pattern(pattern.clone()),
             None => DateFormat::Default,
@@ -579,6 +581,12 @@ impl ChartSettingsState {
         }
         if let Some(weekday_names) = scales.weekday_names {
             chart.chart_options.time_scale.weekday_names = weekday_names;
+        }
+        if let Some(keep) = scales.keep_left_edge_on_interval_change {
+            chart
+                .chart_options
+                .time_scale
+                .keep_left_edge_on_interval_change = keep;
         }
         if let Some(date_format) = &scales.date_format {
             chart.set_date_format(match date_format {
@@ -3350,6 +3358,10 @@ mod tests {
                     labels.format(time, TickMarkType::Time),
                 ],
                 (chart.extended_hours(), chart.overnight_hours()),
+                chart
+                    .chart_options()
+                    .time_scale
+                    .keep_left_edge_on_interval_change,
             )
         };
         let mut chart = chart(&[100.0], &[110.0]);
@@ -3369,6 +3381,7 @@ mod tests {
                 ["13 Mar '24 02:30 PM", "Mar 13, 2024", "02:30 PM"],
                 solid,
                 true,
+                true,
             ),
             (
                 false,
@@ -3378,6 +3391,7 @@ mod tests {
                 Always,
                 ["Wed 13 Mar '24 14:30", "Wed Mar 13, 2024", "14:30"],
                 Default::default(),
+                false,
                 false,
             ),
             (
@@ -3389,9 +3403,11 @@ mod tests {
                 ["Wed 13.03.2024 14:30", "Wed 13.03.2024", "14:30"],
                 Default::default(),
                 false,
+                true,
             ),
         ];
-        for (breaks, source, date_format, use_24_hour, weekday_names, labels, line, lines) in &rows
+        for (breaks, source, date_format, use_24_hour, weekday_names, labels, line, lines, keep) in
+            &rows
         {
             let mut settings = ChartSettingsState::from_chart(&chart);
             settings.show_session_breaks = Some(*breaks);
@@ -3405,6 +3421,7 @@ mod tests {
             scales.date_format = Some(date_format.clone());
             scales.use_24_hour = Some(*use_24_hour);
             scales.weekday_names = Some(*weekday_names);
+            scales.keep_left_edge_on_interval_change = Some(*keep);
             chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
             assert_eq!(
                 read(&chart),
@@ -3415,7 +3432,8 @@ mod tests {
                     Some(*lines),
                     Some(*lines),
                     labels.map(String::from),
-                    (*breaks, *breaks)
+                    (*breaks, *breaks),
+                    *keep
                 )
             );
             let settings = ChartSettingsState::from_chart(&chart);
@@ -3439,7 +3457,8 @@ mod tests {
                     scales.prev_close_line,
                     scales.show_bid_ask_lines,
                     scales.show_high_low_lines,
-                    (settings.extended_hours, settings.overnight_hours)
+                    (settings.extended_hours, settings.overnight_hours),
+                    scales.keep_left_edge_on_interval_change
                 ),
                 (
                     Some(*breaks),
@@ -3450,7 +3469,8 @@ mod tests {
                     Some(*line),
                     Some(*lines),
                     Some(*lines),
-                    (Some(*breaks), Some(*breaks))
+                    (Some(*breaks), Some(*breaks)),
+                    Some(*keep)
                 )
             );
         }
@@ -3465,7 +3485,8 @@ mod tests {
                     Some(row.7),
                     Some(row.7),
                     row.5.map(String::from),
-                    (row.0, row.0)
+                    (row.0, row.0),
+                    row.8
                 )
             );
         }
@@ -3481,7 +3502,8 @@ mod tests {
                 Some(rows[2].7),
                 Some(rows[2].7),
                 rows[2].5.map(String::from),
-                (rows[2].0, rows[2].0)
+                (rows[2].0, rows[2].0),
+                rows[2].8
             )
         );
         assert!(chart.undo());
@@ -3491,6 +3513,7 @@ mod tests {
         let mut options = chart.chart_options().clone();
         options.time_scale.use_24_hour = false;
         options.time_scale.weekday_names = Always;
+        options.time_scale.keep_left_edge_on_interval_change = true;
         chart.set_chart_options(options);
         chart.config_mut().axis_font_family = egui::FontFamily::Monospace;
         chart.config_mut().thousands_sep = Some('_');
@@ -3507,6 +3530,7 @@ mod tests {
             ("/scales_and_lines", "date_format"),
             ("/scales_and_lines", "use_24_hour"),
             ("/scales_and_lines", "weekday_names"),
+            ("/scales_and_lines", "keep_left_edge_on_interval_change"),
             ("/scales_appearance", "font_family"),
         ] {
             let group = saved.pointer_mut(group).unwrap().as_object_mut().unwrap();
@@ -3523,7 +3547,8 @@ mod tests {
                 Some(true),
                 Some(true),
                 ["Wed 13.03.2024 02:30 PM", "Wed 13.03.2024", "02:30 PM"].map(String::from),
-                (true, true)
+                (true, true),
+                true
             )
         );
         assert_eq!(chart.config().axis_font_family, egui::FontFamily::Monospace);

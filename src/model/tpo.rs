@@ -65,6 +65,8 @@ pub struct TPOProfile {
     pub price_tpo_count: HashMap<i64, usize>,
     /// Volume at each row; empty unless built with [`TPOConfig::show_volume_profile`].
     pub(crate) row_volume: HashMap<i64, f64>,
+    /// Open time of the profile's last bar.
+    pub(crate) last_time: DateTime<Utc>,
     /// Point of control: the price (lowest tick) of the row with the most TPOs. A tie takes the
     /// lower price.
     pub poc_price: f64,
@@ -160,8 +162,22 @@ pub struct TPOConfig {
     /// Mark the lowest row when it holds more than one TPO.
     pub show_poor_low: bool,
     /// Extend marked extremes of completed profiles until a later bar trades strictly through
-    /// their price, or to the plot's right edge while no shown bar has.
+    /// their price, or to the plot's right edge while no shown bar has. Each extended extreme no
+    /// later bar has traded through is an alert source; see `Chart::alert_sources`.
     pub extend_poor_extremes: bool,
+    /// Extend the point of control of completed profiles until a later bar's range reaches its
+    /// price, or to the plot's right edge while no shown bar has. Needs `show_poc`. Each extended
+    /// level no later bar has reached is an alert source; see `Chart::alert_sources`.
+    pub extend_poc: bool,
+    /// Extend the value area high of completed profiles, as for `extend_poc`. Needs
+    /// `show_value_area`.
+    pub extend_value_area_high: bool,
+    /// Extend the value area low of completed profiles, as for `extend_poc`. Needs
+    /// `show_value_area`.
+    pub extend_value_area_low: bool,
+    /// Extend the lowest and the highest row of each run of single prints of completed
+    /// profiles, each as for `extend_poc`. Needs `show_single_prints`.
+    pub extend_single_prints: bool,
     /// Show single prints
     pub show_single_prints: bool,
     /// Show the session statistics table below the profile, with the rows of `statistics_rows`.
@@ -252,6 +268,10 @@ impl Default for TPOConfig {
             show_poor_high: false,
             show_poor_low: false,
             extend_poor_extremes: false,
+            extend_poc: false,
+            extend_value_area_high: false,
+            extend_value_area_low: false,
+            extend_single_prints: false,
             show_single_prints: false,
             show_statistics: false,
             statistics_rows: TPOStatisticsRows::default(),
@@ -341,6 +361,55 @@ impl Default for TPOLabels {
             poor_low: false,
             single_prints: false,
             prices: false,
+        }
+    }
+}
+
+/// A level of a completed TPO profile that can extend right of the profile, and that an alert
+/// can watch while no later bar has reached it; see [`TPOConfig::extend_poc`] and
+/// [`TPOLevelSource`](super::TPOLevelSource).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum TPOLevel {
+    /// The point of control, at [`TPOProfile::poc_price`].
+    PointOfControl,
+    /// The value area high, at [`TPOProfile::value_area_high`].
+    ValueAreaHigh,
+    /// The value area low, at [`TPOProfile::value_area_low`].
+    ValueAreaLow,
+    /// A poor high, at [`TPOProfile::profile_high`].
+    PoorHigh,
+    /// A poor low, at [`TPOProfile::profile_low`].
+    PoorLow,
+    /// The lowest or the highest row of a run of adjacent single prints; a run of one row
+    /// has one level.
+    SinglePrints,
+}
+
+impl TPOLevel {
+    /// English name, translated where shown.
+    #[cfg(feature = "drawings")]
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::PointOfControl => "Point of control",
+            Self::ValueAreaHigh => "Value area high",
+            Self::ValueAreaLow => "Value area low",
+            Self::PoorHigh => "Poor high",
+            Self::PoorLow => "Poor low",
+            Self::SinglePrints => "Single prints",
+        }
+    }
+
+    /// Whether `bar` ends this level's extension at `price`. A poor high ends at a bar trading
+    /// strictly above it and a poor low at one trading strictly below it. Every other level ends
+    /// at the first bar whose low-to-high range reaches the price, inclusive. A comparison with a
+    /// NaN price fails.
+    #[cfg(feature = "widget")]
+    pub(crate) fn ended_by(self, price: f64, bar: &Bar) -> bool {
+        match self {
+            Self::PoorHigh => bar.high > price,
+            Self::PoorLow => bar.low < price,
+            _ => bar.low <= price && price <= bar.high,
         }
     }
 }
@@ -641,6 +710,15 @@ impl TPOConfig {
             || (labels.single_prints && self.show_single_prints)
     }
 
+    /// Whether these settings extend a level they show.
+    #[cfg(feature = "widget")]
+    pub(crate) fn extends_levels(&self) -> bool {
+        (self.extend_poc && self.show_poc)
+            || (self.show_value_area && (self.extend_value_area_high || self.extend_value_area_low))
+            || (self.extend_poor_extremes && (self.show_poor_high || self.show_poor_low))
+            || (self.extend_single_prints && self.show_single_prints)
+    }
+
     /// Only one-day profiles split at transitions between regular, extended and overnight hours.
     pub(crate) fn split_hours(&self) -> bool {
         self.split_sessions && !self.joins_sessions()
@@ -705,6 +783,7 @@ impl TPOProfile {
             letters: Vec::new(),
             price_tpo_count: HashMap::new(),
             row_volume: HashMap::new(),
+            last_time: session_date,
             poc_price: 0.0,
             value_area_high: 0.0,
             value_area_low: 0.0,
@@ -789,6 +868,7 @@ impl TPOProfile {
         }
         self.letters.extend(later.letters);
         self.closing_price = later.closing_price;
+        self.last_time = self.last_time.max(later.last_time);
         self.total_volume += later.total_volume;
         self.profile_high = self.profile_high.max(later.profile_high);
         self.profile_low = self.profile_low.min(later.profile_low);
@@ -801,6 +881,66 @@ impl TPOProfile {
             .iter()
             .filter(|l| self.key(l.price) == price_key)
             .collect()
+    }
+
+    /// The runs of adjacent single-print rows, one `tick_size` apart, from the lowest.
+    #[cfg(feature = "widget")]
+    pub(crate) fn single_print_runs(&self) -> impl Iterator<Item = &[f64]> {
+        let tick = self.tick_size;
+        self.single_prints
+            .chunk_by(move |a, b| (b - a - tick).abs() < tick * 0.5)
+    }
+
+    /// The levels `config` extends right of this profile, with the price each extension holds,
+    /// in [`TPOLevel`] order. Single-print runs are those [`Self::single_print_runs`] gives, from
+    /// the lowest run: its lowest row, then its highest row when the run has two or more. An empty
+    /// profile, a level the settings hide, a missing poor extreme and a non-finite price give none.
+    #[cfg(feature = "widget")]
+    pub(crate) fn extensions(&self, config: &TPOConfig) -> Vec<(TPOLevel, f64)> {
+        if self.price_tpo_count.is_empty() {
+            return Vec::new();
+        }
+        let mut levels: Vec<_> = [
+            (
+                TPOLevel::PointOfControl,
+                config.show_poc && config.extend_poc,
+                self.poc_price,
+            ),
+            (
+                TPOLevel::ValueAreaHigh,
+                config.show_value_area && config.extend_value_area_high,
+                self.value_area_high,
+            ),
+            (
+                TPOLevel::ValueAreaLow,
+                config.show_value_area && config.extend_value_area_low,
+                self.value_area_low,
+            ),
+            (
+                TPOLevel::PoorHigh,
+                config.show_poor_high && config.extend_poor_extremes && self.has_poor_high,
+                self.profile_high,
+            ),
+            (
+                TPOLevel::PoorLow,
+                config.show_poor_low && config.extend_poor_extremes && self.has_poor_low,
+                self.profile_low,
+            ),
+        ]
+        .into_iter()
+        .filter(|(_, extended, _)| *extended)
+        .map(|(level, _, price)| (level, price))
+        .collect();
+        if config.show_single_prints && config.extend_single_prints {
+            for run in self.single_print_runs() {
+                levels.push((TPOLevel::SinglePrints, run[0]));
+                if run.len() > 1 {
+                    levels.push((TPOLevel::SinglePrints, run[run.len() - 1]));
+                }
+            }
+        }
+        levels.retain(|(_, price)| price.is_finite());
+        levels
     }
 }
 
@@ -837,6 +977,58 @@ pub fn derive_tick_size(price_range: f64, target_rows: usize) -> f64 {
     } else {
         1.0
     }
+}
+
+/// Bars, ending at the last bar in view, whose price range sizes automatic TPO rows.
+#[cfg(feature = "widget")]
+pub(crate) const AUTO_ROW_BARS: usize = 300;
+
+/// Rows that automatic TPO rows aim at over that range.
+#[cfg(feature = "widget")]
+const AUTO_ROWS: f64 = 80.0;
+
+/// Height of automatic TPO rows for `bars`, the bars up to and including the last one in view.
+///
+/// The price range of the latest [`AUTO_ROW_BARS`] of them is divided into about 80 rows. With a
+/// usable `instrument_tick` the ticks per row are rounded up to a multiple of 5 below 100 ticks,
+/// of 50 below 1,000, of 500 below 10,000 and so on, so rows stay whole ticks. Without one, or when
+/// the tick count overflows, the height is [`derive_tick_size`]'s step for 80 rows. A flat range
+/// counts as 1% of its price, as the price scale fits flat data. Bars without a finite low and high
+/// at or below it are skipped; `None` when no bar is left.
+#[cfg(feature = "widget")]
+pub(crate) fn auto_row_height(bars: &[Bar], instrument_tick: Option<f64>) -> Option<f64> {
+    let window = &bars[bars.len().saturating_sub(AUTO_ROW_BARS)..];
+    let (low, high) = window
+        .iter()
+        .filter(|bar| bar.low.is_finite() && bar.high.is_finite() && bar.low <= bar.high)
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), bar| {
+            (lo.min(bar.low), hi.max(bar.high))
+        });
+    if low > high {
+        return None;
+    }
+    let range = if high > low {
+        high - low
+    } else {
+        high.abs() * 0.01
+    };
+    let rounded = instrument_tick
+        .filter(|tick| *tick > 0.0 && tick.is_finite())
+        .and_then(|tick| {
+            // Within one part in a billion, so that exactly n ticks per row stays n.
+            let per_row = range / tick / AUTO_ROWS * (1.0 - 1e-9);
+            if !per_row.is_finite() {
+                return None;
+            }
+            let (mut step, mut limit) = (5.0, 100.0);
+            while per_row >= limit {
+                step *= 10.0;
+                limit *= 10.0;
+            }
+            let height = (per_row / step).ceil().max(1.0) * step * tick;
+            height.is_finite().then_some(height)
+        });
+    Some(rounded.unwrap_or_else(|| derive_tick_size(range, AUTO_ROWS as usize)))
 }
 
 /// Largest tick number whose rows keep finding their own prices.
@@ -1210,6 +1402,7 @@ fn profiles_for_parts(
                 }
             }
             profile.closing_price = bar.close;
+            profile.last_time = bar.time;
             // Update profile high/low
             profile.profile_high = profile.profile_high.max(bar.high);
             profile.profile_low = profile.profile_low.min(bar.low);
@@ -2353,6 +2546,58 @@ mod tests {
             va_tpos < total,
             "value area should exclude the thin tails (got all {total})"
         );
+    }
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn automatic_rows_aim_at_80_rows_in_rounded_whole_ticks() {
+        let bar = |low: f64, high: f64| Bar::new(DateTime::UNIX_EPOCH, low, high, low, high, 1.0);
+        let single = |low, high| vec![bar(low, high)];
+        let window = std::iter::once(bar(0.0, 100_000.0))
+            .chain((0..AUTO_ROW_BARS).map(|_| bar(5000.0, 5015.0)))
+            .collect();
+        let invalid = vec![
+            bar(f64::NAN, f64::NAN),
+            bar(5000.0, 5015.0),
+            bar(5010.0, 5000.0),
+        ];
+        // (bars, instrument tick, row height), each worked by hand in ticks per row over 80 rows.
+        type Case = (Vec<Bar>, Option<f64>, Option<f64>);
+        let cases: [Case; 15] = [
+            // 60 ticks: 0.75 rounds up to 5.
+            (single(5000.0, 5015.0), Some(0.25), Some(1.25)),
+            // 1,000 ticks: 12.5 rounds up to 15.
+            (single(5000.0, 5250.0), Some(0.25), Some(3.75)),
+            // 10,000 ticks: 125 rounds up to 150 in steps of 50.
+            (single(5000.0, 7500.0), Some(0.25), Some(37.5)),
+            // 100,000 ticks: 1,250 rounds up to 1,500 in steps of 500.
+            (single(5000.0, 30000.0), Some(0.25), Some(375.0)),
+            // 800 ticks: exactly 10 stays 10.
+            (single(5000.0, 5200.0), Some(0.25), Some(2.5)),
+            // 8,000 ticks: exactly 100 stays 100.
+            (single(5000.0, 7000.0), Some(0.25), Some(25.0)),
+            // 800 ticks whose quotient is 10.000000000000002 in f64 stay 10.
+            (single(0.001, 0.0018), Some(1e-6), Some(10.0 * 1e-6)),
+            // 96 ticks: 1.2 rounds up to 5.
+            (single(109.5, 111.0), Some(1.0 / 64.0), Some(5.0 / 64.0)),
+            // No tick: the step for 15 over 80 rows, 0.1875, is 0.2.
+            (single(5000.0, 5015.0), None, Some(0.2)),
+            // Flat: 1% of 5000 is 200 ticks, 2.5 rounds up to 5.
+            (single(5000.0, 5000.0), Some(0.25), Some(1.25)),
+            // Flat without a tick: the step for 1 over 80 rows is 0.02.
+            (single(100.0, 100.0), None, Some(0.02)),
+            // Only the latest 300 bars count.
+            (window, Some(0.25), Some(1.25)),
+            // Bars without a finite, ordered range are skipped.
+            (invalid, Some(0.25), Some(1.25)),
+            (single(f64::NAN, 1.0), Some(0.25), None),
+            // A tick count that overflows falls back to the step without a tick.
+            (single(5000.0, 5015.0), Some(5e-324), Some(0.2)),
+        ];
+        for (bars, tick, expected) in cases {
+            let range = bars.last().map(|bar| (bar.low, bar.high));
+            assert_eq!(auto_row_height(&bars, tick), expected, "{tick:?} {range:?}");
+        }
     }
 
     #[test]

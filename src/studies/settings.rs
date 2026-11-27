@@ -344,7 +344,18 @@ pub(super) fn declared_settings<S: Indicator + ?Sized>(study: &S) -> StudySettin
 /// Missing style lists inherit the study's declared presentation.
 fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     let (levels, fill, color) = declared_levels(study);
-    if (study.name() == "Stochastic" || (study.name() == "MFI" && guides_since(study)))
+    // The built-in Williams %R, saved with two levels or none before its middle level. Its values
+    // are compared so that a host study under the same name keeps its own levels.
+    let williams_r = study.name() == "Williams %R"
+        && study
+            .pane()
+            .levels
+            .iter()
+            .map(|level| level.0)
+            .eq([-20.0, -80.0, -50.0]);
+    if (study.name() == "Stochastic"
+        || (study.name() == "MFI" && guides_since(study))
+        || williams_r)
         && settings.levels.len() == 2
         && levels.len() == 3
     {
@@ -352,6 +363,12 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let mut middle = levels[2];
         middle.visible = false;
         settings.levels.push(middle);
+    } else if williams_r && settings.levels.is_empty() {
+        // Saved before its levels were editable, it drew both bands and their fill.
+        settings.levels = levels;
+        settings.levels[2].visible = false;
+        settings.fill_between_levels = fill;
+        settings.level_fill_color = color;
     } else if matches!(
         study.name(),
         "KST" | "CMF" | "Force Index" | "Advance/Decline Ratio (Bars)"
@@ -4736,6 +4753,8 @@ mod tests {
         );
         let mut expected = template.inputs.clone();
         expected.insert(2, ("combine_fills".to_owned(), InputValue::Toggle(false)));
+        // Saved before interval resets: the Continuous choice keeps its index.
+        expected.push(("reset_minutes".to_owned(), InputValue::Length(60)));
         assert_eq!(
             crate::studies::StudyTemplate::from_study(older.as_ref()).inputs,
             expected

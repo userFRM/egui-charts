@@ -332,22 +332,29 @@ mod tests {
 
     #[cfg(feature = "studies")]
     #[test]
-    fn tpo_rows_follow_the_instrument_tick_in_the_chart_type_and_the_study() {
+    fn tpo_rows_match_in_the_chart_type_and_the_study() {
         use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe};
         use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
-        // A spans 5000.00 to 5000.25 and B 5000.25 to 5000.50. On rows of one 0.25 tick, A alone
-        // holds 5000.00 and B alone 5000.50, so the profile highlights two single prints.
+        // The bars span 4.5, 18 ticks of 0.25: 0.225 ticks per row over 80 rows, rounded up to
+        // rows of 5 ticks (1.25). A holds the row of 5000, B the rows of 5000 to 5002.5, C the row
+        // of 5002.5 and D the row of 5003.75, so the rows of 5001.25 and 5003.75 hold one TPO each
+        // and both paths highlight two single prints.
         let start: chrono::DateTime<chrono::Utc> = "2024-01-02T14:30:00Z".parse().unwrap();
         let single_print = crate::tokens::DESIGN_TOKENS.semantic.tpo.single_print;
         for study in [false, true] {
-            let bars = [(5000.0, 5000.25), (5000.25, 5000.5)]
-                .into_iter()
-                .enumerate()
-                .map(|(i, (low, high))| {
-                    let time = start + chrono::Duration::minutes(30 * i as i64);
-                    Bar::new(time, low, high, low, high, 1.0)
-                })
-                .collect();
+            let bars = [
+                (5000.0, 5001.0),
+                (5000.0, 5003.5),
+                (5002.5, 5003.5),
+                (5003.75, 5004.5),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (low, high))| {
+                let time = start + chrono::Duration::minutes(30 * i as i64);
+                Bar::new(time, low, high, low, high, 1.0)
+            })
+            .collect();
             let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
             chart.set_timeframe(Timeframe::Min30);
             chart.set_instrument(Some(Instrument::new("ES").with_tick_size(0.25)));
@@ -369,6 +376,52 @@ mod tests {
                 .filter(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == single_print))
                 .count();
             assert_eq!(highlighted, 2, "study {study}");
+        }
+    }
+
+    /// Automatic rows come from the bars, so every vertical zoom paints the same profile. Bars 0
+    /// to 12 span 6, 24 ticks of 0.25: 0.3 ticks per row over 80 rows, rounded up to rows of 5
+    /// ticks (1.25). Bar 0 covers the rows of 5000 to 5005 and bars 1 to 12 the row of 5003.75,
+    /// which holds 13 of the 17 TPOs and so is the whole value area, with 3 TPOs below and 1 above.
+    /// Bar 13, on the next day out of view, is not counted: with it, rows would be 13.75.
+    #[test]
+    fn automatic_tpo_rows_keep_the_profile_at_every_vertical_zoom() {
+        use crate::model::{Bar, BarData, ChartType, Instrument, Timeframe};
+        let start: chrono::DateTime<chrono::Utc> = "2024-01-02T14:30:00Z".parse().unwrap();
+        let bars = (0..14)
+            .map(|i| {
+                let (low, high, time) = match i {
+                    0 => (5000.0, 5006.0, start),
+                    13 => (6000.0, 6100.0, start + chrono::Duration::days(1)),
+                    _ => (5004.0, 5004.5, start + chrono::Duration::minutes(30 * i)),
+                };
+                Bar::new(time, low, high, low, high, 1.0)
+            })
+            .collect();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+        chart.set_timeframe(Timeframe::Min30);
+        chart.set_instrument(Some(Instrument::new("ES").with_tick_size(0.25)));
+        chart.set_chart_type(ChartType::TimePriceOpportunity);
+        chart.set_chart_type_params(
+            serde_json::from_value(serde_json::json!({"tpo_statistics": true})).unwrap(),
+        );
+        let ctx = egui::Context::default();
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(-1.0, 12.0));
+        shapes(&ctx, &mut chart, 0.0, vec![]);
+        for (low, high) in [(4999.0, 5007.0), (4990.0, 5016.0), (4950.0, 5060.0)] {
+            chart.price_scale_mut().set_range(low, high);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let texts: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            // The statistics table's value area and TPO counts around the point of control.
+            for value in ["5003.75 / 5003.75", "3 / 1"] {
+                assert!(texts.contains(&value), "visible {low}..{high}: {texts:?}");
+            }
         }
     }
 
@@ -1481,7 +1534,7 @@ mod tests {
                     let edges = if kind == ChartType::SessionVolumeProfile {
                         [98.875, 162.125]
                     } else {
-                        [99.875, 161.875]
+                        [99.875, 162.375]
                     };
                     for price in edges {
                         assert!(
@@ -1494,11 +1547,12 @@ mod tests {
                     if count <= 8 {
                         let range = map.price.range();
                         // The span takes 82% of the pane, with 8% below and 10% above.
-                        // Grouped execution rows span 98.875..162.125; TPO rows of 2 end at 161.875.
+                        // Grouped execution rows span 98.875..162.125. TPO rows of 2.5 (the 440 ticks of
+                        // the bars over 80 rows, 5.5 rounded up to 10) end at 162.375.
                         let (low, high) = if kind == ChartType::SessionVolumeProfile {
                             (98.875 - 63.25 / 0.82 * 0.08, 162.125 + 63.25 / 0.82 * 0.1)
                         } else {
-                            (99.875 - 62.0 / 0.82 * 0.08, 161.875 + 62.0 / 0.82 * 0.1)
+                            (99.875 - 62.5 / 0.82 * 0.08, 162.375 + 62.5 / 0.82 * 0.1)
                         };
                         assert!(
                             (range.min - low).abs() < 1e-9 && (range.max - high).abs() < 1e-9,
@@ -1627,13 +1681,12 @@ mod tests {
                                 100.0 + 1.0 / 0.82 * 0.1,
                             ),
                         ),
-                        // Rows of 2 cover 7..73; rows of 2.5 cover 8.75..71.25. Starting over
-                        // would alternate between spans 66/0.82 and 62.5/0.82.
+                        // Rows of 1.0 (62.1 over 80 rows, no tick) cover 8.5..71.5.
                         (
                             [8.9, 71.0],
                             crate::scales::PriceRange::new(
-                                7.0 - 66.0 / 0.82 * 0.08,
-                                73.0 + 66.0 / 0.82 * 0.1,
+                                8.5 - 63.0 / 0.82 * 0.08,
+                                71.5 + 63.0 / 0.82 * 0.1,
                             ),
                         ),
                     ] {

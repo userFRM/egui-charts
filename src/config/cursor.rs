@@ -14,7 +14,7 @@ pub enum CursorType {
     Arrow,
     /// Pointer with a presentation halo.
     Demonstration,
-    /// Trail that follows the pointer while the button is held, then fades.
+    /// Wand pointer whose clicks throw emoji confetti.
     Magic,
     /// Click a drawing to delete it.
     Eraser,

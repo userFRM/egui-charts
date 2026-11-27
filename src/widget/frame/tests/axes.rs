@@ -1312,6 +1312,73 @@ fn initial_axis_passes_keep_zoom_and_later_measurements_keep_range() {
     }
 }
 
+/// A chart at the live edge with a pixel right margin keeps the margin in pixels when later
+/// labels widen the axis, also when the axis widens while the chart scrolls there, and shows no
+/// scroll to real time button; a chart scrolled into history keeps its range and the button.
+#[test]
+fn pixel_right_margin_survives_a_wider_axis_at_the_live_edge() {
+    use crate::model::Instrument;
+    for row in ["jump", "history", "animated"] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        chart.config_mut().realtime_button_text = Some("Latest".into());
+        let mut options = chart.chart_options().clone();
+        options.time_scale.bar_spacing = 20.0;
+        options.time_scale.right_offset_pixels = Some(60.0);
+        chart.set_chart_options(options);
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(2)));
+        let button = |chart: &mut crate::widget::Chart, time: f64| {
+            shapes(&ctx, chart, time, vec![])
+                .iter()
+                .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "Latest"))
+        };
+        button(&mut chart, 0.0);
+        button(&mut chart, 0.1);
+        if row != "jump" {
+            chart.scroll_to_position(-20.0, false);
+        }
+        assert_eq!(
+            button(&mut chart, 0.2),
+            row != "jump",
+            "{row}: before the resize"
+        );
+        if row == "animated" {
+            // The 400 ms scroll starts on this frame; the axis widens on the next one.
+            chart.scroll_to_real_time(true);
+            button(&mut chart, 0.3);
+        }
+        let width = chart.get_rendered_price_rect().width();
+        let range = chart.state.time_scale().visible_logical_range();
+        chart.set_instrument(Some(Instrument::new("TEST").with_price_decimals(10)));
+        let mut shown = button(&mut chart, 0.4);
+        assert!(
+            chart.get_rendered_price_rect().width() < width,
+            "{row}: later labels must widen the axis"
+        );
+        if row == "animated" {
+            shown = button(&mut chart, 1.0);
+        }
+        let scale = chart.state.time_scale();
+        if row == "history" {
+            let new_range = scale.visible_logical_range();
+            assert!(shown, "{row}: the button stays in history");
+            assert!(
+                (new_range.left - range.left).abs() < 1e-3
+                    && (new_range.right - range.right).abs() < 1e-3,
+                "{row}: {range:?} to {new_range:?}"
+            );
+        } else {
+            // 60 px at the new spacing, not the 3 bars the old spacing gave.
+            let margin = scale.right_offset_precise() * f64::from(scale.bar_spacing());
+            assert!(
+                !shown && (margin - 60.0).abs() < 1e-3,
+                "{row}: margin {margin} px, button shown {shown}"
+            );
+        }
+    }
+}
+
 /// Extra columns share at most half of a narrow widget on either edge. Four 70-point columns
 /// need 280 points, so 240 and 320 keep half for the plot and 800 fits all of them.
 #[test]
