@@ -1829,7 +1829,8 @@ impl Indicator for OptionsVolumeProfile {
                 InputValue::Choice(usize::from(self.move_iv)),
                 InputKind::Choice(vec!["ATM straddle".into(), "Implied volatility".into()]),
             )
-            .with_default(InputValue::Choice(0)),
+            .with_default(InputValue::Choice(0))
+            .shown_when("expected_move", vec![1]),
         ]);
         inputs
     }
