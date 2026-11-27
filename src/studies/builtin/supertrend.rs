@@ -7,8 +7,11 @@
 //! # Components
 //! - Up Trend: the SuperTrend line while the trend is bullish (below price)
 //! - Down Trend: the SuperTrend line while the trend is bearish (above price)
+//! - Body Middle: (open + close) / 2 on each bar with a trend value; hidden, it bounds the background
 //!
 //! Each plotted bar has a value on exactly one of the two lines; the other is NaN.
+//! The background between the trend line and the body middle is green in an up trend and red in a
+//! down trend at 90 % transparency, with a gap at each trend change.
 //!
 //! The first bar with an ATR starts a down trend on the upper band. A down trend turns up when a
 //! close rises above the upper band, and an up trend turns down when a close falls below the lower
@@ -46,6 +49,7 @@ pub struct SuperTrend {
     stepper: Stepper<State>,
     bullish_color: Color32,
     bearish_color: Color32,
+    middle_color: Color32,
     visible: bool,
 }
 
@@ -86,6 +90,7 @@ impl SuperTrend {
             stepper: Stepper::default(),
             bullish_color: palette::GREEN, // Green
             bearish_color: palette::RED,   // Red
+            middle_color: palette::BLUE,
             visible: true,
         }
     }
@@ -108,7 +113,7 @@ impl Default for SuperTrend {
 impl Indicator for SuperTrend {
     crate::studies::inputs::study_inputs!(self;
         atr_period: length("ATR Length", 1, usize::MAX),
-        multiplier: number("Factor", 0.01, f64::MAX)
+        multiplier: number("Factor", 0.01, f64::MAX, 0.01)
     ; {});
 
     fn name(&self) -> &str {
@@ -176,10 +181,11 @@ impl Indicator for SuperTrend {
                 if state.usable == 1 {
                     return IndicatorValue::None;
                 }
+                let middle = (bar.open + bar.close) / 2.0;
                 if bullish {
-                    IndicatorValue::Multiple(vec![state.trend, f64::NAN])
+                    IndicatorValue::Multiple(vec![state.trend, f64::NAN, middle])
                 } else {
-                    IndicatorValue::Multiple(vec![f64::NAN, state.trend])
+                    IndicatorValue::Multiple(vec![f64::NAN, state.trend, middle])
                 }
             });
     }
@@ -219,18 +225,43 @@ impl Indicator for SuperTrend {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.bullish_color, self.bearish_color]
+        vec![self.bullish_color, self.bearish_color, self.middle_color]
     }
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        let middle = line == 2;
         crate::studies::PlotStyle {
             color: self.colors().get(line).copied().unwrap_or(Color32::WHITE),
             width: self.line_style(line).width,
             pattern: crate::model::LineStyle::Solid,
-            // Each trend line holds values only while its trend lasts.
-            plot_type: crate::studies::PlotType::LineWithBreaks,
-            visible: true,
+            // Each trend line holds values only while its trend lasts; the body middle bounds
+            // the background.
+            plot_type: if middle {
+                crate::studies::PlotType::Line
+            } else {
+                crate::studies::PlotType::LineWithBreaks
+            },
+            visible: !middle,
         }
+    }
+
+    /// Shade each trend to the body middle at a tenth of full opacity, leaving a gap at reversals.
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        use crate::studies::{FillBoundary, StudyFill};
+        vec![
+            StudyFill {
+                first: FillBoundary::Plot(0),
+                second: FillBoundary::Plot(2),
+                color: palette::GREEN.gamma_multiply_u8(26),
+                inverted_color: None,
+            },
+            StudyFill {
+                first: FillBoundary::Plot(1),
+                second: FillBoundary::Plot(2),
+                color: palette::RED.gamma_multiply_u8(26),
+                inverted_color: None,
+            },
+        ]
     }
 
     fn draws_only_plots(&self) -> bool {
@@ -243,6 +274,9 @@ impl Indicator for SuperTrend {
         }
         if colors.len() > 1 {
             self.bearish_color = colors[1];
+        }
+        if colors.len() > 2 {
+            self.middle_color = colors[2];
         }
     }
 
@@ -263,6 +297,180 @@ impl Indicator for SuperTrend {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec!["Up Trend".to_string(), "Down Trend".to_string()]
+        vec![
+            "Up Trend".to_string(),
+            "Down Trend".to_string(),
+            "Body Middle".to_string(),
+        ]
+    }
+}
+
+#[cfg(all(test, feature = "widget"))]
+mod tests {
+    use super::*;
+    use crate::chart::coords::ChartMapping;
+    use crate::chart::rendering::{IndicatorRenderer, RenderContext};
+    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use crate::studies::{ConfiguredStudy, FillStyle, StudyTemplate};
+    use egui::{Context, Pos2, RawInput, Rect, Shape};
+
+    #[test]
+    fn supertrend_shades_to_the_body_middle_without_bridging_a_trend_change() {
+        let bars: Vec<_> = [
+            [100.0, 101.0, 99.0, 100.0],
+            [100.0, 103.0, 101.0, 103.0],
+            [103.0, 105.0, 103.0, 105.0],
+            [105.0, 106.0, 104.0, 105.0],
+            [104.0, 104.0, 96.0, 97.0],
+            [97.0, 98.0, 96.0, 97.0],
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, [open, high, low, close])| {
+            Bar::new(
+                chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i as i64),
+                open,
+                high,
+                low,
+                close,
+                1.0,
+            )
+        })
+        .collect();
+        let green = palette::GREEN.gamma_multiply_u8(26);
+        let red = palette::RED.gamma_multiply_u8(26);
+        let recoloured = Color32::from_rgba_premultiplied(0, 0, 51, 51);
+        for row in ["default", "recoloured", "older save"] {
+            let mut study = ConfiguredStudy::new(Box::new(SuperTrend::new(1, 1.0)));
+            if row == "recoloured" {
+                let mut settings = study.settings();
+                settings.plots[0].color = Color32::WHITE;
+                settings.fills[0].color = recoloured;
+                settings.fills[1].visible = false;
+                study.apply_settings(&[], settings).unwrap();
+            }
+            let mut study: Box<dyn Indicator> = if row == "older save" {
+                let mut saved = StudyTemplate::from_study(&study);
+                saved.settings.plots.truncate(2);
+                saved.settings.plot_variants.truncate(2);
+                saved.settings.fills.clear();
+                saved.create().unwrap()
+            } else {
+                Box::new(study)
+            };
+            study.calculate(&bars);
+            let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(240.0, 200.0));
+            let map = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(90.0, 110.0),
+                0.0,
+                200.0,
+                false,
+            );
+            let coords = ChartMapping::new(rect, 30.0, 0, bars.len(), 0.0, map);
+            let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+                IndicatorRenderer::render_study(
+                    &RenderContext::new(ui.painter(), rect),
+                    study.as_ref(),
+                    &bars,
+                    0,
+                    &map,
+                    &coords,
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let bands = |color| {
+                shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Mesh(mesh)
+                            if mesh.vertices.iter().all(|vertex| vertex.color == color) =>
+                        {
+                            Some(
+                                mesh.vertices
+                                    .iter()
+                                    .map(|vertex| vertex.pos)
+                                    .collect::<Vec<_>>(),
+                            )
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let check = |color, expected: Vec<Vec<Pos2>>| {
+                let actual = bands(color);
+                assert_eq!(actual.len(), expected.len(), "{row}");
+                for (actual, expected) in actual.iter().zip(expected) {
+                    assert_eq!(actual.len(), expected.len(), "{row}");
+                    for (actual, expected) in actual.iter().zip(expected) {
+                        assert!(
+                            actual.distance(expected) < 1e-4,
+                            "{row}: {actual:?} != {expected:?}"
+                        );
+                    }
+                }
+            };
+            // ATR(1) is the true range: 2, 3, 2, 2, 9, 2. The up trend holds 99, 102,
+            // 103 on bars 1..=3; the down trend holds 106, 99 on bars 4..=5.
+            // y(price) = 10 * (110 - price); body middles are 101.5, 104, 105, 100.5, 97.
+            let point = |bar, y| Pos2::new(coords.idx_to_x(bar), y);
+            let up = if row == "older save" {
+                vec![]
+            } else {
+                vec![
+                    vec![
+                        point(1, 110.0),
+                        point(2, 80.0),
+                        point(2, 60.0),
+                        point(1, 85.0),
+                    ],
+                    vec![
+                        point(2, 80.0),
+                        point(3, 70.0),
+                        point(3, 50.0),
+                        point(2, 60.0),
+                    ],
+                ]
+            };
+            check(
+                if row == "recoloured" {
+                    recoloured
+                } else {
+                    green
+                },
+                up,
+            );
+            let down = if row == "default" {
+                vec![vec![
+                    point(4, 40.0),
+                    point(5, 110.0),
+                    point(5, 130.0),
+                    point(4, 95.0),
+                ]]
+            } else {
+                vec![]
+            };
+            check(red, down);
+            assert!(!shapes.iter().any(|shape| matches!(
+                &shape.shape, Shape::Path(path)
+                    if path.stroke.color == egui::epaint::ColorMode::Solid(palette::BLUE)
+            )));
+            assert!(!study.settings().plots[2].visible);
+            if row == "older save" {
+                assert_eq!(study.line_count(), 3);
+                assert_eq!(
+                    study.settings().plots[2],
+                    SuperTrend::default().plot_style(2)
+                );
+                assert_eq!(
+                    study.settings().fills,
+                    [green, red].map(|color| FillStyle {
+                        visible: false,
+                        ..FillStyle::new(color)
+                    })
+                );
+            }
+        }
     }
 }

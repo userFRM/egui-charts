@@ -12,7 +12,7 @@ use egui::Color32;
 pub struct CloseToCloseVol {
     period: usize,
     /// Trading days per year the result is annualized over, one bar per day (252 for stocks, 365
-    /// for crypto); bars shorter than a day need the bars in a year instead
+    /// for crypto)
     trading_days: f64,
     values: IndicatorValues,
     colors: Vec<Color32>,
@@ -20,10 +20,10 @@ pub struct CloseToCloseVol {
 }
 
 impl CloseToCloseVol {
-    /// Create with a lookback of `period` bars, clamped to at least 1.
+    /// Create with a lookback of `period` bars, clamped to at least 2.
     pub fn new(period: usize) -> Self {
         Self {
-            period: period.max(1),
+            period: period.max(2),
             trading_days: 252.0,
             values: IndicatorValues::new(),
             colors: vec![palette::LIGHT_BLUE], // Purple
@@ -31,17 +31,17 @@ impl CloseToCloseVol {
         }
     }
 
-    /// Set the bars per year the volatility is annualized over, clamped into 0 to
-    /// `f64::MAX`, NaN to 0.
+    /// Set the trading days per year used to annualize volatility, one bar per day,
+    /// clamped into 1 to 366, NaN to 1.
     pub fn with_trading_days(mut self, days: f64) -> Self {
-        self.trading_days = super::clamp_param(days, 0.0, f64::MAX);
+        self.trading_days = super::clamp_param(days, 1.0, 366.0);
         self
     }
 }
 
 impl Default for CloseToCloseVol {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(10)
     }
 }
 
@@ -105,8 +105,8 @@ impl Indicator for CloseToCloseVol {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX),
-        trading_days: number("Trading days per year", 0.0, f64::MAX)
+        period: length("Period", 2, usize::MAX),
+        trading_days: number("Trading days per year", 1.0, 366.0)
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {
