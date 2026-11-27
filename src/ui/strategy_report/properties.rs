@@ -169,8 +169,15 @@ pub(super) fn show(
             _ => OrderSize::EquityFraction(amount),
         };
         let label = ui.label(l10n::text(ui.ctx(), "Pyramiding"));
-        ui.add(egui::DragValue::new(&mut settings.pyramiding).range(0..=usize::MAX))
-            .labelled_by(label.id);
+        // A saved zero runs as one: show the limit in effect, and store only what the user edits.
+        let mut limit = settings.pyramiding.max(1);
+        if ui
+            .add(egui::DragValue::new(&mut limit).range(1..=usize::MAX))
+            .labelled_by(label.id)
+            .changed()
+        {
+            settings.pyramiding = limit;
+        }
         ui.end_row();
         let (mut kind, mut amount) = match settings.commission {
             Commission::Fraction(v) => (0, v),
