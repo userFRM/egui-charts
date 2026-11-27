@@ -291,6 +291,17 @@ impl StopSweeps {
         self.formed = [None; 4];
     }
 
+    /// Starts another interval and rule from retained executions without reporting them.
+    pub(super) fn watching(&self, clock: Option<BarClock>, settings: &DetectorSettings) -> Self {
+        let mut watch = Self::new(self.tick, None);
+        watch.sizes_label = self.sizes_label.clone();
+        watch.trades = self.trades.clone();
+        watch.live = self.live;
+        watch.last_time = self.last_time;
+        watch.set_clock(clock, settings, &mut Vec::new());
+        watch
+    }
+
     pub(super) fn trade(
         &mut self,
         fill: &Tick,

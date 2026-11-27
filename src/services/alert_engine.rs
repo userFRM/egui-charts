@@ -960,9 +960,10 @@ impl AlertEngine {
     }
 
     /// Delivers the live conditions drained by `OrderFlowDetectors::take_footprint_events` to
-    /// footprint alerts on their symbol and interval. `Once` and `OncePerBar` fire at the first
-    /// execution that meets the condition; `OncePerBarClose` fires on a closed bar that meets
-    /// it. Each alert fires at most once per bar, including duplicate events from other charts.
+    /// footprint alerts of their symbol, interval and footprint rule. `Once` and `OncePerBar`
+    /// fire at the first execution that meets the condition; `OncePerBarClose` fires on a
+    /// closed bar that meets it. Each alert fires at most once per bar, including duplicate
+    /// events from other charts.
     /// Triggers carry the event's time and price, and its message when the alert has none;
     /// custom messages expand as for `strategy_fills`.
     pub fn footprint_events(&self, events: &[FootprintAlertEvent], now: DateTime<Utc>) {
@@ -974,6 +975,8 @@ impl AlertEngine {
                 now,
                 |alert| {
                     alert.condition == AlertCondition::Footprint(event.condition)
+                        && alert.timeframe == Some(event.timeframe)
+                        && alert.inputs.as_deref().and_then(|inputs| inputs.footprint) == event.rule
                         && (alert.frequency == AlertFrequency::OncePerBarClose) == event.closed
                 },
                 |_, seen, last| {
@@ -2677,6 +2680,7 @@ mod tests {
                             symbol: (*symbol).into(),
                             exchange: None,
                             timeframe: Timeframe::Min1,
+                            rule: None,
                             condition: if changed {
                                 StackedSellImbalance
                             } else {

@@ -4,7 +4,10 @@ use chrono::{DateTime, Utc};
 
 use super::DetectionKind;
 use crate::data::{Footprint, FootprintBar};
-use crate::model::{ChartTypeParams, Direction, FootprintCondition, Signal, SignalId, SignalShape};
+use crate::model::{
+    ChartTypeParams, Direction, FootprintAlertRule, FootprintCondition, Signal, SignalId,
+    SignalShape,
+};
 use crate::scales::VolumeFormatter;
 use crate::services::SignalEvent;
 
@@ -108,6 +111,18 @@ impl Default for FootprintRule {
 }
 
 impl FootprintRule {
+    /// Reads only the saved alert rule, leaving marker and panel switches disabled.
+    pub(super) fn reading(rule: FootprintAlertRule) -> Self {
+        Self {
+            imbalance_ratio: rule.imbalance_ratio,
+            diagonal: rule.diagonal,
+            imbalance_min_volume: rule.imbalance_min_volume,
+            stack: rule.stack,
+            row_ticks: rule.row_ticks,
+            ..Self::default()
+        }
+    }
+
     /// Takes the imbalance ratio, comparison, minimum volume and stack of the footprint under
     /// `params`, such as a chart's `Chart::chart_type_params`, and `row_ticks`, the instrument
     /// ticks per row that footprint shows, such as `Chart::footprint_row_ticks`, so that alerts
