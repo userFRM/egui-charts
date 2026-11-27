@@ -587,6 +587,12 @@ pub struct Chart {
     /// The legend's quantity box, when the user clicked it, for trading to open its calculator.
     #[cfg(feature = "ui")]
     pub(crate) quantity_clicked: Option<egui::Rect>,
+    /// The order presets the legend offers beside the quote buttons, for the next frame only.
+    #[cfg(feature = "ui")]
+    pub(crate) order_presets: Option<crate::chart::rendering::QuotePresets>,
+    /// The preset chosen in the quote buttons' menu: `Some(None)` for none.
+    #[cfg(feature = "ui")]
+    pub(crate) preset_chosen: Option<Option<String>>,
 
     // =========================================================================
     // Selection State
