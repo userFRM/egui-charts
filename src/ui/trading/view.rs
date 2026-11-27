@@ -279,6 +279,7 @@ impl Trading {
             line_width: 1.0,
             line_length: 0.0,
             label_alignment: display.label_alignment,
+            separate_labels: Some(display.separate_labels),
             show_positions: display.show_positions,
             submit: false,
             modify: capabilities.modify,
@@ -424,6 +425,9 @@ impl Trading {
 
         if self.service.is_some() {
             let lines = self.draw_overlays(ui, chart);
+            if let Some(on) = lines.separate_labels {
+                self.display.separate_labels = on;
+            }
             chart.trading_tags = lines.tags;
             chart.trading_outlined = lines.outlined;
             match lines.action {
@@ -605,6 +609,7 @@ impl Trading {
                 line_width: 1.0,
                 line_length: 0.0,
                 label_alignment: self.display.label_alignment,
+                separate_labels: None,
                 show_positions: false,
                 submit: true,
                 modify: true,
@@ -2174,6 +2179,10 @@ mod tests {
             !defaults.compact_ticket,
             "older settings keep the full ticket"
         );
+        assert!(
+            !defaults.separate_labels,
+            "older settings keep labels at their prices"
+        );
         assert!(defaults.extend_lines);
         assert_eq!(defaults.label_alignment, Right);
         assert!(!defaults.include_in_image);
@@ -2198,6 +2207,7 @@ mod tests {
                 for extended in [false, true] {
                     trading.display.label_alignment = alignment;
                     trading.display.extend_lines = extended;
+                    trading.display.separate_labels = extended;
                     let json = serde_json::to_string(&trading.display).unwrap();
                     assert_eq!(
                         serde_json::from_str::<TradingSettings>(&json).unwrap(),

@@ -131,7 +131,9 @@ pub struct Trading {
     /// Sell trade at once, which events raise notifications and whether fills ask for a sound.
     /// Copy the chart settings' [`trading`](crate::widget::settings::ChartSettingsState::trading)
     /// options here when the user applies them, and read them back when opening the dialog or
-    /// saving: [`apply_hide_action`](Self::apply_hide_action) changes them from the Hide menu.
+    /// saving: [`apply_hide_action`](Self::apply_hide_action) changes them from the Hide menu,
+    /// and [`show`](Self::show) updates
+    /// [`separate_labels`](TradingSettings::separate_labels) from the label menus' No overlap switch.
     pub display: TradingSettings,
     /// The sound asked for by fills since the host last took it.
     sound: Option<String>,

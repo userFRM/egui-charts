@@ -305,12 +305,11 @@ impl Strategy for StudyStrategy {
         let zero = vec![0.; bars.len()];
         let values = self.studies[0].values();
         let line = |column| values.line(column);
-        // Some studies reveal their seeded history only after their whole-run warm-up.
+        // MACD reveals its seeded history only after its whole-run warm-up.
         // Do not trade those earlier values before a prefix could have exposed them.
         let schema = self.studies[0].inputs();
         let warmup = match self.rule {
             Rule::Macd => length(&schema, "slow_period").max(length(&schema, "signal_period")),
-            Rule::SuperTrend => length(&schema, "atr_period").saturating_add(1),
             _ => 1,
         };
         // Whether the SAR is in an uptrend on each bar, which its one column does not tell.
