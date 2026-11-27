@@ -13,8 +13,8 @@ use super::{AlertDialogAction, AlertDialogConfig};
 use crate::data::inbox::Inbox;
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency,
-    AlertPositionProgress, AlertRule, AlertSource, AlertSourceName, NotificationSchedule,
-    NotificationWindow, Timeframe, TimezoneId,
+    AlertPositionProgress, AlertRule, AlertSource, AlertSourceName, FootprintCondition,
+    NotificationSchedule, NotificationWindow, Timeframe, TimezoneId,
 };
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
@@ -62,6 +62,10 @@ pub struct AlertDialog {
     /// assert_eq!(dialog.strategy_runs[0].0, "run-7");
     /// ```
     pub strategy_runs: Vec<(String, String)>,
+    /// Whether the host feeds `OrderFlowDetectors::take_footprint_events` to
+    /// `AlertEngine::footprint_events`. Only then is Footprint offered; an existing footprint
+    /// alert shows its condition either way.
+    pub footprint_conditions: bool,
     /// The zone the expiry date and time are entered in, UTC by default. Set it before
     /// [`open`](Self::open) or [`edit`](Self::edit), usually to the chart's time zone.
     pub timezone: TimezoneId,
@@ -120,6 +124,7 @@ impl std::fmt::Debug for AlertDialog {
             .field("sources", &self.sources)
             .field("watchlists", &self.watchlists)
             .field("strategy_runs", &self.strategy_runs)
+            .field("footprint_conditions", &self.footprint_conditions)
             .field("timezone", &self.timezone)
             .field("account_timezone", &self.account_timezone)
             .field("starts", &self.starts)
@@ -162,6 +167,7 @@ impl AlertDialog {
             sources: Vec::new(),
             watchlists: Vec::new(),
             strategy_runs: Vec::new(),
+            footprint_conditions: false,
             timezone: TimezoneId::utc(),
             account_timezone: None,
             starts: false,
@@ -858,11 +864,7 @@ impl AlertDialog {
                         (AlertFrequency::OncePerBarClose, "Once per bar close"),
                         (AlertFrequency::OncePerMinute, "Once per minute"),
                     ] {
-                        if (self.alert.condition.is_event()
-                            && !matches!(value, AlertFrequency::Once | AlertFrequency::EveryTime))
-                            || (matches!(self.alert.condition, AlertCondition::Position { .. })
-                                && value != AlertFrequency::Once)
-                        {
+                        if !self.alert.condition.frequencies().contains(&value) {
                             continue;
                         }
                         ui.selectable_value(
@@ -1122,6 +1124,7 @@ impl AlertDialog {
                     &self.sources,
                     &self.strategy_runs,
                     true,
+                    self.footprint_conditions,
                     None,
                 );
             } else {
@@ -1142,6 +1145,7 @@ impl AlertDialog {
                     &self.sources,
                     &[],
                     false,
+                    false,
                     None,
                 );
                 if ui
@@ -1157,17 +1161,15 @@ impl AlertDialog {
         if events {
             self.alert.additional_conditions.clear();
             self.alert.additional_timeframes.clear();
-            if !matches!(
-                self.alert.frequency,
-                AlertFrequency::Once | AlertFrequency::EveryTime
-            ) {
-                self.alert.frequency = AlertFrequency::EveryTime;
-            }
         }
         let position = matches!(self.alert.condition, AlertCondition::Position { .. });
-        if position {
-            // A position alert ends at its exit, so it takes frequency Once.
-            self.alert.frequency = AlertFrequency::Once;
+        if !self
+            .alert
+            .condition
+            .frequencies()
+            .contains(&self.alert.frequency)
+        {
+            self.alert.frequency = self.alert.condition.frequencies()[0];
         }
         if !events
             && !position
@@ -1488,6 +1490,7 @@ pub(crate) fn rule_form(
     sources: &[(AlertSource, AlertSourceName)],
     runs: &[(String, String)],
     offer_position: bool,
+    offer_footprint: bool,
     mut level_text: Option<&mut String>,
 ) -> bool {
     let mut level_edited = false;
@@ -1595,6 +1598,10 @@ pub(crate) fn rule_form(
         runs.first()
             .map(|(id, _)| (AlertCondition::StrategyFills(id.clone()), "Strategy fills")),
     )
+    .chain(offer_footprint.then_some((
+        AlertCondition::Footprint(FootprintCondition::BuyImbalance),
+        "Footprint",
+    )))
     .collect::<Vec<_>>();
     let selected = match condition {
         AlertCondition::MovingBy { value, .. } if value.is_sign_negative() => "Moving down",
@@ -1611,6 +1618,7 @@ pub(crate) fn rule_form(
                 AlertCondition::StrategyFills(_) => "Strategy fills",
                 AlertCondition::DetectorSignals(_) => "Detector signals",
                 AlertCondition::CustomEvents(_) => "Custom events",
+                AlertCondition::Footprint(_) => "Footprint",
                 _ => "Condition",
             }),
     };
@@ -1659,6 +1667,21 @@ pub(crate) fn rule_form(
         .accessible_name(l10n::text(ui.ctx(), "Condition"));
     ui.horizontal_wrapped(|ui| match condition {
         AlertCondition::Holds => {}
+        AlertCondition::Footprint(condition) => {
+            egui::ComboBox::from_id_salt("footprint_condition")
+                .selected_text(l10n::text(ui.ctx(), condition.to_string()))
+                .show_ui(ui, |ui| {
+                    for value in FootprintCondition::ALL {
+                        ui.selectable_value(
+                            condition,
+                            value,
+                            l10n::text(ui.ctx(), value.to_string()),
+                        );
+                    }
+                })
+                .response
+                .accessible_name(l10n::text(ui.ctx(), "Footprint condition"));
+        }
         AlertCondition::Position { progress, .. } => {
             ui.label(l10n::text(ui.ctx(), progress.to_string()));
         }
