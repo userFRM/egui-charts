@@ -49,6 +49,8 @@ pub(crate) enum ProfileStyle {
         anchored: bool,
         /// Width of the point of control line, the drawing's line width.
         poc_width: f32,
+        /// Decimals of the row values, two without.
+        volume_decimals: Option<u8>,
     },
 }
 
@@ -136,7 +138,16 @@ pub(crate) fn paint_profile(
             ProfileStyle::Drawing {
                 anchored,
                 poc_width,
-            } => (true, anchored, false, 0.3, poc_width, [true; 2], None),
+                volume_decimals,
+            } => (
+                true,
+                anchored,
+                false,
+                0.3,
+                poc_width,
+                [true; 2],
+                volume_decimals,
+            ),
         };
     if profile.exposure.is_some() {
         paint_exposure(painter, profile, config, span.clone(), share, price_to_y);
@@ -189,11 +200,12 @@ pub(crate) fn paint_profile(
     let mut row_right = right;
     let mut width = right - left;
     if drawing {
-        painter.rect_filled(
-            rect,
-            0.0,
-            Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 15),
-        );
+        if config.show_box {
+            let [r, g, b, a] = config
+                .box_color
+                .unwrap_or([color[0], color[1], color[2], 15]);
+            painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(r, g, b, a));
+        }
         if right_aligned {
             row_right = painter.clip_rect().right();
             // Rows at the pane's edge scale with the pane, wherever the anchor is.
@@ -373,12 +385,16 @@ pub(crate) fn paint_profile(
         0.0
     };
     let mut figures = Vec::new();
-    if config.show_values && !drawing {
+    if config.show_values {
         let formatter = crate::scales::VolumeFormatter {
             precision: volume_decimals.map_or(2, usize::from),
         };
         let font = egui::FontId::proportional(typography::XS);
-        let text_color = painter.ctx().active_theme().ui.text;
+        let text_color = config
+            .values_color
+            .map_or(painter.ctx().active_theme().ui.text, |[r, g, b, a]| {
+                Color32::from_rgba_unmultiplied(r, g, b, a)
+            });
         for (row, &volume) in profile.volume.iter().enumerate() {
             let delta = profile.up[row] - profile.down[row];
             let amount = if config.display == ProfileDisplay::Delta {
@@ -416,8 +432,8 @@ pub(crate) fn paint_profile(
             let galley = painter.layout_no_wrap(text, font.clone(), text_color);
             let size = galley.size();
             let (a, b) = (y_at_row(row), y_at_row(row + 1));
-            // Beside its bar, else over the bar's end, 2 short of the span's far edge and the room.
-            let offset = (bar_width(row) + 2.0).min(right - left - 2.0 - room - size.x);
+            // Beside its bar, else over the bar's end, 2 short of the rows' far edge and the room.
+            let offset = (bar_width(row) + 2.0).min(width - 2.0 - room - size.x);
             if (a - b).abs() < size.y || offset < 2.0 {
                 continue;
             }
@@ -458,9 +474,10 @@ pub(crate) fn paint_profile(
             &[key, figures].concat(),
         );
     }
-    // A study's span often starts at the pane's left edge, under the chart legend, so a study whose
-    // rows start at the left notes its source at the right.
-    let note_right = !drawing && !right_aligned;
+    // A study's span often starts at the pane's left edge, under the chart legend, and a drawing's
+    // top row value sits at its left corner, so these note their source at the right when their
+    // rows start at the left.
+    let note_right = !right_aligned && (!drawing || config.show_values);
     // A drawing's colour tints its range: too faint for text.
     let note_color = if drawing {
         painter.ctx().active_theme().ui.text.to_srgba_unmultiplied()
@@ -827,10 +844,10 @@ fn draw_volume_profile_lines(
     let theme = painter.ctx().active_theme();
     let font = egui::FontId::proportional(theme.text.tiny);
 
-    let poc_color = if drawing {
-        theme.ui.text
-    } else {
-        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
+    let poc_color = match config.poc_color {
+        Some([r, g, b, a]) => Color32::from_rgba_unmultiplied(r, g, b, a),
+        None if drawing => theme.ui.text,
+        None => Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
     };
     if config.show_poc {
         painter.add(egui::Shape::line(
@@ -951,6 +968,7 @@ mod tests {
                         ProfileStyle::Drawing {
                             anchored: false,
                             poc_width: crate::styles::stroke::THICK,
+                            volume_decimals: None,
                         }
                     } else {
                         ProfileStyle::Study {

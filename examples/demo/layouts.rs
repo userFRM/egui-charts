@@ -994,6 +994,7 @@ impl DemoApp {
             .collect();
         settings.market_heatmap = self.market_heatmap.selection.clone();
         settings.drawing_sort = self.object_tree.state().drawing_sort.clone();
+        settings.shortcuts = self.shortcuts.clone();
         settings
     }
 
@@ -1036,6 +1037,10 @@ impl DemoApp {
         preferences.favorites = settings.indicator_favorites.into_iter().collect();
         self.indicator_dialog.set_preferences(preferences);
         self.market_heatmap.selection = settings.market_heatmap;
+        // Settings without bindings return charts that had saved ones to the defaults.
+        self.shortcuts = settings
+            .shortcuts
+            .or(self.shortcuts.as_ref().map(|_| Default::default()));
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);
         }
