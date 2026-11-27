@@ -441,7 +441,9 @@ pub(crate) struct Declaration {
     /// What it declares, with the limits the parser holds it to.
     pub summary: fn() -> String,
     read: fn(&mut Cursor, &mut Collector) -> Step<Option<usize>>,
-    eval: fn(&mut EvalContext, &[Expression], &Dynamic) -> RhaiResult,
+    /// What the statement does on each bar; `None` for a declaration read only when the script
+    /// compiles, which the bars run without.
+    eval: Option<Eval>,
 }
 
 /// The declarations, in the order the reference lists them. These are the only ones registered,
@@ -458,7 +460,7 @@ pub(crate) const DECLARATIONS: [Declaration; 8] = [
                 .into()
         },
         read: display,
-        eval: nothing,
+        eval: None,
     },
     Declaration {
         name: "input",
@@ -473,7 +475,7 @@ pub(crate) const DECLARATIONS: [Declaration; 8] = [
             )
         },
         read: input,
-        eval: nothing,
+        eval: None,
     },
     Declaration {
         name: "state",
@@ -486,7 +488,7 @@ pub(crate) const DECLARATIONS: [Declaration; 8] = [
             )
         },
         read: state_decl,
-        eval: nothing,
+        eval: None,
     },
     Declaration {
         name: "series",
@@ -499,7 +501,7 @@ pub(crate) const DECLARATIONS: [Declaration; 8] = [
             )
         },
         read: series,
-        eval: store_series,
+        eval: Some(store_series),
     },
     Declaration {
         name: "bars",
@@ -514,7 +516,7 @@ pub(crate) const DECLARATIONS: [Declaration; 8] = [
             )
         },
         read: bars,
-        eval: nothing,
+        eval: None,
     },
     Declaration {
         name: "plot",
@@ -537,7 +539,7 @@ pub(crate) const DECLARATIONS: [Declaration; 8] = [
             )
         },
         read: plot,
-        eval: store_plot,
+        eval: Some(store_plot),
     },
     Declaration {
         name: "fill",
@@ -549,7 +551,7 @@ pub(crate) const DECLARATIONS: [Declaration; 8] = [
                 .into()
         },
         read: fill,
-        eval: nothing,
+        eval: None,
     },
     Declaration {
         name: "study",
@@ -563,7 +565,7 @@ pub(crate) const DECLARATIONS: [Declaration; 8] = [
             )
         },
         read: study,
-        eval: read_study,
+        eval: Some(read_study),
     },
 ];
 
@@ -576,12 +578,15 @@ pub(crate) fn register(engine: &mut Engine, collector: &Shared) {
             declaration.name,
             move |symbols, look, state| parse(&collector, read, symbols, look, state),
             false,
-            declaration.eval,
+            declaration.eval.unwrap_or(nothing),
         );
     }
 }
 
 type RhaiResult = Result<Dynamic, Box<EvalAltResult>>;
+
+/// What a declaration's statement does when a bar runs it.
+type Eval = fn(&mut EvalContext, &[Expression], &Dynamic) -> RhaiResult;
 
 fn nothing(_: &mut EvalContext, _: &[Expression], _: &Dynamic) -> RhaiResult {
     Ok(Dynamic::UNIT)
@@ -594,11 +599,11 @@ fn number(
     what: impl FnOnce() -> String,
 ) -> Result<f64, Box<EvalAltResult>> {
     let value = context.eval_expression_tree(expression)?;
-    if let Some(value) = value.clone().try_cast::<f64>() {
+    if let Ok(value) = value.as_float() {
         Ok(value)
-    } else if let Some(value) = value.clone().try_cast::<i64>() {
+    } else if let Ok(value) = value.as_int() {
         Ok(value as f64)
-    } else if let Some(series) = value.clone().try_cast::<Handle>() {
+    } else if let Some(series) = value.read_lock::<Handle>() {
         Ok(series.value())
     } else {
         Err(EvalAltResult::ErrorRuntime(
@@ -628,7 +633,7 @@ pub(crate) fn type_name(value: &Dynamic) -> &'static str {
 
 fn store_series(context: &mut EvalContext, inputs: &[Expression], state: &Dynamic) -> RhaiResult {
     let at = state.as_int().unwrap_or(0) as usize;
-    let name = inputs[0].get_string_value().unwrap_or_default().to_owned();
+    let name = inputs[0].get_string_value().unwrap_or_default();
     let value = number(context, &inputs[1], || format!("series {name}"))?;
     runtime::with(|run| {
         if let Some(slot) = run.columns.declared[at].last_mut() {
@@ -641,7 +646,7 @@ fn store_series(context: &mut EvalContext, inputs: &[Expression], state: &Dynami
 
 fn store_plot(context: &mut EvalContext, inputs: &[Expression], state: &Dynamic) -> RhaiResult {
     let at = state.as_int().unwrap_or(0) as usize;
-    let title = inputs[0].get_string_value().unwrap_or_default().to_owned();
+    let title = inputs[0].get_string_value().unwrap_or_default();
     let mut value = number(context, &inputs[1], || format!("plot \"{title}\""))?;
     let span = span(inputs[0].position());
     let coloured = runtime::with(|run| {
@@ -1463,6 +1468,61 @@ pub(crate) fn spans<'a>(
         previous = Some(token);
     }
     found
+}
+
+/// `source` with every statement of a declaration that does nothing on a bar written as spaces,
+/// its line breaks kept, so the bars run without them and every other statement keeps its line
+/// and column.
+pub(crate) fn without_declarations(source: &str) -> String {
+    let skipped = |word| {
+        let mut skipped = DECLARATIONS.iter().filter(|d| d.eval.is_none());
+        skipped.any(|d| d.name == word)
+    };
+    let pieces = pieces(source).into_iter();
+    let tokens: Vec<_> = pieces
+        .filter_map(|(token, _, range)| Some((token?, range)))
+        .collect();
+    let mut running = String::with_capacity(source.len());
+    let mut copied = 0;
+    let mut at = 0;
+    while let Some((token, range)) = tokens.get(at) {
+        // A statement starts the text or follows a `;` or a block's brace, not a map's `#{`.
+        let starts = match at.checked_sub(1).map(|before| tokens[before].0) {
+            None | Some(Token::Symbol(';' | '}')) => true,
+            Some(Token::Symbol('{')) => at < 2 || tokens[at - 2].0 != Token::Symbol('#'),
+            _ => false,
+        };
+        at += 1;
+        if !(starts && matches!(token, Token::Word(word) if skipped(*word))) {
+            continue;
+        }
+        // It ends at its `;`, before the brace closing its block or at the end of the text.
+        let mut end = source.len();
+        let mut depth = 0;
+        while let Some((token, after)) = tokens.get(at) {
+            match token {
+                Token::Symbol(';') if depth == 0 => {
+                    end = after.end;
+                    at += 1;
+                    break;
+                }
+                Token::Symbol('}') if depth == 0 => {
+                    end = after.start;
+                    break;
+                }
+                Token::Symbol('(' | '[' | '{') => depth += 1,
+                Token::Symbol(')' | ']' | '}') => depth -= 1,
+                _ => {}
+            }
+            at += 1;
+        }
+        running.push_str(&source[copied..range.start]);
+        let blank = |c| if matches!(c, '\n' | '\r') { c } else { ' ' };
+        running.extend(source[range.start..end].chars().map(blank));
+        copied = end;
+    }
+    running.push_str(&source[copied..]);
+    running
 }
 
 /// A piece of a script's text outside comments.
