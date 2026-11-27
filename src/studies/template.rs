@@ -206,17 +206,25 @@ impl StudyTemplateSet {
 
 impl StudyTemplate {
     /// Capture the factory key, [`Indicator::registered_name`], calculation inputs, presentation
-    /// and value scale, without computed values. A host metric keeps its descriptor too.
+    /// and value scale, without computed values. A raw study also keeps its declared source.
+    /// A host metric keeps its descriptor too.
     /// An input that reads another study's plot keeps that study's chart id;
     /// `Chart::study_template_set` saves a chart's studies with the links between them.
     pub fn from_study(study: &dyn Indicator) -> Self {
+        let mut inputs: Vec<_> = study
+            .inputs()
+            .into_iter()
+            .map(|input| (input.id, input.value))
+            .collect();
+        // Raw studies declare their source without listing its configured input.
+        if let Some(source) = study.source()
+            && !inputs.iter().any(|(id, _)| id == "source")
+        {
+            inputs.push(("source".to_owned(), InputValue::Source(source)));
+        }
         Self {
             name: study.registered_name().into(),
-            inputs: study
-                .inputs()
-                .into_iter()
-                .map(|input| (input.id, input.value))
-                .collect(),
+            inputs,
             settings: study.settings(),
             visible: study.user_visible(),
             scale: Some(study.scale()),
@@ -762,6 +770,15 @@ impl StudyTemplate {
                 template
                     .inputs
                     .push(("smoothing".to_owned(), InputValue::Choice(0)));
+            }
+            // A Woodies CCI read the close before it opened on the typical price.
+            "Woodies CCI" if !has("source") => {
+                template.inputs.push((
+                    "source".to_owned(),
+                    InputValue::Source(crate::studies::StudySource::Price(
+                        crate::model::PriceSource::Close,
+                    )),
+                ));
             }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
@@ -2383,6 +2400,19 @@ mod tests {
                     ("as_drawings", Toggle(true)),
                 ],
             ),
+            // Saved without a source while the study read the close: restored on the close.
+            (
+                "Woodies CCI",
+                vec![("turbo_length", Length(6)), ("cci_length", Length(14))],
+                vec![
+                    ("turbo_length", Length(6)),
+                    ("cci_length", Length(14)),
+                    (
+                        "source",
+                        InputValue::Source(crate::studies::StudySource::Price(PriceSource::Close)),
+                    ),
+                ],
+            ),
             // Saved while each range included its largest size: the limit is the smallest number
             // above it with one more decimal place.
             (
@@ -2492,6 +2522,59 @@ mod tests {
                 "{name}"
             );
         }
+        // A new raw study's declared source is saved too, so it is not mistaken for an older
+        // source-less save when restored.
+        let captured = StudyTemplate::from_study(&crate::studies::WoodiesCCI::default());
+        let source = InputValue::Source(crate::studies::StudySource::Price(PriceSource::HLC3));
+        assert_eq!(
+            captured
+                .inputs
+                .iter()
+                .find(|(id, _)| id == "source")
+                .map(|(_, value)| value),
+            Some(&source)
+        );
+        let restored = captured.create().unwrap();
+        assert_eq!(
+            restored
+                .inputs()
+                .iter()
+                .find(|input| input.id == "source")
+                .map(|input| &input.value),
+            Some(&source)
+        );
+
+        // Literal saves captured on origin/main cf9bdb1e4, with and without an explicit source.
+        // Both keep their Close source, inputs, plot styles and scale.
+        for text in [
+            r#"{"name":"Woodies CCI","inputs":[["turbo_length",{"Length":6}],["cci_length",{"Length":14}],["down_color",{"Color":[244,67,54,255]}],["transition_color",{"Color":[244,67,54,255]}],["neutral_color",{"Color":[244,67,54,255]}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.WoodiesCCI.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"Histogram","visible":true},{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[244,67,54,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Solid","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"Woodies CCI","inputs":[["turbo_length",{"Length":6}],["cci_length",{"Length":14}],["down_color",{"Color":[244,67,54,255]}],["transition_color",{"Color":[244,67,54,255]}],["neutral_color",{"Color":[244,67,54,255]}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.WoodiesCCI.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"Histogram","visible":true},{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[244,67,54,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Solid","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let restored = saved.create().unwrap();
+            let inputs = restored.inputs();
+            let close = InputValue::Source(crate::studies::StudySource::Price(PriceSource::Close));
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == "source")
+                    .map(|input| &input.value),
+                Some(&close)
+            );
+            for (id, value) in &saved.inputs {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == *id)
+                        .map(|input| &input.value),
+                    Some(value),
+                    "Woodies CCI {id}"
+                );
+            }
+            assert_eq!(restored.settings(), saved.settings);
+            assert_eq!(Some(restored.scale()), saved.scale);
+        }
+
         // Literal study saved on main before Hours existed: all saved inputs and styles stay,
         // and the trading day remains selected with its extended hours split.
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":true}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
