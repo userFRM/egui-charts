@@ -74,7 +74,7 @@ pub enum Slippage {
 #[non_exhaustive]
 #[serde(default)]
 pub struct BacktestSettings {
-    /// Starting account value in the account currency. Must be finite.
+    /// Starting account value in the account currency, 1,000,000 by default. Must be finite.
     pub initial_capital: f64,
     /// The account currency of capital, profits, fees and equity, such as "EUR". `None` or an
     /// empty code uses [`Backtest::instrument_currency`]; another currency converts the run's
@@ -84,7 +84,8 @@ pub struct BacktestSettings {
     pub risk_free_rate: f64,
     /// Size used by entries that do not supply their own quantity.
     pub order_size: OrderSize,
-    /// Maximum simultaneously open entries in one direction. Zero disables entries.
+    /// Maximum simultaneously open entries in one direction. Zero counts as one: a strategy can
+    /// always open one position, and an opposite entry still reverses it.
     pub pyramiding: usize,
     /// Fee paid on each fill and allocated to trades by quantity.
     pub commission: Commission,
@@ -150,7 +151,7 @@ pub struct BacktestSettings {
 impl Default for BacktestSettings {
     fn default() -> Self {
         Self {
-            initial_capital: 10_000.0,
+            initial_capital: 1_000_000.0,
             currency: None,
             risk_free_rate: 0.02,
             order_size: OrderSize::Fixed(1.0),
@@ -285,6 +286,11 @@ impl BacktestSettings {
         } else {
             1.0
         }
+    }
+
+    /// The pyramiding limit in effect: zero allows one entry, as one does.
+    fn pyramiding(&self) -> usize {
+        self.pyramiding.max(1)
     }
 }
 
@@ -1219,7 +1225,7 @@ impl Backtest {
         };
         report.properties = vec![
             ("Order size".into(), size),
-            ("Pyramiding".into(), settings.pyramiding.to_string()),
+            ("Pyramiding".into(), settings.pyramiding().to_string()),
             ("Commission".into(), commission),
             ("Slippage".into(), slippage),
             ("Leverage".into(), settings.leverage().to_string()),
@@ -2284,9 +2290,7 @@ impl<'a> Run<'a> {
         match order.kind {
             Kind::Entry(..) => {
                 let reversing = self.lots.first().is_some_and(|lot| lot.side != side);
-                if self.settings.pyramiding == 0
-                    || (!reversing && self.lots.len() >= self.settings.pyramiding)
-                {
+                if !reversing && self.lots.len() >= self.settings.pyramiding() {
                     return;
                 }
                 let quantity = order
@@ -3668,6 +3672,20 @@ mod tests {
                 context.entry("C", Buy, None, OrderType::Market);
             }
         }
+        fn both_ways(bar: usize, context: &mut StrategyContext<'_>) {
+            match bar {
+                0 => {
+                    context.entry("A", Buy, None, OrderType::Market);
+                    context.entry("B", Buy, None, OrderType::Market);
+                }
+                1 => {
+                    context.entry("C", Sell, None, OrderType::Market);
+                    context.entry("D", Sell, None, OrderType::Market);
+                }
+                2 => context.exit("X", None, None, None),
+                _ => {}
+            }
+        }
         fn hold(bar: usize, context: &mut StrategyContext<'_>) {
             if bar == 0 {
                 context.entry("A", Buy, None, OrderType::Market);
@@ -4720,16 +4738,21 @@ mod tests {
                 vec![1000.0, 1000.0, 1000.0, 1040.0],
                 0,
             ),
+            // Zero allows one entry per direction, as one does: B and D are not filled, and C
+            // reverses A at 110, earning 2 * (110 - 100), before X closes C at 100 for 2 * 10.
             (
-                "disabled entries",
-                stack,
+                "zero pyramiding allows one entry per direction",
+                both_ways,
                 BacktestSettings {
                     pyramiding: 0,
                     ..terms.clone()
                 },
-                flat(&[100.0, 100.0, 110.0]),
-                vec![],
-                vec![1000.0; 4],
+                flat(&[100.0, 100.0, 110.0, 100.0]),
+                vec![
+                    trade(Buy, 2.0, 1, 100.0, Some((2, 110.0, 20.0)), "A / C"),
+                    trade(Sell, 2.0, 2, 110.0, Some((3, 100.0, 20.0)), "C / X"),
+                ],
+                vec![1000.0, 1000.0, 1000.0, 1020.0, 1040.0],
                 0,
             ),
             (

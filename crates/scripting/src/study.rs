@@ -324,10 +324,11 @@ impl ScriptState {
                 self.drawings.replace(outcome.start, outcome.drawn);
                 match outcome.error {
                     Some(error) => *last_error = Some(error),
-                    None if outcome.start == 0 => {
+                    // A study built on no bars, as a layout check builds one, measures nothing:
+                    // it leaves the error and the profile of the script's studies as they are.
+                    None if outcome.start == 0 && !self.bars.is_empty() => {
                         *last_error = None;
-                        // A study built on no bars, as a layout check builds one, measures nothing.
-                        if outcome.profile.is_some() && !self.bars.is_empty() {
+                        if outcome.profile.is_some() {
                             let profile = self.script.profile.lock();
                             *profile.unwrap_or_else(|e| e.into_inner()) = outcome.profile;
                         }

@@ -126,6 +126,7 @@ impl DemoApp {
             .chart
             .instrument()
             .and_then(|instrument| instrument.currency.clone());
+        run.exchange_rates = super::strategy::exchange_rates(run.exchange_rate_request().as_ref());
         let source = &bars[bars.partition_point(|bar| bar.time < first.time)..];
         // Prime history before any alert watches the run, so only subsequent executions notify.
         run.update(script.as_mut(), source, &[]);
@@ -288,7 +289,7 @@ impl DemoApp {
                 let mut event = CustomAlertEvent::new(
                     fill.sequence,
                     fill.time,
-                    format!("Momentum turned {side} at {}", fill.price),
+                    format!("Momentum turned {side} at {}", fill.price_text()),
                 );
                 event.price = Some(fill.price);
                 Some(event)
@@ -309,7 +310,7 @@ mod tests {
     use super::super::tests::{AppStorage, ui_click, ui_frame};
     use super::*;
     use egui_charts::model::{Bar, BarClock, Timeframe};
-    use egui_charts::strategies::{Commission, StrategyFactory};
+    use egui_charts::strategies::{Commission, Slippage, StrategyFactory};
 
     /// Clicks the one text `label` that a frame of the strategy panel and the dialogs shows.
     fn click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
@@ -583,11 +584,9 @@ mod tests {
         let report = run.report().unwrap();
         assert_eq!(run.instrument_currency.as_deref(), Some("USD"));
         assert_eq!(report.currency.as_deref(), Some("EUR"));
-        assert_eq!(
-            report.unavailable.as_deref(),
-            Some("Exchange rates from USD to EUR are unavailable")
-        );
-        assert!(report.trades.is_empty() && report.equity.is_empty());
+        assert_eq!(report.unavailable, None);
+        assert!(!report.trades.is_empty());
+        assert!(report.trades.iter().all(|trade| trade.exchange_rate == 0.9));
 
         let restored = restart(&mut app, &ctx);
         let alerts = restored.alert_host.engine().alerts();
@@ -599,8 +598,8 @@ mod tests {
                 Add them again from the strategy tester."));
     }
 
-    /// The live momentum run names its entries in its fill alert and raises an alert of its
-    /// own when a bar closes unchanged.
+    /// The live momentum run names its entries in its fill alert, raises an alert of its own
+    /// when a bar closes unchanged, and writes the price of a turn in the run's price format.
     #[test]
     fn demo_live_momentum_alerts_carry_its_texts_and_a_paused_close() {
         let ctx = egui::Context::default();
@@ -612,10 +611,12 @@ mod tests {
         app.switch_timeframe(Timeframe::Min1);
         let mut settings = app.strategy_report.settings().clone();
         settings.recalculate_on_every_update = false;
+        settings.price_increment = 0.01;
+        settings.slippage = Slippage::Increments(2);
         app.strategy_report.set_settings(settings).unwrap();
         app.chart.set_feed_paused(true);
         let open: chrono::DateTime<chrono::Utc> = "2026-10-27T19:00:00Z".parse().unwrap();
-        let bars: Vec<_> = [100.0, 101.0, 103.0, 103.0, 104.0]
+        let bars: Vec<_> = [99.0, 100.0, 100.1, 100.1, 101.0]
             .into_iter()
             .enumerate()
             .map(|(minute, close)| {
@@ -638,7 +639,16 @@ mod tests {
         messages.sort_unstable();
         assert_eq!(
             messages,
-            ["Momentum buys after an up close", "Momentum paused at 103"]
+            [
+                "Momentum buys after an up close",
+                "Momentum paused at 100.1"
+            ]
         );
+        // Two increments of slippage on the open of 100.1 fill at 100.1 + 0.02.
+        let turns: Vec<_> = (app.alerts.log().iter())
+            .filter(|trigger| trigger.id.0 == format!("{id}{TURNS}"))
+            .map(|trigger| trigger.message.as_str())
+            .collect();
+        assert_eq!(turns, ["Momentum turned long at 100.12"]);
     }
 }

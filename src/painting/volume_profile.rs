@@ -390,11 +390,11 @@ pub(crate) fn paint_profile(
             precision: volume_decimals.map_or(2, usize::from),
         };
         let font = egui::FontId::proportional(typography::XS);
-        let text_color = config
+        let color32 = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let values_color = config
             .values_color
-            .map_or(painter.ctx().active_theme().ui.text, |[r, g, b, a]| {
-                Color32::from_rgba_unmultiplied(r, g, b, a)
-            });
+            .map_or(painter.ctx().active_theme().ui.text, color32);
+        let value_area_values_color = config.value_area_values_color.map_or(values_color, color32);
         for (row, &volume) in profile.volume.iter().enumerate() {
             let delta = profile.up[row] - profile.down[row];
             let amount = if config.display == ProfileDisplay::Delta {
@@ -428,6 +428,12 @@ pub(crate) fn paint_profile(
                         formatter.format_with_min_unit_decimals(delta, 2)
                     ),
                 }
+            };
+            // The rows the bars mark as the value area; an options profile's strikes have none.
+            let text_color = if !options && (va_low..=va_high).contains(&row) {
+                value_area_values_color
+            } else {
+                values_color
             };
             let galley = painter.layout_no_wrap(text, font.clone(), text_color);
             let size = galley.size();
