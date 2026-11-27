@@ -408,9 +408,12 @@ fn position_menu(
     ) {
         return Some(TradingLineAction::Reverse(position.clone()));
     }
-    let offers = (capabilities.limit && !held.0) || (capabilities.stop && !held.1);
+    let offers = capabilities.position_exits
+        && ((capabilities.limit && !held.0) || (capabilities.stop && !held.1));
     let why = if !capabilities.limit && !capabilities.stop {
         "The account does not support take-profit or stop-loss orders"
+    } else if !capabilities.position_exits {
+        "The account does not support exits on positions"
     } else {
         "The position has every exit the account supports"
     };
