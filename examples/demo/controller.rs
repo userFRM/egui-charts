@@ -6183,12 +6183,14 @@ mod tests {
             .unwrap_or_else(|| panic!("missing control: {label}"))
     }
 
-    /// The demo's series settings reach the TPO chart type's statistics rows and hours, and the
-    /// study settings the Time Price Opportunity study's statistics rows.
+    /// The demo's series settings reach the TPO chart type's statistics rows, hours, blocks,
+    /// volume profile settings, profile length and price line, and the study settings the Time
+    /// Price Opportunity study's statistics rows, profile period, value area edges and volume
+    /// profile levels.
     #[test]
-    fn tpo_statistics_and_hours_reach_the_demo_chart() {
-        use egui::accesskit::{Action, ActionRequest, TreeId};
-        use egui_charts::model::{ChartType, ProfileSession};
+    fn tpo_settings_reach_the_demo_chart() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, TreeId};
+        use egui_charts::model::{ChartType, PriceSource, ProfileSession, TPOProfilePeriod};
         use egui_charts::studies::{IndicatorFactory, InputValue};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
@@ -6231,6 +6233,52 @@ mod tests {
         assert!(params.tpo_statistics && params.tpo_statistics_rows.total_volume);
         assert_eq!(params.tpo_session, ProfileSession::Regular);
 
+        // Numbers are typed through AccessKit's set value.
+        let set = |app: &mut DemoApp, label: &str, value: f64| {
+            let nodes = draw(&ctx, app, vec![]);
+            let target_node = control(&nodes, label).0;
+            draw(
+                &ctx,
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::SetValue,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: Some(ActionData::NumericValue(value)),
+                })],
+            );
+        };
+        app.handle_chart_context(ContextMenuAction::OpenSeriesSettings);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in [
+            "Blocks",
+            "Volume profile",
+            "Volume point of control",
+            "Volume placement",
+            "Left",
+            "Price source",
+            "High",
+            "Profile period",
+            "Weeks",
+        ] {
+            click(&mut app, label);
+        }
+        set(&mut app, "Profile length", 2.0);
+        set(&mut app, "Line width", 3.0);
+        click(&mut app, "Ok");
+        assert!(!app.series_settings.is_open);
+        let params = app.chart.chart_type_params();
+        assert!(!params.tpo_blocks && params.tpo_volume_profile);
+        assert!(params.tpo_volume.poc && params.tpo_volume.left);
+        assert_eq!(
+            (params.tpo_profile_period, params.tpo_profile_periods),
+            (TPOProfilePeriod::Week, 2)
+        );
+        assert_eq!(params.styles.tpo_price_source, PriceSource::High);
+        assert_eq!(params.styles.tpo_line.width, 3.0);
+
         let study = IndicatorFactory::new()
             .create("Time Price Opportunity")
             .unwrap();
@@ -6239,15 +6287,30 @@ mod tests {
         for _ in 0..3 {
             draw(&ctx, &mut app, vec![]);
         }
-        for label in ["Statistics", "Total volume", "Apply"] {
+        for label in [
+            "Statistics",
+            "Total volume",
+            "Profile period",
+            "Weeks",
+            "Value area high",
+            "Volume profile",
+            "Volume point of control",
+            "Apply",
+        ] {
             click(&mut app, label);
         }
         assert!(!app.indicator_settings.is_open());
         let inputs = app.chart.indicator_mut(id).unwrap().inputs();
-        for input in ["statistics", "statistics_total_volume"] {
+        for (input, expected) in [
+            ("statistics", InputValue::Toggle(true)),
+            ("statistics_total_volume", InputValue::Toggle(true)),
+            ("profile_period", InputValue::Choice(1)),
+            ("value_area_high", InputValue::Toggle(false)),
+            ("volume_poc", InputValue::Toggle(true)),
+        ] {
             assert_eq!(
                 inputs.iter().find(|i| i.id == input).map(|i| &i.value),
-                Some(&InputValue::Toggle(true)),
+                Some(&expected),
                 "{input}"
             );
         }
@@ -13573,6 +13636,78 @@ mod tests {
             2.0,
             "defaults belong to one tool"
         );
+    }
+
+    /// The demo's drawing dialog offers line ends for curves, double curves and brushes, and
+    /// smoothing for highlighters; what is picked there lands on the drawing.
+    #[test]
+    fn curve_line_ends_and_highlighter_smoothing_apply_through_the_demo_dialog() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, TreeId};
+        use egui_charts::drawings::{ArrowStyle, ChartPoint, Drawing, DrawingToolType as Tool};
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let click = |app: &mut DemoApp, node: &egui::accesskit::Node| {
+            let bounds = node.bounds().unwrap();
+            let at = egui::pos2(
+                ((bounds.x0 + bounds.x1) / 2.0) as f32,
+                ((bounds.y0 + bounds.y1) / 2.0) as f32,
+            );
+            ui_click(&ctx, egui::vec2(1440.0, 900.0), at, |ui| {
+                app.show_dialogs(ui.ctx());
+            });
+        };
+        let open = |app: &mut DemoApp, tool: Tool| {
+            app.chart.drawings_mut().drawings.clear();
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = vec![
+                ChartPoint::new(0.0, 100.0),
+                ChartPoint::new(2.0, 120.0),
+                ChartPoint::new(1.0, 95.0),
+            ];
+            app.chart.drawings_mut().drawings.push(drawing);
+            app.open_drawing_props_for(7);
+            for _ in 0..3 {
+                draw(&ctx, app, vec![]);
+            }
+            let nodes = draw(&ctx, app, vec![]);
+            click(app, &control(&nodes, "Style").1);
+        };
+        for tool in [Tool::Curve, Tool::DoubleCurve, Tool::Brush] {
+            open(&mut app, tool);
+            let nodes = draw(&ctx, &mut app, vec![]);
+            assert_eq!(
+                control(&nodes, "Line start").1.value(),
+                Some("Plain"),
+                "{tool:?}"
+            );
+            click(&mut app, &control(&nodes, "Line end").1);
+            for label in ["Arrow", "Ok"] {
+                let nodes = draw(&ctx, &mut app, vec![]);
+                click(&mut app, &control(&nodes, label).1);
+            }
+            let drawing = &app.chart.drawings().drawings[0];
+            assert_eq!(drawing.arrow_end_style, ArrowStyle::Arrow, "{tool:?}");
+            assert_eq!(drawing.arrow_start_style, ArrowStyle::None, "{tool:?}");
+        }
+
+        open(&mut app, Tool::Highlighter);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        let (smoothing, node) = control(&nodes, "Smoothing");
+        assert_eq!(node.numeric_value(), Some(5.0));
+        let request = egui::Event::AccessKitActionRequest(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: *smoothing,
+            data: Some(ActionData::NumericValue(9.0)),
+        });
+        draw(&ctx, &mut app, vec![request]);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Ok").1);
+        assert_eq!(app.chart.drawings().drawings[0].smoothing, 9);
     }
 
     /// Turning Lock all off preserves each drawing's own lock, including through undo and redo.

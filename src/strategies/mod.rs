@@ -17,6 +17,8 @@
 //! [`Backtest::update`] retains the execution state as the host appends bars or changes the
 //! forming bar, and returns [`StrategyFill`] events. [`Backtest::report`] exposes its report.
 //! Feed those events to `services::AlertEngine::strategy_fills` with both engine features enabled.
+//! Alerts the strategy raises through [`StrategyContext::alert`] are in [`Backtest::new_alerts`]
+//! after each update, for `services::AlertEngine::strategy_alerts`.
 //!
 //! [`optimise`] runs a lazy grid of input combinations on fresh strategies and yields each
 //! combination's [`StrategyTrial`], using the same bars and backtest settings throughout.
@@ -32,6 +34,6 @@ pub use optimize::{StrategyTrial, optimise};
 pub(crate) use backtest::same_bars;
 
 pub use backtest::{
-    Backtest, BacktestSettings, Commission, OrderSize, Slippage, Strategy, StrategyContext,
-    StrategyFill,
+    Backtest, BacktestSettings, Commission, OrderSize, OrderTag, Slippage, Strategy, StrategyAlert,
+    StrategyAlertFrequency, StrategyContext, StrategyFill,
 };

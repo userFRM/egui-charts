@@ -410,6 +410,7 @@ impl DrawingProps {
                     time_axis_label,
                     elliott_degree,
                     elliott_show_wave,
+                    smoothing,
                 );
                 // Each config takes only its edited members, keeping the peer's other settings.
                 macro_rules! edited_config {
@@ -848,6 +849,7 @@ mod tests {
             DrawingToolType::CrossLine,
             DrawingToolType::DateRange,
             DrawingToolType::DateAndPriceRange,
+            DrawingToolType::Highlighter,
         ] {
             chart.drawings_mut().drawings.clear();
             let mut drawing = Drawing::new(7, tool);
@@ -885,6 +887,11 @@ mod tests {
             let line = tool.supports_line_ends();
             assert_eq!(labels.contains(&"Line start"), line, "{tool:?}");
             assert_eq!(labels.contains(&"Line end"), line, "{tool:?}");
+            assert_eq!(
+                labels.contains(&"Smoothing"),
+                tool == DrawingToolType::Highlighter,
+                "{tool:?}"
+            );
             let middle = tool.supports_middle_line();
             assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
             // A new parallel channel shows its middle line and styles it; a rectangle's is fixed.
@@ -1439,6 +1446,14 @@ mod tests {
             fn(&mut Drawing),
         );
         let cases: &[ConfigCase] = &[
+            (
+                "highlighter smoothing",
+                DrawingToolType::Highlighter,
+                |_| {},
+                |d| d.smoothing = 2,
+                |d| d.smoothing = 9,
+                |d| d.smoothing = 9,
+            ),
             (
                 "bars pattern",
                 DrawingToolType::BarsPattern,
