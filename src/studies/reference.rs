@@ -546,6 +546,48 @@ fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
     .filter(|v| !v.is_nan())
 }
 
+/// Each value is available on its own bar, even when no later bars have arrived yet.
+#[test]
+fn warm_ups_show_each_value_on_a_series_ending_at_its_bar() {
+    let bars = fixture();
+    let studies: [(&str, fn() -> Box<dyn Indicator>); 2] = [
+        ("Chop(14)", || Box::new(ChoppinessIndex::default())),
+        ("Mass(9,25)", || Box::new(MassIndex::default())),
+    ];
+    let mut failures = Vec::new();
+    for (name, create) in studies {
+        let mut checked_lines = 0;
+        for row in EXPECTED.lines() {
+            let mut tokens = row.split_whitespace();
+            if tokens.next() != Some(name) {
+                continue;
+            }
+            checked_lines += 1;
+            let line = tokens.next().unwrap().parse().unwrap();
+            let expected: Vec<_> = tokens.collect();
+            assert_eq!(expected.len(), bars.len(), "{name}: one token per bar");
+            for end in 1..=bars.len() {
+                let mut study = create();
+                study.calculate(&bars[..end]);
+                let actual = line_value(&study.values().to_rows()[end - 1], line);
+                let token = expected[end - 1];
+                let want = (token != "-").then(|| token.parse::<f64>().unwrap());
+                let equal = match (actual, want) {
+                    (Some(a), Some(w)) => (a - w).abs() <= 1e-9 * w.abs() + 1e-12,
+                    (a, w) => a == w,
+                };
+                if !equal {
+                    failures.push(format!(
+                        "{name} line {line}, prefix {end}: expected {want:?}, got {actual:?}"
+                    ));
+                }
+            }
+        }
+        assert!(checked_lines > 0, "{name}: no expected lines");
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
 #[test]
 fn staple_studies_match_published_definitions() {
     // Force Index needs three price changes to seed a period-three average.
