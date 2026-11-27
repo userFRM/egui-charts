@@ -98,6 +98,8 @@ pub struct Trading {
     ticket: OrderTicket,
     /// A change the user asked for on a line, waiting for confirmation.
     pending: Option<TradingLineAction>,
+    /// Buy or Sell pressed with an applied preset, for [`show`](Self::show) to act on.
+    quoted: Option<(String, OrderSide)>,
     /// The position to protect, with the take profit and stop loss entered so far.
     protecting: Option<(Position, Option<f64>, Option<f64>)>,
     /// The quantity in a pending Close dialog; each new confirmation resets it.
@@ -120,7 +122,8 @@ pub struct Trading {
     /// buttons' spread, where a click opens a calculator that changes it.
     pub quantity: f64,
     /// The ticket presets by the broker's [`account_id`](Broker::account_id). Hosts persist
-    /// them by this stable id; brokers that keep the default share the empty key.
+    /// them by this stable id; brokers that keep the default share the empty key. The applied
+    /// one, [`OrderPreset::applied`], is what Buy and Sell use.
     pub presets: BTreeMap<String, Vec<OrderPreset>>,
     /// The account panel's names and the history it lists.
     pub account_panel: AccountPanel,
@@ -217,6 +220,7 @@ impl Default for Trading {
             placing: Vec::new(),
             ticket: OrderTicket::default(),
             pending: None,
+            quoted: None,
             protecting: None,
             close_quantity: None,
             preview: None,
@@ -381,6 +385,7 @@ impl Trading {
             self.refuse(Sent::Place(order), NOT_LIVE);
         }
         self.pending = None;
+        self.quoted = None;
         self.protecting = None;
         self.account = None;
         self.connection = None;
@@ -460,8 +465,26 @@ impl Trading {
     }
 
     /// Handles the Buy or Sell button: a market order of [`quantity`](Self::quantity) at once
-    /// with [`TradingSettings::instant_orders`], otherwise the ticket for one.
+    /// with [`TradingSettings::instant_orders`], otherwise the ticket for one. With an applied
+    /// [preset](OrderPreset::applied), the next [`show`](Self::show) builds the order from it:
+    /// at once with instant orders for a market order the account and symbol take in full,
+    /// otherwise in the ticket with the preset applied.
     pub fn trade(&mut self, symbol: String, side: OrderSide) {
+        if self.service.is_some() && self.applied_preset().is_some() {
+            self.quoted = Some((symbol, side));
+        } else {
+            self.trade_now(symbol, side);
+        }
+    }
+
+    fn applied_preset(&self) -> Option<&OrderPreset> {
+        self.presets
+            .get(&self.account_id)?
+            .iter()
+            .find(|preset| preset.applied)
+    }
+
+    fn trade_now(&mut self, symbol: String, side: OrderSide) {
         self.load_rules(&symbol);
         let mut request = OrderRequest::new(symbol, side, self.quantity, OrderType::Market);
         if self.display.instant_orders
