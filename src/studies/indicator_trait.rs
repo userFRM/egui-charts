@@ -742,6 +742,12 @@ pub trait Indicator: Send + ConcreteStudy {
         None
     }
 
+    /// Accepted bars of displacement for the chart's Offset input, positive to the right.
+    /// The default accepts any `i32`. An offset restored outside the range stays until edited.
+    fn offset_range(&self) -> std::ops::RangeInclusive<i32> {
+        i32::MIN..=i32::MAX
+    }
+
     /// Update using an aligned source column. Missing source values remain gaps.
     /// The default substitutes the source for OHLC and retains the bar's other fields.
     fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
