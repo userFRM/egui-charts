@@ -311,6 +311,7 @@ pub(super) fn declared_settings<S: Indicator + ?Sized>(study: &S) -> StudySettin
         fill_between_levels,
         level_fill_color,
         mfi_auto_range: false,
+        tsi_unit_range: false,
         untagged_plots: (0..study.line_count())
             .filter(|&line| !study.plot_tagged(line))
             .collect(),
@@ -435,6 +436,7 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             },
         ];
         settings.precision.get_or_insert(3);
+        settings.tsi_unit_range = true;
     } else if settings.levels.is_empty() && guides_since(study) {
         // Older saves drew no guides or band; showing them later uses the declared styles.
         settings.levels = levels
@@ -643,6 +645,10 @@ pub struct StudySettings {
     /// Keep automatic fitting for an MFI saved before it declared a fixed range.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) mfi_auto_range: bool,
+    /// Keep the -1 to 1 range of a Trend Strength Index saved before its band guides while
+    /// both stay hidden.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) tsi_unit_range: bool,
     /// Plots, as indices into [`plots`](Self::plots), whose last value has no tag on the price
     /// scale while the chart shows study values; the legend still shows it. A study starts
     /// with the plots its [`Indicator::plot_tagged`] leaves out, every plot of a study with more
@@ -693,6 +699,7 @@ impl Default for StudySettings {
             fill_between_levels: false,
             level_fill_color: Color32::TRANSPARENT,
             mfi_auto_range: false,
+            tsi_unit_range: false,
             untagged_plots: Vec::new(),
             price_line_plots: Vec::new(),
             plot_variants: Vec::new(),
@@ -963,6 +970,16 @@ impl ConfiguredStudy {
             && guides_since(self.study.as_ref())
         {
             pane.range = None;
+        }
+        if self.settings.tsi_unit_range
+            && self.study.name() == "Trend Strength Index"
+            && self
+                .settings
+                .levels
+                .get(1..3)
+                .is_some_and(|bands| bands.iter().all(|band| !band.visible))
+        {
+            pane.range = Some((-1.0, 1.0));
         }
         pane
     }
@@ -5068,7 +5085,7 @@ mod tests {
                 ],
                 false,
                 None,
-                Some((-1.0, 1.0)),
+                Some((-1.1, 1.1)),
                 Color32::TRANSPARENT,
                 vec![],
             ),
@@ -5197,7 +5214,12 @@ mod tests {
                 assert!(!study.pane().fill_between_levels, "{name}");
                 assert_eq!(
                     study.pane().range,
-                    if name == "MFI" && empty { None } else { range },
+                    match name {
+                        "MFI" if empty => None,
+                        // Older saves keep the range they drew with while the band guides stay hidden.
+                        "Trend Strength Index" => Some((-1.0, 1.0)),
+                        _ => range,
+                    },
                     "{name}"
                 );
                 let shown: Vec<_> = study.pane().levels.iter().map(|level| level.1).collect();

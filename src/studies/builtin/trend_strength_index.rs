@@ -151,7 +151,8 @@ impl Indicator for TrendStrengthIndex {
 
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
-            range: Some((-1.0, 1.0)),
+            // A margin keeps the guides at 1 and -1 inside the pane.
+            range: Some((-1.1, 1.1)),
             levels: vec![
                 (0.0, palette::GRAY.gamma_multiply_u8(128), "Zero"),
                 (1.0, palette::UP, "Bullish Band"),
@@ -367,6 +368,17 @@ mod tests {
                 .all(|fill| fill.colors == [clear; 2])
         );
         assert_eq!(restored.precision(), Some(3));
+        // It keeps its range until a band guide is shown, which then opens a margin around it.
+        assert_eq!(study.pane().range, Some((-1.1, 1.1)));
+        assert_eq!(restored.pane().range, Some((-1.0, 1.0)));
+        let mut restored = StudyTemplate::from_study(restored.as_ref())
+            .create()
+            .unwrap();
+        assert_eq!(restored.pane().range, Some((-1.0, 1.0)));
+        let mut shown = restored.settings();
+        shown.levels[2].visible = true;
+        restored.apply_settings(&[], shown).unwrap();
+        assert_eq!(restored.pane().range, Some((-1.1, 1.1)));
         let unset = saved.replace(r#""precision":3"#, r#""precision":null"#);
         let restored = serde_json::from_str::<StudyTemplate>(&unset)
             .unwrap()
@@ -381,5 +393,46 @@ mod tests {
         let got = rolling(&[1.0, 2.0, f64::NAN, 4.0, 5.0, 6.0], 3);
         assert_eq!(got[..5], [None; 5]);
         assert!((got[5].unwrap() - 1.0).abs() < 1e-12);
+    }
+
+    /// A new study's pane draws its guides at 1 and -1 whole inside the pane, in both themes.
+    #[test]
+    fn band_guides_paint_inside_the_pane() {
+        use crate::widget::test_frames::{chart, run};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = egui::Context::default();
+            // Closes that cycle keep the line near zero, away from the guides.
+            let mut chart = chart(&[100.0, 108.0, 104.0], &[110.0, 115.0, 113.0]);
+            chart.set_theme(&ctx, &theme);
+            chart.add_indicator(Box::new(TrendStrengthIndex::default()));
+            run(&ctx, &mut chart, 0.0, Vec::new());
+            let (shapes, _) = run(&ctx, &mut chart, 0.1, Vec::new());
+            let pane = chart.get_rendered_indicator_panes()[0].clone();
+            let rect = pane.chart_rect;
+            for (value, color) in [(1.0, palette::UP), (-1.0, palette::DOWN)] {
+                let y = rect.bottom()
+                    - ((value - pane.y_min) / (pane.y_max - pane.y_min)) as f32 * rect.height();
+                let dashes: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|(clip, shape)| match shape {
+                        egui::Shape::LineSegment { points, stroke }
+                            if stroke.color == color
+                                && points[0].y == points[1].y
+                                && (points[0].y - y).abs() < 0.5 =>
+                        {
+                            Some((*clip, points[0].y, stroke.width))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!dashes.is_empty(), "{value}");
+                for (clip, y, width) in dashes {
+                    assert!(
+                        y - width / 2.0 >= clip.top() && y + width / 2.0 <= clip.bottom(),
+                        "{value}: {y} in {clip:?}"
+                    );
+                }
+            }
+        }
     }
 }
