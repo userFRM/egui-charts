@@ -538,6 +538,7 @@ impl Alert {
     /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
     ///
     /// let mut alert = Alert::new("NYSE:IBM", AlertCondition::Above(100.0));
+    /// alert.strategy_events = egui_charts::model::StrategyEvents::Fills;
     /// alert.message = "{{ticker}} on {{exchange}} closed at {{close}} on {{interval}}".into();
     /// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
     /// let bar = Bar::new(time, 99.0, 102.0, 98.0, 101.5, 1000.0);
