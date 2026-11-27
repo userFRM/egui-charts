@@ -1074,6 +1074,72 @@ mod tests {
                 assert_eq!(drawn, shown.then_some(pane.0), "case {at}, paste {paste}");
             }
         }
+        // Pane records saved before the custom timeframe switch existed, with and without a
+        // chosen interval. The same saved-input upgrade must restore the study and its identity.
+        for record in [
+            r#"{"studies":[["Up/Down Volume",[["lower_interval",{"Timeframe":"Min1"}]]]],"rank":0}"#,
+            r#"{"studies":[["Up/Down Volume",[["lower_interval",{"Timeframe":null}]]]],"rank":0}"#,
+            r#"{"studies":[["Volume Delta",[["lower_interval",{"Timeframe":"Min1"}]]]],"rank":0}"#,
+            r#"{"studies":[["Volume Delta",[["lower_interval",{"Timeframe":null}]]]],"rank":0}"#,
+            r#"{"studies":[["Cumulative Volume Delta",[["lower_interval",{"Timeframe":"Min1"}],["anchor",{"Choice":0}]]]],"rank":0}"#,
+            r#"{"studies":[["Cumulative Volume Delta",[["lower_interval",{"Timeframe":null}],["anchor",{"Choice":0}]]]],"rank":0}"#,
+        ] {
+            for explicit_off in [false, true] {
+                let mut stored: serde_json::Value = serde_json::from_str(record).unwrap();
+                if explicit_off {
+                    stored["studies"][0][1]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!(["custom_interval", {"Toggle": false}]));
+                }
+                let factory = IndicatorFactory::new();
+                let name = stored["studies"][0][0].as_str().unwrap();
+                let mut template =
+                    StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+                template.inputs = serde_json::from_value(stored["studies"][0][1].clone()).unwrap();
+                let enabled =
+                    !explicit_off && stored["studies"][0][1][0][1]["Timeframe"].is_string();
+                let restored = template.create_with(&factory).unwrap();
+                let switch = restored
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == "custom_interval")
+                    .unwrap();
+                assert_eq!(switch.value, InputValue::Toggle(enabled));
+                assert_eq!(switch.default, InputValue::Toggle(false));
+                let text = copied(rsi);
+                let (prefix, json) = text.split_once('\n').unwrap();
+                let mut json: serde_json::Value = serde_json::from_str(json).unwrap();
+                json["drawings"][0]["pane"] = stored;
+                for paste in [false, true] {
+                    let mut target = Chart::new(BarData::from_bars(bars.clone()));
+                    target.set_symbol("A");
+                    let mut owner = None;
+                    // A pane keeping the same interval with the switch off must not capture a
+                    // drawing saved when that interval was in use.
+                    for custom in [false, true] {
+                        let mut study = template.create_with(&factory).unwrap();
+                        study
+                            .set_input("custom_interval", InputValue::Toggle(custom))
+                            .unwrap();
+                        let pane = target.add_indicator(study);
+                        if custom == enabled {
+                            owner = Some(pane.0);
+                        }
+                    }
+                    if paste {
+                        target.paste_drawings(&format!("{prefix}\n{json}")).unwrap();
+                    } else {
+                        target.load_drawings(&json.to_string()).unwrap();
+                    }
+                    assert_eq!(
+                        target.drawings().drawings[0].pane,
+                        owner,
+                        "{record}, explicit off {explicit_off}, paste {paste}"
+                    );
+                }
+            }
+        }
         // Earlier built-in pane names resolve, while host studies keep their own name.
         let pvt: Study = || IndicatorFactory::new().create("PVT").unwrap();
         let host_vpt: Study = || {

@@ -42,6 +42,8 @@ pub enum PlotType {
     Columns,
     /// A plus at each defined value.
     Crosses,
+    /// A short horizontal dash centred on the bar at each defined value, in the plot's width.
+    Dashes,
     /// A line along the values over a fill of its colour at 20% of its opacity down to zero,
     /// joined across missing bars.
     #[serde(rename = "JoinedArea")]
@@ -70,7 +72,7 @@ impl PlotType {
     /// Every plot type any plot can take, in the order a style editor lists them. A
     /// [`Character`](Self::Character) plot is offered for a plot whose study declares one, as
     /// [`Indicator::plot_character`](super::Indicator::plot_character) reports.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Line,
         Self::LineWithBreaks,
         Self::StepLine,
@@ -82,6 +84,7 @@ impl PlotType {
         Self::AreaWithBreaks,
         Self::Circles,
         Self::Crosses,
+        Self::Dashes,
         Self::TriangleUp,
         Self::TriangleDown,
         Self::BarColor,
@@ -102,6 +105,7 @@ impl PlotType {
             Self::AreaWithBreaks => "Area with breaks",
             Self::Circles => "Circles",
             Self::Crosses => "Crosses",
+            Self::Dashes => "Dashes",
             Self::TriangleUp => "Triangle up",
             Self::TriangleDown => "Triangle down",
             Self::BarColor => "Bar colour",
@@ -4732,7 +4736,9 @@ mod tests {
         let mut older = template.create().unwrap();
         older.set_timeframe(Timeframe::Min5);
         let restored = crate::studies::StudyTemplate::from_study(older.as_ref());
-        assert_eq!(restored.inputs, template.inputs);
+        let mut inputs = template.inputs.clone();
+        inputs.push(("custom_interval".to_owned(), InputValue::Toggle(false)));
+        assert_eq!(restored.inputs, inputs);
         let mut expected = template.settings.clone();
         expected.levels = vec![LevelStyle {
             value: None,

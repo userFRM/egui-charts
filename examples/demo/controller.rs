@@ -2116,7 +2116,9 @@ impl eframe::App for DemoApp {
         self.poll_watchlist_file();
         self.advance_replay();
         if self.replay.is_none() || self.live.loading() {
-            let delay = self.live.advance(chrono::Utc::now());
+            let now = chrono::Utc::now();
+            let delay = self.live.advance(now);
+            self.advance_live_strategy_source(now);
             if !self.live.paused() || delay.is_zero() {
                 ctx.request_repaint_after(delay);
             }
@@ -3851,6 +3853,7 @@ impl DemoApp {
         while cursor < time {
             cursor = (cursor + chrono::Duration::seconds(1)).min(time);
             self.live.advance(cursor);
+            self.advance_live_strategy_source(cursor);
         }
         self.live.set_paused(true);
     }
@@ -6587,6 +6590,109 @@ mod tests {
                 "{input}"
             );
         }
+    }
+
+    /// The demo reaches delta dashes, the retained custom interval, interval anchors and ticks.
+    #[test]
+    fn lower_interval_volume_studies_offer_their_new_settings() {
+        use egui::accesskit::{Action, ActionRequest, Role, Toggled, TreeId};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let click = |app: &mut DemoApp, node: &egui::accesskit::Node| {
+            let b = node.bounds().unwrap();
+            ui_click(
+                &ctx,
+                egui::vec2(1440.0, 900.0),
+                egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32),
+                |ui| {
+                    app.show_dialogs(ui.ctx());
+                },
+            );
+        };
+        let factory = IndicatorFactory::new();
+        let up_down = app
+            .chart
+            .add_indicator(factory.create("Up/Down Volume").unwrap());
+        app.open_indicator_settings(up_down);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Style").1);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        let mut pickers: Vec<_> = nodes
+            .iter()
+            .filter(|(_, n)| n.role() == Role::ComboBox && n.label() == Some("Plot type"))
+            .collect();
+        pickers.sort_by(|a, b| {
+            a.1.bounds()
+                .unwrap()
+                .y0
+                .total_cmp(&b.1.bounds().unwrap().y0)
+        });
+        assert_eq!(pickers.len(), 3);
+        assert_eq!(pickers[2].1.value(), Some("Dashes"));
+        click(&mut app, &control(&nodes, "Apply").1);
+        assert!(!app.indicator_settings.is_open());
+        let cvd = app
+            .chart
+            .add_indicator(factory.create("Cumulative Volume Delta").unwrap());
+        app.open_indicator_settings(cvd);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        let nodes = draw(&ctx, &mut app, vec![]);
+        assert_eq!(
+            control(&nodes, "Use custom timeframe").1.toggled(),
+            Some(Toggled::False)
+        );
+        assert!(
+            !nodes
+                .iter()
+                .any(|(_, n)| n.label() == Some("Lower interval"))
+        );
+        click(&mut app, &control(&nodes, "Use custom timeframe").1);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        control(&nodes, "Lower interval");
+        click(&mut app, &control(&nodes, "Anchor period").1);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        draw(
+            &ctx,
+            &mut app,
+            vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                action: Action::ScrollIntoView,
+                target_tree: TreeId::ROOT,
+                target_node: control(&nodes, "Interval").0,
+                data: None,
+            })],
+        );
+        draw(&ctx, &mut app, vec![]);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Interval").1);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        control(&nodes, "Anchor interval (minutes)");
+        click(&mut app, &control(&nodes, "Data aggregation").1);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Ticks").1);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Apply").1);
+        assert!(!app.indicator_settings.is_open());
+        let study = app.chart.indicator_mut(cvd).unwrap();
+        for (id, want) in [
+            ("custom_interval", InputValue::Toggle(true)),
+            ("anchor", InputValue::Choice(7)),
+            ("aggregation", InputValue::Choice(1)),
+        ] {
+            assert_eq!(
+                study.inputs().iter().find(|i| i.id == id).map(|i| &i.value),
+                Some(&want),
+                "{id}"
+            );
+        }
+        assert_eq!(study.order_flow_inputs().len(), 1);
     }
 
     /// The Style tab offers a plot the character its study declares, also for a plot saved as
