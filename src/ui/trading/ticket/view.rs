@@ -300,6 +300,8 @@ impl OrderTicket {
         {
             self.renaming = None;
         }
+        let selected = saved.iter().position(|preset| preset.applied);
+        let mut applied = None;
         let mut remove = None;
         let mut rename = None;
         let mut cancel_rename = false;
@@ -326,8 +328,12 @@ impl OrderTicket {
                     }
                     cancel_rename = ui.button(l10n::text(ui.ctx(), "Cancel")).clicked();
                 } else {
-                    if ui.selectable_label(false, preset.name.as_str()).clicked() {
+                    if ui
+                        .selectable_label(selected == Some(index), preset.name.as_str())
+                        .clicked()
+                    {
                         self.apply(preset, market);
+                        applied = Some(index);
                     }
                     if IconButton::new(&icons::PENCIL)
                         .size(ButtonSize::SM)
@@ -349,6 +355,11 @@ impl OrderTicket {
                     }
                 }
             });
+        }
+        if let Some(chosen) = applied {
+            for (index, preset) in saved.iter_mut().enumerate() {
+                preset.applied = index == chosen;
+            }
         }
         if let Some((index, name)) = rename {
             saved[index].name = name;
@@ -437,8 +448,9 @@ impl OrderTicket {
                     )
                     .clicked()
                 {
-                    let preset = self.replacing.take().unwrap();
+                    let mut preset = self.replacing.take().unwrap();
                     if let Some(index) = exists {
+                        preset.applied = saved[index].applied;
                         saved[index] = preset;
                     } else {
                         saved.push(preset);
@@ -720,6 +732,20 @@ mod tests {
             .get_mut("stocks")
             .unwrap()
             .push(OrderPreset::new("Other", 1.0));
+        harness.run();
+        harness.get_by_label("Scalp").click();
+        harness.run();
+        assert_eq!(
+            harness.state().1["stocks"]
+                .iter()
+                .map(|preset| preset.applied)
+                .collect::<Vec<_>>(),
+            [true, false]
+        );
+        assert_eq!(
+            harness.get_by_label("Scalp").accesskit_node().toggled(),
+            Some(egui::accesskit::Toggled::True)
+        );
         harness.state_mut().0.quantity = 5.0;
         harness.state_mut().0.preset_name = "Scalp".into();
         harness.run();
@@ -741,6 +767,7 @@ mod tests {
             ["Scalp", "Other"]
         );
         assert_eq!(harness.state().1["stocks"][0].quantity, 5.0);
+        assert!(harness.state().1["stocks"][0].applied);
         let mut kept = harness.state().1["stocks"][0].clone();
         kept.sizing = Some(PresetSizing::RiskPercent(1.0));
         kept.order_type = Some(Kind::Limit);

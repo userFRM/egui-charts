@@ -12,6 +12,9 @@
 //! KAMA[t] = KAMA[t-1] + SC * (Close[t] - KAMA[t-1])
 //! ```
 //!
+//! KAMA starts at the close of bar N, the first bar with an efficiency ratio. A volatility
+//! sum within 1e-10 of zero gives an efficiency ratio of 0.
+//!
 //! # Default parameters
 //!
 //! `KAMA::new(10)` with fast period 2 and slow period 30.
@@ -54,10 +57,12 @@ pub struct KAMA {
 #[derive(Clone, Debug, Default)]
 struct State {
     closes: VecDeque<f64>,
-    seed_sum: f64,
     volatility: f64,
     kama: Option<f64>,
 }
+
+/// A volatility sum at or below this is a flat window, whose efficiency ratio is 0.
+const FLAT: f64 = 1e-10;
 
 impl KAMA {
     /// Create a new KAMA indicator.
@@ -138,25 +143,22 @@ impl Indicator for KAMA {
                     state.volatility += (close - previous).abs();
                 }
                 state.closes.push_back(close);
-                let next = if let Some(previous) = state.kama {
-                    // N + 1 closes supply exactly N price changes.
-                    let first = state.closes.pop_front().unwrap();
-                    let er = if state.volatility > 0.0 {
-                        (close - first).abs() / state.volatility
-                    } else {
-                        0.0
-                    };
-                    let sc = (er * (fast - slow) + slow).powi(2);
-                    state.volatility =
-                        (state.volatility - (state.closes.front().unwrap() - first).abs()).max(0.0);
-                    previous + sc * (close - previous)
+                // N + 1 closes supply exactly N price changes.
+                if state.closes.len() <= self.period {
+                    return IndicatorValue::None;
+                }
+                let first = state.closes.pop_front().unwrap();
+                let er = if state.volatility > FLAT {
+                    (close - first).abs() / state.volatility
                 } else {
-                    state.seed_sum += close;
-                    if state.closes.len() < self.period {
-                        return IndicatorValue::None;
-                    }
-                    state.seed_sum / self.period as f64
+                    0.0
                 };
+                let sc = (er * (fast - slow) + slow).powi(2);
+                state.volatility =
+                    (state.volatility - (state.closes.front().unwrap() - first).abs()).max(0.0);
+                let next = state
+                    .kama
+                    .map_or(close, |previous| previous + sc * (close - previous));
                 state.kama = Some(next);
                 IndicatorValue::Single(next)
             });
@@ -210,8 +212,8 @@ mod tests {
     use crate::studies::test_support::make_bar;
 
     /// Expected values from Kaufman's definition (n price changes per
-    /// efficiency ratio), seeded with the simple average of the first n
-    /// closes; fast 2, slow 30.
+    /// efficiency ratio), starting at the close of bar n and taking an ER of 0 for a volatility
+    /// sum within 1e-10 of zero; fast 2, slow 30.
     #[test]
     fn calculate_matches_kaufman_reference() {
         // (name, period, closes, expected KAMA per bar)
@@ -225,13 +227,13 @@ mod tests {
                     None,
                     None,
                     None,
-                    Some(10.875),
-                    Some(10.88078101514626),
-                    Some(11.078408170242067),
-                    Some(11.210978306235772),
-                    Some(11.47106771973126),
-                    Some(11.613647858472564),
-                    Some(11.656395577253855),
+                    None,
+                    Some(11.0),
+                    Some(11.186509423054689),
+                    Some(11.308998607901609),
+                    Some(11.559947166441425),
+                    Some(11.694238878019066),
+                    Some(11.735160277014124),
                 ],
             ),
             (
@@ -241,17 +243,17 @@ mod tests {
                 &[
                     None,
                     None,
-                    Some(2.0),
-                    Some(2.8888888888888884),
-                    Some(3.8271604938271597),
-                    Some(4.792866941015088),
+                    None,
+                    Some(4.0),
+                    Some(4.444444444444445),
+                    Some(5.135802469135803),
                 ],
             ),
             (
                 "flat",
                 3,
                 &[7.0; 5],
-                &[None, None, Some(7.0), Some(7.0), Some(7.0)],
+                &[None, None, None, Some(7.0), Some(7.0)],
             ),
             ("short", 5, &[1.0, 2.0, 3.0], &[None, None, None]),
             // The NaN close has no value; the next efficiency ratio spans the closes around it.
@@ -261,12 +263,23 @@ mod tests {
                 &[1.0, 2.0, f64::NAN, 4.0, 5.0, 6.0, 7.0],
                 &[
                     None,
-                    Some(1.5),
                     None,
-                    Some(2.611111111111111),
-                    Some(3.6728395061728394),
-                    Some(4.707133058984911),
-                    Some(5.726185032769395),
+                    None,
+                    Some(4.0),
+                    Some(4.444444444444445),
+                    Some(5.135802469135803),
+                    Some(5.964334705075446),
+                ],
+            ),
+            (
+                "flat window",
+                2,
+                &[0.0, 0.0, 2.9103830456733704e-11, 5.820766091346741e-11],
+                &[
+                    None,
+                    None,
+                    Some(2.9103830456733704e-11),
+                    Some(2.922497022970658e-11),
                 ],
             ),
         ];
@@ -288,7 +301,10 @@ mod tests {
                 match (got, want) {
                     (IndicatorValue::None, None) => {}
                     (IndicatorValue::Single(g), Some(w)) => {
-                        assert!((g - w).abs() < 1e-12, "{name}[{i}]: got {g}, want {w}")
+                        assert!(
+                            (g - w).abs() <= 1e-12 * w.abs(),
+                            "{name}[{i}]: got {g}, want {w}"
+                        )
                     }
                     _ => panic!("{name}[{i}]: got {got:?}, want {want:?}"),
                 }
