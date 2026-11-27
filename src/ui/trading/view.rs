@@ -3223,7 +3223,10 @@ mod tests {
                 .expect("send button")
                 .click();
             h.run();
-            assert_eq!(*broker.placed.lock().unwrap(), [request.clone()]);
+            assert_eq!(
+                broker.placed.lock().unwrap().as_slice(),
+                std::slice::from_ref(&request)
+            );
             if undock {
                 let saved = serde_json::to_string(&h.state().0.display).unwrap();
                 let mut restored = Trading::default();
