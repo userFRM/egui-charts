@@ -491,10 +491,13 @@ mod tests {
     use crate::studies::Indicator;
     use egui::{Pos2, Rect};
 
-    /// Period boundaries hide the connecting segment, never an enabled latest-value line.
+    /// Period boundaries hide the connecting segment, and trend reversals move the value to the
+    /// other side of the price, but neither hides an enabled latest-value line.
     #[test]
-    fn pivot_price_line_shows_on_the_first_bar_of_a_period() {
-        use crate::studies::{ConfiguredStudy, IntradayPivotPoints, PivotPoints, PivotTimeframe};
+    fn price_line_shows_at_the_latest_value_of_a_period_or_trend() {
+        use crate::studies::{
+            ConfiguredStudy, IntradayPivotPoints, ParabolicSAR, PivotPoints, PivotTimeframe,
+        };
         let start: chrono::DateTime<chrono::Utc> = "2026-01-05T00:00:00Z".parse().unwrap();
         let bars: Vec<_> = (0..49)
             .map(|i| {
@@ -509,6 +512,22 @@ mod tests {
                 )
             })
             .collect();
+        // The SAR starts an uptrend on bar 1 at bar 0's low of 99 and stays there on bar 2, since
+        // that low caps 99 + 0.02 * (103 - 99). On bar 3 the low of 96 falls through
+        // 99 + 0.04 * (105 - 99) = 99.24, and the SAR turns down to the trend's high of 105.
+        let sar_bars: Vec<_> = [
+            (101.0, 99.0, 100.0),
+            (103.0, 101.0, 102.0),
+            (105.0, 103.0, 104.0),
+            (100.0, 96.0, 97.0),
+        ]
+        .into_iter()
+        .zip(0..)
+        .map(|((high, low, close), i)| {
+            let time = start + chrono::TimeDelta::hours(i);
+            crate::model::Bar::new(time, close, high, low, close, 1.0)
+        })
+        .collect();
         let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 120.0));
         let price = PriceMap::new(
             PriceTransform::default(),
@@ -519,29 +538,53 @@ mod tests {
         );
         // Daily P = (111 + 99 + 110) / 3, then (123 + 111 + 122) / 3.
         // Four-hour P = (113 + 111 + 112) / 3, then (115 + 113 + 114) / 3.
-        let cases: [(Box<dyn Indicator>, usize, f64, bool); 4] = [
+        type Case<'a> = (Box<dyn Indicator>, &'a [crate::model::Bar], f64, bool);
+        let cases: [Case; 6] = [
             (
                 Box::new(PivotPoints::new().with_timeframe(PivotTimeframe::Daily)),
-                48,
+                &bars[..48],
                 320.0 / 3.0,
                 false,
             ),
             (
                 Box::new(PivotPoints::new().with_timeframe(PivotTimeframe::Daily)),
-                49,
+                &bars[..49],
                 356.0 / 3.0,
                 true,
             ),
-            (Box::new(IntradayPivotPoints::new(240)), 32, 112.0, false),
-            (Box::new(IntradayPivotPoints::new(240)), 33, 114.0, true),
+            (
+                Box::new(IntradayPivotPoints::new(240)),
+                &bars[..32],
+                112.0,
+                false,
+            ),
+            (
+                Box::new(IntradayPivotPoints::new(240)),
+                &bars[..33],
+                114.0,
+                true,
+            ),
+            (
+                Box::new(ParabolicSAR::default()),
+                &sar_bars[..3],
+                99.0,
+                false,
+            ),
+            (
+                Box::new(ParabolicSAR::default()),
+                &sar_bars[..4],
+                105.0,
+                false,
+            ),
         ];
-        for (study, count, expected, boundary) in cases {
+        for (study, data, expected, boundary) in cases {
+            let count = data.len();
             let mut study = ConfiguredStudy::new(study);
             study.set_timeframe(crate::model::Timeframe::Hour1);
             let mut settings = study.settings();
             settings.price_line_plots = vec![0];
             study.apply_settings(&[], settings).unwrap();
-            study.calculate(&bars[..count]);
+            study.calculate(data);
             assert!((study.values().value(0, count - 1).unwrap() - expected).abs() < 1e-10);
             assert_eq!(
                 study.plot_color(0, count - 1),
@@ -568,7 +611,7 @@ mod tests {
                 .collect();
             output.drop_without_applying_deltas();
             assert_eq!(lines.len(), 1, "count={count}: {lines:?}");
-            // y = 120 - (P - 80) / 60 * 120; the one-pixel dots round to pixels.
+            // y = 120 - (value - 80) / 60 * 120; the one-pixel dots round to pixels.
             let expected_y = (120.0 - (expected - 80.0) * 2.0) as f32;
             assert!((lines[0] - expected_y).abs() <= 0.5, "{lines:?}");
         }

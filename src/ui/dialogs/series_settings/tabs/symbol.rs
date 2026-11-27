@@ -269,6 +269,23 @@ impl SymbolTab {
         ui.end_row();
     }
 
+    /// A switch whose long name wraps in the label column, usable while `enabled`.
+    fn wrapped_switch(ui: &mut Ui, name: &str, enabled: bool, value: &mut bool) {
+        let label = ui
+            .vertical(|ui| {
+                ui.set_width(160.0);
+                ui.add(
+                    egui::Label::new(l10n::text(ui.ctx(), name))
+                        .wrap()
+                        .halign(egui::Align::Min),
+                )
+            })
+            .inner;
+        ui.add_enabled(enabled, egui::Checkbox::without_text(value))
+            .labelled_by(label.id);
+        ui.end_row();
+    }
+
     fn optional_number<N: egui::emath::Numeric>(
         ui: &mut Ui,
         name: &str,
@@ -1200,25 +1217,31 @@ impl SymbolTab {
                     }
                     ui.end_row();
                 }
-                let label = ui
-                    .vertical(|ui| {
-                        ui.set_width(160.0);
-                        ui.add(
-                            egui::Label::new(l10n::text(
-                                ui.ctx(),
-                                "Extend poor highs and lows until repaired",
-                            ))
-                            .wrap()
-                            .halign(egui::Align::Min),
-                        )
-                    })
-                    .inner;
-                ui.add_enabled(
+                Self::wrapped_switch(
+                    ui,
+                    "Extend poor highs and lows until repaired",
                     poor[0] || poor[1],
-                    egui::Checkbox::without_text(&mut params.tpo_extend_poor),
-                )
-                .labelled_by(label.id);
-                ui.end_row();
+                    &mut params.tpo_extend_poor,
+                );
+                for (name, enabled, value) in [
+                    (
+                        "Extend point of control until touched",
+                        params.tpo_poc,
+                        &mut params.tpo_extend_poc,
+                    ),
+                    (
+                        "Extend value area high until touched",
+                        params.tpo_value_area_levels,
+                        &mut params.tpo_extend_vah,
+                    ),
+                    (
+                        "Extend value area low until touched",
+                        params.tpo_value_area_levels,
+                        &mut params.tpo_extend_val,
+                    ),
+                ] {
+                    Self::wrapped_switch(ui, name, enabled, value);
+                }
                 let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_row_ticks)
@@ -1254,6 +1277,12 @@ impl SymbolTab {
                 ui.checkbox(&mut params.tpo_single_prints, "")
                     .labelled_by(label.id);
                 ui.end_row();
+                Self::wrapped_switch(
+                    ui,
+                    "Extend single prints until touched",
+                    params.tpo_single_prints,
+                    &mut params.tpo_extend_single_prints,
+                );
                 let label = ui.label(l10n::text(ui.ctx(), "TPO Midpoint"));
                 ui.checkbox(&mut params.tpo_midpoint, "")
                     .labelled_by(label.id);
