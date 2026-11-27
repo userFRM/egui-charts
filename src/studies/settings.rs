@@ -1248,6 +1248,9 @@ impl Indicator for ConfiguredStudy {
     fn source(&self) -> Option<super::StudySource> {
         self.source.or_else(|| self.study.source())
     }
+    fn offset_range(&self) -> std::ops::RangeInclusive<i32> {
+        self.study.offset_range()
+    }
     fn inputs(&self) -> Vec<super::StudyInput> {
         let mut inputs = self.study.inputs();
         if let Some(default) = self.study.source() {

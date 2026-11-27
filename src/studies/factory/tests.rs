@@ -644,6 +644,49 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
             );
         }
     }
+    // Saved templates and factory defaults can return a study already configured for a chart.
+    for (name, min, max, rejected) in [
+        ("VWAP", 0, i32::MAX, vec![-1]),
+        ("VWMA", -500, 500, vec![-501, 501]),
+        ("SMA", i32::MIN, i32::MAX, vec![]),
+    ] {
+        let mut factory = IndicatorFactory::new();
+        let template = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+        factory
+            .set_defaults(std::slice::from_ref(&template))
+            .unwrap();
+        for configured in [
+            Box::new(ConfiguredStudy::new(
+                IndicatorFactory::new().create(name).unwrap(),
+            )) as Box<dyn Indicator>,
+            template.create().unwrap(),
+            factory.create(name).unwrap(),
+        ] {
+            assert_eq!(configured.offset_range(), min..=max, "{name}");
+            let mut study = ConfiguredStudy::new(configured);
+            assert_eq!(study.offset_range(), min..=max, "{name} wrapped");
+            let offset = study
+                .inputs()
+                .into_iter()
+                .rev()
+                .find(|input| input.id == "plot_offset")
+                .unwrap();
+            assert!(
+                matches!(offset.kind, InputKind::Integer(lower, upper) if (lower, upper) == (min, max)),
+                "{name}: {:?}",
+                offset.kind
+            );
+            for value in &rejected {
+                assert!(
+                    study.set_input("plot_offset", Integer(*value)).is_err(),
+                    "{name} {value}"
+                );
+            }
+            for value in [min, max] {
+                study.set_input("plot_offset", Integer(value)).unwrap();
+            }
+        }
+    }
     // The strategies built on these studies take the studies' inputs.
     #[cfg(all(test, feature = "strategies"))]
     {
