@@ -13,20 +13,20 @@ pub struct VortexIndicator {
     /// Lookback period (typically 14)
     period: usize,
     values: IndicatorValues,
-    /// Colors: [+VI (bullish), -VI (bearish)]
+    /// Colors: [VI + (bullish), VI - (bearish)]
     colors: Vec<Color32>,
     visible: bool,
 }
 
 impl VortexIndicator {
-    /// Create with a lookback of `period` bars, clamped to at least 1.
+    /// Create with a lookback of `period` bars, clamped to at least 2.
     pub fn new(period: usize) -> Self {
         Self {
-            period: period.max(1),
+            period: period.max(2),
             values: IndicatorValues::new(),
             colors: vec![
-                palette::BLUE, // +VI
-                palette::PINK, // -VI
+                palette::BLUE, // VI +
+                palette::PINK, // VI -
             ],
             visible: true,
         }
@@ -112,8 +112,12 @@ impl VortexIndicator {
 
 impl Indicator for VortexIndicator {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Length", 2, usize::MAX)
     ; {});
+
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Fixed(4)
+    }
 
     fn name(&self) -> &str {
         "Vortex"
@@ -186,9 +190,19 @@ impl Indicator for VortexIndicator {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![
-            format!("+VI({})", self.period),
-            format!("-VI({})", self.period),
-        ]
+        vec!["VI +".into(), "VI -".into()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Output titles stay the same at every length for legends, alert sources and scripts.
+    #[test]
+    fn catalogue_lines_read_vi_plus_and_vi_minus() {
+        for study in [VortexIndicator::default(), VortexIndicator::new(30)] {
+            assert_eq!(study.line_names(), ["VI +", "VI -"]);
+        }
     }
 }

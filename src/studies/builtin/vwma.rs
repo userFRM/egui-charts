@@ -75,6 +75,10 @@ impl Indicator for VWMA {
         ))
     }
 
+    fn offset_range(&self) -> std::ops::RangeInclusive<i32> {
+        -500..=500
+    }
+
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX)
     ; {});
