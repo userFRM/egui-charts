@@ -60,7 +60,7 @@ pub use alert::{
     Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
     AlertFrequency, AlertId, AlertInputs, AlertPositionProgress, AlertRule, AlertSource,
     AlertSourceName, AlertStatus, AlertStudy, AlertTrigger, CustomAlertEvent, NotificationSchedule,
-    NotificationWindow,
+    NotificationWindow, TPOLevelSource,
 };
 #[cfg(any(feature = "widget", feature = "studies"))]
 pub(crate) use bar::index_at_with_timeframe;
@@ -146,7 +146,7 @@ pub use timezone::{TimezoneId, TimezoneOffset};
 pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{
     ProfileShape, SessionType, TPOColorMode, TPOConfig, TPODisplayMode, TPOLabels, TPOLetter,
-    TPOProfile, TPOProfilePeriod, TPOStatisticsRows, derive_tick_size, to_tpo_profiles,
+    TPOLevel, TPOProfile, TPOProfilePeriod, TPOStatisticsRows, derive_tick_size, to_tpo_profiles,
 };
 pub(crate) use trading::rounding_tolerance;
 #[cfg(feature = "widget")]
