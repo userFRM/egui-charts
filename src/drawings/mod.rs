@@ -24,6 +24,8 @@
 
 pub mod categories;
 pub mod domain;
+#[cfg(feature = "color-emoji")]
+mod emoji_set;
 pub(crate) mod glyphs;
 pub mod manager;
 pub mod persistence;

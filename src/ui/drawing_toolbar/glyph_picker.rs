@@ -1,7 +1,7 @@
 //! Searchable bundled icons, emoji and stickers with session-local recents.
 
 use super::DrawingToolbarAction;
-use crate::drawings::glyphs::{self, GLYPHS, Glyph};
+use crate::drawings::glyphs::{self, Glyph};
 use crate::drawings::{DrawingToolRegistry, DrawingToolType};
 use crate::localization as l10n;
 use egui::{Rect, Ui, Vec2};
@@ -85,14 +85,14 @@ impl GlyphPicker {
                 let recent: Vec<_> = self
                     .recent
                     .iter()
-                    .filter_map(|id| GLYPHS.iter().find(|g| g.id == *id))
+                    .filter_map(|id| glyphs::picker_glyphs().find(|g| g.id == *id))
                     .filter(matches)
                     .collect();
                 if !recent.is_empty() {
                     ui.label(l10n::text(ui.ctx(), "Recent"));
                     picked = cells(ui, &recent, registry);
                 }
-                let filtered: Vec<_> = GLYPHS.iter().filter(matches).collect();
+                let filtered: Vec<_> = glyphs::picker_glyphs().filter(matches).collect();
                 if filtered.is_empty() {
                     ui.label(l10n::text(ui.ctx(), "No matching glyphs"));
                 }
@@ -132,6 +132,12 @@ fn cells(ui: &mut Ui, glyphs: &[&Glyph], registry: &DrawingToolRegistry) -> Opti
     let columns = ((ui.available_width() / 48.0) as usize).max(1);
     let mut picked = None;
     for row in glyphs.chunks(columns) {
+        // Rows off screen take their place without widgets: the full emoji set has thousands of cells.
+        let row_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), 40.0));
+        if !ui.is_rect_visible(row_rect) {
+            ui.allocate_space(Vec2::new(ui.available_width(), 40.0));
+            continue;
+        }
         ui.horizontal(|ui| {
             for glyph in row {
                 let enabled = registry.availability(tool_type(glyph.id)).enabled;
@@ -155,7 +161,7 @@ fn cells(ui: &mut Ui, glyphs: &[&Glyph], registry: &DrawingToolRegistry) -> Opti
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         l10n::text(ui.ctx(), glyph.id),
-                        egui::FontId::proportional(24.0),
+                        glyphs::font_id(ui.ctx(), glyph.id, 24.0),
                         color,
                     );
                 }

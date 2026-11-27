@@ -185,6 +185,10 @@ icons = ["widget", "dep:resvg"]
 ## reusable `ui_kit` widget library they are built on, the `ext` helpers, and
 ## the built-in studies they offer.
 ui = ["icons", "studies", "drawings", "csv", "png-export", "dep:egui_extras", "egui_extras/svg", "eframe/accesskit"]
+## The full Unicode 18.0 emoji list, 3,963 emoji in nine categories, in colour in the drawing bar's icon and
+## emoji picker and on the chart, from the bundled Noto Color Emoji font (5 MB). Without it the picker offers
+## 35 emoji drawn by the application's fonts. Placed emoji restore the same way with or without it.
+color-emoji = ["ui", "dep:epaint", "epaint/color_fonts"]
 ## Month and weekday names and the AM/PM marker in the language of a locale, for
 ## `Chart::set_locale` and `LocaleTimeFormatter`, from chrono's locale tables.
 ## Without it those labels stay in English.
@@ -244,6 +248,8 @@ web-sys = { version = "0.3.106", features = ["Window"], optional = true }
 ehttp = { version = "0.7.2", optional = true }
 # theme::apply_to_egui installs the bundled Roboto face.
 egui = { version = "0.37.0", default-features = false, features = ["serde"], optional = true }
+# Only to switch on egui's colour font renderer for `color-emoji`; egui does not forward the feature.
+epaint = { version = "0.37.0", default-features = false, optional = true }
 # The engine names colours as `egui::Color32`; without `widget` that path
 # resolves to this crate, which egui re-exports.
 ecolor = { version = "0.37.0", features = ["serde"] }

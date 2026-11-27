@@ -1135,7 +1135,9 @@ mod tests {
                 let name = format!("disc {disc:?}, dark {}", theme.dark);
                 let anchor = Pos2::new(100.0, 100.0);
                 // The bundled fonts lack the default face, so it is drawn in white on the disc:
-                // its outline, its eyes and, below, its smile as a line.
+                // its outline, its eyes and, below, its smile as a line. The colour emoji font
+                // has the face, so then the disc holds the emoji as text.
+                let color = cfg!(feature = "color-emoji");
                 let face = |fill| {
                     let eye = |x| (Pos2::new(x, 98.0), Color32::WHITE);
                     [
@@ -1147,14 +1149,16 @@ mod tests {
                 };
                 assert_eq!(
                     discs,
-                    Vec::from_iter(disc.into_iter().flat_map(face)),
+                    Vec::from_iter(disc.into_iter().flat_map(|fill| {
+                        face(fill).into_iter().take(if color { 1 } else { 4 })
+                    })),
                     "{name}"
                 );
                 let smiles = (shapes.iter())
                     .filter(|s| matches!(s, Shape::Path(p) if !p.closed))
                     .count();
-                assert_eq!(smiles, usize::from(disc.is_some()), "{name}");
-                assert!(!said(&shapes, "🙂"), "{name}");
+                assert_eq!(smiles, usize::from(disc.is_some() && !color), "{name}");
+                assert_eq!(said(&shapes, "🙂"), disc.is_some() && color, "{name}");
                 let plates: Vec<_> = (shapes.iter())
                     .filter_map(|s| match s {
                         Shape::Rect(r) => Some(r.rect),
