@@ -1,13 +1,16 @@
 Noto Color Emoji, as built into assets/emoji/Noto-COLRv1.ttf by tools/emoji-font.sh
 
-The emoji images come from the 2D/svg directory of googlefonts/noto-emoji
-(https://github.com/googlefonts/noto-emoji), Copyright Google LLC, and are
-licensed under the Apache License, Version 2.0, whose full text follows.
+Source repository: https://github.com/googlefonts/noto-emoji
 
-The region flags come from the third_party/region-flags directory of the same
-repository. They were collected from Wikimedia Commons and checked to be in the
-public domain or otherwise exempt from copyright; see
-third_party/region-flags/LICENSE in that repository for the details of each flag.
+Commit: e20cbc2bbec1926686be9f9bee7d1d2cfa1fea0e (tag v2026-09-24-unicode18_0)
+
+Source directories: 2D/svg (the emoji images) and third_party/region-flags/waved-svg (the region flags)
+
+The README of that commit states the licence of these files in its License section: "Tools and most image resources are under the Apache license, version 2.0." The emoji images are Copyright Google LLC and are used under the Apache License, Version 2.0, whose full text follows.
+
+The same README states: "Flag images under third_party/region-flags are in the public domain or otherwise exempt from copyright." See third_party/region-flags/LICENSE in that repository for the details of each flag.
+
+The root LICENSE file of that repository is the SIL Open Font License, Version 1.1, which covers the upstream font files under its fonts directory. None of those font files is shipped here: Noto-COLRv1.ttf is compiled from the SVG images above only.
 
                               Apache License
                         Version 2.0, January 2004
