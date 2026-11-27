@@ -1681,13 +1681,15 @@ mod tests {
         // Volume cases use highs of 20, lows of zero and volumes 1..=9. At bar 7 the
         // three-bar CMF is (3 + 1.4 + 4.8)/21 = 46/105; ADL sums to 13.
         // EFI(3) seeds from forces 4, -3, 12 (mean 13/3), then uses alpha 1/2.
+        // SMI(3, 2, 2, 2) seeds each EMA from two inputs, then uses alpha 2/3. Its first
+        // SMI is 100/17 on bar 4 and its first signal is (100/17 + 800/73)/2 = 10450/1241.
         let cases: [(&str, [&[f64]; 3]); 8] = [
             (
                 "SMI",
                 [
-                    &[24300.0 / 4577.0, -90248918812.0 / 92919667995.0],
-                    &[-72900.0 / 4253.0, -1376112074668.0 / 86342003055.0],
-                    &[92300.0 / 4969.0, 9100832864927708.0 / 1287100239540885.0],
+                    &[650.0 / 127.0, -89624350.0 / 72026399.0],
+                    &[-1025.0 / 59.0, -543351800.0 / 33461083.0],
+                    &[91900.0 / 4967.0, 3451318664800.0 / 498603597783.0],
                 ],
             ),
             (
