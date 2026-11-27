@@ -84,6 +84,8 @@
 //! simple MACD signal averages the MACD values only, and an exponential one starts at the first; ATR's
 //! simple, exponential and weighted smoothings start on the period-th true range, the exponential one at
 //! their mean; a Chandelier Exit value needs a full lookback window.
+//! The Rank Correlation Index starts on the bar after its first full window; the RCI Ribbon
+//! starts on the full window itself.
 
 use crate::model::Bar;
 use crate::studies::{
@@ -1106,12 +1108,16 @@ fn staple_studies_match_published_definitions() {
         (
             "Rank-flat-hand",
             Box::new(RankCorrelationIndex::new(4)),
-            flat[..4].to_vec(),
+            flat[..5].to_vec(),
         ),
         (
             "Rank-ties-hand",
             Box::new(RankCorrelationIndex::new(4)),
-            ties,
+            [5.0, 1.0, 1.0, 2.0, 2.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| Bar::new(bars[i].time, c, c, c, c, 1.0))
+                .collect(),
         ),
         (
             "StochRSI-hand",
