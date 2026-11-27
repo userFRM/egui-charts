@@ -423,10 +423,11 @@ fn catalogue_studies_open_with_their_usual_lengths() {
 }
 
 /// These studies label their inputs as the studies are usually labelled and accept exactly
-/// their usual range, through `set_input`, the Inputs tab and the strategies built on them.
+/// their usual range, through `set_input`, the Inputs tab, the chart's Offset and the strategies
+/// built on them.
 #[test]
 fn catalogue_inputs_take_their_usual_labels_and_ranges() {
-    use crate::studies::InputValue::{self, Length, Number};
+    use crate::studies::InputValue::{self, Integer, Length, Number};
     type Row = (
         &'static str,
         &'static str,
@@ -522,10 +523,37 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
                 (Number(50.5), false),
             ],
         ),
+        (
+            "VWAP",
+            "plot_offset",
+            "Offset",
+            vec![
+                (Integer(-1), false),
+                (Integer(0), true),
+                (Integer(500), true),
+            ],
+        ),
+        (
+            "VWMA",
+            "plot_offset",
+            "Offset",
+            vec![
+                (Integer(-501), false),
+                (Integer(-500), true),
+                (Integer(500), true),
+                (Integer(501), false),
+            ],
+        ),
+        (
+            "SMA",
+            "plot_offset",
+            "Offset",
+            vec![(Integer(-600), true), (Integer(600), true)],
+        ),
     ];
     let factory = IndicatorFactory::new();
     for (name, id, label, values) in rows {
-        let mut study = factory.create(name).unwrap();
+        let mut study = ConfiguredStudy::new(factory.create(name).unwrap());
         let listed = study.inputs().into_iter().find(|input| input.id == id);
         assert_eq!(
             listed.map(|input| input.label),

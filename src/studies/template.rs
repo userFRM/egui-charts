@@ -365,25 +365,31 @@ impl StudyTemplate {
         }
         // Studies saved before an input's range narrowed restore with the value they were saved
         // with, from the bottom of the range the input took then; only edits are bounded.
-        const NARROWED: [(&str, &str); 8] = [
-            ("BB", "std_dev"),
-            ("BBTrend", "multiplier"),
-            ("LinReg Slope", "period"),
-            ("MFI", "period"),
-            ("RCI", "smoothing_deviation"),
-            ("SuperTrend", "multiplier"),
-            ("Woodies CCI", "turbo_length"),
-            ("Woodies CCI", "cci_length"),
+        const NARROWED: [(&str, &str, f64); 10] = [
+            ("BB", "std_dev", 0.0),
+            ("BBTrend", "multiplier", 0.0),
+            ("LinReg Slope", "period", 1.0),
+            ("MFI", "period", 1.0),
+            ("RCI", "smoothing_deviation", 0.0),
+            ("SuperTrend", "multiplier", 0.0),
+            ("Woodies CCI", "turbo_length", 1.0),
+            ("Woodies CCI", "cci_length", 1.0),
+            ("VWAP", "plot_offset", f64::MIN),
+            ("VWMA", "plot_offset", f64::MIN),
         ];
         let saved = inputs
             .iter()
             .filter(|(id, value)| {
-                NARROWED.contains(&(study.name(), id.as_str()))
-                    && match value {
-                        InputValue::Length(value) => *value >= 1,
-                        InputValue::Number(value) => *value >= 0.0,
-                        _ => false,
-                    }
+                NARROWED.iter().any(|&(name, input, bottom)| {
+                    name == study.name()
+                        && input == id
+                        && match value {
+                            InputValue::Length(value) => *value as f64 >= bottom,
+                            InputValue::Number(value) => *value >= bottom,
+                            InputValue::Integer(value) => f64::from(*value) >= bottom,
+                            _ => false,
+                        }
+                })
             })
             .cloned()
             .collect();
@@ -2009,7 +2015,7 @@ mod tests {
     /// limit above it that has one more decimal place, and their names write it.
     #[test]
     fn templates_saved_before_split_lengths_restore_their_values() {
-        use InputValue::{Choice, Length, Number, Text, Toggle};
+        use InputValue::{Choice, Integer, Length, Number, Text, Toggle};
         let rows = [
             (
                 "CCI",
@@ -2061,6 +2067,16 @@ mod tests {
                 "LinReg Slope",
                 vec![("period", Length(1))],
                 vec![("period", Length(1))],
+            ),
+            (
+                "VWAP",
+                vec![("plot_offset", Integer(-3))],
+                vec![("plot_offset", Integer(-3))],
+            ),
+            (
+                "VWMA",
+                vec![("plot_offset", Integer(-600))],
+                vec![("plot_offset", Integer(-600))],
             ),
             // Saved under the earlier name.
             (
@@ -2472,6 +2488,16 @@ mod tests {
                 "{name}"
             );
         }
+        // Saved on main 7c5548b22 before VWMA's offset range narrowed. Its saved value,
+        // styles and input ids survive restoration unchanged.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"VWMA","inputs":[["period",{"Length":20}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":-600}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VWMA.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(
+            StudyTemplate::from_study(restored.as_ref()).inputs,
+            saved.inputs
+        );
+        assert_eq!(restored.settings(), saved.settings);
+
         // Literal study saved on main before Hours existed: all saved inputs and styles stay,
         // and the trading day remains selected with its extended hours split.
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":true}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();

@@ -2757,6 +2757,47 @@ mod tests {
         }
     }
 
+    /// Number fields use the declared arrow and drag increment, with 0.1 as the fallback.
+    #[test]
+    fn catalogue_number_fields_step_as_their_inputs_declare() {
+        use crate::studies::IndicatorFactory;
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        let factory = IndicatorFactory::new();
+        for (name, label, step) in [
+            ("SuperTrend", "Factor", 0.01),
+            ("RCI", "BB StdDev", 0.5),
+            ("Volatility Stop", "Multiplier", 0.25),
+            ("GK Vol", "Trading days per year", 0.1),
+        ] {
+            let mut study = factory.create(name).unwrap();
+            if name == "RCI" {
+                study.set_input("smoothing", InputValue::Choice(2)).unwrap();
+            }
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            let id = chart.add_indicator(study);
+            let mut dialog = IndicatorSettingsDialog::default();
+            assert!(dialog.open_for_chart(&chart, id));
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    dialog.show(ui.ctx(), &Theme::dark());
+                });
+            harness.run();
+            assert_eq!(
+                harness
+                    .get_by_role_and_label(egui::accesskit::Role::SpinButton, label)
+                    .accesskit_node()
+                    .numeric_value_step(),
+                Some(step),
+                "{name} {label}"
+            );
+        }
+    }
+
     /// A session start saved as 570 minutes shows as 09:30 in two fields that edit it, and the
     /// session's zone is picked from the zones the host set in place of the default list.
     #[test]

@@ -91,7 +91,7 @@ impl Indicator for RankCorrelationIndex {
         smoothing: choice("Smoothing", SmoothingType::ALL),
         smoothing_length: length("Smoothing length", 1, usize::MAX)
             if smoothing in SmoothingType::WITH_LENGTH,
-        smoothing_deviation: number("BB StdDev", 0.001, 50.0)
+        smoothing_deviation: number("BB StdDev", 0.001, 50.0, 0.5)
             if smoothing in SmoothingType::WITH_BANDS
     ; {});
 

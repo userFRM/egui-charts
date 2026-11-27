@@ -87,7 +87,7 @@ impl Default for VolatilityStop {
 impl Indicator for VolatilityStop {
     crate::studies::inputs::study_inputs!(self;
         length: length("Length", 1, usize::MAX),
-        multiplier: number("Multiplier", 0.0, f64::MAX)
+        multiplier: number("Multiplier", 0.0, f64::MAX, 0.25)
     ; {});
 
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
