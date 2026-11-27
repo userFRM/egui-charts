@@ -4,7 +4,10 @@ use crate::{
     strategies::{Commission, OrderSize, StrategyContext},
 };
 use egui::{Role, Vec2};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 
 fn bars() -> Vec<Bar> {
     [100.0, 101.0, 102.0, 103.0, 100.0, 99.0, 98.0, 101.0]
@@ -884,6 +887,132 @@ fn selecting_a_strategy_applies_its_declared_order_size() {
         let tester = StrategyTester::new(factory);
         assert_eq!(tester.strategy(), "A host strategy");
         assert_eq!(tester.settings().order_size, size);
+    }
+}
+
+#[test]
+fn equity_order_sizes_are_shown_and_typed_in_percent() {
+    for dark in [false, true] {
+        for width in [360.0, 1440.0] {
+            let tester = StrategyTester {
+                tab: Tab::Properties,
+                ..StrategyTester::default()
+            };
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(width, 900.0))
+                .with_context_setup(move |ctx| {
+                    ctx.set_visuals(if dark {
+                        egui::Visuals::dark()
+                    } else {
+                        egui::Visuals::light()
+                    });
+                })
+                .build_ui_state(
+                    |ui, tester: &mut StrategyTester| {
+                        tester.show(ui, "TEST", Timeframe::Min1, &trend());
+                    },
+                    tester,
+                );
+            for (name, shown) in [
+                ("SuperTrend", "15.00"),
+                ("Technical Ratings", "5.00"),
+                ("Bar Up/Down", "10.00"),
+                ("Consecutive Up/Down", "1.00"),
+            ] {
+                h.state_mut().select_strategy(name).unwrap();
+                h.run();
+                assert_eq!(
+                    h.get_by_role_and_label(Role::SpinButton, "Order size")
+                        .accesskit_node()
+                        .value()
+                        .as_deref(),
+                    Some(shown),
+                    "{name}"
+                );
+            }
+            for (literal, shown) in [
+                (r#"{"order_size":{"EquityFraction":0.007}}"#, Some("0.70")),
+                (r#"{"order_size":{"EquityFraction":0.29}}"#, Some("29.00")),
+                (r#"{"order_size":{"EquityFraction":1e307}}"#, None),
+                (r#"{"order_size":{"EquityFraction":5e-324}}"#, None),
+            ] {
+                let saved: BacktestSettings = serde_json::from_str(literal).unwrap();
+                h.state_mut().set_settings(saved.clone()).unwrap();
+                let undo_steps = h.state().undo_settings.len();
+                h.run();
+                h.run();
+                assert_eq!(
+                    h.state().settings(),
+                    &saved,
+                    "saved {literal}, dark={dark}, width={width}"
+                );
+                assert_eq!(h.state().undo_settings.len(), undo_steps);
+                if let Some(shown) = shown {
+                    assert_eq!(
+                        h.get_by_role_and_label(Role::SpinButton, "Order size")
+                            .accesskit_node()
+                            .value()
+                            .as_deref(),
+                        Some(shown)
+                    );
+                }
+            }
+            h.state_mut()
+                .select_strategy("Consecutive Up/Down")
+                .unwrap();
+            h.run();
+            h.get_by_role_and_label(Role::ComboBox, "Order size model")
+                .click();
+            h.run();
+            h.get_by_label("% of equity").click();
+            h.run();
+            assert_eq!(
+                h.state().settings().order_size,
+                OrderSize::EquityFraction(0.01)
+            );
+            h.get_by_role_and_label(Role::SpinButton, "Order size")
+                .set_value_accesskit(10.0);
+            h.run();
+            assert_eq!(
+                h.state().settings().order_size,
+                OrderSize::EquityFraction(0.1)
+            );
+            assert_eq!(
+                h.get_by_role_and_label(Role::SpinButton, "Order size")
+                    .accesskit_node()
+                    .value()
+                    .as_deref(),
+                Some("10.00")
+            );
+            h.get_by_role_and_label(Role::Button, "Run").click();
+            h.run();
+            let report = h.state().report().unwrap();
+            assert_eq!(report.trades.len(), 2);
+            // floor(1,000,000 * 10% / 103) = 970. After losing 970 * 4, equity is 996,120.
+            // floor(996,120 * 10% / 99) = 1006; sizing from initial capital would give 1010.
+            assert_eq!(
+                report
+                    .trades
+                    .iter()
+                    .map(|trade| trade.quantity)
+                    .collect::<Vec<_>>(),
+                [970.0, 1006.0]
+            );
+            assert!(
+                report
+                    .properties
+                    .contains(&("Rejected orders".into(), "0".into()))
+            );
+            h.get_by_role_and_label(Role::Tab, "Backtest settings")
+                .click();
+            h.run();
+            h.get_by_role_and_label(Role::ComboBox, "Order size model")
+                .click();
+            h.run();
+            h.get_by_label("Cash").click();
+            h.run();
+            assert_eq!(h.state().settings().order_size, OrderSize::Cash(10.0));
+        }
     }
 }
 

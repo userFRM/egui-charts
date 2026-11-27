@@ -151,23 +151,29 @@ pub(super) fn show(
             &mut settings.risk_free_rate,
             (-1.0f64).next_up(),
         );
-        let (mut kind, mut amount) = match settings.order_size {
+        let (mut kind, shown) = match settings.order_size {
             OrderSize::Fixed(v) => (0, v),
             OrderSize::Cash(v) => (1, v),
-            OrderSize::EquityFraction(v) => (2, v),
+            // Bound the percentage display without changing untouched saved fractions.
+            OrderSize::EquityFraction(v) => (2, (v * 100.0).clamp(f64::MIN_POSITIVE, f64::MAX)),
         };
+        let before = (kind, shown);
         choice(
             ui,
             "Order size model",
             &mut kind,
-            &["Fixed units", "Cash", "Equity fraction"],
+            &["Fixed units", "Cash", "% of equity"],
         );
+        let mut amount = shown;
         number(ui, "Order size", &mut amount, f64::MIN_POSITIVE);
-        settings.order_size = match kind {
-            0 => OrderSize::Fixed(amount),
-            1 => OrderSize::Cash(amount),
-            _ => OrderSize::EquityFraction(amount),
-        };
+        // Avoid rounding an untouched fraction through a percent round trip.
+        if (kind, amount) != before {
+            settings.order_size = match kind {
+                0 => OrderSize::Fixed(amount),
+                1 => OrderSize::Cash(amount),
+                _ => OrderSize::EquityFraction(amount / 100.0),
+            };
+        }
         let label = ui.label(l10n::text(ui.ctx(), "Pyramiding"));
         // A saved zero runs as one: show the limit in effect, and store only what the user edits.
         let mut limit = settings.pyramiding.max(1);
