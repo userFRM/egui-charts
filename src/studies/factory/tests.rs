@@ -1083,3 +1083,16 @@ fn catalogue_choices_read_in_words_and_restore() {
         Some((0, Some("SMA".to_owned())))
     );
 }
+
+/// Vortex keeps distinct four-decimal readings unless a study precision overrides them.
+#[test]
+fn catalogue_studies_read_in_their_usual_units() {
+    let factory = IndicatorFactory::new();
+    for (precision, expected) in [(None, "1.0473"), (Some(2), "1.05")] {
+        let mut study = ConfiguredStudy::new(factory.create("Vortex").unwrap());
+        let mut settings = study.settings();
+        settings.precision = precision;
+        study.apply_settings(&[], settings).unwrap();
+        assert_eq!(study.format_value(1.0473), expected);
+    }
+}
