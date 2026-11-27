@@ -13341,6 +13341,31 @@ mod tests {
                     .to_vec(),
             );
         }
+        fn scroll(
+            app: &mut DemoApp,
+            ctx: &egui::Context,
+            point: egui::Pos2,
+            delta: f32,
+        ) -> Vec<(String, egui::Rect)> {
+            let mut texts = frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, delta),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            for _ in 0..8 {
+                texts = frame(app, ctx, vec![]);
+            }
+            texts
+        }
         fn enter(app: &mut DemoApp, ctx: &egui::Context) {
             frame(
                 app,
@@ -13401,8 +13426,8 @@ mod tests {
             (Tool::GannFan, "Fan lines"),
             (Tool::LongPos, "Entry price"),
             (Tool::ShortPos, "Entry price"),
-            (Tool::FixedRangeVolumeProfile, "VAL"),
-            (Tool::AnchoredVolumeProfile, "VAL"),
+            (Tool::FixedRangeVolumeProfile, "VA values colour"),
+            (Tool::AnchoredVolumeProfile, "VA values colour"),
             (Tool::RegressionTrend, "Upper deviation"),
             (Tool::BarsPattern, "Mirrored"),
         ] {
@@ -13431,11 +13456,31 @@ mod tests {
                 .1
                 .center();
             click(&mut app, &ctx, inputs);
-            let texts = frame(&mut app, &ctx, vec![]);
+            let mut texts = frame(&mut app, &ctx, vec![]);
+            // The profile's value controls start below the dialog's opening view.
+            let scroll_at = if matches!(
+                tool,
+                Tool::FixedRangeVolumeProfile | Tool::AnchoredVolumeProfile
+            ) {
+                let point = texts
+                    .iter()
+                    .find(|(text, _)| text == "VAH")
+                    .unwrap()
+                    .1
+                    .center();
+                texts = scroll(&mut app, &ctx, point, -160.0);
+                Some(point)
+            } else {
+                None
+            };
             assert!(
                 texts.iter().any(|(text, _)| text == heading),
                 "{tool:?}: {texts:?}"
             );
+            if let Some(point) = scroll_at {
+                // Keep the next tool's opening view at the top too.
+                scroll(&mut app, &ctx, point, 2000.0);
+            }
             assert_eq!(
                 format!("{:?}", app.chart.drawings().drawings[0]),
                 before,
