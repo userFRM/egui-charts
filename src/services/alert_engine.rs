@@ -672,8 +672,9 @@ impl AlertEngine {
         }
     }
 
-    /// Delivers each new fill of `run` to matching strategy-fill alerts. Use a unique run id
-    /// for each `Backtest` instance, retained for its lifetime, and forward its update batches.
+    /// Delivers each new fill of `run` to the strategy-fill alerts of that run whose
+    /// [`strategy_events`](Alert::strategy_events) take fills. Use a unique run id for each
+    /// `Backtest` instance, retained for its lifetime, and forward its update batches.
     /// Repeated batches are ignored by sequence, including after edits or rearming an alert
     /// on the same run and when multiple fills share a timestamp.
     /// `now` gates expiry and notification schedules; event times are the source fill times.
@@ -705,9 +706,9 @@ impl AlertEngine {
         fills: &[crate::strategies::StrategyFill],
         now: DateTime<Utc>,
     ) {
-        use crate::model::StrategyReport;
+        use crate::model::{StrategyEvents, StrategyReport};
         let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
-        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
+        self.fire_events(symbol, exchange, timeframe, now, watches, |alert, seen| {
             fills
                 .iter()
                 .filter_map(|fill| {
@@ -720,6 +721,10 @@ impl AlertEngine {
                         return None;
                     }
                     seen.last_sequence = fill.sequence;
+                    // Advance excluded fills too, so changing the choice cannot replay them.
+                    if alert.strategy_events == StrategyEvents::Alerts {
+                        return None;
+                    }
                     let side = match fill.side {
                         crate::model::OrderSide::Buy => "Buy",
                         crate::model::OrderSide::Sell => "Sell",
@@ -785,7 +790,8 @@ impl AlertEngine {
     }
 
     /// Delivers each new alert of `run`, raised through `StrategyContext::alert` and read from
-    /// `Backtest::new_alerts` after each update, to the strategy-fill alerts of that run, as
+    /// `Backtest::new_alerts` after each update, to the strategy-fill alerts of that run whose
+    /// [`strategy_events`](Alert::strategy_events) take alert calls, as
     /// [`strategy_fills`](Self::strategy_fills) delivers its fills. Alerts numbered at or below
     /// one already received are ignored, counted apart from fills. A trigger reports the alert's
     /// bar time and finite price, and the strategy's message when the alert has none; custom
@@ -801,38 +807,49 @@ impl AlertEngine {
         alerts: &[crate::strategies::StrategyAlert],
         now: DateTime<Utc>,
     ) {
-        use crate::model::StrategyReport;
+        use crate::model::{StrategyEvents, StrategyReport};
         let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
-        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
-            alerts
-                .iter()
-                .filter_map(|alert| {
-                    if alert.sequence <= seen.last_alert {
-                        return None;
-                    }
-                    seen.last_alert = alert.sequence;
-                    let price = Some(alert.price).filter(|price| price.is_finite());
-                    Some(Occurrence {
-                        time: alert.time,
-                        price,
-                        shown_price: price.map(StrategyReport::without_rounding_digits),
-                        message: alert.message.clone(),
-                        fields: vec![
-                            ("order_id", String::new()),
-                            ("side", String::new()),
-                            ("quantity", String::new()),
-                            ("position", String::new()),
-                            ("market_position", String::new()),
-                            ("market_position_size", String::new()),
-                            ("prev_market_position", String::new()),
-                            ("prev_market_position_size", String::new()),
-                            ("comment", String::new()),
-                            ("alert_message", alert.message.clone()),
-                        ],
+        self.fire_events(
+            symbol,
+            exchange,
+            timeframe,
+            now,
+            watches,
+            |watched, seen| {
+                alerts
+                    .iter()
+                    .filter_map(|alert| {
+                        if alert.sequence <= seen.last_alert {
+                            return None;
+                        }
+                        seen.last_alert = alert.sequence;
+                        // Advance excluded calls too, so changing the choice cannot replay them.
+                        if watched.strategy_events == StrategyEvents::Fills {
+                            return None;
+                        }
+                        let price = Some(alert.price).filter(|price| price.is_finite());
+                        Some(Occurrence {
+                            time: alert.time,
+                            price,
+                            shown_price: price.map(StrategyReport::without_rounding_digits),
+                            message: alert.message.clone(),
+                            fields: vec![
+                                ("order_id", String::new()),
+                                ("side", String::new()),
+                                ("quantity", String::new()),
+                                ("position", String::new()),
+                                ("market_position", String::new()),
+                                ("market_position_size", String::new()),
+                                ("prev_market_position", String::new()),
+                                ("prev_market_position_size", String::new()),
+                                ("comment", String::new()),
+                                ("alert_message", alert.message.clone()),
+                            ],
+                        })
                     })
-                })
-                .collect()
-        });
+                    .collect()
+            },
+        );
     }
 
     /// Delivers each new formation or target in `signals`, the current signals of `symbol` on
@@ -863,55 +880,46 @@ impl AlertEngine {
             matches!(condition, AlertCondition::DetectorSignals(detector)
                 if signals.iter().any(|signal| signal.category == *detector))
         };
-        self.fire_events(
-            symbol,
-            exchange,
-            timeframe,
-            now,
-            watches,
-            |condition, seen| {
-                let AlertCondition::DetectorSignals(detector) = condition else {
-                    return Vec::new();
-                };
-                // History never moves back, or another chart's older bars would fire again the
-                // signals whose ids were dropped.
-                let from = seen.history.map_or(from, |history| history.max(from));
-                seen.history = Some(from);
-                // Signals anchored before `from` can no longer fire, so their ids are not kept.
-                seen.signals.retain(|(_, time)| *time >= from);
-                signals
-                    .iter()
-                    .filter(|signal| signal.category == *detector)
-                    .filter_map(|signal| {
-                        let (time, price) = match signal.shape {
-                            SignalShape::Marker { time, price, .. } => (time, price),
-                            SignalShape::Level {
-                                price,
-                                from: Some(start),
-                            } => (start, Some(price)),
-                            SignalShape::Level { from: None, .. } => return None,
-                            SignalShape::PriceZone { from, price, .. } => (from, Some(price)),
-                            SignalShape::Zone { from, .. } => (from, None),
-                        };
-                        if time < from || seen.signals.iter().any(|(id, _)| *id == signal.id) {
-                            return None;
-                        }
-                        seen.signals.push((signal.id.clone(), time));
-                        let text = signal.tooltip.as_ref().or(signal.label.as_ref());
-                        Some(Occurrence {
-                            time,
-                            price: price.filter(|price| price.is_finite()),
-                            shown_price: None,
-                            fields: Vec::new(),
-                            message: text.map_or_else(
-                                || detector.clone(),
-                                |text| format!("{detector}: {text}"),
-                            ),
-                        })
+        self.fire_events(symbol, exchange, timeframe, now, watches, |alert, seen| {
+            let AlertCondition::DetectorSignals(detector) = &alert.condition else {
+                return Vec::new();
+            };
+            // History never moves back, or another chart's older bars would fire again the
+            // signals whose ids were dropped.
+            let from = seen.history.map_or(from, |history| history.max(from));
+            seen.history = Some(from);
+            // Signals anchored before `from` can no longer fire, so their ids are not kept.
+            seen.signals.retain(|(_, time)| *time >= from);
+            signals
+                .iter()
+                .filter(|signal| signal.category == *detector)
+                .filter_map(|signal| {
+                    let (time, price) = match signal.shape {
+                        SignalShape::Marker { time, price, .. } => (time, price),
+                        SignalShape::Level {
+                            price,
+                            from: Some(start),
+                        } => (start, Some(price)),
+                        SignalShape::Level { from: None, .. } => return None,
+                        SignalShape::PriceZone { from, price, .. } => (from, Some(price)),
+                        SignalShape::Zone { from, .. } => (from, None),
+                    };
+                    if time < from || seen.signals.iter().any(|(id, _)| *id == signal.id) {
+                        return None;
+                    }
+                    seen.signals.push((signal.id.clone(), time));
+                    let text = signal.tooltip.as_ref().or(signal.label.as_ref());
+                    Some(Occurrence {
+                        time,
+                        price: price.filter(|price| price.is_finite()),
+                        shown_price: None,
+                        fields: Vec::new(),
+                        message: text
+                            .map_or_else(|| detector.clone(), |text| format!("{detector}: {text}")),
                     })
-                    .collect()
-            },
-        );
+                })
+                .collect()
+        });
     }
 
     /// Connects the host's custom event source `source`, whose events the host feeds to
@@ -967,7 +975,7 @@ impl AlertEngine {
         timeframe: Timeframe,
         now: DateTime<Utc>,
         watches: impl Fn(&AlertCondition) -> bool,
-        mut occurrences: impl FnMut(&AlertCondition, &mut Run) -> Vec<Occurrence>,
+        mut occurrences: impl FnMut(&Alert, &mut Run) -> Vec<Occurrence>,
     ) {
         let mut fired = Vec::new();
         let mut state = self.lock();
@@ -1007,7 +1015,7 @@ impl AlertEngine {
                     done,
                     ..Run::default()
                 });
-            for occurrence in occurrences(&alert.condition, seen) {
+            for occurrence in occurrences(alert, seen) {
                 if seen.done {
                     continue;
                 }

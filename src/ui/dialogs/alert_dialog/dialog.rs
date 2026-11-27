@@ -14,7 +14,7 @@ use crate::data::inbox::Inbox;
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency,
     AlertPositionProgress, AlertRule, AlertSource, AlertSourceName, NotificationSchedule,
-    NotificationWindow, Timeframe, TimezoneId,
+    NotificationWindow, StrategyEvents, Timeframe, TimezoneId,
 };
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
@@ -1124,6 +1124,27 @@ impl AlertDialog {
                     true,
                     None,
                 );
+                if matches!(self.alert.condition, AlertCondition::StrategyFills(_)) {
+                    egui::ComboBox::from_id_salt("strategy_events")
+                        .width(ui.available_width().min(200.0))
+                        .truncate()
+                        .selected_text(l10n::text(ui.ctx(), self.alert.strategy_events.to_string()))
+                        .show_ui(ui, |ui| {
+                            for value in [
+                                StrategyEvents::FillsAndAlerts,
+                                StrategyEvents::Fills,
+                                StrategyEvents::Alerts,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.alert.strategy_events,
+                                    value,
+                                    l10n::text(ui.ctx(), value.to_string()),
+                                );
+                            }
+                        })
+                        .response
+                        .accessible_name(l10n::text(ui.ctx(), "Strategy events"));
+                }
             } else {
                 let index = self.editing_condition - 1;
                 self.alert
