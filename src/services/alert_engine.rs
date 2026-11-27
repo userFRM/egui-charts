@@ -9,7 +9,8 @@ use super::{AlertEvent, Alerts, Events};
 use crate::data::{FeedError, MaybeSend, Reply};
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertId,
-    AlertPositionProgress, AlertSource, AlertStatus, AlertTrigger, Bar, BarClock, Timeframe,
+    AlertPositionProgress, AlertSource, AlertStatus, AlertTrigger, Bar, BarClock,
+    FootprintAlertEvent, Timeframe,
 };
 
 /// Triggers the engine keeps for [`AlertEngine::triggers`], silent entries included.
@@ -706,7 +707,7 @@ impl AlertEngine {
         now: DateTime<Utc>,
     ) {
         use crate::model::StrategyReport;
-        let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
+        let watches = |alert: &Alert| matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run);
         self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
             fills
                 .iter()
@@ -802,7 +803,7 @@ impl AlertEngine {
         now: DateTime<Utc>,
     ) {
         use crate::model::StrategyReport;
-        let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
+        let watches = |alert: &Alert| matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run);
         self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
             alerts
                 .iter()
@@ -859,8 +860,8 @@ impl AlertEngine {
     ) {
         use crate::model::SignalShape;
         let signals: Vec<_> = signals.into_iter().collect();
-        let watches = |condition: &AlertCondition| {
-            matches!(condition, AlertCondition::DetectorSignals(detector)
+        let watches = |alert: &Alert| {
+            matches!(&alert.condition, AlertCondition::DetectorSignals(detector)
                 if signals.iter().any(|signal| signal.category == *detector))
         };
         self.fire_events(
@@ -937,7 +938,7 @@ impl AlertEngine {
         events: &[crate::model::CustomAlertEvent],
         now: DateTime<Utc>,
     ) {
-        let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::CustomEvents(name) if name == source);
+        let watches = |alert: &Alert| matches!(&alert.condition, AlertCondition::CustomEvents(name) if name == source);
         self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
             events
                 .iter()
@@ -958,7 +959,41 @@ impl AlertEngine {
         });
     }
 
-    /// Fires the active alerts of `symbol` on `timeframe` whose condition `watches` accepts,
+    /// Delivers the live conditions drained by `OrderFlowDetectors::take_footprint_events` to
+    /// footprint alerts on their symbol and interval. `Once` and `OncePerBar` fire at the first
+    /// execution that meets the condition; `OncePerBarClose` fires on a closed bar that meets
+    /// it. Each alert fires at most once per bar, including duplicate events from other charts.
+    /// Triggers carry the event's time and price, and its message when the alert has none;
+    /// custom messages expand as for `strategy_fills`.
+    pub fn footprint_events(&self, events: &[FootprintAlertEvent], now: DateTime<Utc>) {
+        for event in events {
+            self.fire_events(
+                &event.symbol,
+                event.exchange.as_deref(),
+                event.timeframe,
+                now,
+                |alert| {
+                    alert.condition == AlertCondition::Footprint(event.condition)
+                        && (alert.frequency == AlertFrequency::OncePerBarClose) == event.closed
+                },
+                |_, seen| {
+                    if seen.fired.is_some_and(|bar| event.bar <= bar) {
+                        return Vec::new();
+                    }
+                    seen.fired = Some(event.bar);
+                    vec![Occurrence {
+                        time: event.time,
+                        price: Some(event.price).filter(|price| price.is_finite()),
+                        shown_price: None,
+                        message: event.message.clone(),
+                        fields: Vec::new(),
+                    }]
+                },
+            );
+        }
+    }
+
+    /// Fires the active alerts of `symbol` on `timeframe` whose alert `watches` accepts,
     /// with the occurrences `occurrences` takes from what the alert's run has seen.
     fn fire_events(
         &self,
@@ -966,7 +1001,7 @@ impl AlertEngine {
         exchange: Option<&str>,
         timeframe: Timeframe,
         now: DateTime<Utc>,
-        watches: impl Fn(&AlertCondition) -> bool,
+        watches: impl Fn(&Alert) -> bool,
         mut occurrences: impl FnMut(&AlertCondition, &mut Run) -> Vec<Occurrence>,
     ) {
         let mut fired = Vec::new();
@@ -984,7 +1019,7 @@ impl AlertEngine {
             alert.status == AlertStatus::Active
                 && alert.is_valid()
                 && alert.starts.is_none_or(|starts| starts <= now)
-                && watches(&alert.condition)
+                && watches(alert)
                 && alert.timeframe.is_none_or(|own| own == timeframe)
                 && match &alert.watchlist {
                     Some(list) => watchlists
@@ -1776,7 +1811,8 @@ fn condition_holds(
         AlertCondition::Holds => value != 0.0,
         AlertCondition::StrategyFills(_)
         | AlertCondition::DetectorSignals(_)
-        | AlertCondition::CustomEvents(_) => false,
+        | AlertCondition::CustomEvents(_)
+        | AlertCondition::Footprint(_) => false,
         AlertCondition::Crossing(level) => compare(
             AlertComparison::Crossing,
             traded,
