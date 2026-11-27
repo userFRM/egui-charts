@@ -57,7 +57,7 @@
 //!   simple, exponential and weighted averages.
 //!
 //! Where a definition leaves a convention open, the expected series follows the one the study
-//! documents (EMA seeds with the mean of its first closes, MACD with the first close, PPO and the Percentage Volume Oscillator
+//! documents (EMA and MACD seed each exponential average with the mean of its first values, PPO and the Percentage Volume Oscillator
 //! seed their EMAs with the mean of the first values and their signal with the mean of the first
 //! values of the oscillator, Force Index, Elder Ray, Bull Bear Power, TRIX and the Mass Index seed their EMAs with the mean of
 //! their first values, the Envelopes EMA and the Chaikin volatility and Chaikin Oscillator EMAs seed with their first input, an
@@ -81,7 +81,7 @@
 //! with the mean of the first medians, the Chop Zone seeds its EMA with the mean of the first 34 closes,
 //! and the Volatility Stop starts at the first close in an uptrend and uses the bar's true range as its
 //! band until its ATR has a full length. The McGinley Dynamic starts at the first close; a
-//! simple MACD signal averages the MACD values only, and an exponential one starts at the first; ATR's
+//! MACD signal averages the MACD values only, under either formula; ATR's
 //! simple, exponential and weighted smoothings start on the period-th true range, the exponential one at
 //! their mean; a Chandelier Exit value needs a full lookback window.
 //! The Rank Correlation Index starts on the bar after its first full window; the RCI Ribbon
@@ -550,7 +550,8 @@ fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
 fn warm_ups_show_each_value_on_a_series_ending_at_its_bar() {
     let bars = fixture();
     type Case = (&'static str, fn() -> Box<dyn Indicator>);
-    let studies: [Case; 4] = [
+    let studies: [Case; 5] = [
+        ("MACD(12,26,9)", || Box::new(MACD::default())),
         ("Chop(14)", || Box::new(ChoppinessIndex::default())),
         ("Mass(9,25)", || Box::new(MassIndex::default())),
         ("SuperTrend(10,3)", || Box::new(SuperTrend::default())),

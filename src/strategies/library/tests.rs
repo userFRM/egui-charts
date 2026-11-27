@@ -685,6 +685,17 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             ],
             expected: vec![(4, Buy, 12.), (6, Sell, 8.), (8, Buy, 10.)],
         },
+        // EMA(1) - EMA(2), EMA signal(2): histogram from bar 2 = -20/3, 20/27, -530/81, 10/9.
+        Case {
+            name: "MACD",
+            prices: points(&[30., 60., 50., 80., 40., 50.]),
+            inputs: vec![
+                ("fast_period", Length(1)),
+                ("slow_period", Length(2)),
+                ("signal_period", Length(2)),
+            ],
+            expected: vec![(4, Buy, 40.), (5, Sell, 50.)],
+        },
         // Momentum(1) = missing,-1,1,2,-1,-3,2,0. Its change agrees at 2,3,4,5,6.
         Case {
             name: "Momentum",

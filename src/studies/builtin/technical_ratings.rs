@@ -27,7 +27,7 @@
 //!
 //! A group's score is its mean vote. The summary averages the chosen groups' scores,
 //! ignoring groups without a vote. A component missing any value its rule reads has no
-//! vote; MACD votes from bar 25. A bar without finite high, low and close has no values.
+//! vote; MACD votes from bar 33. A bar without finite high, low and close has no values.
 //! Coverage is votes divided by components, across the chosen groups for the summary.
 //! A score without a vote has no value. Categories use these thresholds:
 //!
@@ -244,8 +244,6 @@ impl Rule {
 struct Component {
     group: Group,
     rule: Rule,
-    /// Usable bars before the first vote.
-    warmup: usize,
     study: Box<dyn Indicator>,
 }
 
@@ -254,7 +252,6 @@ impl std::fmt::Debug for Component {
         f.debug_struct("Component")
             .field("group", &self.group)
             .field("rule", &self.rule)
-            .field("warmup", &self.warmup)
             .finish_non_exhaustive()
     }
 }
@@ -360,73 +357,54 @@ impl TechnicalRatings {
 
     /// The components in rating order: the moving averages, then the oscillators.
     fn build() -> Vec<Component> {
-        let component = |group, rule, warmup, study: Box<dyn Indicator>| Component {
-            group,
-            rule,
-            warmup,
-            study,
-        };
+        let component = |group, rule, study: Box<dyn Indicator>| Component { group, rule, study };
         let (average, oscillator) = (Group::MovingAverage, Group::Oscillator);
         let mut components = Vec::with_capacity(26);
         for length in [10, 20, 30, 50, 100, 200] {
             components.push(component(
                 average,
                 Rule::Average,
-                0,
                 Box::new(SMA::new(length)),
             ));
             components.push(component(
                 average,
                 Rule::Average,
-                0,
                 Box::new(EMA::new(length)),
             ));
         }
         components.extend([
-            component(average, Rule::Average, 0, Box::new(HMA::new(9))),
-            component(average, Rule::Average, 0, Box::new(VWMA::new(20))),
+            component(average, Rule::Average, Box::new(HMA::new(9))),
+            component(average, Rule::Average, Box::new(VWMA::new(20))),
             component(
                 average,
                 Rule::Ichimoku,
-                0,
                 Box::new(IchimokuCloud::new(9, 26, 52)),
             ),
-            component(oscillator, Rule::Rsi, 0, Box::new(RSI::new(14))),
+            component(oscillator, Rule::Rsi, Box::new(RSI::new(14))),
             component(
                 oscillator,
                 Rule::Stochastic,
-                0,
                 Box::new(Stochastic::new(14, 3, 3)),
             ),
-            component(oscillator, Rule::Cci, 0, Box::new(CCI::new(20))),
-            component(oscillator, Rule::Adx, 0, Box::new(ADX::new(14))),
+            component(oscillator, Rule::Cci, Box::new(CCI::new(20))),
+            component(oscillator, Rule::Adx, Box::new(ADX::new(14))),
             component(
                 oscillator,
                 Rule::Awesome,
-                0,
                 Box::new(AwesomeOscillator::new(5, 34)),
             ),
-            component(oscillator, Rule::Momentum, 0, Box::new(Momentum::new(10))),
-            // The MACD shows no value before its slow and signal averages are seeded, then shows
-            // all of its history; the vote starts at that bar so that it never changes.
-            component(oscillator, Rule::Macd, 25, Box::new(MACD::new(12, 26, 9))),
+            component(oscillator, Rule::Momentum, Box::new(Momentum::new(10))),
+            component(oscillator, Rule::Macd, Box::new(MACD::new(12, 26, 9))),
             component(
                 oscillator,
                 Rule::StochasticRsi,
-                0,
                 Box::new(StochasticRSI::new(14, 14, 3, 3)),
             ),
-            component(oscillator, Rule::WilliamsR, 0, Box::new(WilliamsR::new(14))),
-            component(
-                oscillator,
-                Rule::BullBearPower,
-                0,
-                Box::new(ElderRay::new(13)),
-            ),
+            component(oscillator, Rule::WilliamsR, Box::new(WilliamsR::new(14))),
+            component(oscillator, Rule::BullBearPower, Box::new(ElderRay::new(13))),
             component(
                 oscillator,
                 Rule::Ultimate,
-                0,
                 Box::new(UltimateOscillator::new(7, 14, 28)),
             ),
         ]);
@@ -444,13 +422,9 @@ impl TechnicalRatings {
             .find(|component| matches!(component.rule, Rule::BullBearPower))
             .and_then(|component| trend(component.study.values(), bars, at));
         components.iter().map(move |component| {
-            let vote = (at >= component.warmup)
-                .then(|| {
-                    component
-                        .rule
-                        .vote(component.study.values(), at, bars[at].close, trend)
-                })
-                .flatten();
+            let vote = component
+                .rule
+                .vote(component.study.values(), at, bars[at].close, trend);
             (component.group, vote)
         })
     }

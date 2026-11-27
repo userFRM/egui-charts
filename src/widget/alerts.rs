@@ -408,15 +408,15 @@ mod tests {
             ),
             (
                 Box::new(MACD::new(1, 2, 2)),
-                vec![30., 60., 50., 80.],
+                vec![30., 60., 50., 80., 40.],
                 vec![
                     (
                         "MACD: Crosses above signal line",
-                        vec![None, Some(0.), Some(0.), Some(1.)],
+                        vec![None, None, None, Some(1.), Some(0.)],
                     ),
                     (
                         "MACD: Crosses below signal line",
-                        vec![None, Some(0.), Some(1.), Some(0.)],
+                        vec![None, None, None, Some(0.), Some(1.)],
                     ),
                 ],
             ),
