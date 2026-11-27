@@ -31,6 +31,70 @@ glyphs! {
     "Stickers" => ["sticker:bull", "Bull"; "sticker:bear", "Bear"; "sticker:rocket", "Rocket"; "sticker:idea", "Idea"]
 }
 
+/// Family name of the bundled colour emoji font. SVG export writes it as the text's font family, so a viewer with
+/// the same font installed matches it and others fall back to their own emoji font.
+#[cfg(feature = "color-emoji")]
+const EMOJI_FONT: &str = "Noto Color Emoji";
+
+/// The picker's glyphs in display order: icons, emoji, stickers. With `color-emoji` the emoji are the full Unicode
+/// list; ids from [`GLYPHS`] that are not in it still draw through [`font_id`].
+#[cfg(feature = "ui")]
+pub(crate) fn picker_glyphs() -> impl Iterator<Item = &'static Glyph> + Clone {
+    #[cfg(feature = "color-emoji")]
+    return GLYPHS
+        .iter()
+        .filter(|g| g.category.starts_with("Icons"))
+        .chain(super::emoji_set::EMOJI)
+        .chain(GLYPHS.iter().filter(|g| g.category == "Stickers"));
+    #[cfg(not(feature = "color-emoji"))]
+    GLYPHS.iter()
+}
+
+/// Whether `text` is one emoji of the colour set. Variation selectors are ignored, so the ids saved before the full
+/// set (`"✈"`, `"⚠"`, `"❤"` without U+FE0F) and minimally-qualified or unqualified forms find their emoji.
+#[cfg(feature = "color-emoji")]
+fn is_color_emoji(text: &str) -> bool {
+    use std::collections::HashSet;
+    use std::sync::OnceLock;
+    static KEYS: OnceLock<HashSet<String>> = OnceLock::new();
+    let key = |s: &str| s.chars().filter(|&c| c != '\u{fe0f}').collect::<String>();
+    KEYS.get_or_init(|| super::emoji_set::EMOJI.iter().map(|g| key(g.id)).collect())
+        .contains(&key(text))
+}
+
+/// The font for drawing `text` at `size`: the bundled colour emoji font when `text` is one emoji of the colour set,
+/// the proportional font otherwise. Installs the colour font on first use; until egui applies it (the next pass),
+/// the application's fonts draw the emoji.
+pub(crate) fn font_id(ctx: &egui::Context, text: &str, size: f32) -> egui::FontId {
+    #[cfg(feature = "color-emoji")]
+    if is_color_emoji(text) {
+        let family = egui::FontFamily::Name(EMOJI_FONT.into());
+        if ctx.fonts(|f| f.definitions().families.contains_key(&family)) {
+            return egui::FontId::new(size, family);
+        }
+        // One request per pass: many emoji are drawn in a pass, and a host's `set_fonts` may drop the font later.
+        let requested = egui::Id::unique("egui_charts::emoji_font_requested");
+        let pass = ctx.cumulative_pass_nr();
+        if ctx.data(|d| d.get_temp::<u64>(requested)) != Some(pass) {
+            ctx.data_mut(|d| d.insert_temp(requested, pass));
+            ctx.add_font(egui::FontInsert::new(
+                EMOJI_FONT,
+                egui::FontData::from_static(include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/assets/emoji/Noto-COLRv1.ttf"
+                ))),
+                vec![egui::InsertFontFamily {
+                    family,
+                    priority: egui::FontPriority::Highest,
+                }],
+            ));
+        }
+    }
+    #[cfg(not(feature = "color-emoji"))]
+    let _ = (ctx, text);
+    egui::FontId::proportional(size)
+}
+
 /// Draws original vector glyphs on a 24-unit grid, with no font or image-loader dependency.
 /// Emoji and legacy host strings return false so the caller can use the host font fallback.
 /// `angle` rotates the glyph clockwise in radians about the centre of `rect`.
@@ -131,8 +195,8 @@ pub(crate) fn paint(painter: &Painter, id: &str, rect: Rect, color: Color32, ang
         "icon:diamond" => line(&[(12., 2.), (22., 12.), (12., 22.), (2., 12.)], true),
         "icon:circle" => circle(12., 12., 9., Color32::TRANSPARENT),
         "icon:square" => line(&[(3., 3.), (21., 3.), (21., 21.), (3., 21.)], true),
-        // The bundled emoji font has no slightly smiling face, so it is drawn in its style.
-        "🙂" => {
+        // The bundled monochrome emoji font has no slightly smiling face, so it is drawn in its style.
+        "🙂" if cfg!(not(feature = "color-emoji")) => {
             circle(12., 12., 10., Color32::TRANSPARENT);
             circle(8.5, 9.5, 0.75, color);
             circle(15.5, 9.5, 0.75, color);
@@ -186,4 +250,74 @@ pub(crate) fn paint(painter: &Painter, id: &str, rect: Rect, color: Color32, ang
         _ => return false,
     }
     true
+}
+
+#[cfg(all(test, feature = "color-emoji"))]
+mod tests {
+    use super::*;
+
+    /// Every emoji of the set, and every emoji id saved before it, draws as one colour glyph, and the picker lists
+    /// the set in the nine categories, each once.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn color_emoji_set_draws_every_emoji_in_colour_and_keeps_legacy_ids() {
+        use super::super::emoji_set::EMOJI;
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            font_id(ui.ctx(), "😀", 8.0);
+        })
+        .drop_without_applying_deltas();
+        let mut failures = Vec::new();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let legacy = GLYPHS.iter().filter(|g| g.category.starts_with("Emoji"));
+            for glyph in EMOJI.iter().chain(legacy) {
+                let font = font_id(ui.ctx(), glyph.id, 8.0);
+                if font.family != egui::FontFamily::Name(EMOJI_FONT.into()) {
+                    failures.push(format!("{} {:?}: {:?}", glyph.name, glyph.id, font.family));
+                    continue;
+                }
+                let galley = ui
+                    .painter()
+                    .layout_no_wrap(glyph.id.into(), font, Color32::WHITE);
+                let drawn: Vec<_> = galley
+                    .rows
+                    .iter()
+                    .flat_map(|r| r.glyphs.iter())
+                    .filter(|g| !g.uv_rect.is_nothing())
+                    .collect();
+                if drawn.len() != 1 || !drawn[0].is_color {
+                    failures.push(format!("{} {:?}: {drawn:?}", glyph.name, glyph.id));
+                }
+            }
+        })
+        .drop_without_applying_deltas();
+        assert!(
+            failures.is_empty(),
+            "{} emoji not drawn as one colour glyph, first: {:#?}",
+            failures.len(),
+            &failures[..failures.len().min(20)]
+        );
+        assert_eq!(EMOJI.len(), 3963);
+        let mut runs: Vec<&str> = Vec::new();
+        for glyph in EMOJI {
+            if runs.last() != Some(&glyph.category) {
+                runs.push(glyph.category);
+            }
+        }
+        assert_eq!(
+            runs,
+            [
+                "Emoji: smileys and emotion",
+                "Emoji: people and body",
+                "Emoji: animals and nature",
+                "Emoji: food and drink",
+                "Emoji: travel and places",
+                "Emoji: activities",
+                "Emoji: objects",
+                "Emoji: symbols",
+                "Emoji: flags",
+            ]
+        );
+        assert_eq!(picker_glyphs().count(), 12 + 3963 + 4);
+    }
 }
