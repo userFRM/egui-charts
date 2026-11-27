@@ -261,10 +261,10 @@ pub enum FormationStatus {
     Awaiting,
     /// The price reached [`Formation::target`] on [`Formation::resolved_at`].
     Reached,
-    /// A close broke the guard before breakout, or price passed the opposite extreme before
+    /// A close broke the guard before breakout, or price passed the failure level before
     /// reaching the target, on [`Formation::resolved_at`].
     Failed,
-    /// A bar after breakout reached the target and passed the opposite extreme, with no known
+    /// A bar after breakout reached the target and passed the failure level, with no known
     /// order, on [`Formation::resolved_at`].
     Indefinable,
 }
@@ -521,13 +521,20 @@ fn channel(config: &Config, pivots: &VecDeque<Swing>) -> Option<Candidate> {
     Some(Candidate {
         kind,
         height: start,
-        fail: [
-            lows.iter().map(|p| p.price).fold(f64::INFINITY, f64::min),
-            highs
-                .iter()
-                .map(|p| p.price)
-                .fold(f64::NEG_INFINITY, f64::max),
-        ],
+        fail: if matches!(
+            kind,
+            FormationKind::RisingWedge | FormationKind::FallingWedge
+        ) {
+            [
+                lows.iter().map(|p| p.price).fold(f64::INFINITY, f64::min),
+                highs
+                    .iter()
+                    .map(|p| p.price)
+                    .fold(f64::NEG_INFINITY, f64::max),
+            ]
+        } else {
+            [lows.last()?.price, highs.last()?.price]
+        },
         anchors: w,
         from: 0,
         upper,
@@ -1075,9 +1082,12 @@ impl State {
 /// the pole for a flag or pennant, starting width for a rectangle, triangle or wedge,
 /// distance from tops to neckline for multiple tops or bottoms, head to neckline at the head
 /// for head and shoulders, and depth below the breakout rim for a cup. Bullish targets add
-/// that height; bearish targets subtract it. From the next bar, a high (low) reaching the
-/// target settles a bullish (bearish) formation as Reached; a low (high) passing the channel's
-/// opposite extreme, last top or bottom, right shoulder or handle settles it as Failed. A bar
+/// that height; bearish targets subtract it. Before breakout, rectangles and symmetrical
+/// triangles draw both projections from their current boundaries with Awaiting tooltips.
+/// From the next bar after breakout, a high (low) reaching the target settles a bullish (bearish)
+/// formation as Reached. A low (high) passing the channel's opposite extreme for flags, pennants
+/// and wedges, or the last opposite pivot for rectangles and triangles, last top or bottom,
+/// right shoulder or handle settles it as Failed. A bar
 /// doing both leaves it Indefinable. The breakout bar can reach the target but cannot fail it.
 ///
 /// A boundary is flat when it moves at most `tolerance` percent between the first and last
@@ -1555,18 +1565,24 @@ impl Indicator for ChartPatterns {
                     self.drawing_plots.push(plot);
                 }
                 let target_shown = match self.price_targets {
-                    1 => formation.status == Awaiting,
-                    2 => matches!(formation.status, Awaiting | Reached),
+                    1 => awaiting(formation),
+                    2 => matches!(formation.status, Developing | Awaiting | Reached),
                     3 => false,
                     _ => true,
                 };
-                if let Some(target) = formation.target.filter(|_| target_shown) {
+                let targets = if formation.status == Developing && formation.direction.is_none() {
+                    let (upper, lower) = (formation.boundaries[0], formation.boundaries[1]);
+                    let height = upper[0].1 - lower[0].1;
+                    [Some(upper[1].1 + height), Some(lower[1].1 - height)]
+                } else {
+                    [formation.target, None]
+                };
+                for target in targets.into_iter().flatten().filter(|_| target_shown) {
                     let (status, color) = match formation.status {
-                        Awaiting => ("Awaiting", palette::WARM_ORANGE),
+                        Developing | Awaiting => ("Awaiting", palette::WARM_ORANGE),
                         Reached => ("Reached", palette::UP),
                         Failed => ("Failed", palette::DOWN),
                         Indefinable => ("Indefinable", palette::GRAY),
-                        Developing => unreachable!(),
                     };
                     let price = crate::scales::StudyFormat::Price
                         .format(target, self.label_precision.or(self.precision));
@@ -1581,7 +1597,13 @@ impl Indicator for ChartPatterns {
                         LineTextHorizontalAlign::Right;
                     drawing.label = Some(format!("{name}\nTarget {price}\n{status}"));
                     drawing.chart_points = vec![
-                        ChartPoint::new(formation.confirmed_at.unwrap() as f32, target),
+                        ChartPoint::new(
+                            formation
+                                .confirmed_at
+                                .unwrap_or(formation.anchors.last().unwrap().0)
+                                as f32,
+                            target,
+                        ),
                         ChartPoint::new(
                             formation.resolved_at.unwrap_or(self.stepper.state().last) as f32,
                             target,
@@ -1920,6 +1942,27 @@ mod tests {
         ambiguous[29].low = 118.0;
         let mut breakout_wick = path(&[105.0, 100.0, 130.0, 122.0, 127.0, 119.0, 123.0, 135.0]);
         breakout_wick[31].low = 118.0;
+        let channel_failure = |anchors: &[f64], last_low: f64, bearish: bool| {
+            let mut bars = path(&if bearish {
+                mirror(anchors)
+            } else {
+                anchors.to_vec()
+            });
+            let (open, high, low, close) = if bearish {
+                (150.0, 260.0 - last_low, 145.0, 150.0)
+            } else {
+                (110.0, 115.0, last_low, 110.0)
+            };
+            bars.push(Bar::new(
+                bars.last().unwrap().time + chrono::TimeDelta::minutes(1),
+                open,
+                high,
+                low,
+                close,
+                1.0,
+            ));
+            bars
+        };
         // upper(28) = 130 - 0.3 * 18 = 124.6; pole = 30; target = 154.6.
         // The double top projects 105 - (120 - 105) = 90.
         // The head is 120 - 100.5 = 19.5 over its neckline, 101.8 on bar 28.
@@ -2016,6 +2059,42 @@ mod tests {
                 None,
             ),
             (
+                "rectangle fails at last low",
+                Rectangle,
+                channel_failure(&RECTANGLE, 100.25, false),
+                Failed,
+                Some(24),
+                Some(121.2),
+                Some(26),
+            ),
+            (
+                "rectangle fails at last high",
+                Rectangle,
+                channel_failure(&RECTANGLE, 100.25, true),
+                Failed,
+                Some(24),
+                Some(138.8),
+                Some(26),
+            ),
+            (
+                "ascending triangle fails at last low",
+                AscendingTriangle,
+                channel_failure(&ASCENDING, 102.0, false),
+                Failed,
+                Some(24),
+                Some(122.45),
+                Some(26),
+            ),
+            (
+                "descending triangle fails at last high",
+                DescendingTriangle,
+                channel_failure(&ASCENDING, 102.0, true),
+                Failed,
+                Some(24),
+                Some(137.55),
+                Some(26),
+            ),
+            (
                 "cup",
                 CupAndHandle,
                 path(&CUP),
@@ -2030,7 +2109,7 @@ mod tests {
             let formations = found(&mut study, &bars);
             assert_eq!(formations.len(), 1, "{label}");
             let found_at = match kind {
-                Rectangle => 23,
+                Rectangle | AscendingTriangle | DescendingTriangle => 23,
                 DoubleTop => 18,
                 CupAndHandle => 33,
                 _ => 28,
@@ -2153,6 +2232,106 @@ mod tests {
                 target.label.as_deref(),
                 Some(format!("Bull Flag\nTarget 154.60\n{status}").as_str())
             );
+        }
+        for (kind, anchors, projections, breakout_target) in [
+            (FormationKind::Rectangle, RECTANGLE, [121.15, 90.4], 121.2),
+            (
+                FormationKind::SymmetricalTriangle,
+                [106.0, 112.0, 100.0, 109.0, 103.0, 105.0],
+                [120.1, 90.4],
+                119.8,
+            ),
+        ] {
+            for bearish in [false, true] {
+                let prices = if bearish {
+                    mirror(&anchors)
+                } else {
+                    anchors.to_vec()
+                };
+                let mut bars = path(&prices)[..24].to_vec();
+                let close = if bearish { 145.0 } else { 115.0 };
+                bars.push(Bar::new(
+                    bars[23].time + chrono::TimeDelta::minutes(1),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.0,
+                ));
+                for patterns in 0..4 {
+                    for targets in 0..4 {
+                        let mut study = ChartPatterns::only(kind);
+                        study
+                            .set_input("pattern_filter", InputValue::Choice(patterns))
+                            .unwrap();
+                        study
+                            .set_input("price_targets", InputValue::Choice(targets))
+                            .unwrap();
+                        study.calculate(&bars[..24]);
+                        let formation = study.formations().remove(0);
+                        assert_eq!(formation.status, FormationStatus::Developing);
+                        assert_eq!(formation.direction, None);
+                        let projected: Vec<_> = study
+                            .drawings()
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| study.drawing_plot(*i) == Some(3))
+                            .map(|(_, drawing)| drawing)
+                            .collect();
+                        assert_eq!(
+                            projected.len(),
+                            if targets == 3 { 0 } else { 2 },
+                            "{kind:?} {bearish} {patterns} {targets}"
+                        );
+                        let prices = if bearish {
+                            [260.0 - projections[1], 260.0 - projections[0]]
+                        } else {
+                            projections
+                        };
+                        for (drawing, price) in projected.iter().zip(prices) {
+                            for (point, bar) in drawing.chart_points.iter().zip([20.0, 23.0]) {
+                                assert_eq!(point.bar_idx, bar);
+                                assert!((point.price - price).abs() < 1e-9);
+                            }
+                            assert_eq!(drawing.text.as_deref(), Some("Target"));
+                            assert_eq!(
+                                drawing.text_color,
+                                Some(palette::WARM_ORANGE.to_srgba_unmultiplied())
+                            );
+                            assert_eq!(drawing.line_style, crate::model::LineStyle::Dotted);
+                            assert_eq!(
+                                drawing.label.as_deref(),
+                                Some(
+                                    format!("{}\nTarget {price:.2}\nAwaiting", kind.label())
+                                        .as_str()
+                                )
+                            );
+                        }
+                        study.update(&bars, 24);
+                        let formation = study.formations().remove(0);
+                        assert_eq!(formation.status, FormationStatus::Awaiting);
+                        assert_eq!(formation.confirmed_at, Some(24));
+                        let target: Vec<_> = study
+                            .drawings()
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| study.drawing_plot(*i) == Some(3))
+                            .map(|(_, drawing)| drawing)
+                            .collect();
+                        assert_eq!(target.len(), usize::from(targets != 3));
+                        if let Some(drawing) = target.first() {
+                            let price = if bearish {
+                                260.0 - breakout_target
+                            } else {
+                                breakout_target
+                            };
+                            assert_eq!(drawing.chart_points[0].bar_idx, 24.0);
+                            assert!((drawing.chart_points[0].price - price).abs() < 1e-9);
+                            assert_eq!(drawing.chart_points[1], drawing.chart_points[0]);
+                        }
+                    }
+                }
+            }
         }
     }
 
