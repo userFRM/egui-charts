@@ -143,7 +143,11 @@ impl Confetti {
 /// of a colour font keep their own colours.
 fn paint_emoji(painter: &egui::Painter, index: usize, center: Pos2, tilt: f32) {
     let (emoji, tint) = MIX[index];
-    let galley = painter.layout_no_wrap(emoji.to_owned(), egui::FontId::proportional(SIZE), tint);
+    let galley = painter.layout_no_wrap(
+        emoji.to_owned(),
+        crate::drawings::glyphs::font_id(painter.ctx(), emoji, SIZE),
+        tint,
+    );
     let min = center - galley.rect.center().to_vec2();
     painter.add(
         egui::epaint::TextShape::new(min, galley, tint)
@@ -190,8 +194,8 @@ mod tests {
     use std::time::Duration;
 
     /// What a frame painted and asked for: the centres of the emoji, the vertex bounds of each
-    /// mesh, the cursor and the repaint delay.
-    type Painted = (Vec<Pos2>, Vec<Rect>, CursorIcon, Duration);
+    /// mesh, the cursor, the repaint delay and how many emoji were drawn in colour.
+    type Painted = (Vec<Pos2>, Vec<Rect>, CursorIcon, Duration, usize);
 
     /// Runs one frame of `chart` at `time` seconds with `events` on an 800x600 screen.
     fn step(ctx: &Context, chart: &mut Chart, time: f64, events: Vec<Event>) -> Painted {
@@ -206,30 +210,39 @@ mod tests {
                 chart.show(ui);
             });
         });
-        fn collect(shape: &Shape, emoji: &mut Vec<Pos2>, meshes: &mut Vec<Rect>) {
+        fn collect(
+            shape: &Shape,
+            emoji: &mut Vec<Pos2>,
+            meshes: &mut Vec<Rect>,
+            color: &mut usize,
+        ) {
             match shape {
-                Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, emoji, meshes)),
-                Shape::Text(text) if MIX.iter().any(|(e, _)| text.galley.text() == *e) => emoji
-                    .push(
+                Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, emoji, meshes, color)),
+                Shape::Text(text) if MIX.iter().any(|(e, _)| text.galley.text() == *e) => {
+                    emoji.push(
                         text.pos
                             + egui::emath::Rot2::from_angle(text.angle)
                                 * text.galley.rect.center().to_vec2(),
-                    ),
+                    );
+                    let rows = text.galley.rows.iter();
+                    *color += usize::from(rows.flat_map(|r| &r.glyphs).any(|g| g.is_color));
+                }
                 Shape::Mesh(mesh) => meshes.push(Rect::from_points(
                     &mesh.vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
                 )),
                 _ => {}
             }
         }
-        let (mut emoji, mut meshes) = (Vec::new(), Vec::new());
+        let (mut emoji, mut meshes, mut color) = (Vec::new(), Vec::new(), 0);
         for clipped in std::mem::take(&mut output.shapes) {
-            collect(&clipped.shape, &mut emoji, &mut meshes);
+            collect(&clipped.shape, &mut emoji, &mut meshes, &mut color);
         }
         let painted = (
             emoji,
             meshes,
             output.platform_output.cursor_icon,
             output.viewport_output[&ViewportId::ROOT].repaint_delay,
+            color,
         );
         output.drop_without_applying_deltas();
         painted
@@ -268,7 +281,7 @@ mod tests {
 
         // Hover is hit-tested against the widgets of the previous frame.
         step(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(tip)]);
-        let (emoji, meshes, cursor, _) =
+        let (emoji, meshes, cursor, _, _) =
             step(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(tip)]);
         assert_eq!((emoji.len(), cursor), (0, CursorIcon::None));
         // The wand's outline, 24 by 5 points from the tip, turned 45 degrees about it.
@@ -303,8 +316,11 @@ mod tests {
             (3.55, -290.23..=-62.24, 217.43),
             (5.05, 34.74..=327.47, 482.88),
         ] {
-            let (emoji, _, _, delay) = step(&ctx, &mut chart, time, vec![]);
+            let (emoji, _, _, delay, color) = step(&ctx, &mut chart, time, vec![]);
             assert_eq!((emoji.len(), delay), (40, Duration::ZERO), "at {time}");
+            // The colour emoji font, installed by the first burst, draws them in colour.
+            let colored = if cfg!(feature = "color-emoji") { 40 } else { 0 };
+            assert_eq!(color, colored, "at {time}");
             for c in &emoji {
                 let (x, y) = (c.x - tip.x, c.y - tip.y);
                 assert!(
