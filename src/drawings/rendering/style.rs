@@ -497,6 +497,33 @@ impl Drawing {
             }
             return;
         }
+        if matches!(self.tool_type, T::Curve | T::DoubleCurve | T::Brush) {
+            // On the painted ends, pointing the way the curve or stroke leaves each one.
+            let ends = match self.tool_type {
+                T::Curve => self.curve_controls().and_then(|[p0, p1, p2]| {
+                    self.curve_ends(super::shapes::quadratic_controls(p0, p1, p2), rect)
+                }),
+                T::DoubleCurve => self
+                    .double_curve_controls()
+                    .and_then(|controls| self.curve_ends(controls, rect)),
+                _ => {
+                    // The stroke leaves each end along the chord to its neighbouring sample.
+                    let samples = self.brush_samples();
+                    let n = samples.len();
+                    (n >= 2).then(|| {
+                        [
+                            (samples[0], samples[0] - samples[1]),
+                            (samples[n - 1], samples[n - 1] - samples[n - 2]),
+                        ]
+                    })
+                }
+            };
+            if let Some([(start, start_direction), (end, end_direction)]) = ends {
+                self.render_marker(painter, start, start_direction, self.arrow_start_style);
+                self.render_marker(painter, end, end_direction, self.arrow_end_style);
+            }
+            return;
+        }
         let ends = match self.tool_type {
             T::TrendLine | T::InfoLine | T::TrendAngle | T::Ray | T::ExtendedLine | T::Arrow => {
                 self.trend_line_ends(rect).map(|(a, b)| [a, b])

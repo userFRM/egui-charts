@@ -259,9 +259,9 @@ impl Drawing {
         }
     }
 
-    /// Samples the curve, continuing extended ends along their nearest distinct control's
-    /// tangent to the pane edge. Left passes the first anchor and Right the last, in either
-    /// drawing direction. Non-finite controls give an empty path.
+    /// Samples the curve, continuing extended ends to the ends [`Self::curve_ends`] gives. Left
+    /// passes the first anchor and Right the last, in either drawing direction. Non-finite
+    /// controls give an empty path.
     pub(super) fn extended_curve(
         &self,
         controls: [Pos2; 4],
@@ -273,25 +273,60 @@ impl Drawing {
         if points.is_empty() {
             return points;
         }
-        let [a, b, c, d] = controls;
-        let apart = |p: Pos2, end: Pos2| (end - p).abs().max_elem() > 1e-6;
-        if self.extend_left
-            && let Some(p) = [b, c, d].into_iter().find(|&p| apart(p, a))
-        {
-            let edge = super::lines::ray_end(p, a, rect);
-            if edge != a {
-                points.insert(0, edge);
+        if let Some([(start, _), (end, _)]) = self.curve_ends(controls, rect) {
+            if start != controls[0] {
+                points.insert(0, start);
             }
-        }
-        if self.extend_right
-            && let Some(p) = [c, b, a].into_iter().find(|&p| apart(p, d))
-        {
-            let edge = super::lines::ray_end(p, d, rect);
-            if edge != d {
-                points.push(edge);
+            if end != controls[3] {
+                points.push(end);
             }
         }
         points
+    }
+
+    /// Where each end of the curve with `controls` is painted, start then end, with the direction
+    /// the curve leaves it in: the first and last control, or with Extend left or right the point
+    /// where the tangent at that end leaves the pane, through whichever edge it meets first. The
+    /// tangent runs from the nearest control apart from the end; where every control coincides
+    /// there is none, and that end keeps its control and a zero direction. `None` when a control
+    /// is not finite.
+    pub(super) fn curve_ends(
+        &self,
+        controls: [Pos2; 4],
+        rect: Rect,
+    ) -> Option<[(Pos2, egui::Vec2); 2]> {
+        if controls.iter().any(|p| !p.is_finite()) {
+            return None;
+        }
+        let [a, b, c, d] = controls;
+        let apart = |p: Pos2, end: Pos2| (end - p).abs().max_elem() > 1e-6;
+        // How far along `step` from `from` the edge ahead lies; a steep tangent meets the top or
+        // bottom edge before a side one, and the line end marker must sit in the pane.
+        let reach = |from: f32, step: f32, min: f32, max: f32| match step {
+            step if step > 1e-6 => (max - from) / step,
+            step if step < -1e-6 => (min - from) / step,
+            _ => f32::INFINITY,
+        };
+        let end = |end: Pos2, others: [Pos2; 3], extend: bool| {
+            others
+                .into_iter()
+                .find(|&p| apart(p, end))
+                .map_or((end, egui::Vec2::ZERO), |p| {
+                    let along = end - p;
+                    let edge = reach(p.x, along.x, rect.min.x, rect.max.x)
+                        .min(reach(p.y, along.y, rect.min.y, rect.max.y));
+                    let tip = if extend {
+                        p + along * edge.max(1.0)
+                    } else {
+                        end
+                    };
+                    (tip, along)
+                })
+        };
+        Some([
+            end(a, [b, c, d], self.extend_left),
+            end(d, [c, b, a], self.extend_right),
+        ])
     }
 
     /// The curve's start, control and end points: the control point is the
@@ -423,14 +458,22 @@ fn bezier_points(controls: [Pos2; 4], clip: Rect, ppp: f32) -> Vec<Pos2> {
 }
 
 impl Drawing {
-    /// Centripetal Catmull-Rom interpolation of the recorded samples. Repeated samples
-    /// have no span; reflected endpoints give the first and last spans finite tangents.
-    pub(super) fn brush_points(&self, clip: Rect, ppp: f32) -> Vec<Pos2> {
-        let mut samples = self.points.clone();
-        if samples.iter().any(|p| !p.is_finite()) {
+    /// The samples a brush or highlighter stroke passes through: the recorded points without
+    /// repeats. Empty when a point is not finite.
+    pub(super) fn brush_samples(&self) -> Vec<Pos2> {
+        if self.points.iter().any(|p| !p.is_finite()) {
             return Vec::new();
         }
+        let mut samples = self.points.clone();
         samples.dedup();
+        samples
+    }
+
+    /// Centripetal Catmull-Rom interpolation of [`Self::brush_samples`], which hold no repeats
+    /// to give a span no length; reflected endpoints give the first and last spans finite
+    /// tangents.
+    pub(super) fn brush_points(&self, clip: Rect, ppp: f32) -> Vec<Pos2> {
+        let samples = self.brush_samples();
         let mut points = Vec::new();
         for i in 0..samples.len().saturating_sub(1) {
             let (a, b) = (samples[i], samples[i + 1]);
@@ -613,6 +656,139 @@ mod tests {
                 drawing.extend_left = false;
                 drawing.extend_right = false;
                 assert_eq!(hit_test(click, &[drawing], "1m"), None);
+            }
+        }
+    }
+
+    /// Line ends sit on the painted ends of a curve, double curve or brush and point the way it
+    /// leaves them. The quadratic curve pulled towards (200, 100) has cubic controls
+    /// (166.667, 116.667) and (233.333, 116.667), so it leaves (300, 150) at slope 1/2 and,
+    /// extended right, meets x = 500 at y = 250. A double curve whose second anchor is its first
+    /// leaves that anchor along the third, at slope -1/3, and extended left meets x = 0 at
+    /// y = 183.333. The steep curve pulled towards (150, 50) leaves (100, 250) along
+    /// (-33.333, 133.333) from its control (133.333, 116.667), so extended left it meets the
+    /// bottom edge, y = 400, at x = 62.5, long before x = 0. A brush leaves each end along the
+    /// chord to its neighbouring sample, a repeated last sample counting once.
+    #[test]
+    fn curve_and_brush_end_markers_follow_the_end_tangents() {
+        use crate::drawings::ArrowStyle;
+        use DrawingToolType as T;
+        fn markers(shapes: &[Shape], fill: Color32, found: &mut Vec<(Pos2, egui::Vec2)>) {
+            for shape in shapes {
+                match shape {
+                    Shape::Vec(shapes) => markers(shapes, fill, found),
+                    Shape::Path(path)
+                        if path.closed && path.points.len() == 3 && path.fill == fill =>
+                    {
+                        let [tip, left, right] = [path.points[0], path.points[1], path.points[2]];
+                        found.push((tip, (tip - left.lerp(right, 0.5)).normalized()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        use std::f32::consts::FRAC_1_SQRT_2;
+        let (curve, diagonal) = ((0.894427, 0.447214), (FRAC_1_SQRT_2, FRAC_1_SQRT_2));
+        let steep = (0.242536, 0.970143);
+        let brush = vec![
+            (100.0, 100.0),
+            (150.0, 120.0),
+            (200.0, 100.0),
+            (250.0, 140.0),
+        ];
+        let brush_ends = (
+            ((100.0, 100.0), (-0.928477, -0.371391)),
+            ((250.0, 140.0), (0.780869, 0.624695)),
+        );
+        let mut repeated = brush.clone();
+        repeated.push((250.0, 140.0));
+        for (tool, anchors, left, right, (start, end)) in [
+            (
+                T::Curve,
+                vec![(100.0, 150.0), (200.0, 100.0), (300.0, 150.0)],
+                false,
+                false,
+                (
+                    ((100.0, 150.0), (-curve.0, curve.1)),
+                    ((300.0, 150.0), curve),
+                ),
+            ),
+            (
+                T::Curve,
+                vec![(100.0, 150.0), (200.0, 100.0), (300.0, 150.0)],
+                false,
+                true,
+                (
+                    ((100.0, 150.0), (-curve.0, curve.1)),
+                    ((500.0, 250.0), curve),
+                ),
+            ),
+            (
+                T::Curve,
+                vec![(100.0, 250.0), (150.0, 50.0), (200.0, 250.0)],
+                true,
+                false,
+                (
+                    ((62.5, 400.0), (-steep.0, steep.1)),
+                    ((200.0, 250.0), steep),
+                ),
+            ),
+            (
+                T::DoubleCurve,
+                vec![
+                    (100.0, 150.0),
+                    (150.0, 100.0),
+                    (250.0, 100.0),
+                    (300.0, 150.0),
+                ],
+                false,
+                false,
+                (
+                    ((100.0, 150.0), (-diagonal.0, diagonal.1)),
+                    ((300.0, 150.0), diagonal),
+                ),
+            ),
+            (
+                T::DoubleCurve,
+                vec![
+                    (100.0, 150.0),
+                    (100.0, 150.0),
+                    (250.0, 100.0),
+                    (300.0, 150.0),
+                ],
+                true,
+                false,
+                (
+                    ((0.0, 183.33333), (-0.948683, 0.316228)),
+                    ((300.0, 150.0), diagonal),
+                ),
+            ),
+            (T::Brush, brush, false, false, brush_ends),
+            (T::Brush, repeated, false, false, brush_ends),
+        ] {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = anchors.into_iter().map(Pos2::from).collect();
+            drawing.completed = true;
+            (drawing.extend_left, drawing.extend_right) = (left, right);
+            (drawing.arrow_start_style, drawing.arrow_end_style) =
+                (ArrowStyle::Arrow, ArrowStyle::Arrow);
+            // The stored colour, not its shade on the default dark theme.
+            drawing.theme_shade = false;
+            let mut found = Vec::new();
+            markers(
+                &super::super::tests::paint(&drawing),
+                drawing.color32(),
+                &mut found,
+            );
+            assert_eq!(found.len(), 2, "{tool:?} {left} {right}: {found:?}");
+            for ((tip, direction), (want_tip, want_direction)) in
+                found.into_iter().zip([start, end])
+            {
+                assert!(
+                    tip.distance(want_tip.into()) < 1e-3
+                        && (direction - egui::Vec2::from(want_direction)).length() < 1e-4,
+                    "{tool:?} {left} {right}: {tip:?} {direction:?}"
+                );
             }
         }
     }
