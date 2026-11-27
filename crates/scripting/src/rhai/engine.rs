@@ -918,9 +918,11 @@ pub(crate) fn engine() -> Engine {
     // Rhai's count restarts in each callback of a function such as `filter`, from a copy it then
     // drops, so the run counts the calls itself.
     engine.on_progress(|_| {
-        runtime::with(runtime::Run::operation)
-            .unwrap_or(false)
-            .then_some(::rhai::Dynamic::UNIT)
+        if runtime::operation() {
+            Some(::rhai::Dynamic::UNIT)
+        } else {
+            None
+        }
     });
     // The values of the running scope are counted at a variable read, where they are in reach.
     // Rhai marks `on_var` as an interface that may change, through a deprecation note.
