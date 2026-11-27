@@ -13,8 +13,8 @@ use super::{AlertDialogAction, AlertDialogConfig};
 use crate::data::inbox::Inbox;
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency,
-    AlertPositionProgress, AlertRule, AlertSource, AlertSourceName, NotificationSchedule,
-    NotificationWindow, StrategyEvents, Timeframe, TimezoneId,
+    AlertPositionProgress, AlertRule, AlertSource, AlertSourceName, FootprintCondition,
+    NotificationSchedule, NotificationWindow, StrategyEvents, Timeframe, TimezoneId,
 };
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
@@ -62,6 +62,10 @@ pub struct AlertDialog {
     /// assert_eq!(dialog.strategy_runs[0].0, "run-7");
     /// ```
     pub strategy_runs: Vec<(String, String)>,
+    /// Whether the host feeds `OrderFlowDetectors::take_footprint_events` to
+    /// `AlertEngine::footprint_events`. Only then is Footprint offered; an existing footprint
+    /// alert shows its condition either way.
+    pub footprint_conditions: bool,
     /// The zone the expiry date and time are entered in, UTC by default. Set it before
     /// [`open`](Self::open) or [`edit`](Self::edit), usually to the chart's time zone.
     pub timezone: TimezoneId,
@@ -120,6 +124,7 @@ impl std::fmt::Debug for AlertDialog {
             .field("sources", &self.sources)
             .field("watchlists", &self.watchlists)
             .field("strategy_runs", &self.strategy_runs)
+            .field("footprint_conditions", &self.footprint_conditions)
             .field("timezone", &self.timezone)
             .field("account_timezone", &self.account_timezone)
             .field("starts", &self.starts)
@@ -162,6 +167,7 @@ impl AlertDialog {
             sources: Vec::new(),
             watchlists: Vec::new(),
             strategy_runs: Vec::new(),
+            footprint_conditions: false,
             timezone: TimezoneId::utc(),
             account_timezone: None,
             starts: false,
@@ -858,11 +864,7 @@ impl AlertDialog {
                         (AlertFrequency::OncePerBarClose, "Once per bar close"),
                         (AlertFrequency::OncePerMinute, "Once per minute"),
                     ] {
-                        if (self.alert.condition.is_event()
-                            && !matches!(value, AlertFrequency::Once | AlertFrequency::EveryTime))
-                            || (matches!(self.alert.condition, AlertCondition::Position { .. })
-                                && value != AlertFrequency::Once)
-                        {
+                        if !self.alert.condition.frequencies().contains(&value) {
                             continue;
                         }
                         ui.selectable_value(
@@ -1102,6 +1104,7 @@ impl AlertDialog {
         self.editing_condition = self
             .editing_condition
             .min(self.alert.additional_conditions.len());
+        let previous_default = self.alert.condition.frequencies()[0];
         ui.push_id(("rule", self.editing_condition), |ui| {
             if self.editing_condition == 0 {
                 if !events {
@@ -1122,6 +1125,7 @@ impl AlertDialog {
                     &self.sources,
                     &self.strategy_runs,
                     true,
+                    self.footprint_conditions,
                     None,
                 );
                 if matches!(self.alert.condition, AlertCondition::StrategyFills(_)) {
@@ -1163,6 +1167,7 @@ impl AlertDialog {
                     &self.sources,
                     &[],
                     false,
+                    false,
                     None,
                 );
                 if ui
@@ -1176,24 +1181,23 @@ impl AlertDialog {
         });
         let was_event = events;
         let events = self.alert.condition.is_event();
-        if events && !was_event {
-            // A newly selected host-event condition starts at its constructor's frequency.
-            self.alert.frequency = AlertFrequency::EveryTime;
+        let default_frequency = self.alert.condition.frequencies()[0];
+        if events && (!was_event || default_frequency != previous_default) {
+            // A newly selected event family starts at its constructor's frequency.
+            self.alert.frequency = default_frequency;
         }
         if events {
             self.alert.additional_conditions.clear();
             self.alert.additional_timeframes.clear();
-            if !matches!(
-                self.alert.frequency,
-                AlertFrequency::Once | AlertFrequency::EveryTime
-            ) {
-                self.alert.frequency = AlertFrequency::EveryTime;
-            }
         }
         let position = matches!(self.alert.condition, AlertCondition::Position { .. });
-        if position {
-            // A position alert ends at its exit, so it takes frequency Once.
-            self.alert.frequency = AlertFrequency::Once;
+        if !self
+            .alert
+            .condition
+            .frequencies()
+            .contains(&self.alert.frequency)
+        {
+            self.alert.frequency = self.alert.condition.frequencies()[0];
         }
         if !events
             && !position
@@ -1514,6 +1518,7 @@ pub(crate) fn rule_form(
     sources: &[(AlertSource, AlertSourceName)],
     runs: &[(String, String)],
     offer_position: bool,
+    offer_footprint: bool,
     mut level_text: Option<&mut String>,
 ) -> bool {
     let mut level_edited = false;
@@ -1621,6 +1626,10 @@ pub(crate) fn rule_form(
         runs.first()
             .map(|(id, _)| (AlertCondition::StrategyFills(id.clone()), "Strategy fills")),
     )
+    .chain(offer_footprint.then_some((
+        AlertCondition::Footprint(FootprintCondition::BuyImbalance),
+        "Footprint",
+    )))
     .collect::<Vec<_>>();
     let selected = match condition {
         AlertCondition::MovingBy { value, .. } if value.is_sign_negative() => "Moving down",
@@ -1637,6 +1646,7 @@ pub(crate) fn rule_form(
                 AlertCondition::StrategyFills(_) => "Strategy fills",
                 AlertCondition::DetectorSignals(_) => "Detector signals",
                 AlertCondition::CustomEvents(_) => "Custom events",
+                AlertCondition::Footprint(_) => "Footprint",
                 _ => "Condition",
             }),
     };
@@ -1685,6 +1695,21 @@ pub(crate) fn rule_form(
         .accessible_name(l10n::text(ui.ctx(), "Condition"));
     ui.horizontal_wrapped(|ui| match condition {
         AlertCondition::Holds => {}
+        AlertCondition::Footprint(condition) => {
+            egui::ComboBox::from_id_salt("footprint_condition")
+                .selected_text(l10n::text(ui.ctx(), condition.to_string()))
+                .show_ui(ui, |ui| {
+                    for value in FootprintCondition::ALL {
+                        ui.selectable_value(
+                            condition,
+                            value,
+                            l10n::text(ui.ctx(), value.to_string()),
+                        );
+                    }
+                })
+                .response
+                .accessible_name(l10n::text(ui.ctx(), "Footprint condition"));
+        }
         AlertCondition::Position { progress, .. } => {
             ui.label(l10n::text(ui.ctx(), progress.to_string()));
         }
@@ -2571,6 +2596,25 @@ mod tests {
         h.run();
         h.run();
         assert_eq!(h.state().alert.frequency, AlertFrequency::Once);
+        h.state_mut().footprint_conditions = true;
+        for frequency in [AlertFrequency::Once, AlertFrequency::OncePerBar] {
+            let mut footprint = Alert::new(
+                "SAMPLE",
+                AlertCondition::Footprint(FootprintCondition::BuyImbalance),
+            );
+            footprint.frequency = frequency;
+            h.state_mut().edit(footprint);
+            h.run();
+            h.run();
+            assert_eq!(h.state().alert.frequency, frequency);
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label("Strategy fills").scroll_to_me();
+            h.run();
+            h.get_by_label("Strategy fills").click();
+            h.run();
+            assert_eq!(h.state().alert.frequency, AlertFrequency::EveryTime);
+        }
     }
 
     /// Names the chart builds keep their parts through storage, so the source list shows the

@@ -8,10 +8,12 @@
 #[cfg(feature = "widget")]
 mod checkpoint;
 mod reader;
+mod replay_point;
 mod sink;
 
 #[cfg(feature = "widget")]
 pub(crate) use checkpoint::{SinkCheckpoint, SinkCheckpointError, SinkCheckpointGuard};
+pub(crate) use replay_point::{RebuildPoint, RestoreRefused};
 pub(crate) use sink::TradeBars;
 
 pub use reader::{ReplyReader, SinkReader, SinkUpdates};
@@ -69,6 +71,7 @@ impl State {
     }
 }
 
+#[derive(Clone)]
 struct Live {
     /// A bar, quote or book push introduced state outside trade-only replay since the last reset.
     #[cfg(feature = "widget")]
@@ -98,6 +101,9 @@ struct Live {
     /// Pending bars the pending limit does not count, those of a replay rebuild until the chart
     /// drains them; `usize::MAX` while the rebuild runs.
     rebuilt_bars: usize,
+    /// Set by `start_rebuild` and cleared by any change the replay did not push: a drain, another
+    /// depth history or other connected studies. A rebuild is saved only while set.
+    rebuild_clean: bool,
     /// The trade-based grouping the queued executions continued after the last drain.
     /// `None` once a pushed bar regrouped some of them.
     queued_from: Option<TradeBars>,
@@ -106,6 +112,7 @@ struct Live {
 
 /// Ids of the trades folded into bars, as many as the trade store holds, the oldest forgotten
 /// first: a feed that replays its last trades after a reconnect must not count them twice.
+#[derive(Clone)]
 struct TakenIds {
     order: VecDeque<u64>,
     ids: HashSet<u64>,
@@ -120,6 +127,7 @@ pub(crate) struct Drained {
 }
 
 /// What one subscription pushed since the last drain.
+#[derive(Clone)]
 pub(crate) struct Updates {
     /// A replay seek discards data from the previous playback position.
     pub(crate) reset: bool,
@@ -223,6 +231,7 @@ impl Inbox {
         let mut state = self.state();
         if let Some(live) = state.subscriptions.get_mut(&id) {
             live.sampler = config.map(Sampler::new);
+            live.rebuild_clean = false;
             live.updates.depth_columns.clear();
             live.updates.replay_depth = None;
             state.changed();
@@ -236,6 +245,7 @@ impl Inbox {
         let mut state = self.state();
         if let Some(live) = state.subscriptions.get_mut(&id) {
             live.last_trade = live.last_trade.max(Some(time));
+            live.rebuild_clean = false;
             state.changed();
         }
     }
@@ -291,6 +301,7 @@ impl Inbox {
                 if live.rebuilt_bars != usize::MAX {
                     live.rebuilt_bars = 0;
                 }
+                live.rebuild_clean = false;
                 updates.depth = live.book.take_changed();
                 updates.orders_changed = std::mem::take(&mut live.orders_changed);
                 if updates.orders_changed {

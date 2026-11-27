@@ -406,7 +406,8 @@ impl AlertStudy {
 
 impl Alert {
     /// An active alert on `symbol` with no id, no expiry and no message. Frequency is `Once`
-    /// for bar conditions and `EveryTime` for strategy fills, detector signals and custom events.
+    /// for bar and footprint conditions and `EveryTime` for strategy fills, detector signals and
+    /// custom events.
     pub fn new(symbol: impl Into<String>, condition: AlertCondition) -> Self {
         Self {
             id: None,
@@ -423,11 +424,7 @@ impl Alert {
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
             additional_timeframes: Vec::new(),
-            frequency: if condition.is_event() {
-                AlertFrequency::EveryTime
-            } else {
-                AlertFrequency::default()
-            },
+            frequency: condition.frequencies()[0],
             condition,
             starts: None,
             expires: None,
@@ -714,6 +711,13 @@ pub enum AlertCondition {
     /// with the same source name; `AlertEngine` saves the alert only once the host connects that
     /// source. Same source, rules and frequencies as `StrategyFills`.
     CustomEvents(String),
+    /// A live footprint condition from the host's order-flow detectors. Feed
+    /// `OrderFlowDetectors::take_footprint_events` to `AlertEngine::footprint_events`.
+    /// At `Once` (the constructor default), fires at the execution that first meets the
+    /// condition and ends; at `OncePerBar`, does so on every bar; at `OncePerBarClose`, fires
+    /// when a bar closes meeting it. Uses the price source and no additional rules. No bars
+    /// evaluate it.
+    Footprint(FootprintCondition),
     /// Crossing up or crossing down, as [`CrossingUp`](Self::CrossingUp) and
     /// [`CrossingDown`](Self::CrossingDown) define them. One evaluation fires once, also when it
     /// reads both.
@@ -1173,8 +1177,32 @@ impl AlertCondition {
     pub(crate) fn is_event(&self) -> bool {
         matches!(
             self,
-            Self::StrategyFills(_) | Self::DetectorSignals(_) | Self::CustomEvents(_)
+            Self::StrategyFills(_)
+                | Self::DetectorSignals(_)
+                | Self::CustomEvents(_)
+                | Self::Footprint(_)
         )
+    }
+
+    /// Allowed frequencies, starting with the constructor default: `EveryTime` for strategy
+    /// fills, detector signals and custom events; `Once` for footprint, position and bar
+    /// conditions. Footprints also take per-bar frequencies, positions only `Once`.
+    pub(crate) fn frequencies(&self) -> &'static [AlertFrequency] {
+        use AlertFrequency as F;
+        match self {
+            Self::StrategyFills(_) | Self::DetectorSignals(_) | Self::CustomEvents(_) => {
+                &[F::EveryTime, F::Once]
+            }
+            Self::Footprint(_) => &[F::Once, F::OncePerBar, F::OncePerBarClose],
+            Self::Position { .. } => &[F::Once],
+            _ => &[
+                F::Once,
+                F::EveryTime,
+                F::OncePerBar,
+                F::OncePerBarClose,
+                F::OncePerMinute,
+            ],
+        }
     }
 
     /// A declared study condition takes only `Holds`, which tests nothing else.
@@ -1185,7 +1213,7 @@ impl AlertCondition {
     /// Whether levels are finite and ordered, lookbacks positive, and referenced ids nonempty.
     pub fn is_valid(&self) -> bool {
         match self {
-            Self::Holds => true,
+            Self::Holds | Self::Footprint(_) => true,
             Self::StrategyFills(name) | Self::DetectorSignals(name) | Self::CustomEvents(name) => {
                 !name.trim().is_empty()
             }
@@ -1240,6 +1268,7 @@ impl std::fmt::Display for AlertCondition {
             Self::StrategyFills(run) => write!(f, "Fills of strategy {run}"),
             Self::DetectorSignals(detector) => write!(f, "Signals of detector {detector}"),
             Self::CustomEvents(source) => write!(f, "Events of {source}"),
+            Self::Footprint(condition) => write!(f, "Footprint: {condition}"),
             Self::Crossing(v) => write!(f, "Crossing {v}"),
             Self::CrossingUp(v) => write!(f, "Crossing up {v}"),
             Self::CrossingDown(v) => write!(f, "Crossing down {v}"),
@@ -1291,12 +1320,8 @@ impl Alert {
                 .as_ref()
                 .is_none_or(|id| !id.trim().is_empty())
             && (!self.condition.is_event()
-                || (self.source == AlertSource::Price
-                    && self.additional_conditions.is_empty()
-                    && matches!(
-                        self.frequency,
-                        AlertFrequency::EveryTime | AlertFrequency::Once
-                    )))
+                || (self.source == AlertSource::Price && self.additional_conditions.is_empty()))
+            && self.condition.frequencies().contains(&self.frequency)
             && self.additional_conditions.iter().all(|rule| {
                 !rule.condition.is_event()
                     && !matches!(rule.condition, AlertCondition::Position { .. })
@@ -1530,6 +1555,70 @@ impl CustomAlertEvent {
     }
 }
 
+/// An imbalance on the rows of the host's order-flow detectors, using their footprint rule's
+/// ratio, comparison, minimum volume, stack and row size. `FootprintRule::follow_chart` copies
+/// these settings from a chart for an [`AlertCondition::Footprint`] alert.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum FootprintCondition {
+    /// A row where buying dominates.
+    BuyImbalance,
+    /// A row where selling dominates.
+    SellImbalance,
+    /// At least the rule's stack of adjacent rows where buying dominates.
+    StackedBuyImbalance,
+    /// At least the rule's stack of adjacent rows where selling dominates.
+    StackedSellImbalance,
+}
+
+impl FootprintCondition {
+    /// Every condition, in the order the alert dialog lists them.
+    pub const ALL: [Self; 4] = [
+        Self::BuyImbalance,
+        Self::SellImbalance,
+        Self::StackedBuyImbalance,
+        Self::StackedSellImbalance,
+    ];
+}
+
+impl std::fmt::Display for FootprintCondition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BuyImbalance => "Buy imbalance",
+            Self::SellImbalance => "Sell imbalance",
+            Self::StackedBuyImbalance => "Stacked buy imbalance",
+            Self::StackedSellImbalance => "Stacked sell imbalance",
+        })
+    }
+}
+
+/// A footprint condition met by a live bar, drained by
+/// `OrderFlowDetectors::take_footprint_events` and delivered to [`AlertCondition::Footprint`]
+/// alerts by `AlertEngine::footprint_events`.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct FootprintAlertEvent {
+    /// The symbol of the bar.
+    pub symbol: String,
+    /// Its exchange, when the tracked instrument names one.
+    pub exchange: Option<String>,
+    /// The detectors' latest subscribed interval of this symbol.
+    pub timeframe: Timeframe,
+    /// The condition met.
+    pub condition: FootprintCondition,
+    /// Open time of the bar.
+    pub bar: DateTime<Utc>,
+    /// Whether the closed bar meets the condition; otherwise the forming bar first met it at
+    /// the execution at `time` and `price`.
+    pub closed: bool,
+    /// Feed time of that execution, or of the event that closed the bar.
+    pub time: DateTime<Utc>,
+    /// Price of that execution, or the closed bar's close.
+    pub price: f64,
+    /// Text shown when the alert has no message, such as `Stacked buy imbalance of 3 rows`.
+    pub message: String,
+}
+
 /// Where an alert stands. The host sets it; the library only shows it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -1748,7 +1837,34 @@ mod tests {
             a.delivery.plain_text = true;
             a.delivery.plain_text_address = address.into();
         }
-        let rows: [(Edit, bool); 58] = [
+        fn footprint(a: &mut Alert, frequency: AlertFrequency) {
+            a.condition = serde_json::from_str(r#"{"Footprint":"StackedBuyImbalance"}"#).unwrap();
+            a.frequency = frequency;
+        }
+        assert_eq!(
+            Alert::new(
+                "ES",
+                AlertCondition::Footprint(FootprintCondition::StackedBuyImbalance)
+            )
+            .frequency,
+            AlertFrequency::Once
+        );
+        let rows: [(Edit, bool); 64] = [
+            (|a| footprint(a, AlertFrequency::Once), true),
+            (|a| footprint(a, AlertFrequency::OncePerBar), true),
+            (|a| footprint(a, AlertFrequency::OncePerBarClose), true),
+            (|a| footprint(a, AlertFrequency::EveryTime), false),
+            (|a| footprint(a, AlertFrequency::OncePerMinute), false),
+            (
+                |a| {
+                    footprint(a, AlertFrequency::Once);
+                    a.additional_conditions.push(AlertRule::new(
+                        AlertSource::Price,
+                        AlertCondition::Above(1.0),
+                    ));
+                },
+                false,
+            ),
             (
                 |a| {
                     a.source = AlertSource::StudyCondition {

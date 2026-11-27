@@ -9,7 +9,8 @@ use super::{AlertEvent, Alerts, Events};
 use crate::data::{FeedError, MaybeSend, Reply};
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertId,
-    AlertPositionProgress, AlertSource, AlertStatus, AlertTrigger, Bar, BarClock, Timeframe,
+    AlertPositionProgress, AlertSource, AlertStatus, AlertTrigger, Bar, BarClock,
+    FootprintAlertEvent, Timeframe,
 };
 
 /// Triggers the engine keeps for [`AlertEngine::triggers`], silent entries included.
@@ -707,86 +708,94 @@ impl AlertEngine {
         now: DateTime<Utc>,
     ) {
         use crate::model::{StrategyEvents, StrategyReport};
-        let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
-        self.fire_events(symbol, exchange, timeframe, now, watches, |alert, seen| {
-            fills
-                .iter()
-                .filter_map(|fill| {
-                    if fill.sequence <= seen.last_sequence
-                        || !fill.price.is_finite()
-                        || !fill.quantity.is_finite()
-                        || fill.quantity <= 0.0
-                        || !fill.position.is_finite()
-                    {
-                        return None;
-                    }
-                    seen.last_sequence = fill.sequence;
-                    // Advance excluded fills too, so changing the choice cannot replay them.
-                    if alert.strategy_events == StrategyEvents::Alerts {
-                        return None;
-                    }
-                    let side = match fill.side {
-                        crate::model::OrderSide::Buy => "Buy",
-                        crate::model::OrderSide::Sell => "Sell",
-                    };
-                    let signed = match fill.side {
-                        crate::model::OrderSide::Buy => fill.quantity,
-                        crate::model::OrderSide::Sell => -fill.quantity,
-                    };
-                    let market = |position: f64| {
-                        let direction = if position > 0.0 {
-                            "long"
-                        } else if position < 0.0 {
-                            "short"
-                        } else {
-                            "flat"
+        let watches = |alert: &Alert| matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run);
+        self.fire_events(
+            symbol,
+            exchange,
+            timeframe,
+            now,
+            watches,
+            |alert, seen, _| {
+                fills
+                    .iter()
+                    .filter_map(|fill| {
+                        if fill.sequence <= seen.last_sequence
+                            || !fill.price.is_finite()
+                            || !fill.quantity.is_finite()
+                            || fill.quantity <= 0.0
+                            || !fill.position.is_finite()
+                        {
+                            return None;
+                        }
+                        seen.last_sequence = fill.sequence;
+                        // Advance excluded fills too, so changing the choice cannot replay them.
+                        if alert.strategy_events == StrategyEvents::Alerts {
+                            return None;
+                        }
+                        let side = match fill.side {
+                            crate::model::OrderSide::Buy => "Buy",
+                            crate::model::OrderSide::Sell => "Sell",
                         };
-                        (
-                            direction.to_owned(),
-                            StrategyReport::quantity_text(position.abs()),
-                        )
-                    };
-                    let (after, after_size) = market(fill.position);
-                    let (before, before_size) = market(fill.position - signed);
-                    let quantity = StrategyReport::quantity_text(fill.quantity);
-                    let position = StrategyReport::quantity_text(fill.position);
-                    let price = StrategyReport::price_text_with(fill.price, fill.price_decimals);
-                    Some(Occurrence {
-                        time: fill.time,
-                        price: Some(fill.price),
-                        shown_price: Some(StrategyReport::without_rounding_digits(fill.price)),
-                        fields: vec![
-                            ("order_id", fill.order_id.clone()),
-                            ("side", side.into()),
-                            ("quantity", quantity.clone()),
-                            ("position", position.clone()),
-                            ("market_position", after),
-                            ("market_position_size", after_size),
-                            ("prev_market_position", before),
-                            ("prev_market_position_size", before_size),
+                        let signed = match fill.side {
+                            crate::model::OrderSide::Buy => fill.quantity,
+                            crate::model::OrderSide::Sell => -fill.quantity,
+                        };
+                        let market = |position: f64| {
+                            let direction = if position > 0.0 {
+                                "long"
+                            } else if position < 0.0 {
+                                "short"
+                            } else {
+                                "flat"
+                            };
                             (
-                                "comment",
-                                fill.comment
-                                    .clone()
-                                    .filter(|comment| !comment.is_empty())
-                                    .unwrap_or_else(|| fill.order_id.clone()),
-                            ),
-                            (
-                                "alert_message",
-                                fill.alert_message.clone().unwrap_or_default(),
-                            ),
-                        ],
-                        message: fill
-                            .alert_message
-                            .clone()
-                            .filter(|message| !message.is_empty())
-                            .unwrap_or_else(|| {
-                                format!("{side} {quantity} at {price}, position {position}")
-                            }),
+                                direction.to_owned(),
+                                StrategyReport::quantity_text(position.abs()),
+                            )
+                        };
+                        let (after, after_size) = market(fill.position);
+                        let (before, before_size) = market(fill.position - signed);
+                        let quantity = StrategyReport::quantity_text(fill.quantity);
+                        let position = StrategyReport::quantity_text(fill.position);
+                        let price =
+                            StrategyReport::price_text_with(fill.price, fill.price_decimals);
+                        Some(Occurrence {
+                            time: fill.time,
+                            price: Some(fill.price),
+                            shown_price: Some(StrategyReport::without_rounding_digits(fill.price)),
+                            fields: vec![
+                                ("order_id", fill.order_id.clone()),
+                                ("side", side.into()),
+                                ("quantity", quantity.clone()),
+                                ("position", position.clone()),
+                                ("market_position", after),
+                                ("market_position_size", after_size),
+                                ("prev_market_position", before),
+                                ("prev_market_position_size", before_size),
+                                (
+                                    "comment",
+                                    fill.comment
+                                        .clone()
+                                        .filter(|comment| !comment.is_empty())
+                                        .unwrap_or_else(|| fill.order_id.clone()),
+                                ),
+                                (
+                                    "alert_message",
+                                    fill.alert_message.clone().unwrap_or_default(),
+                                ),
+                            ],
+                            message: fill
+                                .alert_message
+                                .clone()
+                                .filter(|message| !message.is_empty())
+                                .unwrap_or_else(|| {
+                                    format!("{side} {quantity} at {price}, position {position}")
+                                }),
+                        })
                     })
-                })
-                .collect()
-        });
+                    .collect()
+            },
+        );
     }
 
     /// Delivers each new alert of `run`, raised through `StrategyContext::alert` and read from
@@ -808,14 +817,14 @@ impl AlertEngine {
         now: DateTime<Utc>,
     ) {
         use crate::model::{StrategyEvents, StrategyReport};
-        let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::StrategyFills(id) if id == run);
+        let watches = |alert: &Alert| matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run);
         self.fire_events(
             symbol,
             exchange,
             timeframe,
             now,
             watches,
-            |watched, seen| {
+            |watched, seen, _| {
                 alerts
                     .iter()
                     .filter_map(|alert| {
@@ -876,50 +885,59 @@ impl AlertEngine {
     ) {
         use crate::model::SignalShape;
         let signals: Vec<_> = signals.into_iter().collect();
-        let watches = |condition: &AlertCondition| {
-            matches!(condition, AlertCondition::DetectorSignals(detector)
+        let watches = |alert: &Alert| {
+            matches!(&alert.condition, AlertCondition::DetectorSignals(detector)
                 if signals.iter().any(|signal| signal.category == *detector))
         };
-        self.fire_events(symbol, exchange, timeframe, now, watches, |alert, seen| {
-            let AlertCondition::DetectorSignals(detector) = &alert.condition else {
-                return Vec::new();
-            };
-            // History never moves back, or another chart's older bars would fire again the
-            // signals whose ids were dropped.
-            let from = seen.history.map_or(from, |history| history.max(from));
-            seen.history = Some(from);
-            // Signals anchored before `from` can no longer fire, so their ids are not kept.
-            seen.signals.retain(|(_, time)| *time >= from);
-            signals
-                .iter()
-                .filter(|signal| signal.category == *detector)
-                .filter_map(|signal| {
-                    let (time, price) = match signal.shape {
-                        SignalShape::Marker { time, price, .. } => (time, price),
-                        SignalShape::Level {
-                            price,
-                            from: Some(start),
-                        } => (start, Some(price)),
-                        SignalShape::Level { from: None, .. } => return None,
-                        SignalShape::PriceZone { from, price, .. } => (from, Some(price)),
-                        SignalShape::Zone { from, .. } => (from, None),
-                    };
-                    if time < from || seen.signals.iter().any(|(id, _)| *id == signal.id) {
-                        return None;
-                    }
-                    seen.signals.push((signal.id.clone(), time));
-                    let text = signal.tooltip.as_ref().or(signal.label.as_ref());
-                    Some(Occurrence {
-                        time,
-                        price: price.filter(|price| price.is_finite()),
-                        shown_price: None,
-                        fields: Vec::new(),
-                        message: text
-                            .map_or_else(|| detector.clone(), |text| format!("{detector}: {text}")),
+        self.fire_events(
+            symbol,
+            exchange,
+            timeframe,
+            now,
+            watches,
+            |alert, seen, _| {
+                let AlertCondition::DetectorSignals(detector) = &alert.condition else {
+                    return Vec::new();
+                };
+                // History never moves back, or another chart's older bars would fire again the
+                // signals whose ids were dropped.
+                let from = seen.history.map_or(from, |history| history.max(from));
+                seen.history = Some(from);
+                // Signals anchored before `from` can no longer fire, so their ids are not kept.
+                seen.signals.retain(|(_, time)| *time >= from);
+                signals
+                    .iter()
+                    .filter(|signal| signal.category == *detector)
+                    .filter_map(|signal| {
+                        let (time, price) = match signal.shape {
+                            SignalShape::Marker { time, price, .. } => (time, price),
+                            SignalShape::Level {
+                                price,
+                                from: Some(start),
+                            } => (start, Some(price)),
+                            SignalShape::Level { from: None, .. } => return None,
+                            SignalShape::PriceZone { from, price, .. } => (from, Some(price)),
+                            SignalShape::Zone { from, .. } => (from, None),
+                        };
+                        if time < from || seen.signals.iter().any(|(id, _)| *id == signal.id) {
+                            return None;
+                        }
+                        seen.signals.push((signal.id.clone(), time));
+                        let text = signal.tooltip.as_ref().or(signal.label.as_ref());
+                        Some(Occurrence {
+                            time,
+                            price: price.filter(|price| price.is_finite()),
+                            shown_price: None,
+                            fields: Vec::new(),
+                            message: text.map_or_else(
+                                || detector.clone(),
+                                |text| format!("{detector}: {text}"),
+                            ),
+                        })
                     })
-                })
-                .collect()
-        });
+                    .collect()
+            },
+        );
     }
 
     /// Connects the host's custom event source `source`, whose events the host feeds to
@@ -945,8 +963,8 @@ impl AlertEngine {
         events: &[crate::model::CustomAlertEvent],
         now: DateTime<Utc>,
     ) {
-        let watches = |condition: &AlertCondition| matches!(condition, AlertCondition::CustomEvents(name) if name == source);
-        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen| {
+        let watches = |alert: &Alert| matches!(&alert.condition, AlertCondition::CustomEvents(name) if name == source);
+        self.fire_events(symbol, exchange, timeframe, now, watches, |_, seen, _| {
             events
                 .iter()
                 .filter_map(|event| {
@@ -966,16 +984,63 @@ impl AlertEngine {
         });
     }
 
-    /// Fires the active alerts of `symbol` on `timeframe` whose condition `watches` accepts,
-    /// with the occurrences `occurrences` takes from what the alert's run has seen.
+    /// Delivers the live conditions drained by `OrderFlowDetectors::take_footprint_events` to
+    /// footprint alerts on their symbol and interval. `Once` and `OncePerBar` fire at the first
+    /// execution that meets the condition; `OncePerBarClose` fires on a closed bar that meets
+    /// it. Each alert fires at most once per bar, including duplicate events from other charts.
+    /// Triggers carry the event's time and price, and its message when the alert has none;
+    /// custom messages expand as for `strategy_fills`.
+    pub fn footprint_events(&self, events: &[FootprintAlertEvent], now: DateTime<Utc>) {
+        for event in events {
+            self.fire_events(
+                &event.symbol,
+                event.exchange.as_deref(),
+                event.timeframe,
+                now,
+                |alert| {
+                    alert.condition == AlertCondition::Footprint(event.condition)
+                        && (alert.frequency == AlertFrequency::OncePerBarClose) == event.closed
+                },
+                |_, seen, last| {
+                    // A restored run counts its saved firing only on its first delivery.
+                    if seen.fired.is_none()
+                        && last.is_some_and(|last| {
+                            if event.closed {
+                                event.time <= last
+                            } else {
+                                event.bar <= last
+                            }
+                        })
+                    {
+                        seen.fired = Some(event.bar);
+                    }
+                    if seen.fired.is_some_and(|bar| event.bar <= bar) {
+                        return Vec::new();
+                    }
+                    seen.fired = Some(event.bar);
+                    vec![Occurrence {
+                        time: event.time,
+                        price: Some(event.price).filter(|price| price.is_finite()),
+                        shown_price: None,
+                        message: event.message.clone(),
+                        fields: Vec::new(),
+                    }]
+                },
+            );
+        }
+    }
+
+    /// Fires the active alerts of `symbol` on `timeframe` whose alert `watches` accepts,
+    /// with the occurrences `occurrences` takes from what the alert's run has seen and, for a
+    /// restored alert, the symbol's saved last firing.
     fn fire_events(
         &self,
         symbol: &str,
         exchange: Option<&str>,
         timeframe: Timeframe,
         now: DateTime<Utc>,
-        watches: impl Fn(&AlertCondition) -> bool,
-        mut occurrences: impl FnMut(&Alert, &mut Run) -> Vec<Occurrence>,
+        watches: impl Fn(&Alert) -> bool,
+        mut occurrences: impl FnMut(&Alert, &mut Run, Option<DateTime<Utc>>) -> Vec<Occurrence>,
     ) {
         let mut fired = Vec::new();
         let mut state = self.lock();
@@ -986,13 +1051,14 @@ impl AlertEngine {
             events,
             watchlists,
             triggers,
+            restored,
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
             alert.status == AlertStatus::Active
                 && alert.is_valid()
                 && alert.starts.is_none_or(|starts| starts <= now)
-                && watches(&alert.condition)
+                && watches(alert)
                 && alert.timeframe.is_none_or(|own| own == timeframe)
                 && match &alert.watchlist {
                     Some(list) => watchlists
@@ -1015,7 +1081,12 @@ impl AlertEngine {
                     done,
                     ..Run::default()
                 });
-            for occurrence in occurrences(alert, seen) {
+            let last = match &alert.watchlist {
+                _ if !restored.contains(&id) => None,
+                Some(_) => alert.member_triggered_at.get(symbol).copied(),
+                None => alert.last_triggered_at,
+            };
+            for occurrence in occurrences(alert, seen, last) {
                 if seen.done {
                     continue;
                 }
@@ -1784,7 +1855,8 @@ fn condition_holds(
         AlertCondition::Holds => value != 0.0,
         AlertCondition::StrategyFills(_)
         | AlertCondition::DetectorSignals(_)
-        | AlertCondition::CustomEvents(_) => false,
+        | AlertCondition::CustomEvents(_)
+        | AlertCondition::Footprint(_) => false,
         AlertCondition::Crossing(level) => compare(
             AlertComparison::Crossing,
             traded,
@@ -2589,6 +2661,79 @@ mod tests {
             })
             .collect();
         assert_eq!(symbols, ["OTHER"]);
+    }
+
+    #[test]
+    fn restored_footprint_alerts_count_each_symbols_last_firing() {
+        use crate::model::FootprintCondition::{StackedBuyImbalance, StackedSellImbalance};
+        use AlertFrequency::{OncePerBar, OncePerBarClose};
+
+        for (frequency, last, open, at, covered) in [
+            (OncePerBar, 65, 60, 70, true),
+            (OncePerBar, 65, 120, 125, false),
+            (OncePerBarClose, 120, 60, 120, true),
+            (OncePerBarClose, 120, 60, 121, false),
+            (OncePerBarClose, 120, 120, 180, false),
+        ] {
+            for list in [false, true] {
+                for changed in [false, true] {
+                    let mut saved =
+                        alert(AlertCondition::Footprint(StackedBuyImbalance), frequency);
+                    saved.id = Some(AlertId("1".into()));
+                    saved.last_triggered_at = Some(time(last));
+                    if list {
+                        saved.symbol.clear();
+                        saved.watchlist = Some("tech".into());
+                        saved.member_triggered_at.insert("SYM".into(), time(last));
+                        saved.last_triggered_at = Some(time(last + 60));
+                    }
+                    let host = Host::new(vec![saved]);
+                    host.engine
+                        .set_watchlist("tech", vec!["SYM".into(), "OTHER".into()]);
+                    if changed {
+                        // A monitoring edit starts this session's alert with no restored guard.
+                        let mut edited = host.engine.alerts().remove(0);
+                        edited.condition = AlertCondition::Footprint(StackedSellImbalance);
+                        assert_eq!(host.save(edited), Ok(()));
+                    }
+                    let symbols: &[_] = if list { &["SYM", "OTHER"] } else { &["SYM"] };
+                    for symbol in symbols {
+                        let mut event = FootprintAlertEvent {
+                            symbol: (*symbol).into(),
+                            exchange: None,
+                            timeframe: Timeframe::Min1,
+                            condition: if changed {
+                                StackedSellImbalance
+                            } else {
+                                StackedBuyImbalance
+                            },
+                            bar: time(open),
+                            closed: frequency == OncePerBarClose,
+                            time: time(at),
+                            price: 100.0,
+                            message: String::new(),
+                        };
+                        host.engine.footprint_events(&[event.clone()], time(at));
+                        let expected = if !covered || *symbol == "OTHER" || changed {
+                            vec![100.0]
+                        } else {
+                            vec![]
+                        };
+                        assert_eq!(
+                            host.fired(),
+                            expected,
+                            "{frequency:?}, last {last}, open {open}, at {at}, list {list}, changed {changed}, {symbol}"
+                        );
+                        host.engine.footprint_events(&[event.clone()], time(at));
+                        assert!(host.fired().is_empty(), "same bar stays silent");
+                        event.bar = time(open + 60);
+                        event.time = time(at + 60);
+                        host.engine.footprint_events(&[event], time(at + 60));
+                        assert_eq!(host.fired(), [100.0], "the next bar fires");
+                    }
+                }
+            }
+        }
     }
 
     /// A crossing follows the configured ray's stable slot through drawing and alert restore,

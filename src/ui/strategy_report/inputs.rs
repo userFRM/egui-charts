@@ -20,9 +20,11 @@ pub(crate) fn show_input(
         (InputKind::Integer(min, max), InputValue::Integer(value)) => {
             ui.add(egui::DragValue::new(value).range(*min..=*max))
         }
-        (InputKind::Number(min, max), InputValue::Number(value)) => {
-            ui.add(egui::DragValue::new(value).speed(0.1).range(*min..=*max))
-        }
+        (InputKind::Number(min, max), InputValue::Number(value)) => ui.add(
+            egui::DragValue::new(value)
+                .speed(input.step.unwrap_or(0.1))
+                .range(*min..=*max),
+        ),
         (InputKind::Choice(choices), InputValue::Choice(value)) => {
             egui::ComboBox::from_id_salt(&input.id)
                 .selected_text(l10n::text(

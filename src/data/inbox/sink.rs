@@ -142,6 +142,7 @@ impl Inbox {
                 capacity: trade_capacity,
             },
             rebuilt_bars: 0,
+            rebuild_clean: false,
             queued_from: Some(TradeBars::default()),
             updates: Updates::new(Trades::new(trade_capacity)),
         };
@@ -191,7 +192,7 @@ impl Inbox {
 /// [`Self::reload_history`] does.
 #[derive(Clone)]
 pub struct Sink {
-    inbox: Arc<Inbox>,
+    pub(super) inbox: Arc<Inbox>,
     pub(crate) id: SubscriptionId,
 }
 
@@ -253,7 +254,10 @@ impl Sink {
     /// so its bars do not count against the pending limit. Ended by [`Self::finish_rebuild`].
     pub(crate) fn start_rebuild(&self, time: DateTime<Utc>) {
         self.reset_replay(time);
-        self.update(|live| live.rebuilt_bars = usize::MAX);
+        self.update(|live| {
+            live.rebuilt_bars = usize::MAX;
+            live.rebuild_clean = true;
+        });
     }
 
     /// Keeps the rebuilt bars out of the pending limit until the chart drains them, and puts
@@ -793,6 +797,12 @@ impl Live {
                 // The chart rebuilt drained history; include the executions still queued.
                 self.give_queued(input);
             }
+        }
+        // A newly connected source holds what the chart rebuilt, not what this rebuild pushed.
+        if inputs.len() != self.study_inputs.len()
+            || !(inputs.iter().zip(&self.study_inputs)).all(|(new, old)| new.same_source(old))
+        {
+            self.rebuild_clean = false;
         }
         self.study_inputs = inputs;
     }

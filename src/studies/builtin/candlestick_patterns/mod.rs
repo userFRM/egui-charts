@@ -71,18 +71,22 @@
 //!
 //! Three lines: Bullish at the low of a bar with a bullish pattern (an upward triangle),
 //! Bearish at the high of a bar with a bearish one (a downward triangle) and Neutral at the
-//! high of a bar with a doji or spinning top (a circle). These values only place the marks: the
+//! low of a bar with only a doji or spinning top (a circle). These values only place the marks: the
 //! legend lists none of them, and the price scale starts without their tags. Each mark is
 //! labelled with the abbreviations of the patterns found on the bar, one per line; on a bar with a
-//! bearish pattern the neutral ones join the bearish label, so the two never overlap. Hovering a
+//! bearish pattern the neutral ones join the bearish label, and on a bar with only a bullish one
+//! the bullish label, so no two labels overlap. Hovering a
 //! mark shows the full name of each pattern it labels, such as "Three White Soldiers - Bullish",
-//! each followed by its rule in words, in the label's order. Every pattern has a toggle, all on by
-//! default, and the pattern type marks both sides (the default, neutral patterns included) or only
-//! the bullish or only the bearish patterns.
+//! each followed by its rule in words, in the label's order. Every pattern has a toggle; Abandoned
+//! Baby, Doji, Dragonfly Doji, Engulfing and Hammer are on by default. The pattern type marks
+//! both sides (the default) or only the bullish or only the bearish patterns; neutral patterns
+//! are marked under every type while their toggle is on.
 //!
 //! Each pattern also has its own study, registered under its label, such as "Doji" or
-//! "Engulfing - Bearish". It draws one line, named and styled as its side's line above, and
-//! marks only that pattern with the same abbreviation and hover text. A neutral pattern keeps
+//! "Engulfing - Bearish". It draws two lines: its marks, named and styled as its side's line
+//! above, and Background, which tints every candle of each pattern it finds in the side colour
+//! at 90% transparency. A live bar that stops completing a pattern removes its tint. The marks
+//! carry only that pattern's abbreviation and hover text. A neutral pattern keeps
 //! its own line even when a bearish pattern completes on the same bar. A pattern whose rule
 //! reads the trend offers the trend rule as its only input, SMA50 by default; the twelve
 //! without a trend condition, such as Doji or Kicking, offer none.
@@ -137,9 +141,9 @@ pub enum PatternType {
     /// Bullish, bearish and neutral patterns.
     #[default]
     Both,
-    /// Bullish patterns only.
+    /// Bullish and neutral patterns.
     Bullish,
-    /// Bearish patterns only.
+    /// Bearish and neutral patterns.
     Bearish,
 }
 
@@ -153,12 +157,12 @@ impl PatternType {
         }
     }
 
-    /// Whether this choice marks patterns of `side`; neutral ones only with both sides.
+    /// Whether this choice marks patterns of `side`; neutral ones are always marked.
     fn marks(self, side: Side) -> bool {
         match self {
             Self::Both => true,
-            Self::Bullish => side == Bullish,
-            Self::Bearish => side == Bearish,
+            Self::Bullish => side != Bearish,
+            Self::Bearish => side != Bullish,
         }
     }
 }
@@ -181,11 +185,32 @@ const TYPES: [PatternType; 3] = [
     PatternType::Bearish,
 ];
 
+/// The patterns All Candlestick Patterns marks when it is added; the others start off.
+const ON_BY_DEFAULT: [&str; 7] = [
+    "Abandoned Baby - Bearish",
+    "Abandoned Baby - Bullish",
+    "Doji",
+    "Dragonfly Doji - Bullish",
+    "Engulfing - Bearish",
+    "Engulfing - Bullish",
+    "Hammer - Bullish",
+];
+
+/// The line of a single pattern study that tints the pattern's candles.
+const BACKGROUND: usize = 1;
+
+/// Whether a source bar supplies a candle to the pattern rules.
+fn usable(bar: &Bar) -> bool {
+    [bar.open, bar.high, bar.low, bar.close]
+        .iter()
+        .all(|v| v.is_finite())
+}
+
 /// All Candlestick Patterns: the common candlestick patterns, each with a toggle, marked
 /// and labelled at the bar that completes them.
 ///
 /// The factory also lists each pattern under its label, such as "Engulfing - Bearish". That
-/// study marks only its pattern on one line for its side, and offers the trend rule, SMA50 by
+/// study marks only its pattern, tints its candles, and offers the trend rule, SMA50 by
 /// default, only when the pattern's rule reads the trend.
 #[derive(Clone, Debug)]
 pub struct CandlestickPatterns {
@@ -196,6 +221,10 @@ pub struct CandlestickPatterns {
     patterns: [bool; PATTERNS.len()],
     /// One bit per pattern of [`PATTERNS`] found on each source bar.
     found: Vec<u64>,
+    /// For a single study, the first source bar of the pattern found on each source bar.
+    spans: Vec<Option<usize>>,
+    /// A single study's Background colour.
+    background: Color32,
     values: IndicatorValues,
     stepper: Stepper<State>,
     colors: [Color32; 3],
@@ -204,6 +233,10 @@ pub struct CandlestickPatterns {
 
 #[derive(Clone, Debug, Default)]
 struct State {
+    /// Source index of the next bar.
+    next: usize,
+    /// Source index of each candle in `candles`.
+    sources: std::collections::VecDeque<usize>,
     closes: std::collections::VecDeque<f64>,
     bodies: std::collections::VecDeque<f64>,
     average: Option<f64>,
@@ -219,6 +252,8 @@ impl CandlestickPatterns {
             only: None,
             patterns: [true; PATTERNS.len()],
             found: Vec::new(),
+            spans: Vec::new(),
+            background: Color32::TRANSPARENT,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: [palette::BLUE, palette::RED, palette::GRAY],
@@ -233,13 +268,15 @@ impl CandlestickPatterns {
     /// under its label with the default trend rule.
     pub(crate) fn only(index: usize) -> Self {
         let label = PATTERNS[index].label;
+        let color = [palette::BLUE, palette::RED, palette::GRAY][PATTERNS[index].side.line()];
         Self {
             only: Some(index),
+            background: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 26),
             ..Self::new(PatternTrend::Sma50).with_patterns(|pattern| pattern == label)
         }
     }
 
-    /// Mark both sides with neutral patterns, or only bullish or only bearish patterns.
+    /// Mark both sides, or only bullish or only bearish patterns; neutral ones are always marked.
     pub fn with_pattern_type(mut self, pattern_type: PatternType) -> Self {
         self.pattern_type = pattern_type;
         self
@@ -264,30 +301,36 @@ impl CandlestickPatterns {
             .map(|(_, p)| p)
     }
 
-    /// The patterns one line labels at a source bar: its side's, and on the bearish line the
-    /// neutral ones too, which the neutral line then leaves out.
+    /// The patterns one line labels at a source bar: its side's, joined by neutral names on
+    /// the bearish line, or the bullish line when there is no bearish pattern.
     fn labelled(&self, line: usize, bar: usize) -> Vec<&'static Pattern> {
+        if self.only.is_some() && line == BACKGROUND {
+            return Vec::new();
+        }
         let Some(side) = [Bullish, Bearish, Neutral]
             .get(self.combined_line(line))
             .copied()
         else {
             return Vec::new();
         };
+        let bearish = self.found(bar, Bearish).next().is_some();
+        let bullish = self.found(bar, Bullish).next().is_some();
         match side {
-            // The bearish and neutral marks share the high, so one label names both.
-            Bearish => self
+            Bearish if bearish => self
                 .found(bar, Bearish)
                 .chain(self.found(bar, Neutral))
                 .collect(),
-            Neutral if self.found(bar, Bearish).next().is_some() => Vec::new(),
+            Bullish if bullish && !bearish => self
+                .found(bar, Bullish)
+                .chain(self.found(bar, Neutral))
+                .collect(),
+            Neutral if bearish || bullish => Vec::new(),
             _ => self.found(bar, side).collect(),
         }
     }
 
-    /// The line of All Candlestick Patterns that line `line` of this study stands for: `line`
-    /// itself, or for a single study, which draws only its pattern's side, that side's line
-    /// whatever `line` is, so a caller asking for the side's line of the combined layout reads
-    /// the study's one line.
+    /// The combined side's line for a mark. Line 0 of a single study stands for its side's
+    /// line; its line 1 is the Background.
     fn combined_line(&self, line: usize) -> usize {
         self.only.map_or(line, |k| PATTERNS[k].side.line())
     }
@@ -306,6 +349,14 @@ impl CandlestickPatterns {
             .with_default(InputValue::Choice(0))
     }
 
+    /// The single study registered under `label`, or `None` for another name.
+    pub(crate) fn single(label: &str) -> Option<Self> {
+        PATTERNS
+            .iter()
+            .position(|pattern| pattern.label == label)
+            .map(Self::only)
+    }
+
     /// The line of All Candlestick Patterns that marks the pattern labelled `label`, which that
     /// pattern's own study drew on while it drew all three lines, or `None` for another name.
     pub(crate) fn pattern_line(label: &str) -> Option<usize> {
@@ -316,10 +367,11 @@ impl CandlestickPatterns {
     }
 }
 
-/// Construct with the conventional default trend rule and every pattern on.
+/// Construct with the conventional default trend rule and the usual patterns on: Abandoned
+/// Baby, Doji, Dragonfly Doji, Engulfing and Hammer.
 impl Default for CandlestickPatterns {
     fn default() -> Self {
-        Self::new(PatternTrend::Sma50)
+        Self::new(PatternTrend::Sma50).with_patterns(|label| ON_BY_DEFAULT.contains(&label))
     }
 }
 
@@ -351,7 +403,7 @@ impl Indicator for CandlestickPatterns {
                         InputValue::Toggle(on),
                         InputKind::Toggle,
                     )
-                    .with_default(InputValue::Toggle(true))
+                    .with_default(InputValue::Toggle(ON_BY_DEFAULT.contains(&pattern.label)))
                 },
             ));
         }
@@ -394,6 +446,15 @@ impl Indicator for CandlestickPatterns {
     }
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+        if self.only.is_some() && line == BACKGROUND {
+            return crate::studies::PlotStyle {
+                color: self.background,
+                width: 1.0,
+                pattern: crate::model::LineStyle::Solid,
+                plot_type: crate::studies::PlotType::BackgroundColor,
+                visible: true,
+            };
+        }
         let line = self.combined_line(line);
         crate::studies::PlotStyle {
             color: self.colors[line.min(2)],
@@ -408,12 +469,16 @@ impl Indicator for CandlestickPatterns {
         }
     }
 
+    fn plot_color_only(&self, line: usize) -> bool {
+        self.only.is_some() && line == BACKGROUND
+    }
+
     fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
-        // Bullish marks hold the bar's low, bearish and neutral ones its high.
-        if self.combined_line(line) == 0 {
-            crate::studies::ShapeSide::Below
-        } else {
+        // Bullish and neutral marks hold the bar's low, bearish ones its high.
+        if self.combined_line(line) == 1 {
             crate::studies::ShapeSide::Above
+        } else {
+            crate::studies::ShapeSide::Below
         }
     }
 
@@ -462,13 +527,22 @@ impl Indicator for CandlestickPatterns {
             0
         };
         self.found.truncate(start);
+        let dropped = self
+            .spans
+            .get(start..)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .copied()
+            .min();
+        self.spans.truncate(start);
         let own = self.only.map(|k| PATTERNS[k].side.line());
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                if ![bar.open, bar.high, bar.low, bar.close]
-                    .iter()
-                    .all(|v| v.is_finite())
-                {
+                let at = state.next;
+                state.next += 1;
+                if !usable(bar) {
+                    self.spans.push(None);
                     self.found.push(0);
                     return IndicatorValue::None;
                 }
@@ -523,6 +597,7 @@ impl Indicator for CandlestickPatterns {
                 if state.bodies.len() == BODY_AVERAGE {
                     state.average = Some(average);
                 }
+                state.sources.push_back(at);
                 state.candles.push_back(Candle {
                     open: bar.open,
                     high: bar.high,
@@ -535,6 +610,7 @@ impl Indicator for CandlestickPatterns {
                 let max_bars = PATTERNS.iter().map(|pattern| pattern.bars).max().unwrap();
                 if state.candles.len() > max_bars {
                     state.candles.pop_front();
+                    state.sources.pop_front();
                 }
                 let candles = state.candles.make_contiguous();
                 let mut bits = 0;
@@ -548,6 +624,11 @@ impl Indicator for CandlestickPatterns {
                     }
                 }
                 self.found.push(bits);
+                self.spans.push(
+                    self.only
+                        .filter(|&k| bits >> k & 1 == 1)
+                        .map(|k| state.sources[state.sources.len() - PATTERNS[k].bars]),
+                );
                 let found = |side| {
                     PATTERNS
                         .iter()
@@ -558,14 +639,38 @@ impl Indicator for CandlestickPatterns {
                 let marks = [
                     if bull { bar.low } else { f64::NAN },
                     if bear { bar.high } else { f64::NAN },
-                    if neutral && !bear { bar.high } else { f64::NAN },
+                    if neutral && !bull && !bear {
+                        bar.low
+                    } else {
+                        f64::NAN
+                    },
                 ];
                 // A single study draws only its side's line.
                 match own {
-                    Some(line) => IndicatorValue::Single(marks[line]),
+                    Some(line) => IndicatorValue::Multiple(vec![marks[line], f64::NAN]),
                     None => IndicatorValue::Multiple(marks.to_vec()),
                 }
             });
+        if self.only.is_some() {
+            // Bars tinted by a pattern found from `start` on, before or after this run.
+            let from = self.spans[start..]
+                .iter()
+                .flatten()
+                .copied()
+                .chain(dropped)
+                .min()
+                .map_or(start, |first| first.min(start));
+            for bar in from..start {
+                self.values.set_value(BACKGROUND, bar, f64::NAN);
+            }
+            for end in from..self.spans.len() {
+                if let Some(first) = self.spans[end] {
+                    for bar in (first..=end).filter(|&bar| usable(&data[bar])) {
+                        self.values.set_value(BACKGROUND, bar, data[bar].close);
+                    }
+                }
+            }
+        }
     }
 
     fn is_incremental(&self) -> bool {
@@ -607,22 +712,27 @@ impl Indicator for CandlestickPatterns {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        (0..self.line_count())
-            .map(|line| self.colors[self.combined_line(line)])
-            .collect()
+        match self.only {
+            Some(k) => vec![self.colors[PATTERNS[k].side.line()], self.background],
+            None => self.colors.to_vec(),
+        }
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         for (line, color) in colors.into_iter().take(self.line_count()).enumerate() {
-            let slot = self.combined_line(line);
-            self.colors[slot] = color;
+            if self.only.is_some() && line == BACKGROUND {
+                self.background = color;
+            } else {
+                let slot = self.combined_line(line);
+                self.colors[slot] = color;
+            }
         }
     }
 
     fn line_names(&self) -> Vec<String> {
         let names = ["Bullish", "Bearish", "Neutral"];
         match self.only {
-            Some(k) => vec![names[PATTERNS[k].side.line()].into()],
+            Some(k) => vec![names[PATTERNS[k].side.line()].into(), "Background".into()],
             None => names.map(String::from).into(),
         }
     }
@@ -633,6 +743,9 @@ impl Indicator for CandlestickPatterns {
             .into_iter()
             .enumerate()
             .filter(|(line, _)| {
+                if self.only.is_some() && *line == BACKGROUND {
+                    return false;
+                }
                 let side = [Bullish, Bearish, Neutral][self.combined_line(*line)];
                 self.pattern_type.marks(side)
                     && PATTERNS
@@ -706,10 +819,15 @@ mod tests {
         } else {
             label
         };
-        let mut study = IndicatorFactory::new().create(name).unwrap();
+        let mut study: Box<dyn Indicator> = if label.is_empty() {
+            Box::new(CandlestickPatterns::new(trend))
+        } else {
+            IndicatorFactory::new().create(name).unwrap()
+        };
         let rule = TRENDS.iter().position(|&rule| rule == trend).unwrap();
         study.set_input("trend", InputValue::Choice(rule)).unwrap();
         study.calculate(&data);
+        let line = if label.is_empty() { line } else { 0 };
         study.plot_text(line, data.len() - 1)
     }
 
@@ -887,6 +1005,30 @@ mod tests {
                     );
                     assert_eq!(study.alert_condition(names.len(), last), None);
                     assert_eq!(study.alert_condition(condition, data.len()), None);
+                    if only.is_some() {
+                        let tinted: Vec<_> = (0..data.len())
+                            .filter(|&bar| study.values().value(1, bar).is_some())
+                            .collect();
+                        let expected_bars: Vec<_> = if expected {
+                            (flat.len()..data.len()).collect()
+                        } else {
+                            Vec::new()
+                        };
+                        assert_eq!(tinted, expected_bars, "{label}, {formation:?}");
+                        if !expected && formation[..formation.len() - 1] == hit[..hit.len() - 1] {
+                            let mut original = flat.clone();
+                            original.extend(
+                                hit.iter()
+                                    .map(|&(o, h, l, c)| Bar::new(Utc::now(), o, h, l, c, 1.0)),
+                            );
+                            study.calculate(&original);
+                            study.update(&data, last);
+                            assert!(
+                                (0..data.len()).all(|bar| study.values().value(1, bar).is_none()),
+                                "{label}: live removal"
+                            );
+                        }
+                    }
                 }
             }
             assert_eq!(
@@ -981,7 +1123,16 @@ mod tests {
         assert_eq!(text(none, &flat, tri_star, "", 1).as_deref(), Some("3S\nD"));
         assert_eq!(text(none, &flat, tri_star, "", 2), None);
 
-        // The pattern type keeps one side and drops the neutral patterns.
+        // A bullish Tri-Star and the last doji share the low and one label.
+        let bullish: &[Ohlc] = &[
+            (100.0, 101.0, 99.0, 100.0),
+            (98.0, 99.0, 97.0, 98.0),
+            (100.0, 101.0, 99.0, 100.0),
+        ];
+        assert_eq!(text(none, &flat, bullish, "", 0).as_deref(), Some("3S\nD"));
+        assert_eq!(text(none, &flat, bullish, "", 2), None);
+
+        // The pattern type filters directional patterns while neutral patterns remain enabled.
         let mut data = flat.clone();
         data.extend(
             tri_star
@@ -992,6 +1143,17 @@ mod tests {
         study.calculate(&data);
         let last = data.len() - 1;
         assert_eq!(study.plot_text(1, last), None);
+        assert_eq!(study.plot_text(2, last).as_deref(), Some("D"));
+        assert_eq!(study.values().value(2, last), Some(99.0));
+        let doji = PATTERNS.iter().position(|p| p.label == "Doji").unwrap();
+        assert_eq!(study.alert_condition(doji, last), Some(true));
+        assert_eq!(
+            study.alert_outputs(),
+            [(0, "Bullish".into()), (2, "Neutral".into())]
+        );
+        let mut study = study.with_pattern_type(PatternType::Bearish);
+        study.calculate(&data);
+        assert_eq!(study.plot_text(1, last).as_deref(), Some("3S\nD"));
         assert_eq!(study.plot_text(2, last), None);
     }
 
@@ -1021,6 +1183,36 @@ mod tests {
         );
         let rising = with(walk((40..100).map(f64::from)), hammer);
         let long_fall = with(walk((90..300).rev().map(f64::from)), hammer);
+
+        let mut combined = IndicatorFactory::new()
+            .create("All Candlestick Patterns")
+            .unwrap();
+        let usual = [
+            "Abandoned Baby - Bearish",
+            "Abandoned Baby - Bullish",
+            "Doji",
+            "Dragonfly Doji - Bullish",
+            "Engulfing - Bearish",
+            "Engulfing - Bullish",
+            "Hammer - Bullish",
+        ];
+        for (k, pattern) in PATTERNS.iter().enumerate() {
+            let inputs = combined.inputs();
+            let input = inputs
+                .iter()
+                .find(|input| input.id == format!("patterns [{k}]"))
+                .unwrap();
+            let expected = InputValue::Toggle(usual.contains(&pattern.label));
+            assert_eq!(input.value, expected, "{}", pattern.label);
+            assert_eq!(input.default, expected, "{}", pattern.label);
+        }
+        combined.set_input("trend", InputValue::Choice(2)).unwrap();
+        let flat = walk((0..14).map(|i| 100.0 + f64::from(i % 2)));
+        let dragonfly = with(flat, &[(100.0, 100.0625, 96.0, 100.0625)]);
+        assert_eq!(
+            marks(&mut combined, &dragonfly, 0).as_deref(),
+            Some("DD\nH")
+        );
 
         let mut study = IndicatorFactory::new().create("Hammer - Bullish").unwrap();
         let ids: Vec<String> = study.inputs().into_iter().map(|input| input.id).collect();
@@ -1066,7 +1258,10 @@ mod tests {
         // Bullish on SMA50 and SMA200 with a teal bullish line.
         let kicking = r#"{"name":"Kicking - Bearish","inputs":[["trend",{"Choice":2}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CandlestickPatterns.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[255,152,0,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
         let marubozu = r#"{"name":"Marubozu White - Bullish","inputs":[["trend",{"Choice":1}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CandlestickPatterns.html","plots":[{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleUp","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
-        let saves: [(&str, Color32, &[Ohlc], &str); 2] = [
+        // Saved on origin/main 2be0b0108, when each single pattern had one plot.
+        let doji = r#"{"name":"Doji","inputs":[["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CandlestickPatterns.html","plots":[{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"Circles","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[8,8,8,16],"untagged_plots":[0],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let engulfing = r#"{"name":"Engulfing - Bearish","inputs":[["trend",{"Choice":2}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CandlestickPatterns.html","plots":[{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"TriangleDown","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,3,4,16],"untagged_plots":[0],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#;
+        let saves: [(&str, Color32, &[Ohlc], &str); 4] = [
             (
                 kicking,
                 Color32::from_rgb(255, 152, 0),
@@ -1079,14 +1274,32 @@ mod tests {
                 &[(100.0, 102.0, 100.0, 102.0)],
                 "MW",
             ),
+            (doji, palette::GRAY, &[(100.0, 102.0, 98.0, 100.0625)], "D"),
+            (
+                engulfing,
+                palette::RED,
+                &[
+                    (100.5, 101.25, 100.25, 101.0),
+                    (101.25, 101.5, 99.75, 100.0),
+                ],
+                "BE",
+            ),
         ];
         for (saved, color, bars, abbr) in saves {
             let template = serde_json::from_str::<StudyTemplate>(saved).unwrap();
             let name = template.name.as_str();
             let mut restored = template.create().unwrap();
             assert_eq!(restored.registered_name(), name);
-            assert!(
-                restored.inputs().iter().all(|input| input.id != "trend"),
+            assert_eq!(
+                restored.inputs().iter().any(|input| input.id == "trend"),
+                name == "Engulfing - Bearish",
+                "{name}"
+            );
+            assert_eq!(restored.settings().plots.len(), 2, "{name}");
+            assert!(!restored.plot_style(1).visible, "{name}");
+            assert_eq!(
+                restored.plot_style(1).plot_type,
+                crate::studies::PlotType::BackgroundColor,
                 "{name}"
             );
             assert_eq!(restored.plot_style(0).color, color, "{name}");
@@ -1100,7 +1313,7 @@ mod tests {
     }
 
     /// Each pattern's own study offers the trend rule only when its rule reads the trend, and
-    /// draws one line, named and styled as its side's line of All Candlestick Patterns.
+    /// draws its side's marks and an independently editable Background plot.
     #[test]
     fn single_studies_offer_only_the_settings_they_use() {
         use crate::studies::{IndicatorFactory, PlotType};
@@ -1139,11 +1352,35 @@ mod tests {
             } else {
                 ("Neutral", palette::GRAY, PlotType::Circles)
             };
-            assert_eq!(study.line_names(), [side], "{label}");
+            assert_eq!(study.line_names(), [side, "Background"], "{label}");
+            let background = study.plot_style(1);
+            assert_eq!(background.plot_type, PlotType::BackgroundColor, "{label}");
+            assert!(background.visible && study.plot_color_only(1), "{label}");
+            let (r, g, b) = match side {
+                "Bullish" => (41, 98, 255),
+                "Bearish" => (242, 54, 69),
+                _ => (120, 123, 134),
+            };
+            assert_eq!(
+                background.color,
+                Color32::from_rgba_unmultiplied(r, g, b, 26),
+                "{label}"
+            );
+            assert_eq!(study.alert_outputs(), [(0, side.into())], "{label}");
+            assert_eq!(study.plot_text(1, 0), None);
+            assert_eq!(study.plot_tooltip(1, 0), None);
+            study.set_color(1, changed);
+            assert_eq!(study.plot_style(1).color, changed, "{label}");
+            assert_eq!(study.plot_style(0).color, color, "{label}");
             let style = study.plot_style(0);
             assert_eq!((style.color, style.plot_type), (color, shape), "{label}");
             study.set_color(0, changed);
             assert_eq!(study.plot_style(0).color, changed, "{label}");
+            let saved = crate::studies::StudyTemplate::from_study(study.as_ref());
+            let restored = saved.create().unwrap();
+            assert_eq!(restored.settings(), saved.settings, "{label}");
+            assert!(restored.plot_style(1).visible, "{label}");
+            assert_eq!(restored.plot_style(1).color, changed, "{label}");
         }
     }
 }
