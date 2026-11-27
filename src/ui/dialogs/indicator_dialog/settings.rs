@@ -1373,7 +1373,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let mut study = ConfiguredStudy::new(Box::new(StochasticMomentumIndex::new(5, 2, 2, 3)));
-        let mut bars: Vec<_> = (0..6)
+        let mut bars: Vec<_> = (0..9)
             .map(|i| {
                 crate::model::Bar::new(
                     chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
@@ -1386,6 +1386,9 @@ mod tests {
             })
             .collect();
         bars[5].close = 104.0;
+        bars[6].close = 108.0;
+        bars[7].close = 105.0;
+        bars[8].close = 108.0;
         study.calculate(&bars);
         let defaults = study.settings();
         let before = study.snapshot_settings();
@@ -1503,19 +1506,19 @@ mod tests {
             defaults
         );
 
-        // Independent hand values at bar 5: SMI=475/9, signal=575/9.
+        // Independent hand values at bar 8: SMI=3400/81, signal=12100/243.
         // A 200 px pane from -100 to 100 maps a value v to y=100-v.
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 200.0));
         for (plots, guides, expected) in [
             (vec![], vec![], vec![]),
-            (vec![0], vec![], vec![475.0 / 9.0]),
-            (vec![1], vec![], vec![575.0 / 9.0]),
+            (vec![0], vec![], vec![3400.0 / 81.0]),
+            (vec![1], vec![], vec![12100.0 / 243.0]),
             (vec![], vec![0], vec![40.0]),
             (vec![], vec![1], vec![-40.0]),
             (
                 vec![0, 1],
                 vec![0, 1],
-                vec![475.0 / 9.0, 575.0 / 9.0, 40.0, -40.0],
+                vec![3400.0 / 81.0, 12100.0 / 243.0, 40.0, -40.0],
             ),
         ] {
             for (inverted, visible) in [(false, true), (true, true), (false, false), (true, false)]
