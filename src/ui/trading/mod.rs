@@ -584,6 +584,7 @@ mod tests {
         pub(super) state: Vec<AccountEvent>,
         pub(super) brackets: bool,
         pub(super) partial_close: bool,
+        pub(super) without_position_exits: bool,
         pub(super) placed: Mutex<Vec<OrderRequest>>,
         pub(super) cancelled: Mutex<Vec<OrderId>>,
         pub(super) modified: Mutex<Vec<(OrderId, OrderRequest)>>,
@@ -607,6 +608,7 @@ mod tests {
                 preview: true,
                 brackets: self.brackets,
                 partial_close: self.partial_close,
+                position_exits: !self.without_position_exits,
                 take_profit_level_stops: self.brackets,
                 ..Capabilities::default()
             };

@@ -76,7 +76,10 @@ impl StyleTab {
                     ],
                 );
             }
-            if tool.is_none_or(|tool| tool.supports_color())
+            if props
+                .tool_settings
+                .as_ref()
+                .is_none_or(|template| template.settings.supports_color())
                 && tool != Some(DrawingToolType::PriceLabel)
                 && !position
                 && !regression
@@ -538,6 +541,19 @@ impl StyleTab {
                 {
                     template.settings.pitchfork = Some(config);
                 }
+                ui.end_row();
+            }
+            if let Some(template) = &mut props.tool_settings
+                && template.settings.tool_type == DrawingToolType::Highlighter
+            {
+                let label = ui.label(l10n::text(ui.ctx(), "Smoothing"));
+                // Up to 20 here; a larger value a host stored stays until edited.
+                ui.add(
+                    egui::DragValue::new(&mut template.settings.smoothing)
+                        .range(0..=20)
+                        .clamp_existing_to_range(false),
+                )
+                .labelled_by(label.id);
                 ui.end_row();
             }
             if let Some(template) = &mut props.tool_settings
@@ -1299,7 +1315,8 @@ mod tests {
     use egui::{Context, Event, Modifiers, PointerButton, Pos2, Rect, Shape};
 
     /// Switching Fill on starts from the tool's own fill where it differs from its line, as on
-    /// the regression trend's upper band and the sector, and from a tint of the line elsewhere.
+    /// the regression trend's upper band and the sector, and from a tint of the line elsewhere,
+    /// at 50% on the brush.
     #[test]
     fn enabling_fill_starts_from_the_tool_fill_or_a_tint_of_the_line() {
         let line = Color32::from_rgb(10, 20, 30);
@@ -1309,7 +1326,10 @@ mod tests {
             (DrawingToolType::RegressionTrend, blue),
             (DrawingToolType::Sector, blue),
             (DrawingToolType::ParallelChannel, tint),
-            (DrawingToolType::Brush, tint),
+            (
+                DrawingToolType::Brush,
+                Color32::from_rgba_unmultiplied(10, 20, 30, 128),
+            ),
         ] {
             let chart = Chart::new(BarData::new());
             let mut drawing = Drawing::new(0, tool);

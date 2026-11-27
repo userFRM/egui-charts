@@ -397,6 +397,13 @@ pub struct Drawing {
     /// while placing a polyline closes it; older saved drawings are open.
     #[serde(default)]
     pub closed: bool,
+    /// How many recorded samples a highlighter stroke is evened out over: each sample moves to
+    /// the mean of itself and the `smoothing / 2` samples on either side, fewer near the ends, so
+    /// the first and last samples stay where they were recorded. 0 and 1 draw through every
+    /// sample. New highlighters start at 5; highlighters saved before this setting load with 0
+    /// and draw as they did. Other tools ignore it.
+    #[serde(default)]
+    pub smoothing: u8,
     /// Level lines and band fill of the pitchfork tools.
     #[serde(default)]
     pub pitchfork: Option<PitchforkConfig>,
@@ -862,6 +869,11 @@ impl Drawing {
             table: None,
             glyph_angle: 0.0,
             closed: false,
+            smoothing: if tool_type == DrawingToolType::Highlighter {
+                5
+            } else {
+                0
+            },
             gann: matches!(
                 tool_type,
                 DrawingToolType::GannBox
@@ -973,6 +985,30 @@ impl Drawing {
         }
     }
 
+    /// Whether the renderer paints this drawing's colour, so the Style tab and the floating
+    /// toolbar offer it: as its tool's [`DrawingToolType::supports_color`], except for an emoji
+    /// drawn from the colour emoji font, which keeps the emoji's own colours and takes only the
+    /// opacity. A font icon with a background ring still paints the ring in the colour.
+    #[cfg(feature = "ui")]
+    pub(crate) fn supports_color(&self) -> bool {
+        #[cfg(feature = "color-emoji")]
+        if self.tool_type == DrawingToolType::FontIcon
+            && !self.font_icon_ring()
+            && self
+                .text
+                .as_deref()
+                .is_some_and(crate::drawings::glyphs::is_color_emoji)
+        {
+            return false;
+        }
+        self.tool_type.supports_color()
+    }
+
+    /// Whether a font icon draws a background disc with a ring in its colour.
+    pub(crate) fn font_icon_ring(&self) -> bool {
+        self.stroke_width > 2.0
+    }
+
     /// The text colour of Text and Anchored text that has one. Their colour controls show and
     /// edit it, as the drawing colour then paints at most a border left to follow it.
     #[cfg(feature = "ui")]
@@ -1002,12 +1038,15 @@ impl Drawing {
     }
 
     /// The fill a `tool` drawing takes when Fill is switched on: its own default where that is not
-    /// a tint of its line, as on the regression trend's upper band, otherwise `line` at 20%.
+    /// a tint of its line, as on the regression trend's upper band, otherwise `line` at 20%, or at
+    /// 50% on the brush.
     #[cfg(feature = "ui")]
     pub(crate) fn first_fill(tool: DrawingToolType, line: [u8; 4]) -> [u8; 4] {
         let style = default_style(tool);
         match style.fill {
             Some(fill) if fill[..3] != style.color[..3] => fill,
+            // round(0.5 * 255) = 128.
+            _ if tool == DrawingToolType::Brush => tint(line, 128),
             _ => tint(line, 51),
         }
     }
@@ -1637,6 +1676,9 @@ mod tests {
     /// parallel channel, flat top/bottom or disjoint channel starts its text at the left end of
     /// its first line, and one saved without line measurements keeps it in the middle. The
     /// triangle, ellipse and double curve keep the styles they shared before.
+    /// A highlighter evens its stroke over five samples, and a brush draws through every one.
+    /// The four pitchforks end each line and band the median's length past its start, while the
+    /// pitchfan, which ignores that reach, keeps Extend lines on.
     #[test]
     fn new_drawings_start_in_their_tool_style() {
         use DrawingToolType as T;
@@ -1801,6 +1843,28 @@ mod tests {
             assert_eq!(
                 Drawing::new(1, tool).elliott_degree,
                 ElliottDegree::Intermediate,
+                "{tool:?}"
+            );
+        }
+        assert_eq!(
+            (
+                Drawing::new(1, T::Highlighter).smoothing,
+                Drawing::new(1, T::Brush).smoothing
+            ),
+            (5, 0)
+        );
+        for tool in [
+            T::Pitchfork,
+            T::SchiffPitchfork,
+            T::ModifiedSchiffPitchfork,
+            T::InsidePitchfork,
+            T::Pitchfan,
+        ] {
+            assert_eq!(
+                Drawing::new(1, tool)
+                    .pitchfork
+                    .map(|config| config.extend_lines),
+                Some(tool == T::Pitchfan),
                 "{tool:?}"
             );
         }

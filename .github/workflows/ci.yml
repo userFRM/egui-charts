@@ -64,6 +64,8 @@ jobs:
               README.md|ROADMAP.md) docs=true counts=true ;;
               docs/builder-guide.md|docs/study-data.md|docs/strategy-report.md|docs/site/src/content/docs/*.mdx) docs=true ;;
               crates/scripting/*) scripting=true native=true fmt=true security=true ;;
+              examples/scripting.rs) scripting=true fmt=true ;;
+              examples/support/*) rust=true scripting=true ;;
               *.md|docs/site/*|docs/progress/*) ;;
               terminal/*) terminal=true fmt=true security=true ;;
               examples/demo/*) native=true fmt=true security=true ;;
@@ -413,7 +415,7 @@ jobs:
         run: cargo test --no-default-features --features icons --lib
       - name: Run example tests
         if: needs.changes.outputs.rust == 'true'
-        run: cargo test --all-features --example scripting --example backtesting --example network_feed
+        run: cargo test --all-features --example backtesting --example network_feed
       - name: Run doc tests (all features)
         if: needs.changes.outputs.docs == 'true'
         run: cargo test --doc --all-features

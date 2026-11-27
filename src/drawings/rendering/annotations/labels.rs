@@ -220,7 +220,7 @@ impl Drawing {
                 if weight && !bold {
                     format.color = Color32::TRANSPARENT;
                 }
-                job.append(text, 0.0, format);
+                crate::drawings::glyphs::append_text(painter.ctx(), &mut job, text, format);
             }
             painter.layout_job(job)
         };

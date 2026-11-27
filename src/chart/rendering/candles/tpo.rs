@@ -129,12 +129,12 @@ fn level_captions(profile: &TPOProfile, config: &TPOConfig) -> Vec<Caption> {
         (Level::Poc, config.show_poc && labels.poc, profile.poc_price),
         (
             Level::ValueAreaHigh,
-            config.show_value_area && labels.value_area_high,
+            config.show_value_area && config.show_value_area_high && labels.value_area_high,
             profile.value_area_high,
         ),
         (
             Level::ValueAreaLow,
-            config.show_value_area && labels.value_area_low,
+            config.show_value_area && config.show_value_area_low && labels.value_area_low,
             profile.value_area_low,
         ),
         (
@@ -209,13 +209,18 @@ fn caption_value(caption: &Caption, profile: &TPOProfile) -> String {
 fn caption_color(
     level: Level,
     profile: &TPOProfile,
+    config: &TPOConfig,
     chart: &ChartColors,
     render_config: &TpoRenderConfig,
     bullish: Color32,
     bearish: Color32,
 ) -> Color32 {
     let color = match level {
-        Level::Poc | Level::PoorHigh | Level::PoorLow => return chart.axis_text,
+        Level::Poc => match config.poc_color {
+            Some(color) => color,
+            None => return chart.axis_text,
+        },
+        Level::PoorHigh | Level::PoorLow => return chart.axis_text,
         Level::ValueAreaHigh | Level::ValueAreaLow => return chart.axis_text_secondary,
         Level::Midpoint => bearish,
         Level::InitialBalanceHigh | Level::InitialBalanceLow => render_config.initial_balance_color,
@@ -331,6 +336,7 @@ fn same_profiles(old: &TPOConfig, new: &TPOConfig) -> bool {
         && old.session == new.session
         && old.regular_hours == new.regular_hours
         && old.profile_period == new.profile_period
+        && old.profile_periods == new.profile_periods
         && old.composites == new.composites
         && old.splits == new.splits
         && old.instrument_tick.map(f64::to_bits) == new.instrument_tick.map(f64::to_bits)
@@ -386,10 +392,10 @@ fn whole_sessions(
             end = end.max(end_of(last));
         }
         // Adjacent bars of one period may share a profile, so keep their sessions together.
-        if config.profile_period != TPOProfilePeriod::Session
+        if config.joins_sessions()
             && !matches!(config.session, crate::model::ProfileSession::Custom(_))
         {
-            let period = |i: usize| config.profile_period.key(sessions, full[i].time);
+            let period = |i: usize| config.period_key(sessions, full[i].time);
             while start > 0 && period(start - 1) == period(start) {
                 start = start_of(start - 1);
             }
@@ -407,7 +413,7 @@ fn whole_sessions(
             TPOProfilePeriod::Session => 2,
             TPOProfilePeriod::Week => 9,
             TPOProfilePeriod::Month => 33,
-        };
+        } * i64::from(config.profile_periods.max(1));
         let padding = chrono::TimeDelta::days(days);
         let first = full[start]
             .time
@@ -426,7 +432,7 @@ fn whole_sessions(
             } else {
                 0
             };
-            (layer, config.profile_period.date_key(date))
+            (layer, config.date_period_key(sessions, date))
         };
         let selected = start..end;
         let periods: Vec<_> = parts
@@ -539,7 +545,7 @@ fn build_profiles(
     for end in breaks.chain([bars.len()]) {
         if end < bars.len()
             && (matches!(config.session, crate::model::ProfileSession::Custom(_))
-                && config.profile_period != TPOProfilePeriod::Session
+                && config.joins_sessions()
                 || custom_parts
                     .iter()
                     .any(|p| p.bars.start < end && end < p.bars.end))
@@ -556,10 +562,10 @@ fn build_profiles(
                     .map(|i| parts[i])
             })
             .unwrap_or(profile_open);
-        let joins_period = config.profile_period != TPOProfilePeriod::Session
+        let joins_period = config.joins_sessions()
             && bars.get(end).is_some_and(|next| {
-                config.profile_period.key(sessions, bars[end - 1].time)
-                    == config.profile_period.key(sessions, next.time)
+                config.period_key(sessions, bars[end - 1].time)
+                    == config.period_key(sessions, next.time)
             });
         if joins_period
             || bars.get(end).is_some_and(|next| {
@@ -662,7 +668,9 @@ pub fn render_live_tpo(
     bearish_color: Color32,
 ) {
     let render_config = TpoRenderConfig {
-        poc_color: painter.ctx().active_theme().ui.text,
+        poc_color: base_config
+            .poc_color
+            .unwrap_or(painter.ctx().active_theme().ui.text),
         ..Default::default()
     };
     let x = |i| idx_to_coord(i, chart_rect_min_x);
@@ -704,6 +712,7 @@ pub fn render_live_tpo(
                     let color = caption_color(
                         level.into(),
                         profile,
+                        config,
                         &chart,
                         &render_config,
                         bullish_color,
@@ -941,6 +950,7 @@ pub(crate) fn latest_level_tags(
                                 caption_color(
                                     caption.level,
                                     profile,
+                                    config,
                                     chart,
                                     &TpoRenderConfig::default(),
                                     bullish,
@@ -1081,14 +1091,26 @@ fn place_profiles(
         .filter(|(.., cut)| !cut)
         .map(|&(_, _, width, widest, _)| fit(width, widest))
         .fold(PERIOD_COLUMN_PX, f32::min);
+    // A volume profile on the left takes the start of the session's room, ahead of the profile.
+    let shift = volume_shift(config);
     for (profile, anchor_x, width, widest, _) in placed {
         visit(
             profile,
-            anchor_x,
+            anchor_x + shift,
             column.min(fit(width, widest)).max(1.0),
-            width,
+            width - shift,
             if labels { label_room } else { 0.0 },
         );
+    }
+}
+
+/// How far a volume profile drawn left of each TPO profile moves the profile right: the strip
+/// and its gap, or nothing.
+fn volume_shift(config: &TPOConfig) -> f32 {
+    if config.show_volume_profile && config.volume_profile.left {
+        14.0 + VOLUME_PROFILE_PX
+    } else {
+        0.0
     }
 }
 
@@ -1167,8 +1189,9 @@ pub(crate) fn profile_at(
             } else {
                 letters.len()
             };
-            // Keep the gutter beside occupied rows in the profile's context-menu target.
-            let left = anchor - label_room;
+            // Keep the gutter beside occupied rows, and a strip left of them, in the profile's
+            // context-menu target.
+            let left = anchor - volume_shift(&config) - label_room;
             if reach > 0 && pos.x >= left && pos.x < anchor + reach as f32 * column {
                 let period = (pos.x >= anchor)
                     .then(|| ((pos.x - anchor) / column) as usize)
@@ -1419,7 +1442,9 @@ fn draw_session_profile(
                 };
                 shapes.push(Shape::rect_filled(cell, 0.0, color));
                 if letters_in_cells {
-                    let letter_tone = cell_letter_color(color, &chart);
+                    let letter_tone = config
+                        .letter_color
+                        .unwrap_or_else(|| cell_letter_color(color, &chart));
                     let mut format =
                         TextFormat::simple(FontId::proportional(cell_font_size), letter_tone);
                     format.coords.push("wght", 700.0);
@@ -1473,9 +1498,12 @@ fn draw_session_profile(
             DESIGN_TOKENS.stroke.light,
             painter.ctx().active_theme().ui.text,
         );
-        for edge in [profile.value_area_high, profile.value_area_low] {
+        for (shown, edge) in [
+            (config.show_value_area_high, profile.value_area_high),
+            (config.show_value_area_low, profile.value_area_low),
+        ] {
             let y = row_y(edge);
-            if price_rect.y_range().contains(y) {
+            if shown && price_rect.y_range().contains(y) {
                 // Dashes of 2 px every 5 px, as single segments rather than a path each.
                 let end = max_right + 6.0;
                 let mut x = anchor_x;
@@ -1497,11 +1525,23 @@ fn draw_session_profile(
             .map(|&price| profile.volume_at(price))
             .fold(0.0_f64, f64::max);
         if max > 0.0 {
-            let left = max_right + 14.0;
+            let volume = &config.volume_profile;
+            let inside = volume.value_area_color.unwrap_or(chart.axis_text_secondary);
+            let outside = volume.color.unwrap_or_else(|| dim(inside));
+            let tpo_value_area_rows = volume.tpo_value_area_rows
+                && volume.value_area_color.is_none()
+                && volume.color.is_none();
+            let volume_levels = volume_levels(profile, config.value_area_pct);
+            // Bars grow from the base of the strip: its left edge, or its right edge on the left.
+            let (base, sign) = if volume.left {
+                (anchor_x - 14.0, -1.0)
+            } else {
+                (max_right + 14.0, 1.0)
+            };
             for &price in &levels {
-                let volume = profile.volume_at(price);
+                let row_volume = profile.volume_at(price);
                 let y = row_y(price);
-                if volume <= 0.0
+                if row_volume <= 0.0
                     || y + row_height < price_rect.top()
                     || y - row_height > price_rect.bottom()
                 {
@@ -1509,25 +1549,86 @@ fn draw_session_profile(
                 }
                 let top = (y - block_height * 0.5).round_to_pixels(pixels_per_point);
                 let bottom = (y + block_height * 0.5).round_to_pixels(pixels_per_point);
-                let color = if dims_outside_value_area && !profile.is_in_value_area(price) {
-                    dim(chart.axis_text_secondary)
+                let in_value_area = if tpo_value_area_rows {
+                    !dims_outside_value_area || profile.is_in_value_area(price)
                 } else {
-                    chart.axis_text_secondary
+                    volume_levels.is_some_and(|(_, low, high)| (low..=high).contains(&price))
                 };
-                shapes.push(Shape::rect_filled(
-                    Rect::from_min_max(
-                        Pos2::new(left, top),
-                        Pos2::new(left + VOLUME_PROFILE_PX * (volume / max) as f32, bottom),
+                let fill = if in_value_area { inside } else { outside };
+                let end = base + sign * VOLUME_PROFILE_PX * (row_volume / max) as f32;
+                let rect = Rect::from_x_y_ranges(base.min(end)..=base.max(end), top..=bottom);
+                shapes.push(Shape::rect_filled(rect, 0.0, fill));
+                if volume.values {
+                    let color = volume
+                        .values_color
+                        .unwrap_or_else(|| cell_letter_color(fill, &chart));
+                    let text = crate::scales::StudyFormat::Volume.format(row_volume, None);
+                    let galley =
+                        painter.layout_no_wrap(text, FontId::proportional(typography::XS), color);
+                    // Values sit inside their own bar, where they read on its fill.
+                    if galley.size().x + 4.0 <= rect.width() && galley.size().y <= block_height {
+                        let (align, x) = if volume.left {
+                            (egui::Align2::RIGHT_CENTER, rect.right() - 2.0)
+                        } else {
+                            (egui::Align2::LEFT_CENTER, rect.left() + 2.0)
+                        };
+                        let origin = align.anchor_size(Pos2::new(x, y), galley.size()).min;
+                        shapes.push(Shape::galley(origin, galley, color));
+                    }
+                }
+            }
+            if let Some((poc, low, high)) = volume_levels {
+                let text = painter.ctx().active_theme().ui.text;
+                for (shown, price, color, style) in [
+                    (
+                        volume.poc,
+                        poc,
+                        volume.poc_color.unwrap_or(poc_color),
+                        volume.poc_style,
                     ),
-                    0.0,
-                    color,
-                ));
+                    (
+                        volume.value_area_high,
+                        high,
+                        volume.value_area_high_color.unwrap_or(text),
+                        volume.value_area_high_style,
+                    ),
+                    (
+                        volume.value_area_low,
+                        low,
+                        volume.value_area_low_color.unwrap_or(text),
+                        volume.value_area_low_style,
+                    ),
+                ] {
+                    let y = row_y(price);
+                    if !shown || !price_rect.y_range().contains(y) {
+                        continue;
+                    }
+                    let (start, end) = (
+                        Pos2::new(base, y),
+                        Pos2::new(base + sign * VOLUME_PROFILE_PX, y),
+                    );
+                    let stroke = Stroke::new(DESIGN_TOKENS.stroke.light, color);
+                    match style.dash_pattern() {
+                        Some((dash, gap)) => {
+                            shapes.extend(crate::painting::dashed_line::dashed_polyline_shapes(
+                                &[start, end],
+                                stroke,
+                                dash,
+                                gap,
+                                painter.clip_rect(),
+                            ));
+                        }
+                        None => shapes.push(Shape::line_segment([start, end], stroke)),
+                    }
+                }
             }
         }
     }
     painter.extend(shapes);
 
     if label_room > 0.0 {
+        // Captions keep their place left of a volume profile drawn on the left.
+        let anchor_x = anchor_x - volume_shift(config);
         let mut label_rows = Vec::new();
         let captions = level_captions(profile, config);
         let candidates = 2 * captions.len();
@@ -1554,6 +1655,7 @@ fn draw_session_profile(
             let color = caption_color(
                 level,
                 profile,
+                config,
                 &chart,
                 render_config,
                 bullish_color,
@@ -1844,6 +1946,31 @@ fn draw_statistics(
     }
 }
 
+/// The volume profile's point of control and value area low and high, as row prices, from the
+/// profile's row volumes; `None` without volume.
+fn volume_levels(profile: &TPOProfile, share: f64) -> Option<(f64, f64, f64)> {
+    let mut rows: Vec<(i64, f64)> = profile
+        .row_volume
+        .iter()
+        .filter(|(_, volume)| **volume > 0.0)
+        .map(|(&key, &volume)| (key, volume))
+        .collect();
+    rows.sort_unstable_by_key(|row| row.0);
+    // The heaviest row, the lower one on a tie.
+    let poc = (0..rows.len()).max_by(|&a, &b| {
+        (rows[a].1.total_cmp(&rows[b].1)).then_with(|| rows[b].0.cmp(&rows[a].0))
+    })?;
+    let total: f64 = rows.iter().map(|row| row.1).sum();
+    let share = if share.is_nan() {
+        0.0
+    } else {
+        share.clamp(0.0, 1.0)
+    };
+    let (low, high) = crate::data::value_area(rows.len(), |i| rows[i], poc, total * share);
+    let price = |key| crate::model::tpo::key_to_price(key, profile.tick_size);
+    Some((price(rows[poc].0), price(low), price(high)))
+}
+
 /// Measure at the POC so logarithmic and inverted scales keep the same geometry.
 fn profile_row_height(profile: &TPOProfile, coords: &PriceMap) -> f32 {
     let (low, high) = profile.row_span(profile.poc_price);
@@ -1852,7 +1979,8 @@ fn profile_row_height(profile: &TPOProfile, coords: &PriceMap) -> f32 {
         .max(1.0)
 }
 
-/// Pick the color for one TPO entry, honouring the configured color mode.
+/// Pick the color for one TPO letter drawn alone: the configured letter colour, or the entry's
+/// under the configured color mode, kept readable.
 fn letter_color(
     render_config: &TpoRenderConfig,
     config: &TPOConfig,
@@ -1862,7 +1990,9 @@ fn letter_color(
     chart: &ChartColors,
 ) -> Color32 {
     readable_color(
-        entry_color(render_config, config, period_idx, price, profile),
+        config
+            .letter_color
+            .unwrap_or_else(|| entry_color(render_config, config, period_idx, price, profile)),
         chart.axis_text,
         &[chart.bg, chart.bg.blend(render_config.value_area_color)],
         4.5,
@@ -3306,6 +3436,208 @@ mod tests {
                 assert_eq!(r.fill, color);
             }
         }
+        // The volume profile's own levels, values, colours and side. With 90 and 4 on the bars
+        // the rows hold 30, 32 and 32, and its value area spans all three although the TPO value
+        // area leaves out 100; with 30 and 10 they hold 10, 15 and 15 and it spans 101 and 102.
+        // Settings saved without the field shade rows by the TPO value area until a colour is
+        // picked. Fills are inside its value area (i), dimmed (d), red (r) or blue (b); each case
+        // lists its rows by price, left edge and width, and its lines and values as (price, line
+        // end, text), a line end of NaN for a value without a line.
+        type Lines<'a> = &'a [(f64, f32, &'a str)];
+        type VolumeCase<'a> = (
+            [f64; 2],
+            Option<serde_json::Value>,
+            [(f64, f32, f32, char); 3],
+            Lines<'a>,
+        );
+        let (red, blue) = (
+            serde_json::json!([255, 0, 0, 255]),
+            serde_json::json!([0, 0, 255, 255]),
+        );
+        let cases: [VolumeCase; 4] = [
+            (
+                [90.0, 4.0],
+                Some(serde_json::json!({
+                    "poc": true, "value_area_high": true, "value_area_low": true, "values": true,
+                })),
+                [
+                    (102.0, 86.0, 40.0, 'i'),
+                    (101.0, 86.0, 40.0, 'i'),
+                    (100.0, 86.0, 37.5, 'i'),
+                ],
+                &[
+                    (101.0, 126.0, "32"),
+                    (102.0, 126.0, "32"),
+                    (100.0, 126.0, "30"),
+                ],
+            ),
+            (
+                [30.0, 10.0],
+                Some(serde_json::json!({
+                    "left": true, "poc": true, "values": true, "color": red,
+                    "value_area_color": blue,
+                })),
+                [
+                    (102.0, -14.0, 40.0, 'b'),
+                    (101.0, -14.0, 40.0, 'b'),
+                    (100.0, 26.0 - 80.0 / 3.0, 80.0 / 3.0, 'r'),
+                ],
+                &[
+                    (101.0, -14.0, "15"),
+                    (102.0, f32::NAN, "15"),
+                    (100.0, f32::NAN, "10"),
+                ],
+            ),
+            (
+                [90.0, 4.0],
+                None,
+                [
+                    (102.0, 86.0, 40.0, 'i'),
+                    (101.0, 86.0, 40.0, 'i'),
+                    (100.0, 86.0, 37.5, 'd'),
+                ],
+                &[],
+            ),
+            (
+                [90.0, 4.0],
+                Some(serde_json::json!({"color": red})),
+                [
+                    (102.0, 86.0, 40.0, 'i'),
+                    (101.0, 86.0, 40.0, 'i'),
+                    (100.0, 86.0, 37.5, 'i'),
+                ],
+                &[],
+            ),
+        ];
+        // The first case's fill is (184, 184, 184) in dark, where white reads at only 1.98:1, and
+        // black in light; red takes black (4:1) and blue white (8.6:1).
+        for (theme, gray_ink) in [
+            (crate::theme::Theme::dark(), Color32::BLACK),
+            (crate::theme::Theme::light(), Color32::WHITE),
+        ] {
+            let chart = theme.chart;
+            for (case, (bar_volumes, volume, rows, levels)) in cases.iter().enumerate() {
+                let mut bars = bars.clone();
+                [bars[0].volume, bars[1].volume] = *bar_volumes;
+                let mut seed = serde_json::json!({"tpo_volume_profile": true, "tpo_row_ticks": 1});
+                if let Some(volume) = volume {
+                    seed["tpo_volume"] = volume.clone();
+                }
+                let params: crate::model::ChartTypeParams = serde_json::from_value(seed).unwrap();
+                let config = TPOConfig {
+                    show_poc: false,
+                    show_initial_balance: false,
+                    show_opening_range: false,
+                    display_mode: TPODisplayMode::Blocks,
+                    ..params.tpo_config(Some(1.0))
+                };
+                let profile = &to_tpo_profiles(&bars, &config, &Timeframe::Min30.into())[0];
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.begin_pass(egui::RawInput::default());
+                draw_session_profile(
+                    &ctx.layer_painter(egui::LayerId::background()),
+                    rect,
+                    &map,
+                    profile,
+                    &config,
+                    &TpoRenderConfig::default(),
+                    40.0,
+                    20.0,
+                    f32::INFINITY,
+                    0.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                );
+                let mut output = ctx.end_pass();
+                output.textures_delta.clear();
+                // The strip starts 14 px past the two 16 px columns, or 14 px before the profile.
+                let base = |x: f32| x == 86.0 || x == 26.0;
+                let painted: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Rect(r) if base(r.rect.left()) || base(r.rect.right()) => Some(r),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(painted.len(), 3, "case {case}");
+                for (r, &(price, left, width, fill)) in painted.iter().zip(rows) {
+                    let y = map.price_to_y(price);
+                    assert!(
+                        (r.rect.left() - left).abs() < 0.001
+                            && (r.rect.width() - width).abs() < 0.001
+                            && (r.rect.top(), r.rect.bottom()) == (y - 7.0, y + 8.0),
+                        "case {case} at {price}: {:?}",
+                        r.rect
+                    );
+                    let fill = match fill {
+                        'i' => chart.axis_text_secondary,
+                        'd' => chart.bg.lerp_to_gamma(chart.axis_text_secondary, 0.45),
+                        'r' => Color32::RED,
+                        _ => Color32::BLUE,
+                    };
+                    assert_eq!(r.fill, fill, "case {case} at {price}");
+                }
+                let lines: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::LineSegment { points, stroke } if base(points[0].x) => {
+                            Some((points[0].y, points[1].x, *stroke))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let poc = readable_color(
+                    TpoRenderConfig::default().poc_color,
+                    chart.axis_text,
+                    &[chart.bg],
+                    3.0,
+                );
+                let expected: Vec<_> = levels
+                    .iter()
+                    .filter(|(_, end, _)| !end.is_nan())
+                    .map(|&(price, end, _)| {
+                        let color = if price == 101.0 { poc } else { theme.ui.text };
+                        let stroke = egui::Stroke::new(DESIGN_TOKENS.stroke.light, color);
+                        (map.price_to_y(price), end, stroke)
+                    })
+                    .collect();
+                assert_eq!(lines, expected, "case {case}");
+                // Values sit inside their bars, from the strip's base, in white or black.
+                let values: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Text(text) => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(values.len(), levels.len(), "case {case}");
+                for (text, (r, &(price, ..))) in values.iter().zip(painted.iter().zip(rows)) {
+                    let value = levels.iter().find(|level| level.0 == price).unwrap().2;
+                    assert_eq!(text.galley.text(), value, "case {case} at {price}");
+                    let (left, right) = (text.pos.x, text.pos.x + text.galley.size().x);
+                    if r.rect.left() == 86.0 {
+                        assert!((left - 88.0).abs() <= 1.0, "case {case} at {price}: {left}");
+                    } else {
+                        assert!(
+                            (right - 24.0).abs() <= 1.0,
+                            "case {case} at {price}: {right}"
+                        );
+                    }
+                    let ink = if case == 0 {
+                        gray_ink
+                    } else if price == 100.0 {
+                        Color32::BLACK
+                    } else {
+                        Color32::WHITE
+                    };
+                    assert_eq!(text.fallback_color, ink, "case {case} at {price}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -3359,13 +3691,23 @@ mod tests {
                 TPOColorMode::ByValueArea,
                 TPOColorMode::ByInitialBalance,
             ] {
-                for (display_mode, column) in [
-                    (TPODisplayMode::Letters, 12.0),
-                    (TPODisplayMode::Letters, 3.5),
-                    (TPODisplayMode::Blocks, 12.0),
-                    (TPODisplayMode::Both, 12.0),
-                    (TPODisplayMode::Both, 3.5),
+                // The chart type's Letters and Blocks switches, the column width, and whether
+                // letters are painted alone or in cells; the rest paint blocks.
+                for (tpo_letters, tpo_blocks, column, letters, in_cells) in [
+                    (true, false, 12.0, true, false),
+                    (true, false, 3.5, false, false),
+                    (false, true, 12.0, false, false),
+                    (false, false, 12.0, false, false),
+                    (true, true, 12.0, false, true),
+                    (true, true, 3.5, false, false),
                 ] {
+                    let display_mode = crate::model::ChartTypeParams {
+                        tpo_letters,
+                        tpo_blocks,
+                        ..Default::default()
+                    }
+                    .tpo_config(None)
+                    .display_mode;
                     for (show_poc, show_value_area) in [(false, false), (false, true), (true, true)]
                     {
                         for density in [1.0, 1.5] {
@@ -3401,11 +3743,12 @@ mod tests {
                                 .iter()
                                 .filter(|s| matches!(s.shape, Shape::Rect(_) | Shape::Text(_)))
                                 .collect();
-                            let readable = column >= 7.0;
-                            let letters = display_mode == TPODisplayMode::Letters && readable;
-                            let in_cells = display_mode == TPODisplayMode::Both && readable;
                             let shapes_per_cell = if in_cells { 2 } else { 1 };
-                            assert_eq!(painted.len(), cells.len() * shapes_per_cell);
+                            assert_eq!(
+                                painted.len(),
+                                cells.len() * shapes_per_cell,
+                                "letters {tpo_letters}, blocks {tpo_blocks}, column {column}"
+                            );
                             for (shapes, (price, period, col)) in
                                 painted.chunks(shapes_per_cell).zip(cells)
                             {
@@ -4116,38 +4459,42 @@ mod tests {
             })
             .collect();
         // Each day has 3 pre-market, 13 regular and 3 post-market half-hour periods.
-        for (range, latest_session_only, profile_period, expected) in [
+        for (range, latest_session_only, (profile_period, profile_periods), expected) in [
             (
                 Some((480, 1440)),
                 false,
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 vec![3, 13, 6, 13, 3],
             ),
             (
                 Some((90, 1530)),
                 false,
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 vec![3, 32, 3],
             ),
-            (None, true, TPOProfilePeriod::Session, vec![3, 13, 3]),
+            (None, true, (TPOProfilePeriod::Session, 1), vec![3, 13, 3]),
             (
                 Some((480, 1440)),
                 true,
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 vec![6, 13, 3],
             ),
             (
                 Some((90, 1530)),
                 true,
-                TPOProfilePeriod::Session,
+                (TPOProfilePeriod::Session, 1),
                 vec![32, 3],
             ),
-            (None, false, TPOProfilePeriod::Week, vec![38]),
-            (None, true, TPOProfilePeriod::Week, vec![38]),
+            (None, false, (TPOProfilePeriod::Week, 1), vec![38]),
+            (None, true, (TPOProfilePeriod::Week, 1), vec![38]),
+            // Tuesday and Wednesday lie in one run of three trading days.
+            (None, false, (TPOProfilePeriod::Session, 3), vec![38]),
+            (None, true, (TPOProfilePeriod::Session, 3), vec![38]),
         ] {
             let config = TPOConfig {
                 split_sessions: true,
                 profile_period,
+                profile_periods,
                 latest_session_only,
                 composites: range
                     .into_iter()
@@ -4160,7 +4507,7 @@ mod tests {
             let span = whole_sessions(&bars, 24..25, &clock.sessions(), &config, clock.timeframe());
             assert_eq!(
                 span,
-                if range.is_none() && profile_period == TPOProfilePeriod::Session {
+                if range.is_none() && !config.joins_sessions() {
                     19..38
                 } else {
                     0..38
@@ -4184,7 +4531,10 @@ mod tests {
                 |i| i as f32 * 10.0,
                 |profile, _, _, _, _| counts.push(profile.tpo_count_at(100.0)),
             );
-            assert_eq!(counts, expected, "{range:?}, latest={latest_session_only}");
+            assert_eq!(
+                counts, expected,
+                "{range:?}, latest={latest_session_only}, {profile_period:?} x{profile_periods}"
+            );
         }
     }
 

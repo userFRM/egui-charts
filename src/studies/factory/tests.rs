@@ -657,7 +657,7 @@ fn per_bar_states_offer_the_colours_they_draw() {
         Color32,
         bool,
     );
-    let rows: [Row; 4] = [
+    let rows: [Row; 6] = [
         (
             "Accelerator Oscillator",
             palette::GREEN,
@@ -693,6 +693,24 @@ fn per_bar_states_offer_the_colours_they_draw() {
             palette::DEEP_TEAL,
             vec![("Downtrend", palette::BRIGHT_RED)],
             palette::DEEP_TEAL,
+            false,
+        ),
+        (
+            "Bull Bear Power",
+            palette::TEAL,
+            vec![("Below zero", palette::RED)],
+            palette::TEAL,
+            false,
+        ),
+        (
+            "BBTrend",
+            palette::TEAL.gamma_multiply_u8(191),
+            vec![
+                ("Easing above zero", palette::TEAL.gamma_multiply_u8(128)),
+                ("Falling below zero", palette::RED.gamma_multiply_u8(191)),
+                ("Easing below zero", palette::RED.gamma_multiply_u8(128)),
+            ],
+            palette::TEAL.gamma_multiply_u8(191),
             false,
         ),
     ];
