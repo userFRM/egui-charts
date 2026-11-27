@@ -1391,6 +1391,7 @@ impl DemoApp {
             .iter()
             .map(|list| (list.name.clone(), list.name.clone()))
             .collect();
+        self.alert_dialog.footprint_conditions = true;
         self.alert_dialog.strategy_runs = self
             .live_strategy
             .iter()
@@ -1438,6 +1439,11 @@ impl DemoApp {
                 .poll(engine, self.indicator_dialog.factory(), &live, ctx, now)
         {
             self.toasts.error(format!("Alert data: {error}"));
+        }
+        // Footprint alerts follow the detectors whose rule the active chart sets.
+        let footprint = self.live.detectors().take_footprint_events();
+        if self.replay.is_none() {
+            engine.footprint_events(&footprint, now);
         }
         if engine
             .alerts()
@@ -6405,6 +6411,108 @@ mod tests {
         assert!(levels.is_empty(), "{levels:?}");
     }
 
+    /// The dialog saves a footprint condition and frequency, then the demo forwards the
+    /// execution that completes its stack exactly once to the alert engine.
+    #[test]
+    fn footprint_alerts_reach_the_demo_alert_dialog() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        use egui_charts::data::MarketEvent;
+        use egui_charts::model::{
+            AlertFrequency, ChartTypeParams, FootprintCondition,
+            OrderSide::{Buy, Sell},
+            Tick,
+        };
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
+        app.live.set_paused(true);
+        finish_feed(&app.live);
+        settle(&mut app, &ctx);
+        app.open_alert(None);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in [
+            "Condition",
+            "Footprint",
+            "Footprint condition",
+            "Stacked buy imbalance",
+            "Frequency",
+            "Once per bar",
+            "Save alert",
+        ] {
+            let nodes = draw(&ctx, &mut app, vec![]);
+            let target_node = control(&nodes, label).0;
+            draw(
+                &ctx,
+                &mut app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: None,
+                })],
+            );
+        }
+        let engine = app.alert_host.engine();
+        let saved = engine.alerts();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            saved[0].condition,
+            AlertCondition::Footprint(FootprintCondition::StackedBuyImbalance)
+        );
+        assert_eq!(saved[0].frequency, AlertFrequency::OncePerBar);
+        let detectors = app.live.detectors();
+        let mut settings = detectors.settings();
+        settings
+            .footprint
+            .rule
+            .follow_chart(&ChartTypeParams::default(), 1);
+        detectors.set_settings(settings);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let last = bars.last().unwrap();
+        let b = last.time + chrono::TimeDelta::minutes(1);
+        let tick = app.chart.instrument().unwrap().tick_size.unwrap();
+        let p = (last.close / tick).round() * tick;
+        let symbol = app.chart.symbol().to_owned();
+        let fired = engine.triggers().len();
+        for (second, row, size, side) in [
+            (1, 0.0, 1.0, Sell),
+            (2, 1.0, 1.0, Sell),
+            (3, 2.0, 1.0, Sell),
+            (4, 1.0, 12.0, Buy),
+            (5, 2.0, 9.0, Buy),
+            (6, 3.0, 15.0, Buy),
+        ] {
+            let time = b + chrono::TimeDelta::seconds(second);
+            detectors.push(
+                &symbol,
+                time,
+                &MarketEvent::Trade(Tick::new(time, p + row * tick, size, Some(side))),
+            );
+        }
+        app.monitor_alerts(&ctx);
+        let triggers = app.alert_host.engine().triggers();
+        assert_eq!(triggers.len(), fired + 1);
+        let trigger = triggers.last().unwrap();
+        assert_eq!(trigger.id, saved[0].id.clone().unwrap());
+        assert_eq!(trigger.time, b + chrono::TimeDelta::seconds(6));
+        assert_eq!(trigger.price, Some(p + 3.0 * tick));
+        assert_eq!(trigger.message, "Stacked buy imbalance of 3 rows");
+        let time = b + chrono::TimeDelta::seconds(7);
+        app.live.detectors().push(
+            &symbol,
+            time,
+            &MarketEvent::Trade(Tick::new(time, p + 3.0 * tick, 15.0, Some(Buy))),
+        );
+        app.monitor_alerts(&ctx);
+        assert_eq!(app.alert_host.engine().triggers().len(), fired + 1);
+    }
+
     /// Study settings use the own-data chart's zones and apply the edited session clock.
     #[test]
     fn study_settings_edit_session_time_and_offer_the_own_data_zone() {
@@ -7293,9 +7401,9 @@ mod tests {
         let (answer, reply) = egui_charts::data::ReplyReader::<OrderId>::new();
         egui_charts::services::Broker::place(&*app.paper, request, reply);
         answer.take().expect("limit reply").expect("working limit");
-        app.trading
-            .presets
-            .insert(String::new(), vec![OrderPreset::new("Two", 2.0)]);
+        let mut two = OrderPreset::new("Two", 2.0);
+        two.applied = true;
+        app.trading.presets.insert(String::new(), vec![two]);
         app.account_panel_height = 470.0;
         let mut storage = AppStorage::default();
         eframe::App::save(&mut *app, &mut storage);
@@ -10838,6 +10946,130 @@ mod tests {
         }
     }
 
+    /// A single pattern added from the browser tints only its formation, behind the candle.
+    #[test]
+    fn indicator_browser_adds_a_single_pattern_with_candle_tint() {
+        use eframe::App;
+
+        let ctx = egui::Context::default();
+        let start = "2026-11-18T15:30:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            start,
+            true,
+        );
+        app.live.set_paused(true);
+        settle(&mut app, &ctx);
+        *app.chart = Chart::new(BarData::new());
+        let mut bars: Vec<_> = (0..14)
+            .map(|i| {
+                let close = 100.0 + f64::from(i % 2);
+                let open = if i == 0 {
+                    99.0
+                } else {
+                    101.0 - f64::from(i % 2)
+                };
+                Bar::new(
+                    start + chrono::TimeDelta::minutes(i.into()),
+                    open,
+                    open.max(close) + 0.25,
+                    open.min(close) - 0.25,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        bars.push(Bar::new(
+            start + chrono::TimeDelta::minutes(14),
+            100.0,
+            102.0,
+            98.0,
+            100.0625,
+            1.0,
+        ));
+        app.chart.set_data(SeriesId::MAIN, bars.clone());
+        app.chart.fit_content();
+
+        let size = egui::vec2(1440.0, 900.0);
+        app.handle_top_toolbar(&ctx, TopToolbarAction::OpenIndicators);
+        for _ in 0..3 {
+            ui_frame(&ctx, size, vec![], |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            });
+        }
+        let texts = ui_frame(&ctx, size, vec![egui::Event::Text("Doji".into())], |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        let row = texts.iter().find(|(text, _)| text == "Doji").unwrap().1;
+        ui_click(&ctx, size, row.center(), |ui| {
+            app.ui(ui, &mut eframe::Frame::_new_kittest())
+        });
+        app.indicator_dialog.close();
+        let id = app
+            .chart
+            .indicators()
+            .find(|(_, study)| study.name() == "Doji")
+            .unwrap()
+            .0;
+        // Choose the study's visual order before checking that its tint is behind price.
+        assert!(
+            app.chart
+                .reorder_indicator(id, egui_charts::widget::VisualOrder::SendToBack)
+        );
+        for _ in 0..18 {
+            ui_frame(&ctx, size, vec![], |ui| {
+                app.ui(ui, &mut eframe::Frame::_new_kittest())
+            });
+        }
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+        );
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
+        let (_, study) = app
+            .chart
+            .indicators()
+            .find(|(_, study)| study.name() == "Doji")
+            .unwrap();
+        assert_eq!(study.line_names(), ["Neutral", "Background"]);
+        let tinted: Vec<_> = (0..bars.len())
+            .filter_map(|i| study.values().value(1, i).map(|value| (i, value)))
+            .collect();
+        assert_eq!(tinted, [(14, 100.0625)]);
+
+        let map = app.chart.get_chart_mapping();
+        let x = map.idx_to_x(14);
+        let color = egui::Color32::from_rgba_unmultiplied(120, 123, 134, 26);
+        let backgrounds: Vec<_> = shapes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, shape)| {
+                if let egui::Shape::Rect(rect) = &shape.shape {
+                    (rect.fill == color).then_some((i, rect.rect))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(backgrounds.len(), 1, "one tinted candle column");
+        let (background_at, rect) = backgrounds[0];
+        assert!((rect.center().x - x).abs() < 0.01);
+        assert!((rect.width() - map.bar_spacing).abs() < 0.01);
+        assert!((rect.top() - map.rect.top()).abs() < 0.01);
+        assert!((rect.bottom() - map.rect.bottom()).abs() < 0.01);
+        let candle = egui::pos2(x, map.price.price_to_y(100.03125));
+        let candle_at = shapes.iter().position(|shape| matches!(&shape.shape,
+            egui::Shape::Rect(rect) if rect.fill != color && rect.rect.contains(candle)
+                && rect.rect.width() < map.bar_spacing && rect.rect.height() < map.rect.height()
+        )).expect("the Doji candle body");
+        assert!(background_at < candle_at, "the tint is behind the candle");
+    }
+
     /// Quick search executes catalogue entries as well as opening settings.
     #[test]
     fn quick_search_executes_studies_tools_and_settings() {
@@ -11716,6 +11948,62 @@ mod tests {
         ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
         let config = app.chart.config();
         assert!(!config.shade_overnight && config.shade_postmarket);
+    }
+
+    /// The demo exposes the Columns close switch and Range's independent colours and Thin bars.
+    #[test]
+    fn chart_settings_columns_and_range_rows_reach_the_demo_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        let size = egui::vec2(1440.0, 900.0);
+        for kind in [ChartType::Columns, ChartType::Range] {
+            app.state.chart_type = kind;
+            app.chart.set_chart_type(kind);
+            app.open_chart_settings_dialog();
+            let show = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+            };
+            let mut labels = Vec::new();
+            for _ in 0..5 {
+                labels = show(&mut app, vec![]);
+            }
+            if kind == ChartType::Range {
+                for label in ["Rising bar colour", "Falling bar colour", "Thin bars"] {
+                    assert!(
+                        labels.iter().any(|(text, _)| text == label),
+                        "{label} is offered"
+                    );
+                }
+            } else {
+                let switch = labels
+                    .iter()
+                    .find(|(text, _)| text == "Color bars based on previous close")
+                    .expect("the Columns close switch is offered")
+                    .1
+                    .center();
+                ui_click(&ctx, size, switch, |ui| app.show_dialogs(ui.ctx()));
+            }
+            let ok = show(&mut app, vec![])
+                .into_iter()
+                .find(|(text, _)| text == "Ok")
+                .unwrap()
+                .1
+                .center();
+            ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+            if kind == ChartType::Columns {
+                assert!(
+                    !app.chart
+                        .chart_type_params()
+                        .styles
+                        .columns
+                        .color_by_previous_close
+                );
+            }
+        }
     }
 
     /// The demo's chart settings offer the switch that keeps the left edge, and with it on an
@@ -15258,6 +15546,137 @@ mod tests {
             );
             assert!(!app.symbol_search.is_open(), "{letter} was not typed");
         }
+    }
+
+    /// The chart preset menu names and highlights its choice, and Shift+B uses its size and
+    /// exits in instant placement mode.
+    #[test]
+    fn a_preset_chosen_beside_buy_and_sell_sizes_the_shift_b_order() {
+        use egui::accesskit::Toggled;
+        use egui_charts::ui::trading::{Bracket, BracketMode, OrderPreset};
+        use egui_kittest::kittest::NodeT as _;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        let last = app
+            .chart
+            .bars(SeriesId::MAIN)
+            .iter()
+            .rfind(|bar| !bar.is_whitespace())
+            .unwrap()
+            .close;
+        let tick = app
+            .chart
+            .instrument()
+            .and_then(|instrument| instrument.tick_size)
+            .unwrap_or(0.01);
+        app.paper.set_price(&symbol, last);
+        app.trading.display.instant_orders = true;
+        let presets = [("Scalp", 2.0, 10.0, 5.0), ("Swing", 3.0, 20.0, 10.0)].map(
+            |(name, quantity, tp, sl)| {
+                let mut preset = OrderPreset::new(name, quantity);
+                preset.take_profit = Some(Bracket::new(BracketMode::Ticks, tp));
+                preset.stop_loss = Some(Bracket::new(BracketMode::Ticks, sl));
+                preset
+            },
+        );
+        app.trading.presets.insert(String::new(), presets.into());
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(|ctx| {
+                egui_extras::install_image_loaders(ctx);
+                ctx.all_styles_mut(|style| {
+                    style.interaction.tooltip_delay = 0.0;
+                    style.interaction.show_tooltips_only_when_still = false;
+                });
+            })
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(3);
+        h.get_by_label("Order presets").click();
+        h.run_steps(2);
+        for (name, selected) in [("No preset", true), ("Scalp", false), ("Swing", false)] {
+            assert_eq!(
+                h.get_by_label(name).accesskit_node().toggled(),
+                Some(if selected {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+            );
+        }
+        h.get_by_label("Swing").click();
+        h.run_steps(2);
+        assert_eq!(
+            h.state().trading.presets[""]
+                .iter()
+                .map(|preset| preset.applied)
+                .collect::<Vec<_>>(),
+            [false, true]
+        );
+        for label in ["BUY · Swing", "SELL · Swing"] {
+            assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)));
+        }
+        h.get_by_label("Order presets").click();
+        h.run_steps(2);
+        assert_eq!(
+            h.get_by_label("Swing").accesskit_node().toggled(),
+            Some(Toggled::True)
+        );
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        let buy = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "BUY · Swing" => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .unwrap();
+        h.hover_at(buy);
+        h.run_steps(2);
+        assert!(
+            h.query_all_by_role(egui::Role::Label)
+                .any(|node| node.value().is_some_and(|text| text.contains(
+                    "Preset Swing\nQuantity 3\nTake profit 20 ticks\nStop loss 10 ticks"
+                )))
+        );
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::B);
+        h.run_steps(3);
+        let saved = serde_json::to_value(h.state().paper.save()).unwrap();
+        let working = saved["working"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|order| order["request"]["symbol"] == symbol)
+            .collect::<Vec<_>>();
+        assert_eq!(working.len(), 2, "{working:?}");
+        for order in &working {
+            assert_eq!(order["request"]["quantity"], 3.0);
+        }
+        let tp = working
+            .iter()
+            .find_map(|order| order["request"]["order_type"]["Limit"].as_f64())
+            .unwrap();
+        let sl = working
+            .iter()
+            .find_map(|order| order["request"]["order_type"]["Stop"].as_f64())
+            .unwrap();
+        assert_eq!(((tp - sl) / tick).round(), 30.0);
     }
 
     /// The paper account attaches exits to open positions, so a position line shows its TP and

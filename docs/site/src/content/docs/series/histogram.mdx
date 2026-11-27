@@ -46,7 +46,9 @@ Main columns use
 [`ColumnsStyle::up_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ColumnsStyle.html#structfield.up_color)
 and `down_color` in
 [`ChartTypeParams::styles`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeParams.html#structfield.styles),
-the rising and falling colours at 50% opacity until set.
+the rising and falling colours at 50% opacity until set. A column takes the rising
+colour when its close is at or above the close before it; set
+`color_by_previous_close` to `false` to compare it with the column's own open.
 Added columns use
 [`SeriesOptions::up_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.up_color),
 `down_color` and

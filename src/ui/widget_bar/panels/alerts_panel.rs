@@ -1300,6 +1300,7 @@ impl AlertsPanel {
                     &self.sources,
                     &[],
                     true,
+                    false,
                     Some(&mut self.draft_level_text),
                 );
                 if self.draft_saving {
