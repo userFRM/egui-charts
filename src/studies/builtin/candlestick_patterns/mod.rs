@@ -474,9 +474,6 @@ impl Indicator for CandlestickPatterns {
     }
 
     fn plot_shape_side(&self, line: usize) -> crate::studies::ShapeSide {
-        if self.only.is_some() && line == BACKGROUND {
-            return crate::studies::ShapeSide::Centred;
-        }
         // Bullish and neutral marks hold the bar's low, bearish ones its high.
         if self.combined_line(line) == 1 {
             crate::studies::ShapeSide::Above
@@ -486,9 +483,6 @@ impl Indicator for CandlestickPatterns {
     }
 
     fn plot_label_colors(&self, line: usize) -> Option<(Color32, Color32)> {
-        if self.only.is_some() && line == BACKGROUND {
-            return None;
-        }
         self.colors
             .get(self.combined_line(line))
             .map(|&color| (color, Color32::WHITE))
@@ -1375,7 +1369,6 @@ mod tests {
             assert_eq!(study.alert_outputs(), [(0, side.into())], "{label}");
             assert_eq!(study.plot_text(1, 0), None);
             assert_eq!(study.plot_tooltip(1, 0), None);
-            assert_eq!(study.plot_label_colors(1), None);
             study.set_color(1, changed);
             assert_eq!(study.plot_style(1).color, changed, "{label}");
             assert_eq!(study.plot_style(0).color, color, "{label}");
