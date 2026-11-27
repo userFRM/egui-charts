@@ -328,12 +328,16 @@ impl Default for BarsStyle {
 pub struct ColumnsStyle {
     /// The price each column reaches. Its colour still compares closes.
     pub price_source: PriceSource,
-    /// Colour of a column whose close is at or above the close before it, including opacity.
+    /// Colour each column by its close against the previous close, rising when the close is at
+    /// or above the last close before it. Off, a column rises when its close is at or above its
+    /// own open. On by default and in documents saved without it.
+    pub color_by_previous_close: bool,
+    /// Colour of a column that rises, including opacity.
     /// [`Color32::PLACEHOLDER`] draws it in the chart's rising candle body colour, as documents
     /// saved before this colour read.
     #[serde(default = "candle_body_color")]
     pub up_color: Color32,
-    /// Colour of a column whose close is below the close before it, including opacity.
+    /// Colour of a column that falls, including opacity.
     /// [`Color32::PLACEHOLDER`] draws it in the chart's falling candle body colour, as documents
     /// saved before this colour read.
     #[serde(default = "candle_body_color")]
@@ -345,6 +349,7 @@ impl Default for ColumnsStyle {
         // The rising and falling colours at 50% opacity: round(0.5 * 255) = 128.
         Self {
             price_source: PriceSource::default(),
+            color_by_previous_close: true,
             up_color: HlcAreaStyle::fill_tint(DESIGN_TOKENS.semantic.extended.bullish, 128),
             down_color: HlcAreaStyle::fill_tint(DESIGN_TOKENS.semantic.extended.bearish, 128),
         }
@@ -668,6 +673,12 @@ fn candle_body_color() -> Color32 {
     Color32::PLACEHOLDER
 }
 
+/// What a missing [`RangeStyle::blocks`] reads: Range styles saved before bold bars drew
+/// filled blocks.
+fn saved_blocks() -> bool {
+    true
+}
+
 /// `color`, or `candle` for [`Color32::PLACEHOLDER`]: the candle body colour that a style saved
 /// before it had colours of its own draws in.
 #[cfg(feature = "widget")]
@@ -767,27 +778,42 @@ impl Default for RenkoStyle {
     }
 }
 
-/// The Range chart's bars.
+/// The Range chart's bars and their colours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct RangeStyle {
-    /// Draw each bar as a stroke from its low to its high with open and close ticks, at the
-    /// chart's wick width at every zoom level as thin OHLC bars are, instead of a filled block.
+    /// Draw each bar at the chart's wick width at every zoom level, as thin OHLC bars are, instead
+    /// of a bold OHLC bar whose stroke and ticks widen with the bar spacing. On by default.
     pub thin_bars: bool,
+    /// While `thin_bars` is off, draw each bar as one filled block from its low to its high,
+    /// without open and close ticks, instead of a bold OHLC bar. Off by default; Range styles
+    /// saved before bold bars read it on, so they draw as they were drawn. Changing Thin bars in
+    /// the series settings turns it off.
+    #[serde(default = "saved_blocks")]
+    pub blocks: bool,
     /// Draw a bar that closed without a trade in its range, as one of the bars a single trade
     /// across a price gap closes, as an outline in its direction's colour without a fill. These
     /// bars stay elements of the chart: studies, the legend and the data window read them as
     /// they read the bars that traded.
     pub phantom_bars: bool,
+    /// Colour of a completed bar whose close is above its open. [`Color32::PLACEHOLDER`] draws it
+    /// in the chart's rising candle body colour, as documents saved before this colour read.
+    #[serde(default = "candle_body_color")]
+    pub up_color: Color32,
+    /// Colour of a completed bar whose close is at or below its open.
+    /// [`Color32::PLACEHOLDER`] draws it in the chart's falling candle body colour, as documents
+    /// saved before this colour read.
+    #[serde(default = "candle_body_color")]
+    pub down_color: Color32,
     /// Colour of the bar in progress, the newest bar until its range is complete, while its close
-    /// is above its open. [`Color32::PLACEHOLDER`] draws it in the chart's rising candle body
-    /// colour, as completed bars and documents saved before this colour are drawn.
+    /// is above its open. [`Color32::PLACEHOLDER`] draws it in `up_color`, the colour of completed
+    /// bars, as documents saved before this colour are drawn.
     #[serde(default = "candle_body_color")]
     pub forming_up: Color32,
     /// Colour of the bar in progress while its close is at or below its open.
-    /// [`Color32::PLACEHOLDER`] draws it in the chart's falling candle body colour, as completed
-    /// bars and documents saved before this colour are drawn.
+    /// [`Color32::PLACEHOLDER`] draws it in `down_color`, the colour of completed bars, as documents
+    /// saved before this colour are drawn.
     #[serde(default = "candle_body_color")]
     pub forming_down: Color32,
 }
@@ -795,8 +821,11 @@ pub struct RangeStyle {
 impl Default for RangeStyle {
     fn default() -> Self {
         Self {
-            thin_bars: false,
+            thin_bars: true,
+            blocks: false,
             phantom_bars: false,
+            up_color: DESIGN_TOKENS.semantic.extended.bullish,
+            down_color: DESIGN_TOKENS.semantic.extended.bearish,
             // Light green and light red, apart from the completed bars on dark and light charts.
             forming_up: Color32::from_rgb(169, 220, 195),
             forming_down: Color32::from_rgb(245, 166, 174),
@@ -805,9 +834,14 @@ impl Default for RangeStyle {
 }
 
 impl RangeStyle {
-    /// How a Range chart drew before it had forming bar colours: in the candle body colours.
+    /// How a Range chart drew before it had its own colours and bold bars: filled blocks in
+    /// the candle body colours.
     fn saved_without_style() -> Self {
         Self {
+            thin_bars: false,
+            blocks: true,
+            up_color: Color32::PLACEHOLDER,
+            down_color: Color32::PLACEHOLDER,
             forming_up: Color32::PLACEHOLDER,
             forming_down: Color32::PLACEHOLDER,
             ..Self::default()
@@ -855,6 +889,7 @@ impl RangeStyle {
 /// styles.point_figure = point_figure;
 /// let mut range = RangeStyle::default();
 /// range.thin_bars = true;
+/// range.up_color = egui::Color32::BLUE;
 /// range.forming_up = egui::Color32::BLUE;
 /// styles.range = range;
 /// let mut renko = RenkoStyle::default();
@@ -865,6 +900,7 @@ impl RangeStyle {
 /// styles.line_break = line_break;
 /// let mut columns = ColumnsStyle::default();
 /// columns.up_color = egui::Color32::BLUE;
+/// columns.color_by_previous_close = false;
 /// styles.columns = columns;
 /// styles.step_line_price_source = Some(PriceSource::High);
 /// styles.tpo_price_source = PriceSource::High;
@@ -1129,6 +1165,7 @@ mod tests {
             ("styles", styles.columns),
             ("parameters", params.styles.columns),
         ] {
+            assert!(columns.color_by_previous_close, "{saved}");
             assert_eq!(
                 [columns.up_color, columns.down_color],
                 [Color32::PLACEHOLDER; 2],

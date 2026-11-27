@@ -40,7 +40,7 @@ impl OhlcVolatility {
 
 impl Default for OhlcVolatility {
     fn default() -> Self {
-        Self::new(20)
+        Self::new(10)
     }
 }
 

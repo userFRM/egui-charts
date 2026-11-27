@@ -7,7 +7,7 @@
 //!
 //! # Formula
 //! With `band = k * ATR(n)` (Wilder's average true range, length 20 and multiplier 2 by
-//! default) and the source the close:
+//! default) and the source, close by default:
 //! - `max` and `min` are the highest and lowest source values since the last reversal
 //! - in an uptrend `stop = max(previous stop, max - band)`,
 //!   in a downtrend `stop = min(previous stop, min + band)`
@@ -19,6 +19,9 @@
 //! plot colour, teal by default, in an uptrend and the Downtrend colour, red by default, in a
 //! downtrend.
 //!
+//! The average true range always reads each bar's high, low and previous close. A bar without
+//! a source value has no stop and leaves the trend unchanged.
+//!
 //! # Example
 //! ```
 //! # let bars: Vec<egui_charts::model::Bar> = (0..60).map(|i| { let p = 100.0 + (i as f64 * 0.3).sin() * 5.0; egui_charts::model::Bar::new(chrono::Utc::now(), p, p + 1.0, p - 1.0, p + 0.5, 1_000.0) }).collect();
@@ -29,7 +32,7 @@
 //! ```
 
 use super::clamp_param;
-use crate::model::Bar;
+use crate::model::{Bar, PriceSource};
 use crate::studies::stepper::Stepper;
 use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
@@ -39,6 +42,7 @@ use egui::Color32;
 pub struct VolatilityStop {
     length: usize,
     multiplier: f64,
+    source: PriceSource,
     values: IndicatorValues,
     stepper: Stepper<State>,
     /// Whether each source bar is in an uptrend, for its colour.
@@ -49,6 +53,8 @@ pub struct VolatilityStop {
 
 #[derive(Clone, Debug, Default)]
 struct State {
+    bar: usize,
+    started: bool,
     usable: usize,
     previous: f64,
     atr: f64,
@@ -59,12 +65,13 @@ struct State {
 }
 
 impl VolatilityStop {
-    /// Create the stop with the ATR length (typically 20) and the ATR multiplier (typically 2,
-    /// clamped into 0 to `f64::MAX`, NaN to 0).
+    /// Create the stop with the ATR length (typically 20, at least 2) and the ATR multiplier
+    /// (typically 2, clamped into 0.25 to `f64::MAX`, NaN to 0.25).
     pub fn new(length: usize, multiplier: f64) -> Self {
         Self {
-            length: length.max(1),
-            multiplier: clamp_param(multiplier, 0.0, f64::MAX),
+            length: length.max(2),
+            multiplier: clamp_param(multiplier, 0.25, f64::MAX),
+            source: PriceSource::Close,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             uptrend: Vec::new(),
@@ -74,6 +81,75 @@ impl VolatilityStop {
             ],
             visible: true,
         }
+    }
+
+    fn update_prices(&mut self, data: &[Bar], from: usize, source: Option<&[f64]>) {
+        let (length, multiplier) = (self.length, self.multiplier);
+        let mut trends = Vec::new();
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                let index = state.bar;
+                state.bar += 1;
+                if ![bar.high, bar.low, bar.close].iter().all(|p| p.is_finite()) {
+                    trends.push(false);
+                    return IndicatorValue::None;
+                }
+                let first = state.usable == 0;
+                let tr = if first {
+                    bar.high - bar.low
+                } else {
+                    ATR::true_range(bar, state.previous)
+                };
+                state.previous = bar.close;
+                state.usable += 1;
+                if state.usable <= length {
+                    state.atr += tr;
+                    if state.usable == length {
+                        state.atr /= length as f64;
+                    }
+                } else {
+                    state.atr += (tr - state.atr) / length as f64;
+                }
+                let band = if state.usable >= length {
+                    multiplier * state.atr
+                } else {
+                    tr
+                };
+                let price = source.map_or_else(
+                    || self.source.compute(bar.open, bar.high, bar.low, bar.close),
+                    |source| source.get(index).copied().unwrap_or(f64::NAN),
+                );
+                if !price.is_finite() {
+                    trends.push(false);
+                    return IndicatorValue::None;
+                }
+                if !state.started {
+                    state.started = true;
+                    (state.max, state.min, state.stop) = (price, price, price);
+                } else {
+                    state.max = state.max.max(price);
+                    state.min = state.min.min(price);
+                    state.stop = if state.downtrend {
+                        state.stop.min(state.min + band)
+                    } else {
+                        state.stop.max(state.max - band)
+                    };
+                }
+                let downtrend = price < state.stop;
+                if downtrend != state.downtrend {
+                    state.downtrend = downtrend;
+                    (state.max, state.min) = (price, price);
+                    state.stop = if downtrend {
+                        price + band
+                    } else {
+                        price - band
+                    };
+                }
+                trends.push(!state.downtrend);
+                IndicatorValue::Single(state.stop)
+            });
+        self.uptrend.truncate(data.len() - trends.len());
+        self.uptrend.extend(trends);
     }
 }
 
@@ -86,9 +162,14 @@ impl Default for VolatilityStop {
 
 impl Indicator for VolatilityStop {
     crate::studies::inputs::study_inputs!(self;
-        length: length("Length", 1, usize::MAX),
-        multiplier: number("Multiplier", 0.0, f64::MAX)
+        length: length("Length", 2, usize::MAX),
+        multiplier: number("Multiplier", 0.25, f64::MAX, 0.25),
+        source: choice("Source", PriceSource::all())
     ; {});
+
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(self.source))
+    }
 
     fn plot_style(&self, _line: usize) -> crate::studies::PlotStyle {
         crate::studies::PlotStyle {
@@ -135,62 +216,11 @@ impl Indicator for VolatilityStop {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let (length, multiplier) = (self.length, self.multiplier);
-        let mut trends = Vec::new();
-        self.stepper
-            .run(data, from, &mut self.values, |state, bar| {
-                if ![bar.high, bar.low, bar.close].iter().all(|p| p.is_finite()) {
-                    trends.push(false);
-                    return IndicatorValue::None;
-                }
-                let source = bar.close;
-                let first = state.usable == 0;
-                let tr = if first {
-                    bar.high - bar.low
-                } else {
-                    ATR::true_range(bar, state.previous)
-                };
-                state.previous = bar.close;
-                state.usable += 1;
-                if state.usable <= length {
-                    state.atr += tr;
-                    if state.usable == length {
-                        state.atr /= length as f64;
-                    }
-                } else {
-                    state.atr += (tr - state.atr) / length as f64;
-                }
-                let band = if state.usable >= length {
-                    multiplier * state.atr
-                } else {
-                    tr
-                };
-                if first {
-                    (state.max, state.min, state.stop) = (source, source, source);
-                } else {
-                    state.max = state.max.max(source);
-                    state.min = state.min.min(source);
-                    state.stop = if state.downtrend {
-                        state.stop.min(state.min + band)
-                    } else {
-                        state.stop.max(state.max - band)
-                    };
-                }
-                let downtrend = source < state.stop;
-                if downtrend != state.downtrend {
-                    state.downtrend = downtrend;
-                    (state.max, state.min) = (source, source);
-                    state.stop = if downtrend {
-                        source + band
-                    } else {
-                        source - band
-                    };
-                }
-                trends.push(!state.downtrend);
-                IndicatorValue::Single(state.stop)
-            });
-        self.uptrend.truncate(data.len() - trends.len());
-        self.uptrend.extend(trends);
+        self.update_prices(data, from, None);
+    }
+
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        self.update_prices(data, from, Some(source));
     }
 
     fn is_incremental(&self) -> bool {
@@ -225,5 +255,121 @@ impl Indicator for VolatilityStop {
 
     fn line_names(&self) -> Vec<String> {
         vec!["Volatility Stop".into()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::PriceSource;
+    use crate::studies::{ConfiguredStudy, InputValue, StudySource};
+
+    /// ATR(2) reads true ranges 2, 2, 1.5, 2.7, 1.5, 2.4, hence bands 2, 2, 1.75,
+    /// 2.225, 1.8625, 2.13125 at multiplier 1. High as source changes only the trail.
+    #[test]
+    fn catalogue_source_moves_the_stop_while_the_range_reads_the_bars() {
+        let bars: Vec<_> = [
+            (10.0, 11.0, 9.0, 10.5),
+            (10.5, 12.0, 10.0, 11.5),
+            (11.5, 12.5, 11.0, 12.0),
+            (12.0, 12.2, 9.5, 9.8),
+            (9.8, 10.5, 9.0, 9.2),
+            (9.2, 11.5, 9.1, 11.2),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (o, h, l, c))| {
+            Bar::new(
+                chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(i as i64),
+                o,
+                h,
+                l,
+                c,
+                1.0,
+            )
+        })
+        .collect();
+        let close = [
+            (10.5, false),
+            (10.5, false),
+            (10.5, false),
+            (12.025, true),
+            (11.0625, true),
+            (9.06875, false),
+        ];
+        let high = [
+            (11.0, false),
+            (11.0, false),
+            (11.0, false),
+            (11.0, false),
+            (12.3625, true),
+            (12.3625, true),
+        ];
+        for mode in 0..4 {
+            let mut study: Box<dyn Indicator> = Box::new(VolatilityStop::new(2, 1.0));
+            if mode == 1 {
+                study.set_input("source", InputValue::Choice(1)).unwrap();
+            } else if mode == 2 {
+                study = Box::new(ConfiguredStudy::new(study));
+                study
+                    .set_input(
+                        "source",
+                        InputValue::Source(StudySource::Price(PriceSource::High)),
+                    )
+                    .unwrap();
+            }
+            let column = [f64::NAN, 12.0, f64::NAN, 12.2, 10.5, 11.5];
+            let check = |study: &dyn Indicator, bar: usize| {
+                if mode == 3 && (bar == 0 || bar == 2) {
+                    assert_eq!(study.values().value(0, bar), None);
+                    assert_eq!(study.plot_variant(0, bar), None);
+                } else {
+                    let (want, down) = if mode == 0 {
+                        close[bar]
+                    } else if mode == 3 && bar < 4 {
+                        (12.0, false)
+                    } else {
+                        high[bar]
+                    };
+                    let got = study.values().value(0, bar).unwrap();
+                    assert!(
+                        (got - want).abs() < 1e-12,
+                        "mode {mode}, bar {bar}: {got} != {want}"
+                    );
+                    assert_eq!(
+                        study.plot_variant(0, bar),
+                        down.then_some(0),
+                        "mode {mode}, bar {bar}"
+                    );
+                }
+            };
+            if mode == 3 {
+                study.update_source(&bars, 0, &column);
+            } else {
+                study.calculate(&bars);
+            }
+            for bar in 0..bars.len() {
+                check(study.as_ref(), bar);
+            }
+            for end in 1..=bars.len() {
+                if mode == 3 {
+                    study.update_source(&bars[..end], end - 1, &column);
+                } else if end == 1 {
+                    study.calculate(&bars[..end]);
+                } else {
+                    study.update(&bars[..end], end - 1);
+                }
+                check(study.as_ref(), end - 1);
+            }
+            // A correction replays the same source and trend state from a checkpoint.
+            if mode == 3 {
+                study.update_source(&bars, 2, &column);
+            } else {
+                study.update(&bars, 2);
+            }
+            for bar in 0..bars.len() {
+                check(study.as_ref(), bar);
+            }
+        }
     }
 }

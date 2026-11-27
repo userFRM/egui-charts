@@ -15,8 +15,8 @@
 //! # Presentation
 //! Columns: above zero, strong green while BBTrend rises or holds and light green while it eases;
 //! below zero, strong red while it falls or holds and light red while it recovers. Exactly zero
-//! and a first value above zero are light green, a first value below zero light red. Each
-//! stage's colour is set in the Style tab.
+//! and a first value, above or below zero, are light green (Easing above zero). Each stage's
+//! colour is set in the Style tab.
 //!
 //! # Example
 //! ```
@@ -68,18 +68,20 @@ impl BBTrend {
     }
 
     /// The stage of `bar`: 0 rising or holding above zero, 1 easing above zero or exactly zero,
-    /// 2 falling or holding below zero, 3 recovering below zero. A first value takes the lighter
-    /// stage of its side.
+    /// 2 falling or holding below zero, 3 recovering below zero. A first value, with no value
+    /// before it to compare, is stage 1 whatever its sign.
     fn stage(&self, bar: usize) -> Option<usize> {
         let value = self.values.value(0, bar)?;
         // Bars without a value, skipped as non-finite, do not count as the previous one.
-        let previous = (0..bar).rev().find_map(|bar| self.values.value(0, bar));
+        let Some(previous) = (0..bar).rev().find_map(|bar| self.values.value(0, bar)) else {
+            return Some(1);
+        };
         Some(if value == 0.0 {
             1
         } else if value > 0.0 {
-            usize::from(!previous.is_some_and(|p| value >= p))
+            usize::from(value < previous)
         } else {
-            2 + usize::from(!previous.is_some_and(|p| value <= p))
+            2 + usize::from(value > previous)
         })
     }
 
@@ -233,7 +235,8 @@ mod tests {
     use super::*;
 
     /// Above zero the column is strong while BBTrend rises and light otherwise; at or below zero
-    /// it is strong while BBTrend falls and light otherwise, and light without a previous value.
+    /// it is strong while BBTrend falls and light otherwise, and a first value, above or below
+    /// zero, is light green.
     #[test]
     fn columns_are_coloured_by_sign_and_direction() {
         let study = BBTrend {
@@ -251,5 +254,29 @@ mod tests {
             })
             .collect();
         assert_eq!(slots, [1, 0, 1, 2, 2, 3, 1]);
+
+        let bars: Vec<_> = (0..5)
+            .map(|i| {
+                let close = 10.0 - i as f64;
+                Bar::new(
+                    chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut study = BBTrend::new(2, 4, 2.0);
+        study.calculate(&bars);
+        // Falling closes: short mean c+0.5, deviation 0.5; long mean c+1.5, deviation sqrt(1.25).
+        // The absolute band differences subtract to -2, so BBTrend = -200 / short mean.
+        assert_eq!(study.values().value(0, 2), None);
+        for (bar, mean, stage, variant) in [(3, 7.5, 1, 0), (4, 6.5, 2, 1)] {
+            assert!((study.values().value(0, bar).unwrap() - -200.0 / mean).abs() < 1e-9);
+            assert_eq!(study.plot_color(0, bar), Some(colors[stage]));
+            assert_eq!(study.plot_variant(0, bar), Some(variant));
+        }
     }
 }
