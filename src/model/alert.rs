@@ -134,6 +134,10 @@ pub struct Alert {
     pub additional_timeframes: Vec<Option<Timeframe>>,
     /// When the alert fires.
     pub condition: AlertCondition,
+    /// The events of its run a [`StrategyFills`](AlertCondition::StrategyFills) alert receives;
+    /// other conditions ignore it.
+    #[serde(default)]
+    pub strategy_events: StrategyEvents,
     /// Whether the alert fires once or on every occurrence.
     #[serde(default)]
     pub frequency: AlertFrequency,
@@ -428,6 +432,7 @@ impl Alert {
             delivery: AlertDelivery::default(),
             message: String::new(),
             status: AlertStatus::default(),
+            strategy_events: StrategyEvents::default(),
         }
     }
 }
@@ -533,6 +538,7 @@ impl Alert {
     /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
     ///
     /// let mut alert = Alert::new("NYSE:IBM", AlertCondition::Above(100.0));
+    /// alert.strategy_events = egui_charts::model::StrategyEvents::Fills;
     /// alert.message = "{{ticker}} on {{exchange}} closed at {{close}} on {{interval}}".into();
     /// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
     /// let bar = Bar::new(time, 99.0, 102.0, 98.0, 101.5, 1000.0);
@@ -694,6 +700,7 @@ pub enum AlertCondition {
     /// Each fill of the host's uniquely named strategy run. Feed `Backtest::update` results to
     /// `AlertEngine::strategy_fills` with the same run id. Uses the price source, no additional
     /// rules, and frequency `EveryTime` (the constructor default) or `Once`. No bars evaluate it.
+    /// [`Alert::strategy_events`] selects fills, the run's alert calls or both.
     StrategyFills(String),
     /// Each new formation or target of the host's detector named here: every
     /// [`Signal`](super::Signal) of the symbol whose category is this name, once per signal id.
@@ -1475,6 +1482,31 @@ impl std::fmt::Display for AlertFrequency {
     }
 }
 
+/// Which events of its strategy run a [`StrategyFills`](AlertCondition::StrategyFills) alert
+/// receives.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum StrategyEvents {
+    /// The run's order fills, fed to `AlertEngine::strategy_fills`, and its alert calls, fed to
+    /// `AlertEngine::strategy_alerts`. Alerts saved without a choice receive both.
+    #[default]
+    FillsAndAlerts,
+    /// Order fills only.
+    Fills,
+    /// Alert calls only.
+    Alerts,
+}
+
+impl std::fmt::Display for StrategyEvents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::FillsAndAlerts => "Order fills and alert calls",
+            Self::Fills => "Order fills only",
+            Self::Alerts => "Alert calls only",
+        })
+    }
+}
+
 impl std::fmt::Display for AlertComparison {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -2249,6 +2281,7 @@ mod tests {
                 additional_timeframes: Vec::new(),
                 symbol: "AAPL".into(),
                 condition: AlertCondition::CrossingUp(101.5),
+                strategy_events: StrategyEvents::FillsAndAlerts,
                 frequency: AlertFrequency::Once,
                 starts: None,
                 expires: None,
@@ -2268,6 +2301,7 @@ mod tests {
             AlertCondition::StrategyFills("run-1".into())
         );
         assert!(fills.is_valid());
+        assert_eq!(fills.strategy_events, StrategyEvents::FillsAndAlerts);
     }
 
     #[cfg(feature = "timezones")]
