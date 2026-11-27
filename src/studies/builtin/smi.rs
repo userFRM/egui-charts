@@ -9,6 +9,11 @@ use egui::Color32;
 /// Enhanced stochastic that measures close relative to HL range midpoint
 /// More responsive than standard stochastic
 ///
+/// Each of its five averages (two of the distance from the range midpoint, two of the range and
+/// the signal) is an EMA that starts from the mean of its first `length` defined inputs. The
+/// first SMI is on bar `period - 1 + (smooth1 - 1) + (smooth2 - 1)` and the first signal
+/// `signal_period - 1` defined SMI values later.
+///
 /// The pane shades above 40 in green and below -40 in red, from transparent to half opacity at
 /// 120 and -120.
 #[derive(Clone, Debug)]
@@ -162,16 +167,20 @@ impl Indicator for StochasticMomentumIndex {
                 let range = high - low;
                 let a1 = 2.0 / (self.smooth1 as f64 + 1.0);
                 let a2 = 2.0 / (self.smooth2 as f64 + 1.0);
-                let d1 = state.1[0].next(distance, 1, a1);
-                let d2 = state.1[1].next(d1, 1, a2);
-                let r1 = state.1[2].next(range, 1, a1);
-                let r2 = state.1[3].next(r1, 1, a2);
+                let d1 = state.1[0].next(distance, self.smooth1, a1);
+                let d2 = state.1[1].next(d1, self.smooth2, a2);
+                let r1 = state.1[2].next(range, self.smooth1, a1);
+                let r2 = state.1[3].next(r1, self.smooth2, a2);
                 let smi = if d2.is_nan() || r2.is_nan() || r2 == 0.0 {
                     f64::NAN
                 } else {
                     100.0 * d2 / (r2 / 2.0)
                 };
-                let signal = state.1[4].next(smi, 1, 2.0 / (self.signal_period as f64 + 1.0));
+                let signal = state.1[4].next(
+                    smi,
+                    self.signal_period,
+                    2.0 / (self.signal_period as f64 + 1.0),
+                );
                 if smi.is_nan() {
                     IndicatorValue::None
                 } else {
@@ -278,39 +287,54 @@ mod tests {
 
     #[test]
     fn test_smi_calculation() {
-        // Blau's SMI by hand: first distance=105-(106+98)/2=3, range=8,
-        // so SMI=75. Next distance=104-(107+99)/2=1; double EMA(2), alpha 2/3,
-        // gives 5/3 then 19/9, so SMI=475/9. EMA(3) signal is (75+475/9)/2=575/9.
+        // Distances 3, 1, 4, 0, 2 on bars 4 to 8, range 8 throughout. EMA(2), alpha 2/3, seeded
+        // with the mean of two: d1 = 2, 10/3, 10/9, 46/27 on bars 5 to 8; d2 = 8/3, 44/27,
+        // 136/81 on bars 6 to 8. SMI = 100 * d2 / 4: 200/3, 1100/27, 3400/81. The signal,
+        // EMA(3), starts on bar 8 at their mean, 12100/243.
         let mut smi = StochasticMomentumIndex::new(5, 2, 2, 3);
-        let mut data: Vec<Bar> = (0..6)
+        let mut data: Vec<Bar> = (0..9)
             .map(|i| make_bar(102.0 + i as f64, 98.0 + i as f64, 101.0 + i as f64))
             .collect();
         data[5].close = 104.0;
+        data[6].close = 108.0;
+        data[7].close = 105.0;
+        data[8].close = 108.0;
         smi.calculate(&data);
-        assert_eq!(smi.values().len(), 6);
-        for bar in 0..4 {
+        assert_eq!(smi.values().len(), 9);
+        for bar in 0..6 {
             assert_eq!(smi.values().value(0, bar), None);
         }
-        for (bar, expected) in [(4, [75.0, 75.0]), (5, [475.0 / 9.0, 575.0 / 9.0])] {
-            for (line, want) in expected.into_iter().enumerate() {
-                let got = smi.values().value(line, bar).unwrap();
-                assert!((got - want).abs() < 1e-12, "line {line}, bar {bar}: {got}");
-            }
+        for bar in 0..8 {
+            assert_eq!(smi.values().value(1, bar), None);
         }
-        // The shared length sets both EMA stages. A correction gives d2=23/9,
-        // then appending gives d2=61/27; the range stays 8 throughout.
+        for (bar, want) in [(6, 200.0 / 3.0), (7, 1100.0 / 27.0), (8, 3400.0 / 81.0)] {
+            let got = smi.values().value(0, bar).unwrap();
+            assert!((got - want).abs() < 1e-12, "bar {bar}: {got}");
+        }
+        assert!((smi.values().value(1, 8).unwrap() - 12100.0 / 243.0).abs() < 1e-12);
+
+        // Each stage seeds over its own length: d2 averages 2, 10/3, 10/9, 46/27 to 55/27.
+        let mut unequal = StochasticMomentumIndex::new(5, 2, 4, 3);
+        unequal.calculate(&data);
+        for bar in 0..8 {
+            assert_eq!(unequal.values().value(0, bar), None);
+        }
+        assert!((unequal.values().value(0, 8).unwrap() - 1375.0 / 27.0).abs() < 1e-12);
+
+        // The shared length sets both EMA stages. A correction gives d2=208/81,
+        // then appending gives d2=196/81; the range stays 8 throughout.
         smi.set_input("smoothing", crate::studies::InputValue::Length(2))
             .unwrap();
         smi.calculate(&data);
-        data[5].close = 105.0;
-        smi.update(&data, 5);
-        for (line, expected) in [575.0 / 9.0, 625.0 / 9.0].into_iter().enumerate() {
-            assert!((smi.values().value(line, 5).unwrap() - expected).abs() < 1e-12);
+        data[8].close = 110.0;
+        smi.update(&data, 8);
+        for (line, expected) in [5200.0 / 81.0, 13900.0 / 243.0].into_iter().enumerate() {
+            assert!((smi.values().value(line, 8).unwrap() - expected).abs() < 1e-12);
         }
-        data.push(make_bar(108.0, 104.0, 106.0));
-        smi.update(&data, 6);
-        for (line, expected) in [1525.0 / 27.0, 1700.0 / 27.0].into_iter().enumerate() {
-            assert!((smi.values().value(line, 6).unwrap() - expected).abs() < 1e-12);
+        data.push(make_bar(111.0, 107.0, 109.0));
+        smi.update(&data, 9);
+        for (line, expected) in [4900.0 / 81.0, 14300.0 / 243.0].into_iter().enumerate() {
+            assert!((smi.values().value(line, 9).unwrap() - expected).abs() < 1e-12);
         }
         // Older saved lengths keep their exact values, even when unequal, and an SMI saved
         // before it declared its shading restores it hidden.
@@ -351,8 +375,8 @@ mod tests {
             crate::studies::InputValue::Length(3)
         );
         // A zero high-low range has no defined ratio.
-        smi.calculate(&vec![make_bar(100.0, 100.0, 100.0); 6]);
-        assert_eq!(smi.values().len(), 6);
+        smi.calculate(&vec![make_bar(100.0, 100.0, 100.0); 9]);
+        assert_eq!(smi.values().len(), 9);
         assert!(
             smi.values()
                 .to_rows()

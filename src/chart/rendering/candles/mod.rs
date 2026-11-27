@@ -350,6 +350,7 @@ pub fn render_chart_type(
                 ),
                 params.type_params.columns_base,
                 params.type_params.styles.columns.price_source,
+                params.type_params.styles.columns.color_by_previous_close,
             );
         }
         ChartType::Baseline => {

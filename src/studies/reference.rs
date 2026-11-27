@@ -612,7 +612,7 @@ fn staple_studies_match_published_definitions() {
     let bars = fixture();
     let studies: Vec<(&str, Box<dyn Indicator>)> = vec![
         ("ZeroTrend(1)", Box::new(ZeroTrendVol::new(1))),
-        ("ZeroTrend(20)", Box::new(ZeroTrendVol::default())),
+        ("ZeroTrend(20)", Box::new(ZeroTrendVol::new(20))),
         ("Parkinson(20)", Box::new(ParkinsonVol::default())),
         ("NetVolume", Box::new(NetVolume::default())),
         ("SMA(20)", Box::new(SMA::new(20))),
