@@ -61,7 +61,7 @@ pub use alert::{
     AlertFrequency, AlertId, AlertInputs, AlertPositionProgress, AlertRule, AlertSource,
     AlertSourceName, AlertStatus, AlertStudy, AlertTrigger, CustomAlertEvent, FootprintAlertEvent,
     FootprintAlertRule, FootprintCondition, NotificationSchedule, NotificationWindow,
-    TPOLevelSource,
+    StrategyEvents, TPOLevelSource,
 };
 #[cfg(any(feature = "widget", feature = "studies"))]
 pub(crate) use bar::index_at_with_timeframe;

@@ -14,7 +14,7 @@ use crate::data::inbox::Inbox;
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency,
     AlertPositionProgress, AlertRule, AlertSource, AlertSourceName, FootprintCondition,
-    NotificationSchedule, NotificationWindow, Timeframe, TimezoneId,
+    NotificationSchedule, NotificationWindow, StrategyEvents, Timeframe, TimezoneId,
 };
 use crate::services::revisions::{Revisions, Settled, Written};
 use crate::services::{ConflictChoice, Storage, StoreKind};
@@ -1105,6 +1105,7 @@ impl AlertDialog {
         self.editing_condition = self
             .editing_condition
             .min(self.alert.additional_conditions.len());
+        let previous_default = self.alert.condition.frequencies()[0];
         ui.push_id(("rule", self.editing_condition), |ui| {
             if self.editing_condition == 0 {
                 if !events {
@@ -1128,6 +1129,27 @@ impl AlertDialog {
                     self.footprint_conditions,
                     None,
                 );
+                if matches!(self.alert.condition, AlertCondition::StrategyFills(_)) {
+                    egui::ComboBox::from_id_salt("strategy_events")
+                        .width(ui.available_width().min(200.0))
+                        .truncate()
+                        .selected_text(l10n::text(ui.ctx(), self.alert.strategy_events.to_string()))
+                        .show_ui(ui, |ui| {
+                            for value in [
+                                StrategyEvents::FillsAndAlerts,
+                                StrategyEvents::Fills,
+                                StrategyEvents::Alerts,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.alert.strategy_events,
+                                    value,
+                                    l10n::text(ui.ctx(), value.to_string()),
+                                );
+                            }
+                        })
+                        .response
+                        .accessible_name(l10n::text(ui.ctx(), "Strategy events"));
+                }
             } else {
                 let index = self.editing_condition - 1;
                 self.alert
@@ -1158,7 +1180,13 @@ impl AlertDialog {
                 }
             }
         });
+        let was_event = events;
         let events = self.alert.condition.is_event();
+        let default_frequency = self.alert.condition.frequencies()[0];
+        if events && (!was_event || default_frequency != previous_default) {
+            // A newly selected event family starts at its constructor's frequency.
+            self.alert.frequency = default_frequency;
+        }
         if events {
             self.alert.additional_conditions.clear();
             self.alert.additional_timeframes.clear();
@@ -2550,6 +2578,44 @@ mod tests {
                 .value()
                 .is_some_and(|text| text == "gone")
         );
+        // Switching to fills starts at Every time; reopening keeps an explicit Only once.
+        h.state_mut().strategy_runs = vec![("run-7".into(), "Momentum live".into())];
+        h.state_mut()
+            .edit(Alert::new("SAMPLE", AlertCondition::Above(1.0)));
+        h.run();
+        assert_eq!(h.state().alert.frequency, AlertFrequency::Once);
+        h.get_by_label("Condition").click();
+        h.run();
+        h.get_by_label("Strategy fills").scroll_to_me();
+        h.run();
+        h.get_by_label("Strategy fills").click();
+        h.run();
+        assert_eq!(h.state().alert.frequency, AlertFrequency::EveryTime);
+        let mut once = Alert::new("SAMPLE", AlertCondition::StrategyFills("run-7".into()));
+        once.frequency = AlertFrequency::Once;
+        h.state_mut().edit(once);
+        h.run();
+        h.run();
+        assert_eq!(h.state().alert.frequency, AlertFrequency::Once);
+        h.state_mut().footprint_conditions = true;
+        for frequency in [AlertFrequency::Once, AlertFrequency::OncePerBar] {
+            let mut footprint = Alert::new(
+                "SAMPLE",
+                AlertCondition::Footprint(FootprintCondition::BuyImbalance),
+            );
+            footprint.frequency = frequency;
+            h.state_mut().edit(footprint);
+            h.run();
+            h.run();
+            assert_eq!(h.state().alert.frequency, frequency);
+            h.get_by_label("Condition").click();
+            h.run();
+            h.get_by_label("Strategy fills").scroll_to_me();
+            h.run();
+            h.get_by_label("Strategy fills").click();
+            h.run();
+            assert_eq!(h.state().alert.frequency, AlertFrequency::EveryTime);
+        }
     }
 
     /// Names the chart builds keep their parts through storage, so the source list shows the
