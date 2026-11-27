@@ -2375,12 +2375,18 @@ fn tpo_edits_drop_when_their_period_changes() {
         assert_eq!(chart.chart_type_params(), &expected, "redo, {row}");
     }
 
-    let made_for_30 =
-        TimePriceOpportunity::profile_edit_inputs(Some((30, 0)), &composites, &splits);
+    let made_for_30 = TimePriceOpportunity::profile_edit_inputs(
+        Some((30, 0, Some((0, 1)))),
+        &composites,
+        &splits,
+    );
     // (input changed, its new value, the dialog's whole list or that input alone, edits kept)
     for (id, value, whole_list, kept) in [
         ("period", InputValue::Length(60), true, false),
         ("row_ticks", InputValue::Length(2), true, true),
+        ("profile_period", InputValue::Choice(1), true, false),
+        ("profile_periods", InputValue::Length(2), true, false),
+        ("profile_period", InputValue::Choice(1), false, false),
         ("value_area", InputValue::Number(60.0), true, true),
         ("period", InputValue::Length(60), false, false),
     ] {
@@ -2468,7 +2474,7 @@ fn tpo_edits_drop_when_their_period_changes() {
             .unwrap()
             .value
     };
-    assert_eq!(saved(&tpo, "splits"), text(&format!("60,0|{split}")));
+    assert_eq!(saved(&tpo, "splits"), text(&format!("60,0,0,1|{split}")));
     // A list made for another row size applies.
     let mut tpo = TimePriceOpportunity::default();
     tpo.set_input("splits", text(&format!("30,4|{split}")))
@@ -2486,14 +2492,47 @@ fn tpo_edits_drop_when_their_period_changes() {
     for invalid in [
         format!("x,0|{split}"),
         format!("60|{split}"),
+        format!("60,0,0|{split}"),
+        format!("60,0,0,1,2|{split}"),
+        format!("60,0,0,x|{split}"),
         "60,0|bad".to_owned(),
     ] {
         assert!(
             tpo.set_input("splits", text(&invalid)).is_err(),
             "{invalid}"
         );
-        assert_eq!(saved(&tpo, "splits"), text(&format!("60,0|{split}")));
+        assert_eq!(saved(&tpo, "splits"), text(&format!("60,0,0,1|{split}")));
     }
+    // New lists carry the profile period too; older lists keep applying under any profile.
+    tpo.set_input("composites", text(&format!("60,0,1,1|{merge}")))
+        .unwrap();
+    assert!(tpo.tpo().unwrap().composites.is_empty());
+    assert_eq!(saved(&tpo, "composites"), text(""));
+    tpo.set_input("splits", text(&format!("60,0,0,1|{split}")))
+        .unwrap();
+    assert_eq!(tpo.tpo().unwrap().splits, splits);
+    tpo.set_input("profile_period", InputValue::Choice(1))
+        .unwrap();
+    assert!(tpo.tpo().unwrap().splits.is_empty());
+    tpo.set_input("splits", text(&format!("60,0|{split}")))
+        .unwrap();
+    assert_eq!(tpo.tpo().unwrap().splits, splits);
+    assert_eq!(saved(&tpo, "splits"), text(&format!("60,0,1,1|{split}")));
+
+    // Restoring new lists before their time and profile settings also keeps them.
+    let mut tpo = TimePriceOpportunity::default();
+    tpo.set_input("composites", text(&format!("60,0,1,2|{merge}")))
+        .unwrap();
+    tpo.set_input("splits", text(&format!("60,0,1,2|{split}")))
+        .unwrap();
+    tpo.set_input("period", InputValue::Length(60)).unwrap();
+    tpo.set_input("profile_period", InputValue::Choice(1))
+        .unwrap();
+    assert!(tpo.tpo().unwrap().splits.is_empty());
+    tpo.set_input("profile_periods", InputValue::Length(2))
+        .unwrap();
+    assert_eq!(tpo.tpo().unwrap().composites, composites);
+    assert_eq!(tpo.tpo().unwrap().splits, splits);
 }
 
 /// Guards #1540: picking the row adds one selected horizontal line at the clicked price in the

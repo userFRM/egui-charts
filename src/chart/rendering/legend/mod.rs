@@ -6,7 +6,7 @@ mod study_controls;
 pub(crate) use study_controls::{controls_width, held_study_controls, study_controls};
 
 use quotes::paint_quotes;
-pub(crate) use quotes::quote_prices;
+pub(crate) use quotes::{QuotePresets, quote_prices};
 
 use crate::chart::rendering::StyleColors;
 use crate::chart::rendering::axes::{semibold, volume_text};
@@ -96,6 +96,16 @@ pub(crate) enum SeriesAction {
     Remove,
 }
 
+/// Actions, the bottom edge, and the quantity and preset controls the user chose.
+type LegendResponse = (
+    Option<QuoteSide>,
+    Option<StudyAction>,
+    f32,
+    Option<Rect>,
+    Option<SeriesAction>,
+    Option<Option<String>>,
+);
+
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
 pub struct Legend<'a> {
     /// Host number formatting for this series' readouts.
@@ -175,6 +185,8 @@ pub struct Legend<'a> {
     /// The order quantity and the host's text for it, shown under the quote buttons' spread,
     /// which the user clicks to change it.
     pub(crate) quantity: Option<(f64, Option<String>)>,
+    /// The order presets the quote buttons offer, set with `quantity`.
+    pub(crate) presets: Option<QuotePresets>,
     /// The last price the Sell and Buy buttons show without a two-sided quote; the chart sets
     /// it while trading draws on it.
     pub(crate) last_price: Option<f64>,
@@ -253,6 +265,7 @@ impl<'a> Legend<'a> {
             day_change: None,
             study_backdrop: 0.6,
             quantity: None,
+            presets: None,
             last_price: None,
             thousands_sep: None,
             price_decimals: None,
@@ -290,7 +303,7 @@ impl<'a> Legend<'a> {
         (quote, study)
     }
 
-    /// Also returns the bottom of the legend and the quantity box, when the user clicked it.
+    /// Also returns the bottom of the legend, the clicked quantity box and the preset chosen.
     /// The first row keeps its usual inset from `first_row_end`, where another control starts.
     pub(crate) fn show_with_colors(
         &self,
@@ -299,17 +312,11 @@ impl<'a> Legend<'a> {
         colors: &StyleColors,
         study_indices: Option<&[usize]>,
         first_row_end: f32,
-    ) -> (
-        Option<QuoteSide>,
-        Option<StudyAction>,
-        f32,
-        Option<Rect>,
-        Option<SeriesAction>,
-    ) {
+    ) -> LegendResponse {
         let theme = ui.active_theme();
         let bounds = plot.shrink2(Vec2::new(theme.spacing.lg, theme.spacing.md));
         if !bounds.is_positive() {
-            return (None, None, plot.top(), None, None);
+            return (None, None, plot.top(), None, None, None);
         }
         #[cfg_attr(not(feature = "icons"), allow(unused_mut))]
         let mut series_action = None;
@@ -693,8 +700,8 @@ impl<'a> Legend<'a> {
             layout.new_row();
         }
 
-        let (action, quantity) =
-            quote_prices(self.quote, self.last_price).map_or((None, None), |prices| {
+        let (action, quantity, preset) =
+            quote_prices(self.quote, self.last_price).map_or((None, None, None), |prices| {
                 let precision = self.price_precision(prices.magnitude());
                 let action = paint_quotes(
                     ui,
@@ -704,6 +711,7 @@ impl<'a> Legend<'a> {
                     self.thousands_sep,
                     self.formatters.price,
                     self.quantity.clone(),
+                    self.presets.as_ref(),
                     id,
                 );
                 layout.new_row();
@@ -979,6 +987,7 @@ impl<'a> Legend<'a> {
             layout.pos.y + layout.height,
             quantity,
             series_action,
+            preset,
         )
     }
 

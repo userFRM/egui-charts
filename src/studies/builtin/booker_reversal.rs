@@ -365,7 +365,7 @@ mod tests {
             &'static [f64],
         );
         let booker = vec![(17.0, 9.0, 10.0), (8.0, 7.0, 7.0), (9.5, 8.5, 9.0)];
-        // Two doji: open and close at the middle of the range. The last one is marked at its high.
+        // Two doji: open and close at the middle of the range. The last one is marked at its low.
         let doji = vec![(10.0, 8.0, 9.0), (12.3, 10.3, 11.3)];
         let rows: [Row; 11] = [
             // Labelled in the test above: a buy on the low of 8.5.
@@ -435,19 +435,19 @@ mod tests {
                 None,
                 &[],
             ),
-            // A doji needs no trend: the Neutral output marks the last bar's high.
+            // A doji needs no trend: the Neutral output marks the last bar's low.
             (
                 "All Candlestick Patterns",
                 Box::new(CandlestickPatterns::default()),
                 doji.clone(),
-                Some(12.3),
+                Some(10.3),
                 &[],
             ),
             (
                 "Doji",
                 IndicatorFactory::new().create("Doji").unwrap(),
                 doji,
-                Some(12.3),
+                Some(10.3),
                 &[],
             ),
             // Too few bars for a formation.

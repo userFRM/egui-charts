@@ -529,6 +529,7 @@ impl IndicatorRenderer {
             } else {
                 ShapeSide::Centred
             };
+            let label_side = indicator.plot_shape_side(line_idx);
             let mut color = plot.color;
             let offset = indicator.plot_offset(line_idx);
             let source_start = display_start
@@ -819,12 +820,15 @@ impl IndicatorRenderer {
                     let mut target = egui::Rect::from_center_size(centre, egui::Vec2::splat(size))
                         .union(egui::Rect::from_pos(at));
                     if let Some(text) = indicator.plot_text(line_idx, i) {
-                        // Clear of the shape: beyond a triangle drawn beside its value, else
-                        // under an upward triangle and over the other shapes.
-                        let below = if side == ShapeSide::Centred {
+                        // Clear of the shape on its declared side, else under an upward
+                        // triangle and over the other shapes.
+                        let below = if label_side == ShapeSide::Centred {
                             plot.plot_type == PlotType::TriangleUp
                         } else {
-                            centre.y > at.y
+                            triangle_centre(at, value, width, label_side, |p| {
+                                price_scale.price_to_y(p)
+                            })
+                            .y > at.y
                         };
                         let (gap, anchor) = match plot.plot_type {
                             PlotType::Character(_) => {
@@ -2147,6 +2151,98 @@ mod tests {
         );
         let on_neckline = Pos2::new(coords.idx_to_x(8), price.price_to_y(105.0));
         assert!(hit_test_indicator(on_neckline, &study, 0, 0..21, &coords, to_y).is_some());
+    }
+
+    /// Neutral pattern circles mark the low, and their labels follow lower prices on either
+    /// scale direction. With 15 points per unit, low 98 maps to y 180, or 120 inverted.
+    #[test]
+    fn neutral_pattern_marks_sit_on_the_low_with_their_label_below() {
+        use crate::studies::{
+            CandlestickPatterns, ConfiguredStudy, IndicatorFactory, PatternTrend,
+        };
+
+        for (name, ohlc, abbr) in [
+            ("Doji", (100.0_f64, 102.0, 98.0, 100.0625_f64), "D"),
+            ("Spinning Top Black", (100.5, 102.0, 98.0, 100.0), "STB"),
+            ("Spinning Top White", (100.0, 102.0, 98.0, 100.5), "STW"),
+            (
+                "All Candlestick Patterns",
+                (100.0, 102.0, 98.0, 100.0625),
+                "D",
+            ),
+        ] {
+            for inverted in [false, true] {
+                let mut previous = 99.0_f64;
+                let mut bars: Vec<_> = (0..14)
+                    .map(|i| {
+                        let close = 100.0 + f64::from(i % 2);
+                        let open = previous;
+                        previous = close;
+                        Bar::new(
+                            Utc::now(),
+                            open,
+                            open.max(close) + 0.25,
+                            open.min(close) - 0.25,
+                            close,
+                            1.0,
+                        )
+                    })
+                    .collect();
+                let (open, high, low, close) = ohlc;
+                bars.push(Bar::new(Utc::now(), open, high, low, close, 1.0));
+                let study: Box<dyn Indicator> = if name == "All Candlestick Patterns" {
+                    Box::new(CandlestickPatterns::new(PatternTrend::NoDetection))
+                } else {
+                    IndicatorFactory::new().create(name).unwrap()
+                };
+                let mut study = ConfiguredStudy::new(study);
+                study.calculate(&bars);
+                let line = if name == "All Candlestick Patterns" {
+                    2
+                } else {
+                    0
+                };
+                assert_eq!(study.values().value(line, 14), Some(98.0), "{name}");
+                let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
+                let price = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(90.0, 110.0),
+                    0.0,
+                    300.0,
+                    inverted,
+                );
+                let coords = ChartMapping::new(rect, 15.0, 0, 20, 0.0, price);
+                let output = Context::default().run_ui(RawInput::default(), |ui| {
+                    IndicatorRenderer::render_study(
+                        &RenderContext::new(ui.painter(), rect),
+                        &study,
+                        &bars,
+                        0,
+                        &price,
+                        &coords,
+                    );
+                });
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text() == abbr => {
+                            Some(text.galley.rect.translate(text.pos.to_vec2()))
+                        }
+                        _ => None,
+                    })
+                    .expect("neutral pattern label");
+                assert!(
+                    if inverted {
+                        text.bottom() <= 115.0
+                    } else {
+                        text.top() >= 185.0
+                    },
+                    "{name}, inverted {inverted}: {text:?}"
+                );
+                output.drop_without_applying_deltas();
+            }
+        }
     }
 
     /// Triangles that mark a bar at its high or low lie wholly outside the bar, beyond the price

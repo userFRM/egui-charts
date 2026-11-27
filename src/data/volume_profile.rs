@@ -155,11 +155,16 @@ pub struct VolumeProfileConfig {
     pub show_value_area_lines: bool,
     /// Draw the price rows; hiding them leaves the profile's levels.
     pub show_rows: bool,
-    /// Write each row's volume beside it, following `display`, in [`Self::values_color`].
+    /// Write each row's volume beside it, following `display`, in [`Self::values_color`], or
+    /// inside the value area in [`Self::value_area_values_color`].
     pub show_values: bool,
     /// Colour of the row values that [`Self::show_values`] writes, unmultiplied RGBA; `None`
     /// uses the theme's foreground.
     pub values_color: Option<[u8; 4]>,
+    /// Colour of the row values inside the value area, unmultiplied RGBA; `None` writes them in
+    /// [`Self::values_color`], as profiles saved before it did. Volume profile drawings offer it;
+    /// studies leave it unset.
+    pub value_area_values_color: Option<[u8; 4]>,
     /// Draw the point of control line.
     pub show_poc: bool,
     /// Colour of the point of control line, unmultiplied RGBA. `None` draws a volume profile
@@ -220,6 +225,8 @@ struct VolumeProfileFields {
     show_values: bool,
     #[serde(default)]
     values_color: Option<[u8; 4]>,
+    #[serde(default)]
+    value_area_values_color: Option<[u8; 4]>,
     #[serde(default = "profile_shown")]
     show_poc: bool,
     #[serde(default)]
@@ -260,6 +267,7 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.show_rows = fields.show_rows;
         config.show_values = fields.show_values;
         config.values_color = fields.values_color;
+        config.value_area_values_color = fields.value_area_values_color;
         config.show_poc = fields.show_poc;
         config.poc_color = fields.poc_color;
         config.show_value_area_high = fields.show_value_area_high;
@@ -425,6 +433,7 @@ impl Default for VolumeProfileConfig {
             show_rows: true,
             show_values: false,
             values_color: None,
+            value_area_values_color: None,
             show_poc: true,
             poc_color: None,
             show_value_area_high: false,

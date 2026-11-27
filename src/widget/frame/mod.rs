@@ -3792,6 +3792,8 @@ impl Chart {
                 let order_quantity = self.order_quantity.take();
                 #[cfg(feature = "ui")]
                 let order_quantity_text = self.order_quantity_text.take();
+                #[cfg(feature = "ui")]
+                let order_presets = self.order_presets.take();
                 // Trading prices market orders at the last price, so Buy and Sell need no quote.
                 #[cfg(feature = "ui")]
                 let last_price = order_quantity.and_then(|_| {
@@ -3889,9 +3891,10 @@ impl Chart {
                 {
                     legend.quantity =
                         order_quantity.map(|quantity| (quantity, order_quantity_text));
+                    legend.presets = order_presets;
                 }
-                let ((quote_action, study_settings, bottom, quantity, main_action), panel) = ui
-                    .push_id(shown.id, |ui| {
+                let ((quote_action, study_settings, bottom, quantity, main_action, preset), panel) =
+                    ui.push_id(shown.id, |ui| {
                         let result = legend.show_with_colors(
                             ui,
                             Rect::from_min_max(
@@ -3932,6 +3935,10 @@ impl Chart {
                     .and_then(|panel| panel.action)
                     .or(quote_action);
                 let quantity = panel.as_ref().and_then(|panel| panel.quantity).or(quantity);
+                let preset = panel
+                    .as_ref()
+                    .and_then(|panel| panel.preset.clone())
+                    .or(preset);
                 if let Some(panel) = panel {
                     if let Some(place) = panel.moved {
                         self.quote_panel_at = Some(place);
@@ -3950,6 +3957,12 @@ impl Chart {
                 }
                 #[cfg(not(feature = "ui"))]
                 let _ = quantity;
+                #[cfg(feature = "ui")]
+                if preset.is_some() {
+                    self.preset_chosen = preset;
+                }
+                #[cfg(not(feature = "ui"))]
+                let _ = preset;
                 study_action = study_settings;
                 series_action = main_action;
                 legend_bottom = bottom;

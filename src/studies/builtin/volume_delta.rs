@@ -589,6 +589,13 @@ mod tests {
             );
             study.calculate(&chart);
             assert_eq!(drawn(&study)[2], (3, 1, [1.0, 5.0, 1.0, 5.0]));
+            // Recorded replay rejects an equal source without tick classification.
+            let point = input.try_lock_replay_point().unwrap().capture();
+            let plain = OrderFlowInput::new(OrderFlowKind::FilteredCvd {
+                min: 0.0,
+                max: f64::MAX,
+            });
+            assert!(!plain.try_lock_replay_point().unwrap().compatible(&point));
         }
     }
 

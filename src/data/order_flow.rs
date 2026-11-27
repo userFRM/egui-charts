@@ -16,8 +16,10 @@ mod checkpoint;
 pub(crate) use checkpoint::{PackedTradeRate, RateGuard};
 #[cfg(feature = "widget")]
 mod footprint_checkpoint;
+mod replay_point;
 #[cfg(feature = "widget")]
 pub(crate) use footprint_checkpoint::{FootprintGuard, PackedFootprintInput};
+pub(crate) use replay_point::{InputLock, InputPoint};
 
 /// Fixed stream aggregation performed before a feed coalesces its updates for painting.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -303,7 +305,7 @@ pub struct BarBook {
 }
 
 /// What a source aggregates.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum Source {
     /// Three outputs per bar.
     Fixed(OrderFlowKind),
@@ -774,7 +776,6 @@ impl OrderFlowInput {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(crate) fn same_source(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
