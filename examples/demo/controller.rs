@@ -15679,6 +15679,59 @@ mod tests {
         assert_eq!(((tp - sl) / tick).round(), 30.0);
     }
 
+    /// Undocking restores the chart's width and keeps the choice in the settings the host saves.
+    #[test]
+    fn the_order_ticket_undocks_into_a_window_and_docks_again() {
+        use egui_charts::model::{OrderRequest, OrderSide, OrderType};
+        use egui_kittest::kittest::NodeT as _;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        app.trading.open_ticket(OrderRequest::new(
+            &symbol,
+            OrderSide::Buy,
+            1.0,
+            OrderType::Market,
+        ));
+        let mut h = Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(egui::vec2(1440.0, 900.0))
+            .with_context_setup(egui_extras::install_image_loaders)
+            .build_ui_state(
+                |ui, app: &mut Box<DemoApp>| {
+                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                },
+                app,
+            );
+        h.run_steps(3);
+        let docked = h.state().chart.get_chart_mapping().rect.right();
+        h.get_by_label("Undock ticket").click();
+        h.run_steps(3);
+        let display = serde_json::to_value(h.state().chart_settings_state().trading).unwrap();
+        assert_eq!(display["undocked_ticket"], true);
+        assert!(h.state().chart.get_chart_mapping().rect.right() >= docked + 300.0);
+        assert!(
+            h.query_all_by_role(egui::accesskit::Role::Button)
+                .any(|node| {
+                    node.accesskit_node()
+                        .label()
+                        .is_some_and(|label| label.ends_with(&format!(" {symbol} MKT")))
+                })
+        );
+        h.get_by_label("Dock ticket").click();
+        h.run_steps(3);
+        let display = serde_json::to_value(h.state().trading.display.clone()).unwrap();
+        assert_eq!(display["undocked_ticket"], false);
+        assert!((h.state().chart.get_chart_mapping().rect.right() - docked).abs() < 1.0);
+    }
+
     /// The paper account attaches exits to open positions, so a position line shows its TP and
     /// SL buttons and its label menu offers Protect position.
     #[test]
