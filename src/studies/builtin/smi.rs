@@ -8,6 +8,9 @@ use egui::Color32;
 /// Stochastic Momentum Index (SMI)
 /// Enhanced stochastic that measures close relative to HL range midpoint
 /// More responsive than standard stochastic
+///
+/// The pane shades above 40 in green and below -40 in red, from transparent to half opacity at
+/// 120 and -120.
 #[derive(Clone, Debug)]
 pub struct StochasticMomentumIndex {
     /// Lookback period (typically 10)
@@ -228,12 +231,12 @@ impl Indicator for StochasticMomentumIndex {
         [
             (
                 "Upper shading",
-                [100.0, 40.0],
+                [120.0, 40.0],
                 [palette::GREEN.gamma_multiply_u8(128), Color32::TRANSPARENT],
             ),
             (
                 "Lower shading",
-                [-40.0, -100.0],
+                [-40.0, -120.0],
                 [Color32::TRANSPARENT, palette::RED.gamma_multiply_u8(128)],
             ),
         ]

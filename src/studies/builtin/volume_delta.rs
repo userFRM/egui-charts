@@ -9,6 +9,7 @@
 //! [`CumulativeVolumeDelta`] adds the bar deltas from the first bar of each anchor period, the
 //! session by default, and draws each bar from the total at its open to the total at its close.
 //! A bar without candles has no value and no candle, and the total carries over it.
+//! Both panes draw a dashed grey zero level.
 //!
 //! [`Indicator::candles`] holds one candle per bar with a value, on plot 1 ("Up") when it closes
 //! above its open and on plot 2 ("Down") otherwise, so a Volume Delta bar whose delta is zero is
@@ -249,6 +250,12 @@ macro_rules! delta_study {
             }
             fn is_overlay(&self) -> bool {
                 false
+            }
+            fn pane(&self) -> crate::studies::StudyPane {
+                crate::studies::StudyPane {
+                    levels: vec![(0.0, palette::GRAY, "Zero")],
+                    ..Default::default()
+                }
             }
             fn value_format(&self) -> StudyFormat {
                 StudyFormat::Volume
