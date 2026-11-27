@@ -174,6 +174,8 @@ pub struct OptionsVolumeProfile {
     put_call: bool,
     // Write each row's figures beside it.
     show_values: bool,
+    // The figures' colour, or Color32::PLACEHOLDER for the theme's text colour.
+    values_color: Color32,
     current_price: bool,
     // Split calls and puts, net positive and negative, calls plus puts, then puts divided by
     // calls, as BAR_COLORS.
@@ -253,6 +255,7 @@ impl OptionsVolumeProfile {
             sides: SIDES.map(|(.., default)| default),
             put_call: true,
             show_values: false,
+            values_color: Color32::PLACEHOLDER,
             current_price: true,
             bar_colors: BAR_COLORS.map(|(.., color)| color),
             left: false,
@@ -302,7 +305,8 @@ impl OptionsVolumeProfile {
     /// writes the calls × puts figures of each volume or open interest row beside it, or over the
     /// end of its bar where the profile has no room past it, with at most two decimals and no
     /// trailing zeros, abbreviated with K, M or B from a thousand, or the row's ratio of puts to
-    /// calls. Layout defaults to placing upcoming expirations beside their dates on the time
+    /// calls. Values colour in the Style tab sets their colour; until it is set, figures follow
+    /// the theme's text colour. Layout defaults to placing upcoming expirations beside their dates on the time
     /// scale, on the chosen side, separately or grouped by week or month. Edge of plot draws
     /// the Expiry choice in the right or left 30% of the plot instead, with the widest row
     /// taking 1% to 30% of the plot's width, 27% by default. Maximum expirations counts from the
@@ -384,6 +388,7 @@ impl OptionsVolumeProfile {
             sides: SIDES.map(|(.., default)| default),
             put_call: true,
             show_values: true,
+            values_color: Color32::PLACEHOLDER,
             current_price: true,
             bar_colors: BAR_COLORS.map(|(.., color)| color),
             left: false,
@@ -1283,6 +1288,8 @@ impl Indicator for OptionsVolumeProfile {
             };
             (right_aligned, width) = (!self.left, (self.width_percent / 30.0) as f32);
             config.show_values = self.show_values && !self.gamma_selected(&cache);
+            config.values_color = (self.values_color != Color32::PLACEHOLDER)
+                .then(|| self.values_color.to_srgba_unmultiplied());
         }
         config.up_color = sides[0].to_srgba_unmultiplied();
         config.down_color = sides[1].to_srgba_unmultiplied();
@@ -1797,6 +1804,17 @@ impl Indicator for OptionsVolumeProfile {
                     .in_style_tab(),
             );
         }
+        inputs.push(
+            StudyInput::new(
+                "values_color",
+                "Values colour",
+                InputValue::Color(self.values_color),
+                InputKind::Color,
+            )
+            .with_default(InputValue::Color(Color32::PLACEHOLDER))
+            .shown_when("show_values", vec![1])
+            .in_style_tab(),
+        );
         inputs.extend([
             StudyInput::new(
                 "expected_move",
@@ -1920,6 +1938,7 @@ impl Indicator for OptionsVolumeProfile {
             ("strikes_around_price", InputValue::Length(count)) => self.strikes_around = count,
             ("placement", InputValue::Choice(choice)) => self.left = choice == 1,
             ("profile_width", InputValue::Number(percent)) => self.width_percent = percent,
+            ("values_color", InputValue::Color(color)) => self.values_color = color,
             (id, InputValue::Color(color)) => {
                 let Some(index) = BAR_COLORS.iter().position(|(bar, ..)| *bar == id) else {
                     return Err(StudyError::invalid_input(id));
@@ -4183,7 +4202,7 @@ mod tests {
     #[test]
     fn options_rows_paint_at_their_place_width_and_expiry() {
         use crate::scales::{PriceMap, PriceRange, PriceTransform};
-        use InputValue::{Choice, Number, Toggle};
+        use InputValue::{Choice, Color, Number, Toggle};
         let (chain, dates) = chain_by_expiry();
         let bars = vec![Bar::new(Utc::now(), 100.0, 101.0, 99.0, 100.0, 1.0); 2];
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 200.0));
@@ -4296,32 +4315,48 @@ mod tests {
             (105.0, [1_499.0, 40.0]),
             (110.0, [5.0, 1_234_567.0]),
         ]);
-        for (chain, dates, edit, written) in [
+        let ink = Color32::from_rgba_unmultiplied(10, 20, 30, 255);
+        let text = crate::theme::Theme::dark().ui.text;
+        for (chain, dates, edit, written, color) in [
             (
                 counts,
                 count_dates,
                 ("volume_sides", Choice(0)),
                 vec!["20 × 10", "1.5K × 40", "5 × 1.23M"],
+                None,
             ),
             (
                 strikes.clone(),
                 listed.clone(),
                 ("volume_sides", Choice(0)),
                 vec!["10 × 5", "0 × 7", "4 × 8"],
+                Some(ink),
             ),
             (
                 strikes,
                 listed,
                 ("volume_sides", Choice(4)),
                 vec!["0.50", "2.00"],
+                Some(ink),
             ),
-            (chain, dates, ("measure", Choice(2)), Vec::new()),
+            (chain, dates, ("measure", Choice(2)), Vec::new(), Some(ink)),
         ] {
+            let factory = profile_factory(chain.clone(), dates.clone());
             let mut profile = edge_profile(chain, "SAMPLE", dates).unwrap();
-            for (id, value) in [edit.clone(), ("show_values", Toggle(true))] {
+            for (id, value) in [
+                edit.clone(),
+                ("layout", Choice(0)),
+                ("show_values", Toggle(true)),
+            ]
+            .into_iter()
+            .chain(color.map(|color| ("values_color", Color(color))))
+            {
                 profile.set_input(id, value).unwrap();
             }
-            let mut study = crate::studies::ConfiguredStudy::new(Box::new(profile));
+            let profile = crate::studies::StudyTemplate::from_study(&profile)
+                .create_with(&factory)
+                .unwrap();
+            let mut study = crate::studies::ConfiguredStudy::new(profile);
             study.calculate(&bars);
             let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 crate::chart::rendering::IndicatorRenderer::render_study(
@@ -4338,11 +4373,16 @@ mod tests {
             let texts: Vec<_> = shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.galley.job.sections[0].format.color,
+                    )),
                     _ => None,
                 })
                 .collect();
-            assert_eq!(texts, written, "{edit:?}");
+            let strings: Vec<_> = texts.iter().map(|(text, _)| text.as_str()).collect();
+            assert_eq!(strings, written, "{edit:?}");
+            assert!(texts.iter().all(|(_, ink)| *ink == color.unwrap_or(text)));
         }
     }
 
