@@ -4724,7 +4724,9 @@ mod tests {
         let mut older = template.create().unwrap();
         older.set_timeframe(Timeframe::Min5);
         let restored = crate::studies::StudyTemplate::from_study(older.as_ref());
-        assert_eq!(restored.inputs, template.inputs);
+        let mut inputs = template.inputs.clone();
+        inputs.push(("custom_interval".to_owned(), InputValue::Toggle(false)));
+        assert_eq!(restored.inputs, inputs);
         let mut expected = template.settings.clone();
         expected.levels = vec![LevelStyle {
             value: None,

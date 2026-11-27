@@ -522,9 +522,38 @@ struct PendingParts {
     rows: Vec<Option<([f64; 3], u64)>>,
 }
 
+/// Sides unknown executions by price changes: up buys, down sells and an unchanged price
+/// keeps the last change's side. Before the first price change the side stays unknown.
+#[derive(Clone, Copy, Debug, Default)]
+struct TickRule {
+    /// Price of the previous execution.
+    price: Option<f64>,
+    /// Whether the last price change was up; `None` before the first change.
+    rising: Option<bool>,
+}
+
+impl TickRule {
+    /// Keeps a supplied side, otherwise uses the tick rule; every price advances the rule.
+    fn classify(&mut self, trade: &Tick) -> Tick {
+        if let Some(previous) = self.price
+            && trade.price != previous
+        {
+            self.rising = Some(trade.price > previous);
+        }
+        self.price = Some(trade.price);
+        let mut classified = trade.clone();
+        classified.side = trade.side.or(self
+            .rising
+            .map(|up| if up { OrderSide::Buy } else { OrderSide::Sell }));
+        classified
+    }
+}
+
 #[derive(Clone)]
 struct State {
     source: Source,
+    /// Sides unknown executions by the tick rule when set.
+    tick_rule: Option<TickRule>,
     trade_bars: super::inbox::TradeBars,
     /// These rows have no live allocation anchor. The first sink allocation replaces them.
     paged_rate: bool,
@@ -673,6 +702,20 @@ impl OrderFlowInput {
         self
     }
 
+    /// The same source, siding executions without a side by the tick rule (see [`TickRule`]).
+    /// Applies to the executions pushed after it.
+    #[cfg(feature = "studies")]
+    pub(crate) fn with_tick_rule(self) -> Self {
+        {
+            let mut state = self.state();
+            if state.tick_rule.is_none() {
+                state.tick_rule = Some(TickRule::default());
+                state.checkpoint_state_changed();
+            }
+        }
+        self
+    }
+
     /// Feed services read by this source. Filtered book size and book balance need individual
     /// orders; executions need trade-side classification only for side-dependent outputs.
     pub fn services(&self) -> &'static [crate::model::FeedService] {
@@ -701,7 +744,13 @@ impl OrderFlowInput {
                 | OrderFlowKind::FlowSum { .. }
                 | OrderFlowKind::SideVolume
                 | OrderFlowKind::FilteredCvd { .. },
-            ) => &[LiveTrades, TradeSides],
+            ) => {
+                if state.tick_rule.is_some() {
+                    &[LiveTrades]
+                } else {
+                    &[LiveTrades, TradeSides]
+                }
+            }
         }
     }
 
@@ -1568,6 +1617,7 @@ impl OrderFlowInput {
                 let mut part = State::new(state.source);
                 part.tick_size = tick_size;
                 part.basis = state.basis;
+                part.tick_rule = state.tick_rule.map(|_| TickRule::default());
                 // A row a nanosecond before the chart's oldest bar is a bar the chart dropped and
                 // the sink opened the oldest one right after it, so a fill at one instant may run
                 // from that bar into the oldest one.
@@ -1711,10 +1761,22 @@ impl OrderFlowInput {
                             .is_none_or(|first| first < start)
                     {
                         let part = OrderFlowInput::new(kind).with_size_basis(state.basis);
-                        // The store's executions are valid, and those held are the cutoff bar's.
-                        held.for_each(|trade| {
-                            part.push_trade_part(clock, trade, open, trade.size, true)
-                        });
+                        if state.tick_rule.is_some() {
+                            part.state().tick_rule = Some(TickRule::default());
+                            // Earlier prices seed the side of a zero tick in the cutoff bar.
+                            for trade in trades
+                                .into_iter()
+                                .flat_map(|t| t.iter())
+                                .filter(|trade| trade.ts < cutoff)
+                            {
+                                part.push_trade(clock, trade);
+                            }
+                        } else {
+                            // The store's executions are valid, and those held are the cutoff bar's.
+                            held.for_each(|trade| {
+                                part.push_trade_part(clock, trade, open, trade.size, true)
+                            });
+                        }
                         replay.row = part.state().bars.get(&open).map(|(row, _)| *row);
                     }
                 }
@@ -1909,6 +1971,7 @@ impl State {
         self.trade_bars.is_plain()
             && self.placement.is_empty()
             && self.filter.is_none()
+            && self.tick_rule.is_none()
             && self.books.is_empty()
             && self.book_rows == 0
             && self.pending.sizes.checkpoint_empty()
@@ -1945,6 +2008,8 @@ impl State {
         let Source::Fixed(kind) = self.source else {
             return;
         };
+        let classified = self.tick_rule.as_mut().map(|rule| rule.classify(trade));
+        let trade = classified.as_ref().unwrap_or(trade);
         // Which size ranges count a size: three for SizeDelta, the first for FilteredCvd.
         let counted = |size: f64| match kind {
             OrderFlowKind::SizeDelta { ranges } => ranges.map(|range| in_size_range(range, size)),
@@ -2115,6 +2180,7 @@ impl State {
     fn new(source: Source) -> Self {
         Self {
             source,
+            tick_rule: None,
             trade_bars: super::inbox::TradeBars::default(),
             paged_rate: false,
             cut: None,
@@ -2158,6 +2224,7 @@ impl State {
             ..replay
         });
         *self = Self {
+            tick_rule: self.tick_rule.map(|_| TickRule::default()),
             filter: self.filter.take(),
             basis: self.basis,
             tick_size: self.tick_size,

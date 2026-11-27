@@ -65,7 +65,11 @@ size uses one-second intrabars. The Lower interval input, shown as Auto with the
 picks while unset, chooses another interval: one no longer than the chart's is read as chosen,
 also when it does not divide the chart interval, and a longer or trade-based one is not read and
 the study shows a table saying so. The Use custom timeframe switch reads the chosen interval only
-while it is on; off, the study reads the automatic one and keeps the choice. Subsecond and tick-count charts have no request. 24-hour
+while it is on; off, the study reads the automatic one and keeps the choice. Cumulative Volume
+Delta can instead add up the chart's executions (Data aggregation Ticks), sided by the feed or
+by the tick rule, and needs no intrabars then. The host supplies historical and live executions
+through its feed or the study's order-flow input. A missing side follows the last price change;
+executions before any price change count for neither side. Subsecond and tick-count charts have no request. 24-hour
 Volume uses the same length-based rule, keeping one hour on whole-day custom charts, only
 where chart bars cannot hold exactly 24 hours: on intervals longer than a day or that do not
 divide one. It sums chart bars until those candles are supplied. Its Units input sums the supplied volume (default) or, for

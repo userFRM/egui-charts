@@ -9,7 +9,10 @@
 //! [`CumulativeVolumeDelta`] adds the bar deltas from the first bar of each anchor period, the
 //! session by default, and draws each bar from the total at its open to the total at its close.
 //! A bar without candles has no value and no candle, and the total carries over it.
-//! Both panes draw a dashed grey zero level.
+//! Cumulative Volume Delta also offers Ticks aggregation: supplied executions count by their
+//! aggressor side or, when missing, by the last price change. Until a price changes they count
+//! for neither side. This mode requests no lower-interval candles and uses the chart's trade
+//! history, including replay and retention. Both panes draw a dashed grey zero level.
 //!
 //! [`Indicator::candles`] holds one candle per bar with a value, on plot 1 ("Up") when it closes
 //! above its open and on plot 2 ("Down") otherwise, so a Volume Delta bar whose delta is zero is
@@ -21,6 +24,7 @@
 use super::anchor_period::AnchorPeriod;
 use super::lower_interval;
 use super::order_flow::{Reset, reset_key};
+use crate::data::{OrderFlowInput, OrderFlowKind};
 use crate::model::{Bar, BarClock, LineStyle, Timeframe};
 use crate::scales::StudyFormat;
 use crate::studies::palette;
@@ -51,6 +55,11 @@ struct DeltaCandles {
     anchor: Option<Reset>,
     /// Length of the Interval anchor in minutes, 1 to 1440.
     anchor_minutes: usize,
+    /// Data aggregation Ticks: the deltas come from executions, not candles.
+    ticks: bool,
+    /// Executions of the chart, sided by the feed or the tick rule; CVD only.
+    flow: Option<OrderFlowInput>,
+    reset_revision: u64,
     candles: Vec<StudyCandle>,
     values: IndicatorValues,
     colors: [Color32; 3],
@@ -66,6 +75,15 @@ impl DeltaCandles {
             lower: lower_interval::Choice::default(),
             anchor,
             anchor_minutes: 60,
+            ticks: false,
+            flow: anchor.map(|_| {
+                OrderFlowInput::new(OrderFlowKind::FilteredCvd {
+                    min: 0.0,
+                    max: f64::MAX,
+                })
+                .with_tick_rule()
+            }),
+            reset_revision: 0,
             candles: Vec::new(),
             values: IndicatorValues::new(),
             colors: [palette::BLUE, palette::UP, palette::DOWN],
@@ -86,11 +104,17 @@ impl DeltaCandles {
                     "anchor",
                     "Anchor period",
                     InputValue::Choice(ANCHORS.iter().position(|p| *p == anchor).unwrap_or(0)),
-                    InputKind::Choice(ANCHORS.iter().map(|a| match a {
-                        Reset::Period(period) => period.label(),
-                        Reset::Interval => "Interval",
-                        Reset::Continuous => unreachable!("anchors always restart"),
-                    }).map(str::to_owned).collect()),
+                    InputKind::Choice(
+                        ANCHORS
+                            .iter()
+                            .map(|a| match a {
+                                Reset::Period(period) => period.label(),
+                                Reset::Interval => "Interval",
+                                Reset::Continuous => unreachable!("anchors always restart"),
+                            })
+                            .map(str::to_owned)
+                            .collect(),
+                    ),
                 )
                 .with_default(InputValue::Choice(0)),
             );
@@ -104,6 +128,15 @@ impl DeltaCandles {
                 .with_default(InputValue::Length(60))
                 .shown_when("anchor", [ANCHORS.len() - 1]),
             );
+            inputs.push(
+                StudyInput::new(
+                    "aggregation",
+                    "Data aggregation",
+                    InputValue::Choice(usize::from(self.ticks)),
+                    InputKind::Choice(vec!["Time".into(), "Ticks".into()]),
+                )
+                .with_default(InputValue::Choice(0)),
+            );
         }
         inputs
     }
@@ -115,7 +148,13 @@ impl DeltaCandles {
                 self.anchor = Some(ANCHORS[at]);
             }
             ("anchor_minutes", InputValue::Length(n))
-                if self.anchor.is_some() && (1..=1440).contains(&n) => self.anchor_minutes = n,
+                if self.anchor.is_some() && (1..=1440).contains(&n) =>
+            {
+                self.anchor_minutes = n
+            }
+            ("aggregation", InputValue::Choice(at @ 0..=1)) if self.anchor.is_some() => {
+                self.ticks = at == 1
+            }
             _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         self.refresh(&[], 0, &[]);
@@ -123,6 +162,10 @@ impl DeltaCandles {
     }
 
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
+        if self.ticks {
+            self.refresh_ticks(data, from);
+            return;
+        }
         let from = from.min(self.values.len()).min(data.len());
         let candles = match self.lower() {
             Some(lower) => {
@@ -157,7 +200,8 @@ impl DeltaCandles {
             return;
         };
         let anchor = self.anchor;
-        let key = anchor.map(|a| reset_key(a, self.anchor_minutes, &self.clock));
+        let clock = self.clock.clone();
+        let key = anchor.map(|a| reset_key(a, self.anchor_minutes, &clock));
         let period = |bar: &Bar| key.as_ref().and_then(|k| k(bar.time));
         let mut last = self
             .candles
@@ -171,35 +215,99 @@ impl DeltaCandles {
                 continue;
             }
             let flow = sides.flow(range);
-            let key = period(bar);
-            let open = match last {
-                Some((at, total)) if anchor.is_some() && at == key => total,
-                _ => 0.0,
-            };
-            let (high, low, close) = (open + flow.high, open + flow.low, open + flow.delta);
-            if ![high, low, close].iter().all(|value| value.is_finite()) {
+            self.push_flow(i, bar, period(bar), flow, &mut last);
+        }
+    }
+
+    /// Appends one candle and advances the total only when its values are finite.
+    fn push_flow(
+        &mut self,
+        i: usize,
+        bar: &Bar,
+        key: Option<i64>,
+        flow: lower_interval::Flow,
+        last: &mut Option<(Option<i64>, f64)>,
+    ) {
+        let open = match *last {
+            Some((at, total)) if self.anchor.is_some() && at == key => total,
+            _ => 0.0,
+        };
+        let (high, low, close) = (open + flow.high, open + flow.low, open + flow.delta);
+        if ![high, low, close].iter().all(|value| value.is_finite()) {
+            return;
+        }
+        // A bar delta of zero sells; an unchanged cumulative total keeps buying.
+        let down = if self.anchor.is_some() {
+            close < open
+        } else {
+            close <= open
+        };
+        self.values.set(
+            i,
+            IndicatorValue::Multiple(if down {
+                vec![close, f64::NAN, close]
+            } else {
+                vec![close, close, f64::NAN]
+            }),
+        );
+        self.candles.push(StudyCandle {
+            bars: i..i + 1,
+            bar: Bar::new(bar.time, open, high, low, close, flow.up - flow.down),
+            plot: 1 + usize::from(down),
+        });
+        *last = Some((key, close));
+    }
+
+    /// Redraws from the execution source, restarting after its history is rebuilt or dropped.
+    fn refresh_ticks(&mut self, data: &[Bar], from: usize) {
+        let Some(flow) = &self.flow else {
+            return;
+        };
+        let revision = flow.reset_revision();
+        let from = if revision != self.reset_revision {
+            0
+        } else {
+            from.min(self.values.len()).min(data.len())
+        };
+        self.reset_revision = revision;
+        let source = data
+            .get(from)
+            .map(|bar| flow.values_from(self.clock.bar_open(bar.time)));
+        self.candles
+            .truncate(self.candles.partition_point(|c| c.bars.start < from));
+        self.values.truncate(from);
+        self.values.resize(data.len(), IndicatorValue::None);
+        let clock = self.clock.clone();
+        let key = self
+            .anchor
+            .map(|a| reset_key(a, self.anchor_minutes, &clock));
+        let period = |bar: &Bar| key.as_ref().and_then(|k| k(bar.time));
+        let mut last = self
+            .candles
+            .last()
+            .map(|c| (period(&data[c.bars.start]), c.bar.close));
+        for (i, bar) in data.iter().enumerate().skip(from) {
+            if !bar.close.is_finite() {
                 continue;
             }
-            // A bar delta of zero sells; an unchanged cumulative total keeps buying.
-            let down = if anchor.is_some() {
-                close < open
-            } else {
-                close <= open
+            let Some(row) = source
+                .as_ref()
+                .and_then(|s| s.get(&clock.bar_open(bar.time)))
+            else {
+                continue;
             };
-            self.values.set(
+            self.push_flow(
                 i,
-                IndicatorValue::Multiple(if down {
-                    vec![close, f64::NAN, close]
-                } else {
-                    vec![close, close, f64::NAN]
-                }),
+                bar,
+                period(bar),
+                lower_interval::Flow {
+                    delta: row[0],
+                    high: row[1],
+                    low: row[2],
+                    ..Default::default()
+                },
+                &mut last,
             );
-            self.candles.push(StudyCandle {
-                bars: i..i + 1,
-                bar: Bar::new(bar.time, open, high, low, close, flow.up - flow.down),
-                plot: 1 + usize::from(down),
-            });
-            last = Some((key, close));
         }
     }
 }
@@ -241,10 +349,19 @@ macro_rules! delta_study {
             fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
                 self.core.set_input(id, value)?;
                 self.core.notice =
-                    lower_interval::notice($name, &self.core.clock, self.core.lower.in_use());
+                    if self.core.ticks { None } else {
+                        lower_interval::notice($name, &self.core.clock, self.core.lower.in_use())
+                    };
                 Ok(())
             }
+            fn needs_order_flow(&self) -> bool {
+                self.core.ticks
+            }
+            fn order_flow_inputs(&self) -> &[OrderFlowInput] {
+                if self.core.ticks { self.core.flow.as_slice() } else { &[] }
+            }
             fn data_requests(&self) -> Vec<StudyDataRequest> {
+                if self.core.ticks { return Vec::new(); }
                 self.core
                     .lower()
                     .map(lower_interval::request)
@@ -261,11 +378,20 @@ macro_rules! delta_study {
                 let changed = self.core.clock != *clock;
                 self.core.clock = clock.clone();
                 self.core.notice =
-                    lower_interval::notice($name, &self.core.clock, self.core.lower.in_use());
+                    if self.core.ticks { None } else {
+                        lower_interval::notice($name, &self.core.clock, self.core.lower.in_use())
+                    };
                 changed
             }
             fn calculate(&mut self, data: &[Bar]) {
-                self.core.refresh(data, 0, &[]);
+                self.update(data, 0);
+            }
+            fn update(&mut self, data: &[Bar], from: usize) {
+                if self.core.ticks {
+                    self.core.refresh_ticks(data, from);
+                } else {
+                    self.core.refresh(data, 0, &[]);
+                }
             }
             fn is_incremental(&self) -> bool {
                 true
@@ -317,6 +443,11 @@ macro_rules! delta_study {
             fn clone_box(&self) -> Box<dyn Indicator> {
                 Box::new(self.clone())
             }
+            fn clone_for_export(&self) -> Box<dyn Indicator> {
+                let mut frozen = self.clone();
+                frozen.core.flow = self.core.flow.as_ref().map(OrderFlowInput::frozen);
+                Box::new(frozen)
+            }
             fn line_names(&self) -> Vec<String> {
                 ["Delta", "Up", "Down"].map(String::from).to_vec()
             }
@@ -346,6 +477,105 @@ mod tests {
     use super::*;
     use crate::studies::IndicatorFactory;
     use chrono::{TimeZone, Utc};
+
+    /// Tick rule hand totals: +3,+2,+4,-1 reaches 8 (high 9); -6,-2,+1 reaches
+    /// -7 (low -8). A quiet bar is absent, and +4 then -2 ends the last bar at 3.
+    #[test]
+    fn cumulative_volume_delta_counts_ticks_by_side_or_tick_rule() {
+        use crate::model::{
+            FeedService,
+            OrderSide::{Buy, Sell},
+            Tick,
+        };
+        let clock = BarClock::new(Timeframe::Min1);
+        let mut study = CumulativeVolumeDelta::new();
+        study.set_bar_clock(&clock);
+        study
+            .set_input("aggregation", InputValue::Choice(1))
+            .unwrap();
+        assert!(study.data_requests().is_empty());
+        assert!(study.needs_order_flow());
+        let input = study.order_flow_inputs()[0].clone();
+        assert_eq!(input.services(), &[FeedService::LiveTrades]);
+        let tick =
+            |s, price, size, side| Tick::new(Utc.timestamp_opt(s, 0).unwrap(), price, size, side);
+        let trades = [
+            tick(0, 10.0, 5.0, None),
+            tick(10, 11.0, 3.0, None),
+            tick(20, 11.0, 2.0, None),
+            tick(30, 10.5, 4.0, Some(Buy)),
+            tick(40, 10.5, 1.0, None),
+            tick(60, 10.5, 6.0, Some(Sell)),
+            tick(70, 10.5, 2.0, None),
+            tick(80, 12.0, 1.0, None),
+            tick(180, 12.0, 4.0, None),
+        ];
+        for trade in &trades {
+            input.push_trade(&clock, trade);
+        }
+        let chart = [0, 60, 120, 180]
+            .map(|s| Bar::new(Utc.timestamp_opt(s, 0).unwrap(), 1.0, 1.0, 1.0, 1.0, 0.0));
+        let drawn = |s: &CumulativeVolumeDelta| {
+            s.candles()
+                .iter()
+                .map(|c| {
+                    (
+                        c.bars.start,
+                        c.plot,
+                        [c.bar.open, c.bar.high, c.bar.low, c.bar.close],
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        study.calculate(&chart);
+        assert_eq!(
+            drawn(&study),
+            [
+                (0, 1, [0.0, 9.0, 0.0, 8.0]),
+                (1, 2, [8.0, 8.0, 0.0, 1.0]),
+                (3, 1, [1.0, 5.0, 1.0, 5.0]),
+            ]
+        );
+        assert_eq!(
+            (0..4)
+                .map(|i| study.values().value(0, i))
+                .collect::<Vec<_>>(),
+            [Some(8.0), Some(1.0), None, Some(5.0)]
+        );
+        assert!(study.candles().iter().all(|c| c.bar.volume == 0.0));
+        input.push_trade(&clock, &tick(190, 11.5, 2.0, None));
+        study.update(&chart, 3);
+        assert_eq!(drawn(&study)[2], (3, 1, [1.0, 5.0, 1.0, 3.0]));
+        let mut fresh = study.clone();
+        fresh.calculate(&chart);
+        assert_eq!(drawn(&study), drawn(&fresh));
+        // A reset forgets earlier prices as well as rows, and forces a full refresh.
+        let mut export = study.clone_for_export();
+        input.clear();
+        input.push_trade(&clock, &tick(180, 12.0, 4.0, None));
+        study.update(&chart, 3);
+        assert_eq!(drawn(&study), [(3, 1, [0.0; 4])]);
+        export.calculate(&chart);
+        assert_eq!(export.values().value(0, 3), Some(3.0));
+        #[cfg(feature = "widget")]
+        {
+            // At 03:05 the unchanged price still takes the uptick from the preceding bar,
+            // even though that price change lies outside the cutoff candle.
+            let mut held = crate::data::trades::Trades::new(100);
+            for trade in trades {
+                held.push(trade);
+            }
+            input.replace_trades(&clock, &held, &chart, None);
+            input.set_replay(
+                &clock,
+                Some(Utc.timestamp_opt(185, 0).unwrap()),
+                Some(&held),
+                &chart,
+            );
+            study.calculate(&chart);
+            assert_eq!(drawn(&study)[2], (3, 1, [1.0, 5.0, 1.0, 5.0]));
+        }
+    }
 
     /// Volume Delta draws each bar from zero along the running delta of its candles, as buying
     /// only when the delta is above zero; Cumulative Volume Delta carries the total across bars
@@ -512,20 +742,30 @@ mod tests {
         assert_eq!(cumulative.values().value(0, 5), Some(8.0));
         // Two-hour periods from midnight: 22:00, 00:00 and 02:00. A missing 02:00
         // candle does not carry the old total into 03:00.
-        cumulative.set_input("anchor", InputValue::Choice(7)).unwrap();
-        cumulative.set_input("anchor_minutes", InputValue::Length(120)).unwrap();
+        cumulative
+            .set_input("anchor", InputValue::Choice(7))
+            .unwrap();
+        cumulative
+            .set_input("anchor_minutes", InputValue::Length(120))
+            .unwrap();
         update(&mut cumulative, &chart, 0, &candles);
-        assert_eq!(drawn(&cumulative), [
-            (0, 1, [0.0, 10.0, 0.0, 6.0]),
-            (1, 2, [6.0, 6.0, -2.0, -2.0]),
-            (2, 1, [0.0, 7.0, 0.0, 7.0]),
-            (3, 1, [7.0, 9.0, 5.0, 9.0]),
-            (5, 1, [0.0, 1.0, 0.0, 1.0]),
-        ]);
+        assert_eq!(
+            drawn(&cumulative),
+            [
+                (0, 1, [0.0, 10.0, 0.0, 6.0]),
+                (1, 2, [6.0, 6.0, -2.0, -2.0]),
+                (2, 1, [0.0, 7.0, 0.0, 7.0]),
+                (3, 1, [7.0, 9.0, 5.0, 9.0]),
+                (5, 1, [0.0, 1.0, 0.0, 1.0]),
+            ]
+        );
         assert_eq!(cumulative.values().value(0, 5), Some(1.0));
         for n in [0, 1441] {
-            assert!(cumulative.set_input("anchor_minutes", InputValue::Length(n)).is_err());
+            assert!(
+                cumulative
+                    .set_input("anchor_minutes", InputValue::Length(n))
+                    .is_err()
+            );
         }
-
     }
 }
