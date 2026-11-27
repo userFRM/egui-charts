@@ -144,7 +144,7 @@ impl DemoApp {
             run,
             id,
             script,
-            feed: self.live.detached(),
+            feed: self.live.detached(&self.chart),
             clock: self.chart.bar_clock(),
             extended_hours: self.chart.extended_hours(),
             awaiting_alert: false,
@@ -692,7 +692,7 @@ mod tests {
     /// displayed chart changes symbol, interval or session.
     #[test]
     fn saved_strategy_fill_alert_keeps_its_run_when_the_chart_changes() {
-        let notices = |change: fn(&mut DemoApp)| {
+        let notices = |symbol: &str, stop_runs: bool, change: fn(&mut DemoApp)| {
             let ctx = egui::Context::default();
             let start = "2026-10-27T19:29:50Z".parse().unwrap();
             let mut app = DemoApp::new_at(
@@ -700,17 +700,31 @@ mod tests {
                 start,
                 true,
             );
+            app.switch_symbol(symbol);
+            let mut settings = app.live.detectors().settings();
+            settings.stop_runs.enabled = stop_runs;
+            app.live.detectors().set_settings(settings);
             app.switch_timeframe(Timeframe::Min1);
-            super::super::tests::finish_feed(&app.live);
-            let shown = |app: &DemoApp| {
-                app.live.snapshot(
-                    app.state.timeframe,
-                    app.chart.bar_clock(),
-                    app.chart.extended_hours(),
-                )
+            let shown = |app: &mut DemoApp| {
+                for _ in 0..4 {
+                    super::super::tests::finish_feed(&app.live);
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1440.0, 900.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            app.chart.show(ui);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                }
             };
-            app.chart.set_data(SeriesId::MAIN, shown(&app));
-            app.chart.set_feed_paused(true);
+            app.chart.set_feed_paused(false);
+            shown(&mut app);
             app.run_sample_backtest();
             app.strategy_report
                 .set_input("length", InputValue::Length(1))
@@ -731,7 +745,7 @@ mod tests {
             let changed = context(&app) != before;
             for second in (10..=600).step_by(10) {
                 app.advance_sample_to(start + chrono::TimeDelta::seconds(second));
-                app.chart.set_data(SeriesId::MAIN, shown(&app));
+                shown(&mut app);
                 app.update_live_strategy();
                 app.alerts.poll(&ctx, &mut app.toasts);
             }
@@ -740,7 +754,7 @@ mod tests {
             assert_eq!(alert.status, AlertStatus::Active);
             assert_eq!(alert.condition, saved.condition);
             let run = &app.live_strategy.as_ref().unwrap().run;
-            assert_eq!(run.symbol, "SAMPLE");
+            assert_eq!(run.symbol, symbol);
             assert_eq!(run.timeframe, Timeframe::Min1);
             assert_eq!(run.settings, settings);
             let log: Vec<_> = app
@@ -749,7 +763,7 @@ mod tests {
                 .iter()
                 .filter(|trigger| Some(&trigger.id) == saved.id.as_ref())
                 .map(|trigger| {
-                    assert_eq!(trigger.symbol, "SAMPLE");
+                    assert_eq!(trigger.symbol, symbol);
                     (
                         trigger.time,
                         trigger.price,
@@ -760,12 +774,6 @@ mod tests {
                 .collect();
             ((log, run.report().cloned()), changed)
         };
-        let (unchanged, changed) = notices(|_| {});
-        assert!(!changed);
-        assert!(
-            !unchanged.0.is_empty(),
-            "ten minutes of bars must fill orders"
-        );
         let cases: [(&str, fn(&mut DemoApp)); 3] = [
             ("symbol", |app| app.switch_symbol("TOKENA")),
             ("interval", |app| app.switch_timeframe(Timeframe::Min5)),
@@ -780,10 +788,18 @@ mod tests {
                 app.apply_session();
             }),
         ];
-        for (name, change) in cases {
-            let (actual, changed) = notices(change);
-            assert!(changed, "{name}: the displayed context must change");
-            assert_eq!(actual, unchanged, "{name}");
+        for (symbol, stop_runs) in [("SAMPLE", false), ("INDEXFZ2026", true)] {
+            let (unchanged, changed) = notices(symbol, stop_runs, |_| {});
+            assert!(!changed);
+            assert!(
+                !unchanged.0.is_empty(),
+                "{symbol}: ten minutes of bars must fill orders"
+            );
+            for (name, change) in cases {
+                let (actual, changed) = notices(symbol, stop_runs, change);
+                assert!(changed, "{symbol} {name}: the displayed context must change");
+                assert_eq!(actual, unchanged, "{symbol} {name}");
+            }
         }
     }
 }
