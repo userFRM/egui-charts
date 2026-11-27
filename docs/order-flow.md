@@ -556,9 +556,9 @@ forming bar's value past it, from zero at the bar's open: a sell volume level of
 fire at close. They rebuild with the stop sweeps on interval changes. Bars opened before the
 first live event's bar, including loaded history, are marked without an alert.
 
-`AlertCondition::Footprint` watches buy, sell, stacked buy or stacked sell imbalance through the
+[`AlertCondition::Footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.AlertCondition.html#variant.Footprint) watches buy, sell, stacked buy or stacked sell imbalance through the
 alert engine, independently of the panel switches. The host drains live conditions with
-`OrderFlowDetectors::take_footprint_events` and passes them to `AlertEngine::footprint_events`.
+[`OrderFlowDetectors::take_footprint_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.OrderFlowDetectors.html#method.take_footprint_events) and passes them to [`AlertEngine::footprint_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.AlertEngine.html#method.footprint_events).
 Only once fires at the execution that first meets the condition and ends the alert; Once per
 bar does so on each forming bar; Once per bar close fires on each closed bar that meets it.
 The demo's alert dialog offers these conditions and frequencies. They use the same rule's
