@@ -125,12 +125,12 @@ impl StudyTemplateSet {
     /// beside the user's own sets and apply as it applies those, for example with
     /// `Chart::apply_chosen_study_template_set`:
     ///
-    /// - "Williams Alligator": [`WilliamsAlligator`].
+    /// - "Bill Williams' 3 Lines": [`WilliamsAlligator`].
     /// - "Displaced EMA": an [`EMA`] drawn 5 bars ahead.
-    /// - "Moving average ribbon": [`MARibbon`].
+    /// - "MA Exp Ribbon": [`MARibbon`].
     /// - "Oscillators": [`RSI`], [`StochasticRSI`] and [`CCI`].
-    /// - "Swing trading": [`BollingerBands`], [`MACD`] and [`Stochastic`].
-    /// - "Volume analysis": [`OnBalanceVolume`] and [`MoneyFlowIndex`].
+    /// - "Swing Trading": [`BollingerBands`], [`MACD`] and [`Stochastic`].
+    /// - "Volume Based": [`OnBalanceVolume`] and [`MoneyFlowIndex`].
     ///
     /// Each set starts with a [`Volume`] study, so that applying it keeps the chart's volume,
     /// and its studies take their default inputs, apart from the displaced EMA's offset. The
@@ -143,11 +143,11 @@ impl StudyTemplateSet {
             .expect("an EMA reads a price, so it takes an offset");
         let sets: [(&'static str, Vec<Box<dyn Indicator>>); 6] = [
             (
-                "Williams Alligator",
+                "Bill Williams' 3 Lines",
                 vec![Box::new(WilliamsAlligator::default())],
             ),
             ("Displaced EMA", vec![Box::new(displaced)]),
-            ("Moving average ribbon", vec![Box::new(MARibbon::default())]),
+            ("MA Exp Ribbon", vec![Box::new(MARibbon::default())]),
             (
                 "Oscillators",
                 vec![
@@ -157,7 +157,7 @@ impl StudyTemplateSet {
                 ],
             ),
             (
-                "Swing trading",
+                "Swing Trading",
                 vec![
                     Box::new(BollingerBands::default()),
                     Box::new(MACD::default()),
@@ -165,7 +165,7 @@ impl StudyTemplateSet {
                 ],
             ),
             (
-                "Volume analysis",
+                "Volume Based",
                 vec![
                     Box::new(OnBalanceVolume::default()),
                     Box::new(MoneyFlowIndex::default()),
