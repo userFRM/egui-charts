@@ -877,8 +877,10 @@ mod tests {
                 drawing.pitchfork = original.clone();
                 drawing.line_style = crate::model::LineStyle::Dashed;
                 drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 3];
+                // New forks start unextended and forks saved without levels extend: the click
+                // flips either.
                 let mut expected = super::super::tabs::pitchfork_shown(&drawing);
-                expected.extend_lines = false;
+                expected.extend_lines = !expected.extend_lines;
                 assert!(
                     expected.levels.iter().all(|level| level.line_style
                         == if original.is_none() {

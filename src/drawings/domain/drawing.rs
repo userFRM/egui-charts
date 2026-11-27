@@ -1014,12 +1014,15 @@ impl Drawing {
     }
 
     /// The fill a `tool` drawing takes when Fill is switched on: its own default where that is not
-    /// a tint of its line, as on the regression trend's upper band, otherwise `line` at 20%.
+    /// a tint of its line, as on the regression trend's upper band, otherwise `line` at 20%, or at
+    /// 50% on the brush.
     #[cfg(feature = "ui")]
     pub(crate) fn first_fill(tool: DrawingToolType, line: [u8; 4]) -> [u8; 4] {
         let style = default_style(tool);
         match style.fill {
             Some(fill) if fill[..3] != style.color[..3] => fill,
+            // round(0.5 * 255) = 128.
+            _ if tool == DrawingToolType::Brush => tint(line, 128),
             _ => tint(line, 51),
         }
     }
@@ -1650,6 +1653,8 @@ mod tests {
     /// its first line, and one saved without line measurements keeps it in the middle. The
     /// triangle, ellipse and double curve keep the styles they shared before.
     /// A highlighter evens its stroke over five samples, and a brush draws through every one.
+    /// The four pitchforks end each line and band the median's length past its start, while the
+    /// pitchfan, which ignores that reach, keeps Extend lines on.
     #[test]
     fn new_drawings_start_in_their_tool_style() {
         use DrawingToolType as T;
@@ -1824,6 +1829,21 @@ mod tests {
             ),
             (5, 0)
         );
+        for tool in [
+            T::Pitchfork,
+            T::SchiffPitchfork,
+            T::ModifiedSchiffPitchfork,
+            T::InsidePitchfork,
+            T::Pitchfan,
+        ] {
+            assert_eq!(
+                Drawing::new(1, tool)
+                    .pitchfork
+                    .map(|config| config.extend_lines),
+                Some(tool == T::Pitchfan),
+                "{tool:?}"
+            );
+        }
         assert_eq!(Drawing::new(1, T::PriceLabel).font_weight, FontWeight::Bold);
         let placed = Drawing::new(1, T::DateAndPriceRange);
         assert_eq!(

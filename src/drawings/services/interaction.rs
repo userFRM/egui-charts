@@ -834,6 +834,9 @@ mod tests {
             }
             drawing.points = anchors.iter().map(|&(x, y)| Pos2::new(x, y)).collect();
             (drawing.extend_left, drawing.extend_right) = (true, true);
+            if let Some(fork) = &mut drawing.pitchfork {
+                fork.extend_lines = true;
+            }
             let got = hit_test(Pos2::new(x, y), std::slice::from_ref(&drawing), "1D");
             if got != want {
                 wrong.push(format!(
