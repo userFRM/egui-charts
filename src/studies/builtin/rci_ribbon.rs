@@ -55,7 +55,7 @@ impl Default for RciRibbon {
 impl RciRibbon {
     fn compute(&self, data: &[Bar]) -> IndicatorValues {
         let lines = self.lengths.map(|length| {
-            let mut rci = RankCorrelationIndex::new(length).from_first_window();
+            let mut rci = RankCorrelationIndex::new(length).with_first_window();
             rci.calculate(data);
             rci
         });

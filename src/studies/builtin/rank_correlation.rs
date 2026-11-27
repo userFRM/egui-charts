@@ -56,7 +56,7 @@ impl RankCorrelationIndex {
     }
 
     /// Read from the first full window, one bar before the standalone study starts.
-    pub(super) fn from_first_window(mut self) -> Self {
+    pub(super) fn with_first_window(mut self) -> Self {
         self.late_start = false;
         self
     }

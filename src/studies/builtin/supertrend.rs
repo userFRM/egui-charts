@@ -8,7 +8,7 @@
 //! - Up Trend: the SuperTrend line while the trend is bullish (below price)
 //! - Down Trend: the SuperTrend line while the trend is bearish (above price)
 //!
-//! Each bar has a value on exactly one of the two lines; the other is NaN.
+//! Each plotted bar has a value on exactly one of the two lines; the other is NaN.
 //!
 //! The first bar with an ATR starts a down trend on the upper band. A down trend turns up when a
 //! close rises above the upper band, and an up trend turns down when a close falls below the lower

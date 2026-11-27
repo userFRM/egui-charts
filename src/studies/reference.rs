@@ -553,7 +553,8 @@ fn line_value(value: &IndicatorValue, line: usize) -> Option<f64> {
 #[test]
 fn warm_ups_show_each_value_on_a_series_ending_at_its_bar() {
     let bars = fixture();
-    let studies: [(&str, fn() -> Box<dyn Indicator>); 4] = [
+    type Case = (&'static str, fn() -> Box<dyn Indicator>);
+    let studies: [Case; 4] = [
         ("Chop(14)", || Box::new(ChoppinessIndex::default())),
         ("Mass(9,25)", || Box::new(MassIndex::default())),
         ("SuperTrend(10,3)", || Box::new(SuperTrend::default())),
