@@ -1,8 +1,8 @@
 //! Volume tools: anchored VWAP and the fixed range and anchored volume profiles
 
 use crate::data::{
-    FootprintBarView, FootprintView, ProfileSource, StudyDataRequest, VolumeProfile,
-    VolumeProfileConfig,
+    FootprintBarView, FootprintView, ProfilePlacement, ProfileSource, StudyDataRequest,
+    VolumeProfile, VolumeProfileConfig,
 };
 use crate::drawings::domain::Drawing;
 use crate::drawings::domain::DrawingToolType;
@@ -415,7 +415,8 @@ impl Drawing {
     }
 
     /// Draws the profile of `bars`, the span that starts at bar `first`, as
-    /// rows beside the first anchor, or at the pane's right edge when anchored,
+    /// rows from either end of the span, as configured, or the pane's right edge when anchored,
+    /// the widest taking the configured share of the span or pane,
     /// with a tint over the measured bars' price and time range and, where its switches show
     /// them, the developing point of control and value area over the bars.
     fn draw_volume_profile(
@@ -432,6 +433,7 @@ impl Drawing {
         let Some(profile) = profile.as_ref() else {
             return;
         };
+        let anchored = self.tool_type == DrawingToolType::AnchoredVolumeProfile;
         crate::painting::volume_profile::paint_profile(
             painter,
             profile,
@@ -439,7 +441,9 @@ impl Drawing {
             self.color,
             left..right,
             ProfileStyle::Drawing {
-                anchored: self.tool_type == DrawingToolType::AnchoredVolumeProfile,
+                anchored,
+                right_aligned: anchored || config.placement == ProfilePlacement::Right,
+                width: f32::from(config.histogram_width.clamp(1, 100)) / 100.0,
                 poc_width: self.stroke_width,
                 volume_decimals: view
                     .instrument
@@ -2079,11 +2083,15 @@ mod tests {
         }
     }
 
-    /// Rows retain their gaps on either scale, leave two thirds of the span clear,
+    /// Rows retain their gaps on either scale and take their configured side and width,
     /// and anchored rows grow left from the pane edge independently of the range tint.
     #[test]
     fn volume_profile_rows_are_drawn_on_either_scale_orientation() {
-        use crate::data::{ProfileDisplay, VolumeProfileConfig};
+        use crate::data::{
+            ProfileDisplay::{Total, UpDown},
+            ProfilePlacement::{Left, Right},
+            VolumeProfileConfig,
+        };
         let bars = sample_bars();
         let upright = |price: f64| (16.0 - price) as f32 * 50.0;
         let inverted = |price: f64| (price - 8.0) as f32 * 50.0;
@@ -2093,19 +2101,36 @@ mod tests {
             DrawingToolType::AnchoredVolumeProfile,
         ] {
             for price_to_y in [&upright as &dyn Fn(f64) -> f32, &inverted] {
-                for (width, row_count, row_height, display, va_lines) in [
-                    (400.0, 24, 11.5, ProfileDisplay::Total, false),
-                    (24.0, 24, 11.5, ProfileDisplay::Total, false),
-                    (24.0, 4, 74.0, ProfileDisplay::UpDown, true),
-                    (1200.0, 24, 11.5, ProfileDisplay::Total, false),
-                    (400.0, 1000, 0.15, ProfileDisplay::Total, false),
-                    (400.0, 4, 74.0, ProfileDisplay::UpDown, false),
-                    (400.0, 4, 74.0, ProfileDisplay::UpDown, true),
+                for (
+                    width,
+                    row_count,
+                    row_height,
+                    display,
+                    va_lines,
+                    placement,
+                    histogram_width,
+                    show_rows,
+                ) in [
+                    (400.0, 24, 11.5, Total, false, Left, 30, true),
+                    (24.0, 24, 11.5, Total, false, Left, 30, true),
+                    (24.0, 4, 74.0, UpDown, true, Left, 30, true),
+                    (1200.0, 24, 11.5, Total, false, Left, 30, true),
+                    (400.0, 1000, 0.15, Total, false, Left, 30, true),
+                    (400.0, 4, 74.0, UpDown, false, Left, 30, true),
+                    (400.0, 4, 74.0, UpDown, true, Left, 30, true),
+                    (400.0, 24, 11.5, Total, false, Right, 30, true),
+                    (400.0, 4, 74.0, UpDown, true, Right, 50, true),
+                    (24.0, 24, 11.5, Total, false, Left, 100, true),
+                    (24.0, 24, 11.5, Total, false, Right, 100, true),
+                    (400.0, 4, 74.0, UpDown, true, Left, 30, false),
                 ] {
                     let mut drawing = Drawing::new(1, tool);
                     let mut config = VolumeProfileConfig::new(row_count, 0.7).unwrap();
                     config.display = display;
                     config.show_value_area_lines = va_lines;
+                    config.show_rows = show_rows;
+                    config.placement = placement;
+                    config.histogram_width = histogram_width;
                     drawing.volume_profile = Some(config);
                     let view = ChartView {
                         price_formatter: None,
@@ -2163,10 +2188,24 @@ mod tests {
                         "range has a faint tint"
                     );
                     let rows = &rects[1..];
-                    let split = display == ProfileDisplay::UpDown;
-                    assert_eq!(rows.len(), row_count * if split { 2 } else { 1 });
+                    let split = display == UpDown;
+                    assert_eq!(
+                        rows.len(),
+                        if show_rows {
+                            row_count * if split { 2 } else { 1 }
+                        } else {
+                            0
+                        }
+                    );
                     let anchored = tool == DrawingToolType::AnchoredVolumeProfile;
-                    let edge = if anchored { 800.0 } else { 100.0 };
+                    let right = anchored || placement == Right;
+                    let edge = if anchored {
+                        800.0
+                    } else if right {
+                        100.0 + width
+                    } else {
+                        100.0
+                    };
                     let mut widest = 0.0_f32;
                     for row in rows.chunks(if split { 2 } else { 1 }) {
                         let mut row_width = 0.0;
@@ -2176,7 +2215,7 @@ mod tests {
                             row_width += segment.rect.width();
                         }
                         assert!(
-                            ((if anchored {
+                            ((if right {
                                 row[0].rect.right()
                             } else {
                                 row[0].rect.left()
@@ -2188,10 +2227,14 @@ mod tests {
                     }
                     let span_width = if anchored { clip.width() } else { width };
                     assert!(
-                        (widest - span_width * 0.3).abs() < 1e-3,
+                        !show_rows
+                            || (widest
+                                - span_width * f32::from(histogram_width.clamp(1, 100)) / 100.0)
+                                .abs()
+                                < 1e-3,
                         "widest row {widest}"
                     );
-                    if split {
+                    if split && show_rows {
                         // Four 1.5-price rows have totals 83 1/3, 350, 619 1/6, 397.5.
                         // 70% of 1450 needs rows 0..=2; row 3 is outside the value area.
                         for side in 0..2 {
