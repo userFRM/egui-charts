@@ -319,6 +319,14 @@ impl IndicatorSettingsDialog {
                 )
                 .show(ui);
                 ui.separator();
+                let default_zones;
+                let zones = match &self.time_zones {
+                    Some(zones) => zones.as_slice(),
+                    None => {
+                        default_zones = crate::ui::timeframe_toolbar::default_time_zones();
+                        default_zones.as_slice()
+                    }
+                };
                 egui::ScrollArea::both()
                     .max_height((ui.available_height() - 72.0).max(0.0))
                     .show(ui, |ui| match self.tab {
@@ -350,15 +358,6 @@ impl IndicatorSettingsDialog {
                                 .iter()
                                 .map(|input| input.is_shown(&self.inputs))
                                 .collect();
-                            let default_zones;
-                            let zones = match &self.time_zones {
-                                Some(zones) => zones.as_slice(),
-                                None => {
-                                    default_zones =
-                                        crate::ui::timeframe_toolbar::default_time_zones();
-                                    default_zones.as_slice()
-                                }
-                            };
                             FormGrid::new("study_inputs").show(ui, |ui| {
                                 for (input, shown) in self.inputs.iter_mut().zip(shown) {
                                     if study_source
@@ -456,7 +455,7 @@ impl IndicatorSettingsDialog {
                                                 } else {
                                                     &[]
                                                 },
-                                                &[],
+                                                zones,
                                             );
                                         }
                                     }
@@ -3087,6 +3086,145 @@ mod tests {
             assert_eq!(study.source(), Some(StudySource::Price(PriceSource::Open)));
             study.calculate(&bars);
             assert_eq!(study.values().value(0, 0), Some(10.0));
+        }
+    }
+
+    /// Style time zones use the same host list as Inputs and preview, cancel and apply like
+    /// calculation inputs.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn style_time_zone_offers_the_configured_zones() {
+        use crate::model::{Bar, BarData, TimezoneId};
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::widget::Chart;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let bars = vec![Bar::new(
+            chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            10.0,
+            14.0,
+            8.0,
+            12.0,
+            1.0,
+        )];
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.set_timeframe(Timeframe::Min1);
+        let study = CustomIndicator::new("Custom", |_| Vec::new())
+            .with_inputs(
+                vec![
+                    StudyInput::new(
+                        "zone",
+                        "Session time zone",
+                        InputValue::TimeZone("UTC".into()),
+                        InputKind::TimeZone { exchange: true },
+                    ),
+                    StudyInput::new(
+                        "label_zone",
+                        "Label time zone",
+                        InputValue::TimeZone("UTC".into()),
+                        InputKind::TimeZone { exchange: true },
+                    )
+                    .in_style_tab(),
+                ],
+                |bars, inputs, _, _| {
+                    let zurich = inputs.iter().any(|input| {
+                        input.id == "label_zone"
+                            && input.value == InputValue::TimeZone("Europe/Zurich".into())
+                    });
+                    vec![IndicatorValue::Single(if zurich { 1.0 } else { 0.0 }); bars.len()]
+                },
+            )
+            .unwrap();
+        let id = chart.add_indicator(Box::new(study));
+        let mut dialog = IndicatorSettingsDialog::default();
+        dialog.set_time_zones(vec![
+            TimezoneId::utc(),
+            TimezoneId::named("Europe/Zurich").unwrap(),
+        ]);
+        for action in ["Cancel", "Apply"] {
+            assert!(dialog.open_for_chart(&chart, id));
+            let mut applied = None;
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    chart.show(ui);
+                    if let Some(edit) =
+                        dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                    {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            harness.get_by_label("Session time zone").click();
+            harness.run();
+            assert!(harness.query_by_label("Europe/Zurich").is_some());
+            assert!(harness.query_by_label("Exchange time").is_some());
+            harness.get_by_label("UTC").click();
+            harness.run();
+            drop(harness);
+            dialog.tab = Tab::Style;
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    chart.show(ui);
+                    if let Some(edit) =
+                        dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                    {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            harness.get_by_label("Label time zone").click();
+            harness.run();
+            assert!(harness.query_by_label("Exchange time").is_some());
+            harness.get_by_label("Europe/Zurich").click();
+            harness.run();
+            drop(harness);
+            let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+            assert_eq!(study.values().value(0, 0), Some(1.0));
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    chart.show(ui);
+                    if let Some(edit) =
+                        dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                    {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            harness.get_by_label(action).click();
+            harness.run();
+            drop(harness);
+            let (zone, value) = if action == "Apply" {
+                let edit = applied.unwrap();
+                chart.user_action(|chart| {
+                    chart
+                        .indicator_mut(id)
+                        .unwrap()
+                        .apply_settings(&edit.inputs, edit.settings)
+                        .unwrap();
+                });
+                ("Europe/Zurich", 1.0)
+            } else {
+                assert!(applied.is_none());
+                ("UTC", 0.0)
+            };
+            let study = chart.indicator_mut(id).unwrap();
+            assert_eq!(
+                study
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == "label_zone")
+                    .unwrap()
+                    .value,
+                InputValue::TimeZone(zone.into())
+            );
+            study.calculate(&bars);
+            assert_eq!(study.values().value(0, 0), Some(value));
         }
     }
 
