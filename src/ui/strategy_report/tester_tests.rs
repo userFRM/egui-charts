@@ -1550,3 +1550,128 @@ fn zone_levels_run_in_either_order_and_optimisation_skips_refused_pairs() {
         );
     }
 }
+
+#[test]
+fn sar_strategy_inputs_keep_each_edit_in_either_order() {
+    use crate::strategies::optimise;
+    use InputValue::Number;
+
+    let bars: Vec<_> = [100.0, 110.0, 120.0, 130.0, 130.0, 101.0, 101.0, 102.0]
+        .into_iter()
+        .enumerate()
+        .map(|(index, price)| {
+            Bar::new(
+                DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(index as i64),
+                price,
+                price,
+                price,
+                price,
+                1.0,
+            )
+        })
+        .collect();
+    let backtest = Backtest::new("SAR", "TEST", Timeframe::Min1, 10_000.0);
+    let factory = StrategyFactory::new();
+    let values = |inputs: &[StudyInput]| {
+        ["initial_af", "af_step", "max_af"].map(|id| {
+            match inputs.iter().find(|input| input.id == id).unwrap().value {
+                Number(value) => value,
+                _ => panic!("{id} must be a number"),
+            }
+        })
+    };
+    for (edits, start, max, check) in [
+        (
+            &[("initial_af", 0.005), ("max_af", 0.01)][..],
+            0.005,
+            0.01,
+            Ok(()),
+        ),
+        (
+            &[("max_af", 0.01), ("initial_af", 0.005)][..],
+            0.005,
+            0.01,
+            Ok(()),
+        ),
+        (
+            &[("initial_af", 0.5), ("max_af", 0.1)][..],
+            0.5,
+            0.1,
+            Err("start must not be above max value"),
+        ),
+        (
+            &[("max_af", 0.1), ("initial_af", 0.5)][..],
+            0.5,
+            0.1,
+            Err("start must not be above max value"),
+        ),
+        (
+            &[("initial_af", 0.005), ("max_af", 0.02)][..],
+            0.005,
+            0.02,
+            Ok(()),
+        ),
+    ] {
+        let mut strategy = factory.create("Parabolic SAR").unwrap();
+        let mut tester = StrategyTester::default();
+        tester.select_strategy("Parabolic SAR").unwrap();
+        for &(id, value) in edits {
+            strategy.set_input(id, Number(value)).unwrap();
+            tester.set_input(id, Number(value)).unwrap();
+        }
+        assert_eq!(values(&strategy.study_inputs()), [start, 0.02, max]);
+        assert_eq!(strategy.validate_inputs(), check);
+        assert_eq!(values(&tester.inputs), [start, 0.02, max]);
+        assert_eq!(
+            values(&tester.configured_strategy().unwrap().study_inputs()),
+            values(&tester.inputs)
+        );
+        assert_eq!(tester.check_run(Timeframe::Min1, false), check);
+        for inputs in [strategy.study_inputs(), tester.inputs.clone()] {
+            assert_eq!(
+                inputs
+                    .iter()
+                    .map(|input| &input.default)
+                    .collect::<Vec<_>>(),
+                [&Number(0.02), &Number(0.02), &Number(0.2)]
+            );
+        }
+        let grid: Vec<_> = edits
+            .iter()
+            .map(|&(id, value)| (id.to_owned(), vec![Number(value)]))
+            .collect();
+        let trials: Vec<_> = optimise(
+            || factory.create("Parabolic SAR").unwrap(),
+            &backtest,
+            &bars,
+            &[],
+            &grid,
+        )
+        .collect();
+        if let Err(reason) = check {
+            assert_eq!(trials, [Err(reason)]);
+        } else {
+            assert_eq!(trials.len(), 1);
+            let trial = trials[0].as_ref().unwrap();
+            assert_eq!(
+                trial.inputs,
+                edits
+                    .iter()
+                    .map(|&(id, value)| (id.to_owned(), Number(value)))
+                    .collect::<Vec<_>>()
+            );
+            // At Max 0.01 SAR stays below 101 on bar 5 (100.79302). At Max 0.02 it
+            // reaches 101.57216, reverses and sells at bar 6's 101, before the close of 102.
+            if max == 0.01 {
+                assert_eq!(trial.performance.open_profit, Some(0.0));
+            } else {
+                assert!(
+                    trial
+                        .performance
+                        .open_profit
+                        .is_some_and(|profit| profit < 0.0)
+                );
+            }
+        }
+    }
+}
