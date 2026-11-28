@@ -576,7 +576,13 @@ impl AlertEvaluator {
                         .studies
                         .iter()
                         .find(|(key, _)| *key == FOOTPRINT_STUDY)
-                        .and_then(|(_, study)| study.plot_value(metric.output(), at)),
+                        .and_then(|(_, study)| match metric {
+                            crate::model::FootprintMetric::Delta => Some(crate::data::side_delta(
+                                study.plot_value(0, at)?,
+                                study.plot_value(1, at)?,
+                            )),
+                            _ => study.plot_value(metric.output(), at),
+                        }),
                     AlertSource::Study { id, output } => context
                         .0
                         .studies
@@ -2045,6 +2051,78 @@ mod tests {
             trade(121, 1.0, Some(OrderSide::Buy));
             poll(&mut evaluator);
             has(&[a, b, c, d]);
+        }
+
+        // Balanced fractional sides must stay at zero, in either execution order.
+        for (first, opposite) in [
+            (OrderSide::Buy, OrderSide::Sell),
+            (OrderSide::Sell, OrderSide::Buy),
+        ] {
+            let feed = Arc::new(Feed::default());
+            let mut evaluator = AlertEvaluator::new(feed.clone());
+            let alerts = [
+                AlertCondition::Below(0.0),
+                AlertCondition::Above(0.0),
+                AlertCondition::Crossing(0.0),
+                AlertCondition::CrossingUp(0.0),
+                AlertCondition::CrossingDown(0.0),
+            ]
+            .map(|condition| {
+                let mut alert = Alert::new("SYM", condition);
+                alert.source = AlertSource::Footprint(Delta);
+                alert.timeframe = Some(Timeframe::Min1);
+                alert.frequency = OncePerBar;
+                alert
+            });
+            let engine = AlertEngine::new().with_alerts(alerts.to_vec());
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            let poll = |evaluator: &mut AlertEvaluator| {
+                assert!(
+                    evaluator
+                        .poll(
+                            &engine,
+                            &IndicatorFactory::new(),
+                            &[],
+                            #[cfg(feature = "ui")]
+                            &ctx,
+                            DateTime::from_timestamp(1000, 0).unwrap(),
+                        )
+                        .is_empty()
+                );
+            };
+            for _ in 0..4 {
+                poll(&mut evaluator);
+            }
+            let mut footprint =
+                crate::data::Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (minute, sizes) in [(1, [1.0, 0.5, 0.5]), (2, [0.3, 0.1, 0.2])] {
+                for (offset, (size, side)) in sizes
+                    .into_iter()
+                    .zip([first, opposite, opposite])
+                    .enumerate()
+                {
+                    let second = minute * 60 + offset as i64 + 1;
+                    let trade = Tick::new(
+                        DateTime::from_timestamp(second, 0).unwrap(),
+                        340.0,
+                        size,
+                        Some(side),
+                    )
+                    .with_id(second as u64);
+                    footprint.push(&trade).unwrap();
+                    for subscription in feed.subscriptions.lock().unwrap().iter() {
+                        subscription.sink.push_tick(trade.clone());
+                    }
+                }
+                poll(&mut evaluator);
+                assert_eq!(footprint.bars().values().next_back().unwrap().delta(), 0.0);
+                assert!(
+                    engine.triggers().is_empty(),
+                    "{first:?}, minute {minute}: {:?}",
+                    engine.triggers()
+                );
+            }
         }
     }
 
