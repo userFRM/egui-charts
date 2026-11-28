@@ -2,7 +2,6 @@
 
 use super::core::Direction;
 use super::layout::Region;
-use super::studies::study_input_summary;
 use super::{Action, Terminal};
 use egui_charts::localization as l10n;
 use egui_charts::model::{ChartType, SeriesScale, SymbolType};
@@ -249,16 +248,13 @@ impl Terminal {
         self.studies.settings.adjust_for_dividends = adjusted;
     }
 
-    fn load_study_template(&mut self, template: &StudyTemplateSet) {
+    pub(super) fn load_study_template(&mut self, template: &StudyTemplateSet) {
         let applied = self.user_action(|terminal| {
             let chart = &mut terminal.charts[terminal.active];
             chart.apply_study_template_set_with(template, terminal.studies.indicators.factory())?;
-            let captions: Vec<_> = chart
-                .indicators()
-                .map(|(id, study)| (id, study_input_summary(study)))
-                .collect();
-            for (id, caption) in captions {
-                chart.set_indicator_inputs(id, caption);
+            let ids: Vec<_> = chart.indicators().map(|(id, _)| id).collect();
+            for id in ids {
+                chart.set_indicator_inputs(id, "");
             }
             Ok::<_, String>(())
         });
