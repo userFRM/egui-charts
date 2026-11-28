@@ -522,6 +522,7 @@ pub struct DemoApp {
     replay_interval: Timeframe,
     replay_scope: ReplayScope,
     replay_session: Option<(ReplaySession, Timeframe)>,
+    replay_session_cutoff: Option<chrono::DateTime<chrono::Utc>>,
     replay_slots: Vec<usize>,
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
@@ -976,6 +977,10 @@ impl DemoApp {
                 }
                 Some((session, interval))
             }),
+            replay_session_cutoff: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "replay_session_cutoff"))
+                .flatten(),
             replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -2035,6 +2040,11 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "account_panel_height", &self.account_panel_height);
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
+        eframe::set_value(
+            storage,
+            "replay_session_cutoff",
+            &self.replay_session_cutoff,
+        );
         self.checkpoint_workspace();
         self.storage.persist(storage);
         eframe::set_value(
@@ -4330,7 +4340,10 @@ impl DemoApp {
                 points,
                 self.theme.ui.border,
             )));
-        if !self.replay_selecting && self.replay.is_none() {
+        // An all charts replay moves to the chart activated; another waits for its end.
+        if !self.replay_selecting
+            && (self.replay.is_none() || self.replay_slots.contains(&self.layout.active()))
+        {
             self.activate_chart_slot(self.layout.active());
         }
         self.drain_chart_events(ui.ctx());
@@ -4863,11 +4876,6 @@ impl DemoApp {
             return;
         }
         let play = matches!(action, ReplayControlAction::Play);
-        let endpoint = match action {
-            ReplayControlAction::GoToStart => Some(false),
-            ReplayControlAction::GoToEnd => Some(true),
-            _ => None,
-        };
         let transport = matches!(
             action,
             ReplayControlAction::Play
@@ -4904,13 +4912,7 @@ impl DemoApp {
             ReplayControlAction::None => return,
             _ => {}
         }
-        if let Some(end) = endpoint
-            && let Some(driver) = self.chart.replay_driver().cloned()
-            && let Some((first, last)) = driver.time_range()
-        {
-            driver.seek(if end { last } else { first });
-            self.push_market_replay_window();
-        } else if !transport {
+        if !transport {
             self.push_replay_window_to_chart();
         }
         self.sync_replay_driver(play);
