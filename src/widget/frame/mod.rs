@@ -3844,9 +3844,8 @@ impl Chart {
                     .unwrap_or(shown.len().saturating_sub(1))
             });
             if let Some((bar, previous_close)) = self.readout_bar_at(selected) {
-                let session_close = self
-                    .config
-                    .compact_legend
+                let session_close = (self.config.compact_legend
+                    && self.config.compact_legend_day_change)
                     .then(|| self.readout_session_close(selected, &exchange_session))
                     .flatten();
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();

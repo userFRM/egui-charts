@@ -447,11 +447,14 @@ pub struct ChartConfig {
     /// Show the change of the last price from the previous session's close in the legend.
     pub show_last_day_change: bool,
     /// Below 600 points of legend width, show the close alone in place of open, high, low and
-    /// close, followed by its change from the previous session's close in place of the bar
-    /// change. Off shows open, high, low, close and the bar change at every width. On by default
-    /// and in configurations saved without this field.
+    /// close, followed by its change from the previous session's close on new charts. Off shows
+    /// open, high, low, close and the bar change at every width. On by default; configurations
+    /// saved without the compact fields keep close alone with the bar change.
     #[serde(default = "compact_legend")]
     pub compact_legend: bool,
+    /// New compact legends use the session change; older saved legends keep the bar change.
+    #[serde(default)]
+    pub(crate) compact_legend_day_change: bool,
     /// Show the backdrop behind the legend's volume and study rows, in the price pane and in
     /// study panes, at [`indicator_backdrop_opacity`](Self::indicator_backdrop_opacity). Turning
     /// it off keeps the opacity. On by default and in configurations saved without this field.
@@ -757,6 +760,7 @@ impl Default for ChartConfig {
             show_market_status: true,
             show_last_day_change: false,
             compact_legend: true,
+            compact_legend_day_change: true,
             show_indicator_backdrop: true,
             indicator_backdrop_opacity: 0.6,
             show_currency: true,
@@ -946,6 +950,7 @@ mod tests {
         let restored: ChartConfig = serde_json::from_str(saved).unwrap();
         assert!(restored.show_indicator_backdrop);
         assert!(restored.compact_legend);
+        assert!(!restored.compact_legend_day_change);
         let original: serde_json::Value = serde_json::from_str(saved).unwrap();
         let current: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();

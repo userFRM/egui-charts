@@ -988,6 +988,62 @@ fn compact_legend_shows_the_close_and_day_change_unless_turned_off() {
             "{text}: {texts:?}"
         );
     }
+    // Older settings and layouts keep close alone with the bar change, including after resaving.
+    let original_settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+    #[cfg(feature = "ui")]
+    let original_layout = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+    let legacy_status: serde_json::Value = serde_json::from_str(
+        r#"{"show_ohlc":true,"show_change":true,"show_change_percent":true,"show_volume":false}"#,
+    )
+    .unwrap();
+    let check_legacy = |chart: &mut Chart| {
+        let texts = read(chart, 450.0);
+        for text in ["C 103.00", "+0.50 (+0.49%)"] {
+            assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+        }
+        for text in ["O 102.50", "H 103.50", "L 102.00", "+3.00 (+3.00%)"] {
+            assert!(
+                !texts.iter().any(|shown| shown == text),
+                "{text}: {texts:?}"
+            );
+        }
+    };
+    let mut saved = serde_json::to_value(&original_settings).unwrap();
+    saved["status_line"] = legacy_status.clone();
+    let settings: crate::widget::settings::ChartSettingsState =
+        serde_json::from_value(saved).unwrap();
+    // Templates use the settings representation, including its compatibility choices.
+    let settings: crate::widget::settings::ChartSettingsState =
+        serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+    settings.apply_to_chart(&mut chart).unwrap();
+    assert_eq!(
+        crate::widget::settings::ChartSettingsState::from_chart(&chart).status_line,
+        settings.status_line
+    );
+    check_legacy(&mut chart);
+    #[cfg(feature = "ui")]
+    for with_config in [false, true] {
+        let mut saved = original_layout.clone();
+        saved["settings"]["status_line"] = legacy_status.clone();
+        for field in ["config", "palette"] {
+            let config = saved[field].as_object_mut().unwrap();
+            config.remove("compact_legend");
+            config.remove("compact_legend_day_change");
+        }
+        if !with_config {
+            saved["config"] = serde_json::Value::Null;
+        }
+        chart
+            .restore(&serde_json::from_value(saved).unwrap())
+            .unwrap();
+        check_legacy(&mut chart);
+        let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+        chart
+            .restore(&serde_json::from_str(&saved).unwrap())
+            .unwrap();
+        check_legacy(&mut chart);
+    }
+    original_settings.apply_to_chart(&mut chart).unwrap();
     // A historical readout uses that bar's session, rather than the last bar's close.
     let selected = chart.bars(crate::widget::SeriesId::MAIN)[4].time;
     chart.set_crosshair_position(Some((selected, 102.5)));
