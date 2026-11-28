@@ -6,7 +6,9 @@
 //! or the highest volume among the last `length` bars, the most recent of equal bars. Auto
 //! takes the period from the chart interval: the session below a day, the month at a day,
 //! the quarter up to 10 days, the year up to 60 days and the decade above. The anchor moves
-//! as bars arrive, and the line is redrawn from the new anchor.
+//! as bars arrive, and the line is redrawn from the new anchor. It can also start at the first
+//! bar at or after the latest earnings, dividend or split event of the chart that a bar has
+//! reached, with no line before such an event.
 //!
 //! # Calculation
 //! VWAP = Sum(Source * Volume) / Sum(Volume) from the anchor bar, Source = (High + Low + Close) / 3
@@ -29,9 +31,10 @@
 
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use super::vwap::BAND_COLORS;
-use crate::model::{Bar, Instrument, PriceSource, Timeframe};
+use crate::model::{Bar, EventKind, Instrument, PriceSource, TimeScaleEvent, Timeframe};
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use chrono::{DateTime, Utc};
 use egui::Color32;
 
 /// How [`VwapAutoAnchored`] finds its anchor bar.
@@ -83,6 +86,42 @@ impl AutoAnchor {
     }
 }
 
+/// How the anchor bar is found: in the bars, or at a corporate event of the chart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Anchor {
+    Bars(AutoAnchor),
+    Event(EventKind),
+}
+
+/// The Anchor Period choices in their saved order: new choices go at the end.
+const ANCHORS: [Anchor; 14] = [
+    Anchor::Bars(AutoAnchor::Auto),
+    Anchor::Bars(AutoAnchor::HighestHigh),
+    Anchor::Bars(AutoAnchor::LowestLow),
+    Anchor::Bars(AutoAnchor::HighestVolume),
+    Anchor::Bars(AutoAnchor::Session),
+    Anchor::Bars(AutoAnchor::Week),
+    Anchor::Bars(AutoAnchor::Month),
+    Anchor::Bars(AutoAnchor::Quarter),
+    Anchor::Bars(AutoAnchor::Year),
+    Anchor::Bars(AutoAnchor::Decade),
+    Anchor::Bars(AutoAnchor::Century),
+    Anchor::Event(EventKind::Earnings),
+    Anchor::Event(EventKind::Dividend),
+    Anchor::Event(EventKind::Split),
+];
+
+impl Anchor {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Bars(anchor) => anchor.label(),
+            Self::Event(EventKind::Earnings) => "Earnings",
+            Self::Event(EventKind::Dividend) => "Dividends",
+            Self::Event(_) => "Splits",
+        }
+    }
+}
+
 /// VWAP from an automatically found anchor bar to the latest bar, with three pairs of bands
 /// at one, two and three times a multiple of the volume-weighted standard deviation of the
 /// source, or of one percent of the absolute VWAP. The first pair is drawn and filled between
@@ -92,10 +131,12 @@ impl AutoAnchor {
 /// [`VolumeWeightedAvgPrice`](super::VolumeWeightedAvgPrice) counts them. The chart supplies
 /// its interval for [`AutoAnchor::Auto`] and the instrument's time zone and session; direct
 /// callers set them with [`Indicator::set_timeframe`] (one minute until then) and
-/// [`Indicator::set_instrument`] (UTC until then). Overlay indicator.
+/// [`Indicator::set_instrument`] (UTC until then). The chart supplies corporate events; direct
+/// callers pass them to [`Indicator::set_time_scale_events`]. Overlay indicator.
 #[derive(Clone, Debug)]
 pub struct VwapAutoAnchored {
-    anchor: AutoAnchor,
+    anchor: Anchor,
+    chart_events: Vec<(EventKind, DateTime<Utc>)>,
     length: usize,
     source: PriceSource,
     percentage_bands: bool,
@@ -127,6 +168,8 @@ struct State {
     intraday: bool,
     period: Option<(i32, u32)>,
     start: usize,
+    /// Number of anchor events reached at the last usable bar.
+    events: usize,
     sums: Sums,
     candidates: std::collections::VecDeque<Point>,
 }
@@ -181,7 +224,8 @@ impl VwapAutoAnchored {
     /// Anchor Auto, length 20, source hlc3, standard deviation bands at a multiplier of 1.
     pub fn new() -> Self {
         Self {
-            anchor: AutoAnchor::Auto,
+            anchor: Anchor::Bars(AutoAnchor::Auto),
+            chart_events: Vec::new(),
             length: 20,
             source: PriceSource::HLC3,
             percentage_bands: false,
@@ -202,7 +246,7 @@ impl VwapAutoAnchored {
 
     /// How the anchor bar is found.
     pub fn with_anchor(mut self, anchor: AutoAnchor) -> Self {
-        self.anchor = anchor;
+        self.anchor = Anchor::Bars(anchor);
         self
     }
 
@@ -222,20 +266,20 @@ impl VwapAutoAnchored {
     fn period(&self) -> Option<AnchorPeriod> {
         let day = Timeframe::Day1.duration_ms();
         Some(match self.anchor {
-            AutoAnchor::Auto => match self.interval.duration_ms() {
+            Anchor::Bars(AutoAnchor::Auto) => match self.interval.duration_ms() {
                 ms if ms < day => AnchorPeriod::Session,
                 ms if ms <= day => AnchorPeriod::Month,
                 ms if ms <= 10 * day => AnchorPeriod::Quarter,
                 ms if ms <= 60 * day => AnchorPeriod::Year,
                 _ => AnchorPeriod::Decade,
             },
-            AutoAnchor::Session => AnchorPeriod::Session,
-            AutoAnchor::Week => AnchorPeriod::Week,
-            AutoAnchor::Month => AnchorPeriod::Month,
-            AutoAnchor::Quarter => AnchorPeriod::Quarter,
-            AutoAnchor::Year => AnchorPeriod::Year,
-            AutoAnchor::Decade => AnchorPeriod::Decade,
-            AutoAnchor::Century => AnchorPeriod::Century,
+            Anchor::Bars(AutoAnchor::Session) => AnchorPeriod::Session,
+            Anchor::Bars(AutoAnchor::Week) => AnchorPeriod::Week,
+            Anchor::Bars(AutoAnchor::Month) => AnchorPeriod::Month,
+            Anchor::Bars(AutoAnchor::Quarter) => AnchorPeriod::Quarter,
+            Anchor::Bars(AutoAnchor::Year) => AnchorPeriod::Year,
+            Anchor::Bars(AutoAnchor::Decade) => AnchorPeriod::Decade,
+            Anchor::Bars(AutoAnchor::Century) => AnchorPeriod::Century,
             _ => return None,
         })
     }
@@ -249,7 +293,7 @@ impl Default for VwapAutoAnchored {
 
 impl Indicator for VwapAutoAnchored {
     crate::studies::inputs::study_inputs!(self;
-        anchor: choice("Anchor Period", [AutoAnchor::Auto, AutoAnchor::HighestHigh, AutoAnchor::LowestLow, AutoAnchor::HighestVolume, AutoAnchor::Session, AutoAnchor::Week, AutoAnchor::Month, AutoAnchor::Quarter, AutoAnchor::Year, AutoAnchor::Decade, AutoAnchor::Century]),
+        anchor: choice("Anchor Period", ANCHORS),
         length: length("Length", 1, usize::MAX),
         source: choice("Source", PriceSource::all()),
         percentage_bands: toggle("Percentage bands"),
@@ -270,6 +314,18 @@ impl Indicator for VwapAutoAnchored {
 
     fn update(&mut self, data: &[Bar], mut from: usize) {
         let period = self.period();
+        let events = if let Anchor::Event(kind) = self.anchor {
+            let mut times: Vec<_> = self
+                .chart_events
+                .iter()
+                .filter_map(|&(event, time)| (event == kind).then_some(time))
+                .collect();
+            times.sort_unstable();
+            times.dedup();
+            Some(times)
+        } else {
+            None
+        };
         let price_source = self.source;
         let (percentage, multiplier) = (self.percentage_bands, self.band_multiplier);
         let usable = |bar: &Bar| {
@@ -293,6 +349,18 @@ impl Indicator for VwapAutoAnchored {
                         return IndicatorValue::None;
                     }
                     let price = price_source.compute(bar.open, bar.high, bar.low, bar.close);
+                    if let Some(events) = &events {
+                        let reached = events.partition_point(|time| *time <= bar.time);
+                        if reached == 0 {
+                            return IndicatorValue::None;
+                        }
+                        if reached != state.events {
+                            state.events = reached;
+                            state.start = source;
+                            state.sums = Sums::default();
+                        }
+                        return state.sums.add(price, bar.volume, percentage, multiplier);
+                    }
                     let Some(period) = period else {
                         state.candidates.push_back(Point {
                             source,
@@ -324,7 +392,7 @@ impl Indicator for VwapAutoAnchored {
             self.shown_start = 0;
             from = 0;
         }
-        if period.is_some() {
+        if period.is_some() || events.is_some() {
             let start = self.stepper.state().start;
             if start > self.shown_start {
                 for bar in self.shown_start..start {
@@ -352,8 +420,8 @@ impl Indicator for VwapAutoAnchored {
             self.shown_indices.clear();
             let candidates = &self.stepper.state().candidates;
             let key = |point: &Point| match self.anchor {
-                AutoAnchor::HighestHigh => point.high,
-                AutoAnchor::LowestLow => -point.low,
+                Anchor::Bars(AutoAnchor::HighestHigh) => point.high,
+                Anchor::Bars(AutoAnchor::LowestLow) => -point.low,
                 _ => point.volume,
             };
             let start = (0..candidates.len())
@@ -380,6 +448,26 @@ impl Indicator for VwapAutoAnchored {
 
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
         self.days.set(instrument)
+    }
+
+    fn set_time_scale_events(&mut self, events: &[TimeScaleEvent]) -> bool {
+        let pairs = || {
+            events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event.kind,
+                        EventKind::Earnings | EventKind::Dividend | EventKind::Split
+                    )
+                })
+                .map(|event| (event.kind, event.time))
+        };
+        // Called every frame: unchanged events need no allocation.
+        if self.chart_events.iter().copied().eq(pairs()) {
+            return false;
+        }
+        self.chart_events = pairs().collect();
+        matches!(self.anchor, Anchor::Event(_))
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -464,6 +552,90 @@ impl Indicator for VwapAutoAnchored {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Equal volumes make the anchored VWAP the mean of the prices from the latest reached
+    /// event. A midday event starts on the next daily bar, and a future event waits for a bar.
+    #[test]
+    fn event_anchors_start_at_the_latest_chart_event() {
+        use crate::model::{EventKind, TimeScaleEvent};
+        use crate::studies::{InputKind, InputValue};
+        use chrono::{TimeZone, Utc};
+        let at = |day, hour| Utc.with_ymd_and_hms(2026, 3, day, hour, 0, 0).unwrap();
+        let mut bars: Vec<_> = (2..=6)
+            .map(|day| {
+                let p = day as f64 + 8.0;
+                Bar::new(at(day, 0), p, p, p, p, 100.0)
+            })
+            .collect();
+        let event = |id: &str, day, hour, kind| TimeScaleEvent::new(id, at(day, hour), kind, "");
+        let first = vec![
+            event("d1", 3, 0, EventKind::Dividend),
+            event("d2", 4, 12, EventKind::Dividend),
+            event("e", 6, 0, EventKind::Earnings),
+        ];
+        let mut later = first.clone();
+        later.push(event("d3", 6, 0, EventKind::Dividend));
+        let mut future = later.clone();
+        future.push(event("d4", 9, 0, EventKind::Dividend));
+        let mut study = VwapAutoAnchored::new();
+        study.set_timeframe(Timeframe::Day1);
+        let readings = |study: &VwapAutoAnchored, len| {
+            (0..len)
+                .map(|i| study.values().value(0, i))
+                .collect::<Vec<_>>()
+        };
+        for (choice, events, want) in [
+            (11, first.clone(), [None, None, None, None, Some(14.0)]),
+            (
+                12,
+                first.clone(),
+                [None, None, None, Some(13.0), Some(13.5)],
+            ),
+            (13, first, [None; 5]),
+            (12, later, [None, None, None, None, Some(14.0)]),
+            (12, future.clone(), [None, None, None, None, Some(14.0)]),
+            (
+                13,
+                vec![
+                    event("s", 1, 0, EventKind::Split),
+                    event("n", 6, 0, EventKind::News),
+                ],
+                [Some(10.0), Some(10.5), Some(11.0), Some(11.5), Some(12.0)],
+            ),
+            (12, vec![], [None; 5]),
+        ] {
+            study
+                .set_input("anchor", InputValue::Choice(choice))
+                .unwrap();
+            study.set_time_scale_events(&events);
+            study.calculate(&bars);
+            assert_eq!(readings(&study, 5), want, "choice {choice}: {events:?}");
+        }
+        assert!(study.set_time_scale_events(&future));
+        assert!(!study.set_time_scale_events(&future));
+        study.calculate(&bars);
+        bars.push(Bar::new(at(9, 0), 15.0, 15.0, 15.0, 15.0, 100.0));
+        study.update(&bars, 4);
+        assert_eq!(
+            readings(&study, 6),
+            [None, None, None, None, None, Some(15.0)]
+        );
+        let mut fresh = study.clone();
+        fresh.calculate(&bars);
+        assert_eq!(readings(&study, 6), readings(&fresh, 6));
+        study.set_input("anchor", InputValue::Choice(4)).unwrap();
+        assert!(!study.set_time_scale_events(&[]));
+        let input = study.inputs().remove(0);
+        let InputKind::Choice(labels) = input.kind else {
+            panic!("anchor choices")
+        };
+        assert_eq!(labels.len(), 14);
+        assert_eq!(
+            &labels[10..],
+            ["Century", "Earnings", "Dividends", "Splits"]
+        );
+        assert!(study.set_input("anchor", InputValue::Choice(14)).is_err());
+    }
 
     /// One session of hourly bars with typical prices 100 to 103 and volumes 0, 0, 1000 and 0:
     /// nothing until volume trades, then 102 on every line, kept by the last bar without volume.
