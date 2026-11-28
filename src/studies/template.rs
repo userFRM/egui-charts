@@ -276,11 +276,21 @@ impl StudyTemplate {
     ) -> Result<Box<dyn Indicator>, crate::studies::StudyError> {
         // A host study registered under a built-in's name takes its own template as saved,
         // where an upgrade for that built-in would rename or convert its inputs.
-        let own = self
+        let mut own = self
             .metric
             .as_ref()
             .map(|metric| Box::new(super::MetricStudy::new(metric.clone())) as Box<dyn Indicator>)
             .or_else(|| factory.create_registered(&self.name));
+        // Omitted inputs in a twelve-plot ribbon predate the four-average defaults.
+        if self.metric.is_none()
+            && !factory.is_host(&self.name)
+            && self.name == "MA Ribbon"
+            && own.is_some()
+            && self.settings.plots.len() == 12
+            && !self.inputs.iter().any(|(id, _)| id == "average_count")
+        {
+            own = Some(Box::new(MARibbon::exponential()));
+        }
         let own_inputs = own.as_ref().map_or_else(Vec::new, |study| study.inputs());
         let study_name = own
             .as_ref()
@@ -2003,6 +2013,78 @@ mod tests {
                     saved.name
                 );
             }
+        }
+    }
+
+    /// Older twelve-plot ribbons may omit any default input and retain explicit overrides.
+    #[test]
+    fn saved_ribbon_with_omitted_inputs_keeps_legacy_defaults() {
+        let literal = r#"{"inputs":[],"name":"MA Ribbon","scale":"Main","settings":{"background":null,"background_visible":true,"fill_between_levels":false,"fills":[],"gradients":[],"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MARibbon.html","hidden_intervals":[],"level_fill_color":[6,3,11,16],"levels":[],"plot_variants":[[],[],[],[],[],[],[],[],[],[],[],[]],"plots":[{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[98,55,174,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":3.0}],"precision":null,"price_line_plots":[],"show_legend_values":true,"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"untagged_plots":[0,1,2,3,4,5,6,7,8,9,10,11],"user_edit_enabled":true},"visible":true}"#;
+        let original: StudyTemplate = serde_json::from_str(literal).unwrap();
+        let bars: Vec<_> = (1..=80)
+            .map(|i| {
+                let close = f64::from(i);
+                Bar::new(
+                    Utc.timestamp_opt(i64::from(i) * 60, 0).unwrap(),
+                    close - 1.,
+                    close + 1.,
+                    close - 2.,
+                    close,
+                    1.,
+                )
+            })
+            .collect();
+        for overrides in [false, true] {
+            let mut saved = original.clone();
+            if overrides {
+                saved.inputs = vec![
+                    ("period_3".into(), InputValue::Length(7)),
+                    ("kind_6".into(), InputValue::Choice(2)),
+                    ("source_8".into(), InputValue::Choice(1)),
+                    ("directional".into(), InputValue::Toggle(false)),
+                ];
+                saved.settings.plots[3].color = Color32::RED;
+                saved.settings.plots[6].visible = false;
+                saved.settings.plots[8].width = 2.;
+            }
+            let mut study = saved.create().unwrap();
+            let inputs = study.inputs();
+            assert_eq!(study.line_count(), 12);
+            for index in 0..12 {
+                for (field, expected) in [
+                    (
+                        "period",
+                        InputValue::Length(if overrides && index == 3 {
+                            7
+                        } else {
+                            (index + 1) * 5
+                        }),
+                    ),
+                    (
+                        "kind",
+                        InputValue::Choice(if overrides && index == 6 { 2 } else { 1 }),
+                    ),
+                    (
+                        "source",
+                        InputValue::Choice(if overrides && index == 8 { 1 } else { 3 }),
+                    ),
+                ] {
+                    let id = format!("{field}_{index}");
+                    assert_eq!(
+                        inputs.iter().find(|input| input.id == id).unwrap().value,
+                        expected,
+                        "{id}"
+                    );
+                }
+            }
+            assert_eq!(study.settings().plots, saved.settings.plots);
+            assert_eq!(study.line_style(11).fill.is_some(), !overrides);
+            study.calculate(&bars);
+            assert_eq!(study.values().value(0, 4), Some(3.));
+            let mut restored = StudyTemplate::from_study(study.as_ref()).create().unwrap();
+            restored.calculate(&bars);
+            assert_eq!(shown(restored.as_ref()), shown(study.as_ref()));
+            assert_eq!(restored.settings(), study.settings());
         }
     }
 
