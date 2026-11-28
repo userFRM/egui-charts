@@ -140,6 +140,7 @@ pub struct MACombination {
     default_cross: [usize; 2],
     touch_crosses: bool,
     crosses: Option<Color32>,
+    legacy_crosses: bool,
     max_period: usize,
     shared_method: bool,
     weighted_delay: bool,
@@ -161,6 +162,7 @@ impl std::fmt::Debug for MACombination {
             .field("default_cross", &self.default_cross)
             .field("touch_crosses", &self.touch_crosses)
             .field("crosses", &self.crosses)
+            .field("legacy_crosses", &self.legacy_crosses)
             .field("max_period", &self.max_period)
             .field("shared_method", &self.shared_method)
             .field("weighted_delay", &self.weighted_delay)
@@ -198,6 +200,7 @@ impl MACombination {
             default_cross: [1, 2],
             touch_crosses: false,
             crosses: None,
+            legacy_crosses: false,
             max_period: usize::MAX,
             shared_method: false,
             weighted_delay: false,
@@ -374,6 +377,19 @@ impl Indicator for MACombination {
             )
             .with_default(InputValue::Toggle(false)),
         ];
+        if self.crosses.is_some() {
+            // Older two-plot saves keep their fixed crossing markers across later saves.
+            inputs.push(
+                StudyInput::new(
+                    "legacy_crosses",
+                    "Legacy crossing markers",
+                    InputValue::Toggle(self.legacy_crosses),
+                    InputKind::Toggle,
+                )
+                .with_default(InputValue::Toggle(false))
+                .shown_when("cross_first", Vec::new()),
+            );
+        }
         inputs.extend(self.lines.iter().enumerate().flat_map(|(index, line)| {
             // An average added after construction has no construction default; it is its own.
             let default = self.defaults.get(index).unwrap_or(line);
@@ -508,6 +524,7 @@ impl Indicator for MACombination {
             ("cross_first", InputValue::Choice(pick)) => self.cross[0] = pick,
             ("cross_second", InputValue::Choice(pick)) => self.cross[1] = pick,
             ("touch_crosses", InputValue::Toggle(touches)) => self.touch_crosses = touches,
+            ("legacy_crosses", InputValue::Toggle(legacy)) => self.legacy_crosses = legacy,
             (id, value) => {
                 let (field, index) = id
                     .rsplit_once('_')
@@ -588,6 +605,7 @@ impl Indicator for MACombination {
             }
         }
         let pair = self.crossing_pair();
+        let crosses_plot = self.crosses.is_some() && !self.legacy_crosses;
         self.markers
             .truncate(self.markers.partition_point(|marker| marker.bar < start));
         self.crossing
@@ -620,7 +638,7 @@ impl Indicator for MACombination {
                         if self.touch_crosses || direction != std::cmp::Ordering::Equal {
                             if let Some(previous) = state.1.filter(|p| *p != direction) {
                                 cross = lines[first];
-                                if self.crosses.is_none() {
+                                if !crosses_plot {
                                     self.markers.push(IndicatorMarker {
                                         bar: i,
                                         value: cross,
@@ -638,7 +656,7 @@ impl Indicator for MACombination {
                         state.1 = None;
                     }
                 }
-                if self.crosses.is_some() {
+                if crosses_plot {
                     lines.push(cross);
                 }
                 IndicatorValue::Multiple(lines)
@@ -654,7 +672,7 @@ impl Indicator for MACombination {
         self.lines
             .iter()
             .map(|line| line.color)
-            .chain(self.crosses)
+            .chain(self.crosses.filter(|_| !self.legacy_crosses))
             .collect()
     }
     fn set_colors(&mut self, colors: Vec<Color32>) {
@@ -680,13 +698,14 @@ impl Indicator for MACombination {
                 )
             })
             .collect();
-        if self.crosses.is_some() {
+        if self.crosses.is_some() && !self.legacy_crosses {
             names.push("Crosses".to_owned());
         }
         names
     }
     fn plot_style(&self, line: usize) -> PlotStyle {
-        if line == self.lines.len()
+        if !self.legacy_crosses
+            && line == self.lines.len()
             && let Some(color) = self.crosses
         {
             return PlotStyle {
@@ -710,6 +729,17 @@ impl Indicator for MACombination {
     }
     fn plot_tagged(&self, line: usize) -> bool {
         line < self.lines.len() && self.line_count() <= 4
+    }
+    fn marker_style(&self) -> Option<PlotStyle> {
+        self.crosses
+            .filter(|_| self.legacy_crosses)
+            .map(|color| PlotStyle {
+                color,
+                width: 4.0,
+                pattern: crate::model::LineStyle::Solid,
+                plot_type: PlotType::Crosses,
+                visible: true,
+            })
     }
     fn markers(&self) -> &[IndicatorMarker] {
         &self.markers
@@ -811,6 +841,9 @@ macro_rules! impl_ma_preset {
             }
             fn plot_tagged(&self, line: usize) -> bool {
                 self.inner.plot_tagged(line)
+            }
+            fn marker_style(&self) -> Option<crate::studies::PlotStyle> {
+                self.inner.marker_style()
             }
             fn markers(&self) -> &[crate::studies::IndicatorMarker] {
                 self.inner.markers()
@@ -1215,18 +1248,13 @@ mod tests {
             settings.plots[2].width = 2.;
             settings.plots[2].plot_type = PlotType::Circles;
             study.apply_settings(&[], settings).unwrap();
-            let mut saved = StudyTemplate::from_study(&study);
+            let saved = StudyTemplate::from_study(&study);
             let restored = saved.create().unwrap();
             assert_eq!(
                 format!("{:?}", restored.inputs()),
                 format!("{:?}", study.inputs())
             );
             assert_eq!(restored.settings(), study.settings());
-            saved.settings.plots.truncate(2);
-            saved.settings.untagged_plots.retain(|i| *i != 2);
-            assert!(!saved.create().unwrap().plot_style(2).visible);
-            saved.settings.plots[0].visible = true;
-            assert!(saved.create().unwrap().plot_style(2).visible);
         }
         for (last, direction) in [
             (2., crate::studies::CrossDirection::Down),

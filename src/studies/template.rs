@@ -1231,24 +1231,15 @@ impl StudyTemplate {
             }
             _ => changed = false,
         }
-        // Crossing marks used to follow the visibility of the two average plots.
+        // Two-plot saves keep the fixed crossing geometry and visibility they were saved with.
         if matches!(study, "MA Cross" | "EMA Cross" | "SMA/EMA Cross")
-            && declares("touch_crosses")
+            && declares("legacy_crosses")
+            && !has("legacy_crosses")
             && template.settings.plots.len() == 2
         {
-            let visible = template.settings.plots.iter().any(|plot| plot.visible);
-            template.settings.plots.push(crate::studies::PlotStyle {
-                color: if study == "MA Cross" {
-                    crate::studies::palette::BLUE
-                } else {
-                    crate::studies::palette::LIGHT_BLUE
-                },
-                width: 4.0,
-                pattern: crate::model::LineStyle::Solid,
-                plot_type: crate::studies::PlotType::Crosses,
-                visible,
-            });
-            template.settings.untagged_plots.push(2);
+            template
+                .inputs
+                .push(("legacy_crosses".to_owned(), InputValue::Toggle(true)));
             changed = true;
         }
         // Pane identities saved before Method derive it from their per-average formulas.
@@ -2221,24 +2212,6 @@ mod tests {
             if saved.name == "PSAR" {
                 expected.plots.truncate(1);
                 expected.plot_variants.truncate(1);
-            }
-            if matches!(
-                saved.name.as_str(),
-                "MA Cross" | "EMA Cross" | "SMA/EMA Cross"
-            ) {
-                expected.plots.push(crate::studies::PlotStyle {
-                    color: if saved.name == "MA Cross" {
-                        crate::studies::palette::BLUE
-                    } else {
-                        crate::studies::palette::LIGHT_BLUE
-                    },
-                    width: 4.0,
-                    pattern: crate::model::LineStyle::Solid,
-                    plot_type: crate::studies::PlotType::Crosses,
-                    visible: true,
-                });
-                expected.untagged_plots.push(2);
-                expected.plot_variants.push(Vec::new());
             }
             assert_eq!(restored.settings(), expected, "{}", saved.name);
             assert_eq!(restored.is_visible(), saved.visible, "{}", saved.name);
