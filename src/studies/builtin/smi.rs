@@ -15,7 +15,7 @@ use egui::Color32;
 /// `signal_period - 1` defined SMI values later.
 ///
 /// The pane shades above 40 in green and below -40 in red, from transparent to half opacity at
-/// 120 and -120.
+/// 120 and -120. Values read in the chart symbol's price format.
 #[derive(Clone, Debug)]
 pub struct StochasticMomentumIndex {
     /// Lookback period (typically 10)
@@ -215,6 +215,10 @@ impl Indicator for StochasticMomentumIndex {
         true
     }
 
+    fn value_format(&self) -> crate::scales::StudyFormat {
+        crate::scales::StudyFormat::Price
+    }
+
     fn pane(&self) -> crate::studies::StudyPane {
         crate::studies::StudyPane {
             height: None,
@@ -283,6 +287,31 @@ impl Indicator for StochasticMomentumIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Symbol decimals apply unless the saved style chooses an explicit precision.
+    #[test]
+    fn readings_follow_the_symbol_price_format() {
+        use crate::model::Instrument;
+        use crate::studies::ConfiguredStudy;
+        let mut study = ConfiguredStudy::new(Box::new(StochasticMomentumIndex::default()));
+        for (tick, precision, want) in [
+            (None, None, "12.35"),
+            (Some(0.0001), None, "12.3457"),
+            (Some(0.25), None, "12.35"),
+            (Some(0.0001), Some(1), "12.3"),
+        ] {
+            let instrument = tick.map(|tick| Instrument::new("T").with_tick_size(tick));
+            study.set_instrument(instrument.as_ref());
+            let mut settings = study.settings();
+            settings.precision = precision;
+            study.apply_settings(&[], settings).unwrap();
+            assert_eq!(
+                study.format_value(12.345678),
+                want,
+                "{tick:?}, {precision:?}"
+            );
+        }
+    }
     use crate::studies::test_support::make_range_bar as make_bar;
 
     #[test]

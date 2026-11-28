@@ -149,9 +149,9 @@ fn step(initial_af: f64, af_step: f64, max_af: f64, state: &mut State, bar: &Bar
 
 impl Indicator for ParabolicSAR {
     crate::studies::inputs::study_inputs!(self;
-        initial_af: number("Initial af", 0.001, 1.0),
-        af_step: number("Af step", 0.001, 1.0),
-        max_af: number("Max af", 0.001, 1.0)
+        initial_af: number("Start", 0.001, 1.0),
+        af_step: number("Increment", 0.001, 1.0),
+        max_af: number("Max Value", 0.001, 1.0)
     ; { self.max_af = self.max_af.max(self.initial_af); });
 
     fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
