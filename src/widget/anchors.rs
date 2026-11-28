@@ -1037,7 +1037,7 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 18] = [
+        let cases: [Case<'_>; 19] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
@@ -1066,6 +1066,23 @@ mod tests {
             // From before session hours were times of day and zones were time zones.
             (sessions, &minute_counts, None, true),
             (four, &no_count, None, true),
+            (
+                || {
+                    Box::new(
+                        crate::studies::RelativeVolumeAtTime::new(10)
+                            .with_anchor(crate::studies::RelativeVolumeAnchor::Week),
+                    )
+                },
+                &|inputs| {
+                    let anchor = inputs
+                        .iter_mut()
+                        .find(|input| input[0] == "anchor")
+                        .unwrap();
+                    anchor[1] = serde_json::json!({"Choice": 1});
+                },
+                None,
+                true,
+            ),
         ];
         for (at, (study, edit, input, shown)) in cases.into_iter().enumerate() {
             let text = copied(study);

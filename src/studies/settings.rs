@@ -1004,11 +1004,11 @@ impl ConfiguredStudy {
     /// Retain the study's current colours, widths and calculation parameters.
     pub fn new(study: Box<dyn Indicator>) -> Self {
         let mut settings = study.settings();
-        // The optional average input must not become a permanent style override.
-        if study.is_volume()
-            && let Some(plot) = settings.plots.get_mut(2)
-        {
-            plot.visible = true;
+        // The optional average lines must not become permanent style overrides.
+        if study.is_volume() {
+            for plot in settings.plots.iter_mut().skip(2) {
+                plot.visible = true;
+            }
         }
         match_declared_styles(study.as_ref(), &mut settings);
         let registered = study.registered_name().to_owned();

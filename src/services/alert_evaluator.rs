@@ -15,6 +15,9 @@ use crate::studies::{
     StudyTemplate,
 };
 
+// The Buy and Sell Volume a footprint metric source reads; chart study ids never reach it.
+const FOOTPRINT_STUDY: usize = usize::MAX;
+
 /// History, subscriptions and independent study state for the alert service. Both interactive
 /// hosts and headless hosts poll this evaluator with the same saved definitions. Chart navigation
 /// and replay never replace its saved study definitions. Dropping it releases all subscriptions.
@@ -165,6 +168,20 @@ impl Evaluation {
                 // stopping the alert's other studies.
                 Err(_) => {}
             }
+        }
+        if alert
+            .rules()
+            .filter(|(_, _, interval)| *interval == timeframe)
+            .flat_map(|(source, condition, _)| {
+                std::iter::once(source).chain(condition.partners().into_iter().flatten())
+            })
+            .any(|source| matches!(source, AlertSource::Footprint(_)))
+        {
+            let mut study =
+                crate::studies::OrderFlowStudy::new(crate::data::OrderFlowKind::SideVolume);
+            study.set_timeframe(timeframe);
+            result.studies.push((FOOTPRINT_STUDY, Box::new(study)));
+            result.tested.insert(FOOTPRINT_STUDY);
         }
         result
     }
@@ -554,6 +571,18 @@ impl AlertEvaluator {
                     .iter()
                     .find(|(run, ..)| run.timeframe == timeframe)?;
                 match source {
+                    AlertSource::Footprint(metric) => context
+                        .0
+                        .studies
+                        .iter()
+                        .find(|(key, _)| *key == FOOTPRINT_STUDY)
+                        .and_then(|(_, study)| match metric {
+                            crate::model::FootprintMetric::Delta => Some(crate::data::side_delta(
+                                study.plot_value(0, at)?,
+                                study.plot_value(1, at)?,
+                            )),
+                            _ => study.plot_value(metric.output(), at),
+                        }),
                     AlertSource::Study { id, output } => context
                         .0
                         .studies
@@ -1910,6 +1939,189 @@ mod tests {
                     ));
                     assert_eq!(engine.alerts()[1], unrelated);
                 }
+            }
+        }
+    }
+
+    /// Sided totals are available without chart studies; unknown trades enter neither side.
+    /// Forming bars fire once and the closing frequency waits for the next bar.
+    #[test]
+    fn footprint_metrics_alert_without_a_study() {
+        use crate::model::{AlertCondition, AlertFrequency, FootprintMetric, OrderSide, Tick};
+        use AlertFrequency::{OncePerBar, OncePerBarClose};
+        use FootprintMetric::{BuyVolume, Delta, SellVolume};
+        for timeframe in [
+            Timeframe::Min1,
+            Timeframe::Ticks(std::num::NonZeroU64::new(5).unwrap()),
+        ] {
+            let feed = Arc::new(Feed::default());
+            let mut evaluator = AlertEvaluator::new(feed.clone());
+            let alerts = [
+                (BuyVolume, AlertCondition::Above(10.0), OncePerBar),
+                (SellVolume, AlertCondition::Above(10.0), OncePerBar),
+                (Delta, AlertCondition::CrossingDown(0.0), OncePerBar),
+                (BuyVolume, AlertCondition::Above(10.0), OncePerBarClose),
+            ]
+            .map(|(metric, condition, frequency)| {
+                let mut alert = Alert::new("SYM", condition);
+                alert.source = AlertSource::Footprint(metric);
+                alert.timeframe = Some(timeframe);
+                alert.frequency = frequency;
+                // The evaluator consumes the same shape a host restores from storage.
+                serde_json::from_str(&serde_json::to_string(&alert).unwrap()).unwrap()
+            });
+            let fired = Arc::new(Mutex::new(Vec::new()));
+            let recorded = fired.clone();
+            let engine =
+                AlertEngine::new()
+                    .with_alerts(alerts.to_vec())
+                    .on_trigger(move |alert, _| {
+                        recorded
+                            .lock()
+                            .unwrap()
+                            .push((alert.source.clone(), alert.frequency));
+                    });
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            let poll = |evaluator: &mut AlertEvaluator| {
+                assert!(
+                    evaluator
+                        .poll(
+                            &engine,
+                            &IndicatorFactory::new(),
+                            &[],
+                            #[cfg(feature = "ui")]
+                            &ctx,
+                            DateTime::from_timestamp(1000, 0).unwrap()
+                        )
+                        .is_empty()
+                );
+            };
+            for _ in 0..4 {
+                poll(&mut evaluator);
+            }
+            let trade = |second, size, side| {
+                for subscription in feed.subscriptions.lock().unwrap().iter() {
+                    subscription.sink.push_tick(
+                        Tick::new(
+                            DateTime::from_timestamp(second, 0).unwrap(),
+                            340.0,
+                            size,
+                            side,
+                        )
+                        .with_id(second as u64),
+                    );
+                }
+            };
+            trade(61, 6.0, Some(OrderSide::Buy));
+            poll(&mut evaluator);
+            assert!(fired.lock().unwrap().is_empty());
+            trade(62, 5.0, Some(OrderSide::Buy));
+            trade(63, 8.0, None);
+            trade(64, 3.0, Some(OrderSide::Sell));
+            poll(&mut evaluator);
+            let a = (AlertSource::Footprint(BuyVolume), OncePerBar);
+            let b = (AlertSource::Footprint(SellVolume), OncePerBar);
+            let c = (AlertSource::Footprint(Delta), OncePerBar);
+            let d = (AlertSource::Footprint(BuyVolume), OncePerBarClose);
+            assert_eq!(fired.lock().unwrap().as_slice(), std::slice::from_ref(&a));
+            for subscription in feed.subscriptions.lock().unwrap().iter() {
+                subscription.sink.push_tick(
+                    Tick::new(
+                        DateTime::from_timestamp(62, 0).unwrap(),
+                        340.0,
+                        5.0,
+                        Some(OrderSide::Buy),
+                    )
+                    .with_id(62)
+                    .with_aggressor_order_id(7),
+                );
+            }
+            trade(65, 9.0, Some(OrderSide::Sell));
+            poll(&mut evaluator);
+            // Evaluations are keyed independently, so simultaneous firings have no ordering.
+            let has = |expected: &[_]| {
+                let actual = fired.lock().unwrap();
+                assert_eq!(actual.len(), expected.len());
+                for event in expected {
+                    assert!(actual.contains(event), "{actual:?}");
+                }
+            };
+            has(&[a.clone(), b.clone(), c.clone()]);
+            trade(121, 1.0, Some(OrderSide::Buy));
+            poll(&mut evaluator);
+            has(&[a, b, c, d]);
+        }
+
+        // Balanced fractional sides must stay at zero, in either execution order.
+        for (first, opposite) in [
+            (OrderSide::Buy, OrderSide::Sell),
+            (OrderSide::Sell, OrderSide::Buy),
+        ] {
+            let feed = Arc::new(Feed::default());
+            let mut evaluator = AlertEvaluator::new(feed.clone());
+            let alerts = [
+                AlertCondition::Below(0.0),
+                AlertCondition::Above(0.0),
+                AlertCondition::Crossing(0.0),
+                AlertCondition::CrossingUp(0.0),
+                AlertCondition::CrossingDown(0.0),
+            ]
+            .map(|condition| {
+                let mut alert = Alert::new("SYM", condition);
+                alert.source = AlertSource::Footprint(Delta);
+                alert.timeframe = Some(Timeframe::Min1);
+                alert.frequency = OncePerBar;
+                alert
+            });
+            let engine = AlertEngine::new().with_alerts(alerts.to_vec());
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            let poll = |evaluator: &mut AlertEvaluator| {
+                assert!(
+                    evaluator
+                        .poll(
+                            &engine,
+                            &IndicatorFactory::new(),
+                            &[],
+                            #[cfg(feature = "ui")]
+                            &ctx,
+                            DateTime::from_timestamp(1000, 0).unwrap(),
+                        )
+                        .is_empty()
+                );
+            };
+            for _ in 0..4 {
+                poll(&mut evaluator);
+            }
+            let mut footprint =
+                crate::data::Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for (minute, sizes) in [(1, [1.0, 0.5, 0.5]), (2, [0.3, 0.1, 0.2])] {
+                for (offset, (size, side)) in sizes
+                    .into_iter()
+                    .zip([first, opposite, opposite])
+                    .enumerate()
+                {
+                    let second = minute * 60 + offset as i64 + 1;
+                    let trade = Tick::new(
+                        DateTime::from_timestamp(second, 0).unwrap(),
+                        340.0,
+                        size,
+                        Some(side),
+                    )
+                    .with_id(second as u64);
+                    footprint.push(&trade).unwrap();
+                    for subscription in feed.subscriptions.lock().unwrap().iter() {
+                        subscription.sink.push_tick(trade.clone());
+                    }
+                }
+                poll(&mut evaluator);
+                assert_eq!(footprint.bars().values().next_back().unwrap().delta(), 0.0);
+                assert!(
+                    engine.triggers().is_empty(),
+                    "{first:?}, minute {minute}: {:?}",
+                    engine.triggers()
+                );
             }
         }
     }

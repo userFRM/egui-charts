@@ -61,6 +61,7 @@ pub struct AlertFeed {
     #[cfg(feature = "ui")]
     stored: Option<crate::drawings::persistence::DrawingStorage>,
     inputs: Vec<crate::data::OrderFlowInput>,
+    trades: crate::data::trades::Trades,
     end: bool,
     #[cfg(feature = "studies")]
     live: bool,
@@ -126,6 +127,7 @@ impl AlertFeed {
             #[cfg(feature = "ui")]
             stored: None,
             inputs: Vec::new(),
+            trades: crate::data::trades::Trades::new(100_000),
             end: false,
             #[cfg(feature = "studies")]
             live: false,
@@ -419,11 +421,28 @@ impl AlertFeed {
                 self.feed.request_depth_snapshot(id);
             }
             if updates.reset {
+                self.trades = self.trades.empty();
                 self.bars.clear();
                 self.origins.clear();
                 self.ready = false;
                 self.request.before = None;
                 self.end = false;
+            }
+            // Count bars reach inputs in the sink; time bars reach them after deduplication.
+            if !self.inputs.is_empty()
+                && self
+                    .request
+                    .clock
+                    .timeframe()
+                    .is_none_or(|tf| !tf.is_trade_based())
+            {
+                self.trades.append(updates.trades, &mut |trade, added| {
+                    if added {
+                        for input in &self.inputs {
+                            input.push_trade(&self.request.clock, trade);
+                        }
+                    }
+                });
             }
             merge(
                 &mut self.bars,
@@ -433,6 +452,7 @@ impl AlertFeed {
             );
             // Replace incomplete history and pending replies before evaluating again.
             if updates.reload || updates.error.is_some() {
+                self.trades = self.trades.empty();
                 self.unsubscribe();
                 self.inbox = std::sync::Arc::default();
                 self.wake.store(true, std::sync::atomic::Ordering::Relaxed);

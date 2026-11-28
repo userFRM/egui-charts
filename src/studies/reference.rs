@@ -1324,8 +1324,38 @@ fn staple_studies_match_published_definitions() {
     };
     studies.extend(time_studies(&bars));
     studies.retain(|(name, _, _)| available(name));
-    for (_, study, data) in &mut studies {
+    for (name, study, data) in &mut studies {
         study.calculate(data);
+        if name.starts_with("RVOL-") {
+            let line = |study: &dyn Indicator| {
+                (0..study.values().len())
+                    .map(|at| study.plot_value(0, at))
+                    .collect::<Vec<_>>()
+            };
+            let expected = line(study.as_ref());
+            let mut incremental = study.clone_box();
+            incremental.calculate(&[]);
+            for end in 1..=data.len() {
+                incremental.update(&data[..end], end - 1);
+                assert_eq!(line(incremental.as_ref()), expected[..end], "{name} {end}");
+                let mut corrected = data[..end].to_vec();
+                corrected[end - 1].volume *= 2.0;
+                incremental.update(&corrected, end - 1);
+                let mut fresh = study.clone_box();
+                fresh.calculate(&corrected);
+                assert_eq!(
+                    line(incremental.as_ref()),
+                    line(fresh.as_ref()),
+                    "{name} correction {end}"
+                );
+                incremental.update(&data[..end], end - 1);
+                assert_eq!(
+                    line(incremental.as_ref()),
+                    expected[..end],
+                    "{name} restore {end}"
+                );
+            }
+        }
     }
 
     let mut failures = Vec::new();
@@ -1590,6 +1620,50 @@ fn time_studies(bars: &[Bar]) -> Vec<(&'static str, Box<dyn Indicator>, Vec<Bar>
                 Timeframe::Day1,
             ),
             daily,
+        ),
+        (
+            "RVOL-4h",
+            clock(
+                Box::new(RelativeVolumeAtTime::new(1).with_anchor_interval(Some(Timeframe::Hour4))),
+                Timeframe::Hour1,
+            ),
+            volumes(
+                &[
+                    (0, 10.0),
+                    (1, 20.0),
+                    (2, 30.0),
+                    (3, 40.0),
+                    (4, 20.0),
+                    (5, 10.0),
+                    (6, 30.0),
+                    (7, 140.0),
+                ]
+                .map(|(h, v)| (h * 3600, v)),
+            ),
+        ),
+        (
+            "RVOL-36h",
+            clock(
+                Box::new(RelativeVolumeAtTime::new(1).with_anchor_interval(Some(
+                    Timeframe::Custom(std::num::NonZeroU64::new(129_600).unwrap()),
+                ))),
+                Timeframe::Hour1,
+            ),
+            volumes(
+                &(0..38)
+                    .map(|h| (h * 3600, if h == 36 { 2.0 } else { 1.0 }))
+                    .collect::<Vec<_>>(),
+            ),
+        ),
+        (
+            "RVOL-bars",
+            clock(
+                Box::new(RelativeVolumeAtTime::new(2).with_anchor_interval(Some(
+                    Timeframe::Custom(std::num::NonZeroU64::new(2400).unwrap()),
+                ))),
+                Timeframe::Hour1,
+            ),
+            volumes(&[(0, 10.0), (1, 20.0), (2, 30.0), (3, 60.0)].map(|(h, v)| (h * 3600, v))),
         ),
         (
             "Seasonality-hand",

@@ -901,6 +901,9 @@ pub enum AlertSource {
     Drawing(String),
     /// The bar's volume.
     Volume,
+    /// An order-flow total of the bar, from the executions the evaluator or chart received;
+    /// a bar without received executions has no value. Offered on volume footprint charts.
+    Footprint(FootprintMetric),
     /// A level of a completed TPO profile at the price it had when chosen; nothing resolves it.
     TPOLevel(TPOLevelSource),
 }
@@ -1621,6 +1624,40 @@ impl std::fmt::Display for FootprintCondition {
     }
 }
 
+/// A per-bar execution total read by [`AlertSource::Footprint`]. As in Buy and Sell Volume,
+/// executions without an aggressor side count for neither side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum FootprintMetric {
+    /// Volume of the bar's buy aggressor executions.
+    BuyVolume,
+    /// Volume of the bar's sell aggressor executions.
+    SellVolume,
+    /// Buy volume minus sell volume.
+    Delta,
+}
+
+impl FootprintMetric {
+    /// Every metric, in the order the alert dialog lists them.
+    pub const ALL: [Self; 3] = [Self::BuyVolume, Self::SellVolume, Self::Delta];
+
+    /// The Buy and Sell Volume output holding this metric.
+    #[cfg(all(feature = "alert-engine", feature = "studies"))]
+    pub(crate) fn output(self) -> usize {
+        self as usize
+    }
+}
+
+impl std::fmt::Display for FootprintMetric {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BuyVolume => "Total buy volume",
+            Self::SellVolume => "Total sell volume",
+            Self::Delta => "Volume delta",
+        })
+    }
+}
+
 /// How an [`AlertCondition::Footprint`] alert reads imbalances, saved with the alert so that
 /// chart changes leave its ratio, comparison, minimum volume, stack and row size unchanged.
 /// Defaults match a footprint chart: ratio 3, diagonal comparison, no minimum volume, a stack
@@ -1753,7 +1790,10 @@ mod tests {
             "extend_line": true, "blink_on_trigger": false,
             "watchlist": "technology", "source": {"Study": {"id": "rsi", "output": 0}},
             "condition": {"Above": 70.0}, "frequency": "OncePerBarClose",
-            "additional_conditions": [{"source": "Price", "condition": {"EnteringChannel": {"lower": 100.0, "upper": 110.0}}}]
+            "additional_conditions": [
+                {"source": "Price", "condition": {"EnteringChannel": {"lower": 100.0, "upper": 110.0}}},
+                {"source": {"Footprint": "Delta"}, "condition": {"Below": -100.0}}
+            ]
         });
         let alert: Alert = serde_json::from_value(stored.clone()).unwrap();
         let saved = serde_json::to_value(alert).unwrap();

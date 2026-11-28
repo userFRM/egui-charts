@@ -285,6 +285,22 @@ impl StudyTemplate {
         let study_name = own
             .as_ref()
             .map_or(self.name.as_str(), |study| study.name());
+        if study_name == "Relative Volume at Time"
+            && own_inputs.iter().any(|input| {
+                input.id == "anchor" && matches!(input.kind, crate::studies::InputKind::Timeframe)
+            })
+            && self
+                .inputs
+                .iter()
+                .filter(|(id, _)| id == "anchor")
+                .nth(1)
+                .is_some()
+        {
+            return Err(crate::studies::StudyError::InvalidInput {
+                id: "anchor".to_owned(),
+                reason: "is saved more than once".to_owned(),
+            });
+        }
         let builtin_source = self.metric.is_none() && !factory.is_host(&self.name);
         let upgraded = if self.metric.is_none() {
             self.upgraded(study_name, &own_inputs, builtin_source)
@@ -410,7 +426,7 @@ impl StudyTemplate {
         // with, from the bottom of the range the input took then; only edits are bounded.
         // The former input kind and finite-number contract still apply to those saved values.
         use InputValue::{Integer, Length, Number};
-        const NARROWED: [(&str, &str, InputValue); 17] = [
+        const NARROWED: [(&str, &str, InputValue); 18] = [
             ("BB", "std_dev", Number(0.0)),
             ("BBTrend", "multiplier", Number(0.0)),
             ("LinReg Slope", "period", Length(1)),
@@ -428,6 +444,7 @@ impl StudyTemplate {
             ("Advance/Decline", "period", Length(1)),
             ("VWAP", "plot_offset", Integer(i32::MIN)),
             ("VWMA", "plot_offset", Integer(i32::MIN)),
+            ("Volume", "period", Length(1)),
         ];
         let saved = inputs
             .iter()
@@ -558,6 +575,21 @@ impl StudyTemplate {
                 template
                     .inputs
                     .push(("custom_interval".to_owned(), InputValue::Toggle(custom)));
+            }
+            // Before the anchor took any interval it chose a day, a week or a month.
+            "Relative Volume at Time"
+                if own.iter().any(|input| {
+                    input.id == "anchor"
+                        && matches!(input.kind, crate::studies::InputKind::Timeframe)
+                }) && matches!(value("anchor"), Some(InputValue::Choice(0..=2))) =>
+            {
+                for (id, value) in &mut template.inputs {
+                    if let ("anchor", InputValue::Choice(choice @ 0..=2)) = (id.as_str(), &*value) {
+                        let interval =
+                            [Timeframe::Day1, Timeframe::Week1, Timeframe::Month1][*choice];
+                        *value = InputValue::Timeframe(Some(interval));
+                    }
+                }
             }
             // Older Knoxville saves drew only momentum and its confirmation marks, and saves
             // from before the window rule took pivot sides and the momentum pane's own scale.
@@ -971,6 +1003,13 @@ impl StudyTemplate {
                 let declared = crate::studies::SuperTrend::default();
                 template.settings.plots.push(declared.plot_style(2));
                 template.settings.fills = hidden_fills(&declared);
+            }
+            // Volume drew three plots before its smoothing line; shown once a type is chosen.
+            "Volume" if self.settings.plots.len() == 3 => {
+                template.settings.plots.push(crate::studies::PlotStyle {
+                    visible: true,
+                    ..crate::studies::Volume::default().plot_style(3)
+                });
             }
             // The unused navy plot colour in older saves still drew rising columns green.
             "Accelerator Oscillator"
@@ -2158,6 +2197,26 @@ mod tests {
         use InputValue::{Choice, Integer, Length, Number, Text, Toggle};
         let rows = [
             (
+                "Volume",
+                vec![("period", Length(5000))],
+                vec![("period", Length(5000))],
+            ),
+            (
+                "Relative Volume at Time",
+                vec![("anchor", Choice(0))],
+                vec![("anchor", InputValue::Timeframe(Some(Timeframe::Day1)))],
+            ),
+            (
+                "Relative Volume at Time",
+                vec![("anchor", Choice(1))],
+                vec![("anchor", InputValue::Timeframe(Some(Timeframe::Week1)))],
+            ),
+            (
+                "Relative Volume at Time",
+                vec![("anchor", Choice(2))],
+                vec![("anchor", InputValue::Timeframe(Some(Timeframe::Month1)))],
+            ),
+            (
                 "CCI",
                 vec![("period", Length(20))],
                 vec![("period", Length(20)), ("smoothing", Choice(0))],
@@ -2640,6 +2699,7 @@ mod tests {
             }
             // Keeping a legacy value does not admit new values outside the declared range.
             let refused = match name {
+                "Volume" => Some(("period", Length(2001))),
                 "C2C Vol" => Some(("trading_days", Number(0.5))),
                 "Volatility Stop" => Some(("multiplier", Number(0.125))),
                 "ASI" => Some(("limit_move", Number(0.075))),
@@ -2676,7 +2736,8 @@ mod tests {
                 "{name} undone"
             );
             assert!(
-                (0..study.line_count()).all(|line| study.plot_style(line).visible),
+                (0..study.line_count())
+                    .all(|line| study.plot_style(line).visible == (name != "Volume" || line < 2)),
                 "{name}"
             );
         }
@@ -3037,6 +3098,72 @@ mod tests {
     /// with its two trend plots restores one, as the chart showed it.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        // Literal defaults saved on origin/main 834e0d769, before interval anchors and smoothing.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Volume","inputs":[["period",{"Length":9}],["average",{"Choice":0}],["show_average",{"Toggle":false}],["color_rule",{"Choice":0}],["overlay",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Volume.html","plots":[{"color":[19,83,77,128],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[120,42,40,128],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,5,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(&restored.settings().plots[..3], saved.settings.plots);
+        assert_eq!(restored.settings().plots.len(), 4);
+        assert!(!restored.plot_style(3).visible);
+        for (id, expected) in [
+            ("period", InputValue::Length(9)),
+            ("smoothing", InputValue::Choice(0)),
+        ] {
+            assert_eq!(
+                restored
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == id)
+                    .map(|input| &input.value),
+                Some(&expected)
+            );
+        }
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Relative Volume at Time","inputs":[["anchor",{"Choice":0}],["length",{"Length":10}],["mode",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.RelativeVolumeAtTime.html","plots":[{"color":[23,53,24,77],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[60,62,67,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[1,3,2,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings(), saved.settings);
+        assert_eq!(
+            restored
+                .inputs()
+                .iter()
+                .find(|input| input.id == "anchor")
+                .map(|input| &input.value),
+            Some(&InputValue::Timeframe(Some(Timeframe::Day1)))
+        );
+
+        for anchors in [
+            [InputValue::Choice(0), InputValue::Choice(0)],
+            [InputValue::Choice(0), InputValue::Choice(1)],
+            [InputValue::Choice(0), InputValue::Choice(3)],
+            [InputValue::Choice(0), InputValue::Choice(usize::MAX)],
+            [
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+            ],
+            [
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+                InputValue::Timeframe(Some(Timeframe::Week1)),
+            ],
+            [
+                InputValue::Timeframe(None),
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+            ],
+            [
+                InputValue::Choice(0),
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+            ],
+        ] {
+            for pair in [anchors.clone(), [anchors[1].clone(), anchors[0].clone()]] {
+                let mut invalid = saved.clone();
+                invalid.inputs.retain(|(id, _)| id != "anchor");
+                invalid
+                    .inputs
+                    .extend(pair.clone().map(|value| ("anchor".to_owned(), value)));
+                assert!(
+                    matches!(invalid.create(), Err(crate::studies::StudyError::InvalidInput { id, .. }) if id == "anchor"),
+                    "duplicate anchors {pair:?}"
+                );
+            }
+        }
+
         // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
         let saved: StudyTemplate = serde_json::from_str(
             r#"{"name":"Open interest","inputs":[],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent","metric":{"id":"oi","name":"Open interest","unit":"","format":"Volume"}}"#,
