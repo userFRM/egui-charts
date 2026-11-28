@@ -102,16 +102,24 @@ impl ReplayEvent {
         }
     }
 
+    /// The trade of an execution a subscription folds into bars, including an order's fill.
+    fn trade(&self) -> Option<&Tick> {
+        match &self.event {
+            MarketEvent::Trade(trade)
+            | MarketEvent::Order {
+                event:
+                    OrderEvent::Execute {
+                        trade: Some(trade), ..
+                    },
+                ..
+            } => Some(trade),
+            _ => None,
+        }
+    }
+
     /// An execution a subscription folds into bars, including an order's fill.
     fn execution(&self) -> bool {
-        matches!(
-            &self.event,
-            MarketEvent::Trade(_)
-                | MarketEvent::Order {
-                    event: OrderEvent::Execute { trade: Some(_), .. },
-                    ..
-                }
-        )
+        self.trade().is_some()
     }
 
     fn book_event(&self) -> bool {
@@ -151,7 +159,8 @@ impl ReplayEvent {
 pub struct ReplayClock {
     events: Arc<[ReplayEvent]>,
     /// Latest time or one-trade stamp through each event, with a symbol's executions stamped
-    /// at least one nanosecond apart as one-trade bars are.
+    /// at least one nanosecond apart as one-trade bars are. A trade id the symbol already
+    /// executed takes no stamp, as one-trade bars skip it.
     due: Arc<[DateTime<Utc>]>,
     cursor: usize,
     time: DateTime<Utc>,
@@ -183,12 +192,18 @@ impl ReplayClock {
         }
         let due: Arc<[DateTime<Utc>]> = {
             let mut stamps = HashMap::<&str, DateTime<Utc>>::new();
+            // A symbol's repeated trade ids take no stamp, as `aggregate_trades` skips them.
+            let mut taken = HashMap::<&str, HashSet<u64>>::new();
             let mut latest = DateTime::<Utc>::MIN_UTC;
             events
                 .iter()
                 .map(|event| {
                     let mut at = event.time;
-                    if event.execution() {
+                    if let Some(trade) = event.trade()
+                        && trade.id.is_none_or(|id| {
+                            taken.entry(event.symbol.as_str()).or_default().insert(id)
+                        })
+                    {
                         if let Some(last) = stamps.get(event.symbol.as_str()) {
                             let next = last.checked_add_signed(TimeDelta::nanoseconds(1));
                             at = at.max(next.unwrap_or(DateTime::<Utc>::MAX_UTC));
@@ -564,9 +579,10 @@ impl ReplayDriver {
     /// [`time`](Self::time) reports `time`; subscriptions see the first held-back event's time
     /// when earlier, so no candle opens past it. Playback continues by recorded time: the next
     /// advance at a positive speed delivers the held executions. Stamps count every recorded
-    /// execution of a symbol, whatever hours a subscription selects and without deduplicating
-    /// trade ids; a source that filters these can have different stamps inside an equal-time
-    /// chain. Call outside egui context locks, as with `seek`.
+    /// execution of a symbol, whatever hours a subscription selects, except a trade id the
+    /// symbol already executed, which `aggregate_trades` skips as well; a source that filters
+    /// executions otherwise can have different stamps inside an equal-time chain. Call outside
+    /// egui context locks, as with `seek`.
     pub fn seek_execution(&self, time: DateTime<Utc>) {
         self.reposition(time, true);
     }

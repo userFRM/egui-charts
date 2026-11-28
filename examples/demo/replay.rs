@@ -3878,7 +3878,8 @@ mod tests {
 
     /// Every execution the replay driver counts is a cursor position, order fills included: one
     /// step visits a fill, a step back restores the execution before it, and a recording whose
-    /// executions are all fills exports and imports.
+    /// executions are all fills exports and imports. A trade id recorded twice is one position,
+    /// and its volume counts once.
     #[test]
     fn recorded_order_fills_are_replay_positions() {
         use super::super::tests::settle;
@@ -3890,6 +3891,12 @@ mod tests {
         let ns = chrono::TimeDelta::nanoseconds(1);
         let tick = |time, price, size| Tick::new(time, price, size, Some(OrderSide::Buy));
         let trade = |time, price, size| (time, MarketEvent::Trade(tick(time, price, size)));
+        let traded = |id, time, price, size| {
+            (
+                time,
+                MarketEvent::Trade(tick(time, price, size).with_id(id)),
+            )
+        };
         let fill = |sequence, id, time, price, size| {
             let trade = Some(tick(time, price, size));
             let event = OrderEvent::Execute { id, size, trade };
@@ -3902,6 +3909,15 @@ mod tests {
         // The executions after an order snapshot, and the cursor time, chart volume and close
         // at each of them.
         let rows = [
+            (
+                "repeated id",
+                vec![
+                    traded(1, s(1), 101.0, 1.0),
+                    traded(1, s(1), 101.0, 1.0),
+                    traded(2, s(1), 103.0, 2.0),
+                ],
+                vec![(s(1) + ns, 1.0, 101.0), (s(1) + ns * 2, 3.0, 103.0)],
+            ),
             (
                 "mixed",
                 vec![
@@ -3962,11 +3978,19 @@ mod tests {
             settle(&mut app, &ctx);
             let position = |app: &DemoApp| {
                 let bar = app.chart.bars(SeriesId::MAIN).last().unwrap();
-                (app.chart.replay_time().unwrap(), bar.volume, bar.close)
+                (
+                    app.chart.replay_time().unwrap(),
+                    bar.volume,
+                    bar.close,
+                    app.chart.replay_driver().unwrap().is_finished(),
+                )
             };
-            app.handle_replay_control(ReplayControlAction::GoToStart);
+            app.handle_replay_control(ReplayControlAction::GoToEnd);
             settle(&mut app, &ctx);
             let mut positions = vec![position(&app)];
+            app.handle_replay_control(ReplayControlAction::GoToStart);
+            settle(&mut app, &ctx);
+            positions.push(position(&app));
             let steps = expected.len() - 1;
             for action in std::iter::repeat_n(ReplayControlAction::NextBar, steps)
                 .chain(std::iter::repeat_n(ReplayControlAction::PreviousBar, steps))
@@ -3975,8 +3999,21 @@ mod tests {
                 settle(&mut app, &ctx);
                 positions.push(position(&app));
             }
-            let mut want = expected.clone();
-            want.extend(expected.iter().rev().skip(1));
+            let &(time, volume, close) = expected.last().unwrap();
+            let mut want = vec![(time, volume, close, true)];
+            want.extend(
+                expected
+                    .iter()
+                    .enumerate()
+                    .map(|(at, &(time, volume, close))| (time, volume, close, at == steps)),
+            );
+            want.extend(
+                expected
+                    .iter()
+                    .rev()
+                    .skip(1)
+                    .map(|&(time, volume, close)| (time, volume, close, false)),
+            );
             assert_eq!(positions, want, "{name}");
         }
     }
