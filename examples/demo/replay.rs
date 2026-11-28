@@ -140,6 +140,29 @@ struct RecordingInstrument {
 }
 
 impl RecordingInstrument {
+    fn new(instrument: &egui_charts::model::Instrument) -> Result<Self, String> {
+        Ok(Self {
+            symbol: instrument.symbol.clone(),
+            description: instrument.description.clone(),
+            exchange: instrument.exchange.clone(),
+            currency: instrument.currency.clone(),
+            unit: instrument.unit.clone(),
+            tick_size: instrument
+                .tick_size
+                .ok_or("Recording requires an instrument tick size")?,
+            price_decimals: instrument.price_decimals,
+            time_zone: instrument.time_zone.clone(),
+            session: instrument.session.clone(),
+        })
+    }
+
+    fn is_valid(&self) -> bool {
+        !self.symbol.is_empty()
+            && self.tick_size.is_finite()
+            && self.tick_size > 0.0
+            && self.price_decimals.is_none_or(|n| n <= 12)
+    }
+
     fn instrument(&self) -> egui_charts::model::Instrument {
         let mut instrument =
             egui_charts::model::Instrument::new(&self.symbol).with_tick_size(self.tick_size);
@@ -188,11 +211,7 @@ impl RecordingImport {
                 .ok_or("Truncated recording metadata")?,
         )
         .map_err(|e| format!("Invalid recording metadata: {e}"))?;
-        if instrument.symbol.is_empty()
-            || !instrument.tick_size.is_finite()
-            || instrument.tick_size <= 0.0
-            || instrument.price_decimals.is_some_and(|n| n > 12)
-        {
+        if !instrument.is_valid() {
             return Err("Invalid recording instrument or tick size".into());
         }
         // Validate the binary version before any workspace state can change.
@@ -311,19 +330,7 @@ fn recording_bytes(
     {
         return Err("No captured executions yet; wait for the feed to load".into());
     }
-    let metadata = RecordingInstrument {
-        symbol: instrument.symbol.clone(),
-        description: instrument.description.clone(),
-        exchange: instrument.exchange.clone(),
-        currency: instrument.currency.clone(),
-        unit: instrument.unit.clone(),
-        tick_size: instrument
-            .tick_size
-            .ok_or("Recording requires an instrument tick size")?,
-        price_decimals: instrument.price_decimals,
-        time_zone: instrument.time_zone.clone(),
-        session: instrument.session.clone(),
-    };
+    let metadata = RecordingInstrument::new(instrument)?;
     let metadata = serde_json::to_vec(&metadata).map_err(|e| e.to_string())?;
     if metadata.len() > 4096 {
         return Err("Recording metadata exceeds 4 KiB".into());
@@ -340,6 +347,131 @@ fn recording_bytes(
         return Err("Recording exceeds the 8 MiB event limit".into());
     }
     Ok(bytes)
+}
+
+/// The download limit on desktop; the web leaves room for other settings in local storage.
+const SAVED_RECORDING_BYTES: usize = if cfg!(target_arch = "wasm32") {
+    512 * 1024
+} else {
+    MAX_RECORDING_BYTES
+};
+
+/// The events a market replay plays, with each recorded symbol's instrument. A saved session
+/// keeps this recording so that Resume plays the same executions after a reload.
+pub(super) struct ReplayRecording {
+    events: Vec<ReplayEvent>,
+    instruments: Vec<egui_charts::model::Instrument>,
+    /// Encoded once for autosave, or kept from the load.
+    saved: std::sync::OnceLock<Option<SavedRecording>>,
+}
+
+/// A recording in the demo's settings: instrument metadata and the binary event stream in hex.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct SavedRecording {
+    instruments: Vec<RecordingInstrument>,
+    events: String,
+}
+
+impl ReplayRecording {
+    /// The executions of `symbol` as bars of `clock`, or none when its trades do not aggregate.
+    fn bars(&self, symbol: &str, clock: BarClock) -> Vec<Bar> {
+        let trades: Vec<_> = self
+            .events
+            .iter()
+            .filter(|event| event.symbol == symbol)
+            .filter_map(|event| match &event.event {
+                MarketEvent::Trade(trade) => Some(trade.clone()),
+                _ => None,
+            })
+            .collect();
+        let tick = self
+            .instruments
+            .iter()
+            .find(|instrument| instrument.symbol == symbol)
+            .and_then(|instrument| instrument.tick_size);
+        egui_charts::data::aggregate_trades_with_tick_size(&trades, clock, tick).unwrap_or_default()
+    }
+
+    fn driver(&self) -> Arc<ReplayDriver> {
+        let driver = ReplayDriver::new(self.events.clone(), self.instruments.clone())
+            .expect("validated market recording");
+        driver.set_checkpoint_budget(REPLAY_CHECKPOINT_BYTES);
+        Arc::new(driver)
+    }
+
+    /// The settings form, or `None` when the recording exceeds [`SAVED_RECORDING_BYTES`].
+    pub(super) fn saved(&self) -> Option<&SavedRecording> {
+        self.saved
+            .get_or_init(|| {
+                let instruments = self
+                    .instruments
+                    .iter()
+                    .map(RecordingInstrument::new)
+                    .collect::<Result<_, _>>()
+                    .ok()?;
+                let mut writer = RecordingWriter::new(Vec::new()).ok()?;
+                for event in &self.events {
+                    writer.write(event).ok()?;
+                }
+                let bytes = writer.finish().ok()?;
+                (bytes.len() <= SAVED_RECORDING_BYTES).then(|| SavedRecording {
+                    instruments,
+                    events: to_hex(&bytes),
+                })
+            })
+            .as_ref()
+    }
+
+    /// A saved recording that a market replay can play, or `None` for a damaged one.
+    pub(super) fn from_saved(saved: SavedRecording) -> Option<Self> {
+        let bytes = from_hex(&saved.events)?;
+        if !saved.instruments.iter().all(RecordingInstrument::is_valid) {
+            return None;
+        }
+        let mut reader = egui_charts::data::RecordingReader::new(bytes.as_slice()).ok()?;
+        let mut events = Vec::new();
+        while let Some(event) = reader.read().ok()? {
+            events.push(event);
+        }
+        let instruments: Vec<_> = saved
+            .instruments
+            .iter()
+            .map(RecordingInstrument::instrument)
+            .collect();
+        ReplayDriver::new(events.clone(), instruments.clone()).ok()?;
+        Some(Self {
+            events,
+            instruments,
+            saved: std::sync::OnceLock::from(Some(saved)),
+        })
+    }
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    bytes
+        .iter()
+        .flat_map(|byte| {
+            [
+                DIGITS[usize::from(byte >> 4)],
+                DIGITS[usize::from(byte & 15)],
+            ]
+        })
+        .map(char::from)
+        .collect()
+}
+
+fn from_hex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2)
+        || text.len() / 2 > MAX_RECORDING_BYTES
+        || !text.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).ok())
+        .collect()
 }
 
 impl DemoApp {
@@ -1067,6 +1199,10 @@ impl DemoApp {
                 .chart
                 .replay_time()
                 .filter(|_| self.chart.replay_driver().is_some());
+            self.replay_session_recording = self
+                .replay_recording
+                .clone()
+                .filter(|_| self.chart.replay_driver().is_some());
         }
     }
 
@@ -1084,6 +1220,7 @@ impl DemoApp {
                 self.trading.set_service(self.paper.clone());
             }
             self.chart.set_replay_time(None);
+            self.replay_recording = None;
             self.chart.drawings_mut().options.local_placement_folder = None;
             restore_conversion(&mut self.chart, &self.live);
             for extra in &mut self.extra_charts {
@@ -1237,27 +1374,47 @@ impl DemoApp {
         self.checkpoint_replay();
     }
 
-    /// The active feed's recorded events and its executions as bars of `clock`.
-    fn recorded_trades(&self, clock: BarClock) -> (Vec<ReplayEvent>, Vec<Bar>) {
-        let mut merged = Vec::new();
-        self.live.read_recording(&mut merged);
-        let trades: Vec<_> = merged
-            .iter()
-            .filter_map(|event| match &event.event {
-                MarketEvent::Trade(trade) => Some(trade.clone()),
-                _ => None,
-            })
-            .collect();
-        let bars = egui_charts::data::aggregate_trades_with_tick_size(
-            &trades,
-            clock,
-            self.live.instrument().tick_size,
-        )
-        .expect("recorded demo executions");
-        (merged, bars)
+    /// The feeds' recordings a new market replay plays: the active chart's, then those of
+    /// other replayed charts with its price unit and another symbol, with their instruments.
+    fn market_recording(&self) -> ReplayRecording {
+        let mut events = Vec::new();
+        self.live.read_recording(&mut events);
+        let mut instruments = vec![self.live.instrument()];
+        for (index, extra) in self.extra_charts.iter().enumerate() {
+            let slot = if index >= self.layout_slot {
+                index + 1
+            } else {
+                index
+            };
+            if !self.replay_slots.contains(&slot)
+                || extra.live.instrument().unit != instruments[0].unit
+                || instruments
+                    .iter()
+                    .any(|instrument| instrument.symbol == extra.chart.symbol())
+            {
+                continue;
+            }
+            instruments.push(extra.live.instrument());
+            extra.live.read_recording(&mut events);
+        }
+        ReplayRecording {
+            events,
+            instruments,
+            saved: std::sync::OnceLock::new(),
+        }
     }
 
     pub(super) fn set_replay_interval(&mut self, interval: Timeframe) {
+        self.set_replay_interval_with(interval, None);
+    }
+
+    /// As [`Self::set_replay_interval`]; a trade interval plays the saved recording when the
+    /// replay has none yet.
+    fn set_replay_interval_with(
+        &mut self,
+        interval: Timeframe,
+        saved: Option<Arc<ReplayRecording>>,
+    ) {
         if self.replay.is_none() || self.recording_files.opened {
             return;
         }
@@ -1270,37 +1427,23 @@ impl DemoApp {
             self.notify("No source history for that update interval");
             return;
         }
-        let market_driver = if interval.is_trade_based() {
-            let instrument = self.live.instrument();
-            let (mut merged, recorded) = self.recorded_trades(clock.clone());
-            bars = recorded;
-            if let Some(driver) = self.chart.replay_driver().cloned() {
-                Some(driver)
-            } else {
-                let mut instruments = vec![instrument];
-                for (index, extra) in self.extra_charts.iter().enumerate() {
-                    let slot = if index >= self.layout_slot {
-                        index + 1
-                    } else {
-                        index
-                    };
-                    if !self.replay_slots.contains(&slot)
-                        || extra.live.instrument().unit != instruments[0].unit
-                        || instruments
-                            .iter()
-                            .any(|instrument| instrument.symbol == extra.chart.symbol())
-                    {
-                        continue;
-                    }
-                    instruments.push(extra.live.instrument());
-                    extra.live.read_recording(&mut merged);
-                }
-                let driver = ReplayDriver::new(merged, instruments).expect("captured market data");
-                driver.set_checkpoint_budget(REPLAY_CHECKPOINT_BYTES);
-                Some(Arc::new(driver))
-            }
+        let (market_driver, recording) = if interval.is_trade_based() {
+            let recording = saved
+                .or_else(|| {
+                    self.replay_recording
+                        .clone()
+                        .filter(|_| self.chart.replay_driver().is_some())
+                })
+                .unwrap_or_else(|| Arc::new(self.market_recording()));
+            bars = recording.bars(&self.state.symbol, clock.clone());
+            let driver = self
+                .chart
+                .replay_driver()
+                .cloned()
+                .unwrap_or_else(|| recording.driver());
+            (Some(driver), Some(recording))
         } else {
-            None
+            (None, None)
         };
         let mut cutoff = self.chart.replay_time();
         if let Some(driver) = &market_driver {
@@ -1325,6 +1468,7 @@ impl DemoApp {
         }
         if !interval.is_trade_based() && self.chart.replay_driver().is_some() {
             self.chart.set_market_replay(None);
+            self.replay_recording = None;
             restore_conversion(&mut self.chart, &self.live);
             self.chart.set_replay_time(cutoff);
             for extra in &mut self.extra_charts {
@@ -1351,6 +1495,7 @@ impl DemoApp {
             }
         }
         self.replay = Some(next);
+        self.replay_recording = recording;
         self.replay_interval = interval;
         self.replay_control.set_automatic_update_interval(false);
         self.push_replay_window_to_chart();
@@ -1460,10 +1605,16 @@ impl DemoApp {
                         self.switch_symbol(&session.symbol);
                     }
                     let clock = source_clock(&self.chart, interval);
-                    // Execution replay needs the recording that holds the saved execution;
-                    // validate it before starting or pausing any live feed.
-                    let bars = if interval.is_trade_based() {
-                        self.recorded_trades(clock).1
+                    // Use the saved recording, else the feed's capture, and validate the
+                    // execution before starting replay or pausing any live feed.
+                    let saved = self
+                        .replay_session_recording
+                        .clone()
+                        .filter(|_| interval.is_trade_based());
+                    let bars = if let Some(recording) = &saved {
+                        recording.bars(&self.state.symbol, clock)
+                    } else if interval.is_trade_based() {
+                        self.market_recording().bars(&self.state.symbol, clock)
                     } else {
                         self.live
                             .snapshot(interval, clock, self.chart.extended_hours())
@@ -1485,7 +1636,7 @@ impl DemoApp {
                     self.replay = Some(replay);
                     self.replay_interval = interval;
                     self.push_replay_window_to_chart();
-                    self.set_replay_interval(interval);
+                    self.set_replay_interval_with(interval, saved);
                     self.replay_control.set_automatic_update_interval(automatic);
                     if interval.is_trade_based()
                         && self.chart.replay_driver().is_some()
@@ -3345,8 +3496,9 @@ mod tests {
         }
     }
 
-    /// Resume validates execution sessions against their recording before starting anything,
-    /// keeping the saved execution and its next step or reporting the missing recording.
+    /// Resume validates execution sessions against their recording before starting anything:
+    /// the recording saved with the session, or for an older save the feed's capture, keeping
+    /// the saved execution and its next step or reporting the missing recording.
     #[test]
     fn resuming_a_trade_replay_needs_its_recording() {
         use super::super::tests::{AppStorage, settle};
@@ -3381,16 +3533,22 @@ mod tests {
         let session = app.replay_session.clone();
         let mut storage = AppStorage::default();
         eframe::App::save(&mut *app, &mut storage);
-        // Older trade sessions carry only the source timestamp.
-        eframe::set_value(
-            &mut storage,
-            "replay_session_cutoff",
-            &None::<DateTime<Utc>>,
-        );
-        for recorded in [true, false] {
+        // (recording saved, capture regenerated): a reload an hour later plays the saved
+        // recording; an older save needs the feed's capture, and refuses without it.
+        for (saved_recording, recorded) in [(true, false), (false, true), (false, false)] {
+            if !saved_recording {
+                // Older trade sessions carry neither the recording nor the execution time.
+                eframe::Storage::remove_string(&mut storage, "replay_session_recording");
+                eframe::set_value(
+                    &mut storage,
+                    "replay_session_cutoff",
+                    &None::<DateTime<Utc>>,
+                );
+            }
+            let later = until + chrono::TimeDelta::hours(1);
             let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
             cc.storage = Some(&storage);
-            let mut restored = DemoApp::new_at(&cc, if recorded { start } else { until }, true);
+            let mut restored = DemoApp::new_at(&cc, if recorded { start } else { later }, true);
             settle(&mut restored, &ctx);
             if recorded {
                 restored.advance_sample_to(until);
@@ -3398,7 +3556,7 @@ mod tests {
             }
             assert_eq!(restored.replay_session, session);
             restored.apply_replay_start(ReplayStartAction::Resume);
-            if recorded {
+            if saved_recording || recorded {
                 assert!(restored.chart.replay_driver().is_some());
                 assert_eq!(restored.replay_interval, interval);
                 assert_eq!(restored.chart.replay_time(), saved);
