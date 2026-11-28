@@ -3379,7 +3379,11 @@ mod tests {
         let mut storage = AppStorage::default();
         eframe::App::save(&mut *app, &mut storage);
         // Older trade sessions carry only the source timestamp.
-        storage.0.remove("replay_session_cutoff");
+        eframe::set_value(
+            &mut storage,
+            "replay_session_cutoff",
+            &None::<DateTime<Utc>>,
+        );
         for recorded in [true, false] {
             let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
             cc.storage = Some(&storage);
