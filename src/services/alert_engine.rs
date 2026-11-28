@@ -116,9 +116,8 @@ const TRIGGER_HISTORY: usize = 5_000;
 /// after an `Upsert` carrying its new progress, and becomes `Triggered` after the exit. Outside
 /// its schedule the triggers are silent but progress still moves. An empty message reads the
 /// progress reached, such as "Position entered". Saving it active after its exit starts it again
-/// from the entry. Moving the entry of an entered position, or any level after its exit, also
-/// starts it again from the entry with an `Upsert` and no trigger; the new entry needs a value
-/// observed after the edit. Moving the target or the stop of an entered position keeps it entered.
+/// from the entry. Moving any level after entry or exit also starts it again from the entry
+/// with an `Upsert` and no trigger; the new entry needs a value observed after the edit.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
@@ -1751,7 +1750,7 @@ fn ended_position(alert: &Alert) -> bool {
         )
 }
 
-/// Restarts a position when its entry moved after entry, or any level moved after exit. The
+/// Restarts a position when any level moved after entry or exit. The
 /// observation reading the edit becomes its baseline, so the edit cannot fire. Older saved
 /// alerts adopt the first resolved levels without changing their progress.
 fn restart_position(alert: &mut Alert, run: &mut Run) -> bool {
@@ -1772,7 +1771,6 @@ fn restart_position(alert: &mut Alert, run: &mut Run) -> bool {
             alert.position_levels = Some(levels);
             false
         }
-        (AlertPositionProgress::Entered, Some(reached)) => reached[0] != entry,
         (_, Some(reached)) => reached != levels,
     };
     if moved {
@@ -2513,7 +2511,7 @@ mod tests {
     }
 
     #[test]
-    fn a_position_alert_resumes_after_a_restart_and_follows_a_moved_stop() {
+    fn a_position_alert_resumes_after_a_restart_and_restarts_after_a_moved_stop() {
         use AlertPositionProgress::{AwaitingEntry, StopReached};
         let condition = AlertCondition::Position {
             levels: Box::new(["p", "p#1", "p#2"].map(|id| AlertSource::Drawing(id.into()))),
@@ -2566,10 +2564,21 @@ mod tests {
         feed_position(&host, &[104.0]);
         assert!(host.fired().is_empty());
         stop.set(102.0);
+        feed_position(&host, &[104.0]);
+        assert!(matches!(
+            host.engine.alerts()[0].condition,
+            AlertCondition::Position {
+                progress: AwaitingEntry,
+                ..
+            }
+        ));
+        assert!(host.fired().is_empty());
         feed_position(&host, &[104.0, 103.0]);
         assert!(host.fired().is_empty());
         feed_position(&host, &[104.0, 103.0, 102.0]);
-        assert_eq!(host.fired(), [102.0]);
+        assert!(host.fired().is_empty());
+        feed_position(&host, &[104.0, 103.0, 102.0, 100.0]);
+        assert_eq!(host.fired(), [100.0, 100.0]);
         let mut again = host.engine.alerts().remove(0);
         assert_eq!(again.status, AlertStatus::Triggered);
         assert!(matches!(
@@ -2604,45 +2613,26 @@ mod tests {
         );
         let entered = "Position entered";
         let target = "Position target reached";
-        let stop = "Position stop reached";
-        let rows: Vec<PositionRow> = vec![
-            (
-                [100.0, 110.0, 95.0],
-                98.0,
-                vec![100.0, 105.0],
-                Entered,
-                [110.0, 130.0, 100.0],
-                vec![100.0, 110.0, 100.0],
-                vec![(entered, 110.0), (stop, 100.0)],
-            ),
-            (
-                [100.0, 90.0, 105.0],
-                102.0,
-                vec![100.0, 97.0],
-                Entered,
-                [95.0, 85.0, 100.0],
-                vec![100.0, 95.0, 100.0],
-                vec![(entered, 95.0), (stop, 100.0)],
-            ),
-            (
-                [100.0, 110.0, 95.0],
-                98.0,
-                vec![99.0, 100.0, 110.0],
-                TargetReached,
-                [100.0, 120.0, 95.0],
-                vec![99.0, 100.0, 120.0],
-                vec![(entered, 100.0), (target, 120.0)],
-            ),
-            (
-                [100.0, 90.0, 105.0],
-                102.0,
-                vec![100.0, 104.0, 105.0],
-                StopReached,
-                [100.0, 90.0, 108.0],
-                vec![102.0, 99.0, 108.0],
-                vec![(entered, 99.0), (stop, 108.0)],
-            ),
-        ];
+        let mut rows: Vec<PositionRow> = Vec::new();
+        for direction in [1.0, -1.0] {
+            let price = |offset| 100.0 + direction * offset;
+            let before = [price(0.0), price(10.0), price(-5.0)];
+            for (reached, close) in [(Entered, 5.0), (TargetReached, 10.0), (StopReached, -5.0)] {
+                for level in 0..3 {
+                    let mut after = before;
+                    after[level] = [price(3.0), price(20.0), price(-4.0)][level];
+                    rows.push((
+                        before,
+                        price(-2.0),
+                        vec![price(0.0), price(close)],
+                        reached,
+                        after,
+                        vec![price(close), after[0], after[1]],
+                        vec![(entered, after[0]), (target, after[1])],
+                    ));
+                }
+            }
+        }
         for (index, (before, history, closes, reached, after, reloaded, expected)) in
             rows.into_iter().enumerate()
         {

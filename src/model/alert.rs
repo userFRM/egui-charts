@@ -97,7 +97,7 @@ pub struct Alert {
     pub member_triggered_at: BTreeMap<String, DateTime<Utc>>,
     /// The entry, target and stop read when a [`Position`](AlertCondition::Position) alert's
     /// progress last moved. Hosts keep these with the alert, as they keep `last_triggered_at`.
-    /// Moving the entry of an entered position, or any level of one that reached its exit,
+    /// Moving any level of a position that entered or reached its exit
     /// starts it again from [`AwaitingEntry`](AlertPositionProgress::AwaitingEntry).
     /// `None` before the first move and for other alerts; ignored while waiting for entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -830,10 +830,9 @@ pub enum AlertCondition {
     /// the previous value was; the stop counts first when both are reached, and no exit is
     /// reached while the target equals the entry. The alert fires on the entry and on the exit,
     /// both on one evaluation that passes through the entry to an exit, and ends after the exit
-    /// with status `Triggered`. Moving the entry of an entered position, or any level after its
-    /// exit, starts it again from `AwaitingEntry` with status `Active`: the new entry needs a
-    /// value observed after the edit, and nothing fires for the edit itself. Moving the target
-    /// or the stop of an entered position keeps it entered. Each trigger moves `progress` on,
+    /// with status `Triggered`. Moving any level after entry or exit starts it again from
+    /// `AwaitingEntry` with status `Active`: the new entry needs a value observed after the
+    /// edit, and nothing fires for the edit itself. Each trigger moves `progress` on,
     /// also outside the alert's schedule, where it is only logged. It takes frequency `Once`,
     /// no additional rules and no watchlist.
     Position {
