@@ -11,8 +11,8 @@ use std::collections::VecDeque;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum OscillatorAverage {
-    /// Alpha 2/(length+1). The Price and Percentage Volume Oscillators and Keltner's middle line
-    /// seed it with the mean of the first `length` values, MACD with the first value.
+    /// Alpha 2/(length+1). The Price and Percentage Volume Oscillators, MACD and Keltner's
+    /// middle line seed it with the mean of the first `length` values.
     Exponential,
     /// Arithmetic mean of the last `length` values.
     Simple,

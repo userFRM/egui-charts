@@ -533,7 +533,10 @@ A streaming helper keeps its own history, which belongs to its call: two calls o
 two windows, and a call that does not run on a bar sees `na` there. Its length must stay the same
 from bar to bar at one call; a length below 1 counts as 1, except for `change`, and a negative
 length is an error. On every bar it gives exactly what the function of the same name in
-`egui_charts::studies::helpers` gives for the whole series up to that bar.
+`egui_charts::studies::helpers` gives for the whole series up to that bar, with `ema` following
+`helpers::ema_sma`. The script's `ema(x, n)` starts at the mean of its first `n` finite inputs,
+with `na` before then. A missing input gives `na` on its bar and leaves the average unchanged,
+as in the native EMA and MACD studies.
 
 ## Reference and completion
 
