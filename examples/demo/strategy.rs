@@ -823,6 +823,86 @@ mod tests {
         assert_eq!(increment(&app), 0.0001, "second switch");
     }
 
+    /// Strategy mode choices flow through the tester form into completed run properties.
+    #[test]
+    fn strategy_modes_reach_the_tester() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-03T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        super::super::tests::settle(&mut app, &ctx);
+        app.run_sample_backtest();
+        let frame = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440., 900.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.show_strategy_report(ui, app.theme.ui.panel_bg),
+            )
+        };
+        let click = |app: &mut DemoApp, label: &str| {
+            let output = frame(app, vec![]);
+            let nodes = &output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes;
+            let target_node = super::super::tests::control(nodes, label).0;
+            output.drop_without_applying_deltas();
+            frame(
+                app,
+                vec![Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: None,
+                })],
+            )
+            .drop_without_applying_deltas();
+        };
+        for name in ["MACD", "Technical Ratings"] {
+            app.strategy_report.select_strategy(name).unwrap();
+            for _ in 0..3 {
+                frame(&mut app, vec![]).drop_without_applying_deltas();
+            }
+            click(&mut app, "Inputs");
+            click(&mut app, "EMA seed");
+            click(&mut app, "First value");
+            if name == "Technical Ratings" {
+                click(&mut app, "Rule set");
+                click(&mut app, "Rising ADX, EMA 50 trend, 26-bar cloud");
+            }
+            click(&mut app, "Run");
+            for _ in 0..100 {
+                frame(&mut app, vec![]).drop_without_applying_deltas();
+            }
+            assert!(!app.strategy_report.is_stale(), "{name}");
+            let report = app.strategy_report.report().unwrap();
+            assert!(
+                report
+                    .properties
+                    .iter()
+                    .any(|(label, value)| label == "EMA seed" && value == "First value")
+            );
+            if name == "Technical Ratings" {
+                assert!(
+                    report
+                        .properties
+                        .iter()
+                        .any(|(label, value)| label == "Rule set"
+                            && value == "Rising ADX, EMA 50 trend, 26-bar cloud")
+                );
+            }
+        }
+    }
+
     #[test]
     fn equity_sized_strategies_trade_whole_quantity_steps_of_each_symbol() {
         let ctx = egui::Context::default();

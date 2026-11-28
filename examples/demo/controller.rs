@@ -6272,7 +6272,7 @@ mod tests {
     }
 
     /// The control among `nodes` named `label`, by its own name or by the label it is tied to.
-    fn control<'a>(
+    pub(super) fn control<'a>(
         nodes: &'a [(egui::accesskit::NodeId, egui::accesskit::Node)],
         label: &str,
     ) -> &'a (egui::accesskit::NodeId, egui::accesskit::Node) {
@@ -6700,6 +6700,114 @@ mod tests {
                 Some(&expected),
                 "{input}"
             );
+        }
+    }
+
+    /// Factory studies expose their moving-average settings through the ordinary dialogs.
+    #[test]
+    fn moving_average_settings_reach_the_demo() {
+        use egui::accesskit::{Action, ActionRequest, Role, TreeId};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-03T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        app.chart.set_feed_paused(true);
+        let click = |app: &mut DemoApp, label: &str| {
+            let nodes = draw(&ctx, app, vec![]);
+            draw(
+                &ctx,
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: control(&nodes, label).0,
+                    data: None,
+                })],
+            );
+        };
+        for (name, edits) in [
+            ("MA Ribbon", vec![]),
+            ("EMA Cross", vec!["Mark touches"]),
+            (
+                "Double MA",
+                vec!["Method", "Weighted", "Weighted starts one bar later"],
+            ),
+            ("SMA", vec!["Smoothing", "SMA + Bollinger Bands"]),
+        ] {
+            let id = app
+                .chart
+                .add_indicator(IndicatorFactory::new().create(name).unwrap());
+            app.open_indicator_settings(id);
+            for _ in 0..3 {
+                draw(&ctx, &mut app, vec![]);
+            }
+            if name == "MA Ribbon" {
+                let nodes = draw(&ctx, &mut app, vec![]);
+                for length in 1..=4 {
+                    control(&nodes, &format!("Length {length}"));
+                }
+                assert!(
+                    !nodes
+                        .iter()
+                        .any(|(_, node)| node.label() == Some("Length 5"))
+                );
+            }
+            for label in edits {
+                click(&mut app, label);
+            }
+            click(&mut app, "Apply");
+            assert!(!app.indicator_settings.is_open(), "{name}");
+            let study = app.chart.indicator_mut(id).unwrap();
+            match name {
+                "MA Ribbon" => assert_eq!(study.line_count(), 4),
+                "EMA Cross" => assert_eq!(
+                    study
+                        .inputs()
+                        .iter()
+                        .find(|i| i.id == "touch_crosses")
+                        .unwrap()
+                        .value,
+                    InputValue::Toggle(true)
+                ),
+                "Double MA" => {
+                    for input in study.inputs() {
+                        if input.id.starts_with("kind_") {
+                            assert_eq!(input.value, InputValue::Choice(2));
+                        }
+                        if input.id == "weighted_delay" {
+                            assert_eq!(input.value, InputValue::Toggle(true));
+                        }
+                    }
+                }
+                "SMA" => assert_eq!(study.line_count(), 4),
+                _ => unreachable!(),
+            }
+            if name == "EMA Cross" {
+                app.open_indicator_settings(id);
+                for _ in 0..3 {
+                    draw(&ctx, &mut app, vec![]);
+                }
+                click(&mut app, "Style");
+                let nodes = draw(&ctx, &mut app, vec![]);
+                let pickers: Vec<_> = nodes
+                    .iter()
+                    .filter(|(_, node)| {
+                        node.role() == Role::ComboBox
+                            && node.labelled_by().iter().any(|label| {
+                                nodes.iter().any(|(id, node)| {
+                                    id == label
+                                        && node.label().or(node.value()) == Some("Plot type")
+                                })
+                            })
+                    })
+                    .collect();
+                assert_eq!(pickers.len(), 3);
+                assert_eq!(pickers[2].1.value(), Some("Crosses"));
+                click(&mut app, "Apply");
+            }
         }
     }
 
