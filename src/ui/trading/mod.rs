@@ -40,8 +40,9 @@ use ticket::{OrderTicket, order_quantity};
 /// The trading controls of one chart, connected to the host's [`Broker`].
 ///
 /// Call [`poll`](Self::poll) every frame, [`show_ticket`](Self::show_ticket) before laying out
-/// the chart, so the order ticket takes its panel beside it, and [`show`](Self::show) after the
-/// chart. Open the order ticket with [`open_ticket`](Self::open_ticket), for example from the
+/// the chart, so the order ticket takes its panel beside it or floats over it when undocked,
+/// and [`show`](Self::show) after the chart. Open the order ticket with
+/// [`open_ticket`](Self::open_ticket), for example from the
 /// chart menu's [`Order`](crate::ui::context_menu::ContextMenuAction::Order) entries, and route
 /// the chart's Buy and Sell buttons ([`Chart::take_quote_action`](crate::widget::Chart::take_quote_action)) to [`trade`](Self::trade).
 /// Without a two-sided quote the buttons show the last price while a broker is set.

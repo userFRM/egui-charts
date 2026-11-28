@@ -1,4 +1,4 @@
-//! The order ticket's panel: its header, tabs and menu, and the button that sends the order.
+//! The order ticket's panel or window: its header, tabs and menu, and the button that sends the order.
 
 use std::collections::BTreeMap;
 
@@ -6,7 +6,7 @@ use super::{
     Action, Market, OrderPreset, OrderTicket, Tab, confirmation, levels_accepted, order_quantity,
     summary,
 };
-use crate::icons::icons;
+use crate::icons::{Icon, icons};
 use crate::localization as l10n;
 use crate::painting::symbol_mark::paint_symbol_mark;
 use crate::scales::decimals;
@@ -20,10 +20,21 @@ use egui::{
     WidgetInfo, vec2,
 };
 
+/// The ticket beside the chart, with a column on its right.
+const DOCK_ICON: Icon = Icon::new(
+    "order-ticket-dock.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4.75" y="4.75" width="14.5" height="14.5" rx="1"/><path d="M14.25 4.75v14.5"/></svg>"##,
+);
+/// The ticket floating over the chart.
+const UNDOCK_ICON: Icon = Icon::new(
+    "order-ticket-undock.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4.75" y="4.75" width="14.5" height="14.5" rx="1"/><rect x="11.25" y="11.25" width="5.5" height="5.5" rx="0.5"/></svg>"##,
+);
+
 impl OrderTicket {
-    /// Draws the ticket's contents into `ui`, the panel the host gives it. Returns what the user
-    /// asked for: an order submitted on the Order tab, or an order, change or cancellation from
-    /// the depth ladder.
+    /// Draws the ticket's contents into the panel or window the host gives it. Returns what the
+    /// user asked for: an order submitted on the Order tab, or an order, change or cancellation
+    /// from the depth ladder.
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -31,6 +42,7 @@ impl OrderTicket {
         presets: &mut BTreeMap<String, Vec<OrderPreset>>,
         one_click: &mut bool,
         compact: &mut bool,
+        undocked: &mut bool,
     ) -> Option<Action> {
         if let Some(editing) = &self.editing {
             self.editing = market
@@ -53,7 +65,7 @@ impl OrderTicket {
             self.preset_notice = None;
         }
         ui.spacing_mut().item_spacing.y = 8.0;
-        self.header(ui, market, presets, one_click, compact);
+        self.header(ui, market, presets, one_click, compact, undocked);
         self.switch(ui);
         let mut action = match self.tab {
             Tab::Order => {
@@ -206,7 +218,7 @@ impl OrderTicket {
     }
 
     /// The symbol with the broker's status while it is not live, the menu of presets and
-    /// one-click trading, and the close button.
+    /// one-click trading, the undock or dock button, and the close button.
     fn header(
         &mut self,
         ui: &mut Ui,
@@ -214,6 +226,7 @@ impl OrderTicket {
         presets: &mut BTreeMap<String, Vec<OrderPreset>>,
         one_click: &mut bool,
         compact: &mut bool,
+        undocked: &mut bool,
     ) {
         ui.horizontal(|ui| {
             ui.set_min_height(32.0);
@@ -226,6 +239,19 @@ impl OrderTicket {
                 {
                     self.open = false;
                     self.editing = None;
+                }
+                let (icon, tooltip) = if *undocked {
+                    (&DOCK_ICON, "Dock ticket")
+                } else {
+                    (&UNDOCK_ICON, "Undock ticket")
+                };
+                if IconButton::new(icon)
+                    .icon_scale(1.0)
+                    .tooltip(tooltip)
+                    .show(ui)
+                    .clicked()
+                {
+                    *undocked = !*undocked;
                 }
                 let more = IconButton::new(&icons::UI_MORE_HORIZONTAL)
                     .icon_scale(1.0)
@@ -958,7 +984,7 @@ mod tests {
                         market.capabilities = capabilities;
                         market.account = account;
                         market.orders = &orders;
-                        ticket.show(ui, &market, presets, &mut false, &mut false);
+                        ticket.show(ui, &market, presets, &mut false, &mut false, &mut false);
                     },
                     (ticket, presets, "a"),
                 );
@@ -1005,7 +1031,14 @@ mod tests {
                     market.timezone = crate::scales::TimezoneMode::Timezone(
                         crate::model::TimezoneId::fixed_offset(-5 * 3600).unwrap(),
                     );
-                    ticket.show(ui, &market, &mut BTreeMap::new(), &mut false, &mut false);
+                    ticket.show(
+                        ui,
+                        &market,
+                        &mut BTreeMap::new(),
+                        &mut false,
+                        &mut false,
+                        &mut false,
+                    );
                 },
                 (
                     OrderTicket {
@@ -1052,7 +1085,14 @@ mod tests {
                         |ui, (ticket, accepted): &mut (OrderTicket, bool)| {
                             let mut market = super::super::tests::market(&rules);
                             market.capabilities.trailing_stop = *accepted;
-                            ticket.show(ui, &market, &mut BTreeMap::new(), &mut false, &mut false);
+                            ticket.show(
+                                ui,
+                                &market,
+                                &mut BTreeMap::new(),
+                                &mut false,
+                                &mut false,
+                                &mut false,
+                            );
                         },
                         (
                             OrderTicket {
@@ -1164,6 +1204,7 @@ mod tests {
                                 &mut std::collections::BTreeMap::new(),
                                 &mut false,
                                 &mut false,
+                                &mut false,
                             );
                         },
                     );
@@ -1195,6 +1236,7 @@ mod tests {
                             ui,
                             &market,
                             &mut std::collections::BTreeMap::new(),
+                            &mut false,
                             &mut false,
                             &mut false,
                         );
@@ -1380,6 +1422,7 @@ mod tests {
                             &market,
                             &mut std::collections::BTreeMap::new(),
                             &mut one_click,
+                            &mut false,
                             &mut false,
                         )
                     },
@@ -1582,6 +1625,7 @@ mod tests {
                             market,
                             &mut std::collections::BTreeMap::new(),
                             &mut true,
+                            &mut false,
                             &mut false,
                         )
                     },
