@@ -239,8 +239,11 @@ pub struct Instrument {
     /// Bar intervals the feed suggests for volume profile studies and drawings, by profile
     /// length and dates. A study whose source follows the chart, or a fixed range or anchored
     /// drawing without executions, reads the shortest suggested interval shorter than the
-    /// chart's that serves its length and holds its dates. Empty, the default, suggests none; profiles then spread each chart
-    /// bar's volume over its range.
+    /// chart's that serves its length and holds its dates. Empty, the default, suggests none;
+    /// studies then read the coarsest advertised interval reaching their detail, else the finest
+    /// shorter than the chart's, as described in `docs/study-data.md`. Advertised intervals come
+    /// from `supported_timeframes`, or `native_timeframes` without it. Drawings instead spread
+    /// each chart bar's volume over its range.
     pub profile_resolutions: Vec<ProfileResolution>,
 }
 

@@ -112,6 +112,9 @@ pub struct TPOConfig {
     pub period_minutes: u32,
     /// Duration of initial balance in minutes (typically 60)
     pub initial_balance_minutes: u32,
+    /// Initial balance length in periods, retaining that count when the period length changes.
+    /// Zero, the default and in earlier saves, counts `initial_balance_minutes` instead.
+    pub initial_balance_periods: u32,
     /// Value area percentage (typically 0.70 for 70%)
     pub value_area_pct: f64,
     /// Show letters or blocks
@@ -236,6 +239,9 @@ pub struct TPOConfig {
     /// footprint rows are: a row of n ticks holds the ticks from a multiple of n up to the next.
     /// `None`, or a tick that is not positive and finite, counts each row as one tick.
     pub instrument_tick: Option<f64>,
+    /// Round automatic rows to the nearest step rather than up, with at least one step.
+    /// Six ticks per row become five, seven and a half become ten. Off by default.
+    pub auto_rows_nearest: bool,
 }
 
 impl Default for TPOConfig {
@@ -244,6 +250,7 @@ impl Default for TPOConfig {
             tick_size: 1.0,
             period_minutes: 30,
             initial_balance_minutes: 60,
+            initial_balance_periods: 0,
             value_area_pct: 0.70,
             display_mode: TPODisplayMode::Letters,
             split_periods: false,
@@ -290,6 +297,7 @@ impl Default for TPOConfig {
             splits: Vec::new(),
             latest_session_only: false,
             instrument_tick: None,
+            auto_rows_nearest: false,
         }
     }
 }
@@ -727,6 +735,15 @@ impl TPOConfig {
         self.split_sessions && !self.joins_sessions()
     }
 
+    /// Initial balance length in minutes, from its period count when set.
+    pub(crate) fn initial_balance_length(&self) -> i64 {
+        if self.initial_balance_periods > 0 {
+            i64::from(self.initial_balance_periods) * i64::from(self.period_minutes.max(1))
+        } else {
+            i64::from(self.initial_balance_minutes)
+        }
+    }
+
     /// The length of the periods: `period_minutes`, at least one minute.
     pub(crate) fn period_length(&self) -> crate::model::Timeframe {
         crate::model::Timeframe::Custom(
@@ -999,7 +1016,11 @@ const AUTO_ROWS: f64 = 80.0;
 /// counts as 1% of its price, as the price scale fits flat data. Bars without a finite low and high
 /// at or below it are skipped; `None` when no bar is left.
 #[cfg(feature = "widget")]
-pub(crate) fn auto_row_height(bars: &[Bar], instrument_tick: Option<f64>) -> Option<f64> {
+pub(crate) fn auto_row_height(
+    bars: &[Bar],
+    instrument_tick: Option<f64>,
+    nearest: bool,
+) -> Option<f64> {
     let window = &bars[bars.len().saturating_sub(AUTO_ROW_BARS)..];
     let (low, high) = window
         .iter()
@@ -1019,7 +1040,8 @@ pub(crate) fn auto_row_height(bars: &[Bar], instrument_tick: Option<f64>) -> Opt
         .filter(|tick| *tick > 0.0 && tick.is_finite())
         .and_then(|tick| {
             // Within one part in a billion, so that exactly n ticks per row stays n.
-            let per_row = range / tick / AUTO_ROWS * (1.0 - 1e-9);
+            let exact = range / tick / AUTO_ROWS;
+            let per_row = exact * (1.0 - 1e-9);
             if !per_row.is_finite() {
                 return None;
             }
@@ -1028,7 +1050,12 @@ pub(crate) fn auto_row_height(bars: &[Bar], instrument_tick: Option<f64>) -> Opt
                 step *= 10.0;
                 limit *= 10.0;
             }
-            let height = (per_row / step).ceil().max(1.0) * step * tick;
+            let rows = if nearest {
+                (exact / step).round()
+            } else {
+                (per_row / step).ceil()
+            };
+            let height = rows.max(1.0) * step * tick;
             height.is_finite().then_some(height)
         });
     Some(rounded.unwrap_or_else(|| derive_tick_size(range, AUTO_ROWS as usize)))
@@ -1221,7 +1248,8 @@ pub(crate) fn profile_parts(
 /// known. A gap leaves empty periods, and each period places one letter on
 /// every row from the lowest low to the highest high of its bars, as one bar of the period
 /// would. The initial balance covers the bars that open
-/// within `config.initial_balance_minutes` of the same instant.
+/// within `config.initial_balance_periods` periods of the same instant, or
+/// `config.initial_balance_minutes` minutes when the period count is zero.
 ///
 /// Rows are `config.tick_size` widened so the bars cover at most about 1,000
 /// rows (see [`TPOProfile::tick_size`]). With `config.instrument_tick` rows are
@@ -1397,7 +1425,7 @@ fn profiles_for_parts(
             profile.profile_low = profile.profile_low.min(bar.low);
 
             // Update initial balance (first N minutes)
-            if elapsed < i64::from(config.initial_balance_minutes) {
+            if elapsed < config.initial_balance_length() {
                 profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
                 profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
             }
@@ -2668,7 +2696,11 @@ mod tests {
         ];
         for (bars, tick, expected) in cases {
             let range = bars.last().map(|bar| (bar.low, bar.high));
-            assert_eq!(auto_row_height(&bars, tick), expected, "{tick:?} {range:?}");
+            assert_eq!(
+                auto_row_height(&bars, tick, false),
+                expected,
+                "{tick:?} {range:?}"
+            );
         }
     }
 
@@ -2883,5 +2915,65 @@ mod tests {
         assert_eq!(partial.rotation_factor(), 2);
         assert_eq!(partial.range_extension(), Some((0.0, 0.0)));
         assert_eq!(partial.total_volume, 1000.0);
+    }
+    /// Half steps round up, smaller fractions round down, and rows keep at least one step.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn automatic_rows_round_up_or_to_the_nearest_step() {
+        for (range, ceiling, nearest) in [
+            (480.0, 10.0, 5.0),
+            (600.0, 10.0, 10.0),
+            (160.0, 5.0, 5.0),
+            (12_000.0, 150.0, 150.0),
+            (13_600.0, 200.0, 150.0),
+            (14_000.0, 200.0, 200.0),
+            (8_000.0, 100.0, 100.0),
+        ] {
+            let bars = [Bar::new(
+                DateTime::UNIX_EPOCH,
+                1000.0,
+                1000.0 + range,
+                1000.0,
+                1000.0,
+                1.0,
+            )];
+            assert_eq!(auto_row_height(&bars, Some(1.0), false), Some(ceiling));
+            assert_eq!(auto_row_height(&bars, Some(1.0), true), Some(nearest));
+        }
+    }
+    /// Initial balance follows a period count after a block edit, while zero keeps minutes.
+    #[test]
+    fn initial_balance_can_count_periods_instead_of_minutes() {
+        let bars: Vec<_> = (0..5)
+            .map(|i| {
+                Bar::new(
+                    DateTime::UNIX_EPOCH + Duration::minutes(i * 15),
+                    100.0,
+                    101.0 + i as f64,
+                    99.0 - i as f64,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect();
+        for (period_minutes, initial_balance_periods, high, low) in [
+            (30, 2, 104.0, 96.0),
+            (15, 2, 102.0, 98.0),
+            (15, 0, 104.0, 96.0),
+        ] {
+            let config = TPOConfig {
+                period_minutes,
+                initial_balance_periods,
+                ..Default::default()
+            };
+            let profiles = to_tpo_profiles(&bars, &config, &BarClock::new(Timeframe::Min15));
+            assert_eq!(
+                (
+                    profiles[0].initial_balance_high,
+                    profiles[0].initial_balance_low
+                ),
+                (high, low)
+            );
+        }
     }
 }

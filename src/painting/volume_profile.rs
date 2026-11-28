@@ -11,6 +11,7 @@ use std::ops::Range;
 
 /// Strongest opacity of a study's rows, that of its default value area colours, so that saved
 /// opaque colours also leave the price bars beneath them readable.
+/// Exact row opacity instead paints rows beneath price bars without this cap.
 const STUDY_ROW_ALPHA: u8 = 163;
 
 // A wall pennant's depth along its row, its height and its gap to what it points at: small enough
@@ -322,7 +323,11 @@ pub(crate) fn paint_profile(
                 c[3]
             } else {
                 // Studies can sit above price bars, also with opaque colours from saved styles.
-                c[3].min(STUDY_ROW_ALPHA)
+                if config.exact_row_opacity {
+                    c[3]
+                } else {
+                    c[3].min(STUDY_ROW_ALPHA)
+                }
             };
             Color32::from_rgba_unmultiplied(c[0], c[1], c[2], alpha)
         };
@@ -969,15 +974,19 @@ mod tests {
         let color = [51, 74, 212, 255];
         let tone = Color32::from_rgb(51, 74, 212);
         // Drawing, row gap, point of control line width and volume display.
-        for (drawing, row_gap, poc_width, display) in [
-            (false, 1.0, 2.0, ProfileDisplay::Total),
-            (false, 1.0, 2.0, ProfileDisplay::UpDown),
-            (false, 1.0, 2.0, ProfileDisplay::Delta),
-            (true, 1.0, 2.0, ProfileDisplay::Total),
-            (true, 1.0, 2.0, ProfileDisplay::UpDown),
-            (true, 1.0, 2.0, ProfileDisplay::Delta),
+        for (drawing, exact, row_gap, poc_width, display) in [
+            (false, false, 1.0, 2.0, ProfileDisplay::Total),
+            (false, true, 1.0, 2.0, ProfileDisplay::Total),
+            (false, false, 1.0, 2.0, ProfileDisplay::UpDown),
+            (false, true, 1.0, 2.0, ProfileDisplay::UpDown),
+            (false, false, 1.0, 2.0, ProfileDisplay::Delta),
+            (false, true, 1.0, 2.0, ProfileDisplay::Delta),
+            (true, false, 1.0, 2.0, ProfileDisplay::Total),
+            (true, false, 1.0, 2.0, ProfileDisplay::UpDown),
+            (true, false, 1.0, 2.0, ProfileDisplay::Delta),
         ] {
             config.display = display;
+            config.exact_row_opacity = exact;
             let ctx = Context::default();
             let text = ctx.active_theme().ui.text;
             let mut output = ctx.run_ui(RawInput::default(), |ui| {
@@ -1019,14 +1028,20 @@ mod tests {
                 })
                 .collect();
             assert!(!rows.is_empty());
-            if !drawing {
+            if !drawing && !exact {
                 assert!(rows.iter().all(|row| row.fill.a() <= 163), "{display:?}");
             } else if display != ProfileDisplay::Total {
                 assert!(rows.iter().any(|row| row.fill.a() == 255), "{display:?}");
             }
             if display != ProfileDisplay::Total {
                 // Studies limit the opaque value area; drawings only thin outside rows.
-                for alpha in if drawing { [59, 255] } else { [89, 163] } {
+                for alpha in if drawing {
+                    [59, 255]
+                } else if exact {
+                    [89, 255]
+                } else {
+                    [89, 163]
+                } {
                     assert!(
                         rows.iter().any(|row| row.fill.a() == alpha),
                         "{display:?}: {alpha}"

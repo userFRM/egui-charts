@@ -79,7 +79,7 @@ type ProfileEdits<T> = (Option<MadeFor>, Vec<T>);
 /// the last visible bar, aiming at about 80 rows, with the ticks per row rounded up to a multiple
 /// of 5 below 100 ticks, of 50 below 1,000, of 500 below 10,000 and so on. Without an instrument
 /// tick size the row is a 1, 2, 2.5 or 5 step. Zooming or scrolling the price scale keeps the
-/// rows.
+/// rows. Round automatic rows to nearest selects the nearest step while Ticks per row is 0.
 #[derive(Clone, Debug)]
 pub struct TimePriceOpportunity {
     row_ticks: usize,
@@ -449,6 +449,13 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Length(0)),
             StudyInput::new(
+                "auto_rows_nearest",
+                "Round automatic rows to nearest",
+                InputValue::Toggle(self.config.auto_rows_nearest),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
+            StudyInput::new(
                 "value_area",
                 "Value area (%)",
                 InputValue::Number(self.config.value_area_pct * 100.0),
@@ -667,6 +674,13 @@ impl Indicator for TimePriceOpportunity {
                 InputKind::Length(1, 1440),
             )
             .with_default(InputValue::Length(60)),
+            StudyInput::new(
+                "initial_balance_periods",
+                "Initial balance periods (0 = minutes)",
+                InputValue::Length(self.config.initial_balance_periods as usize),
+                InputKind::Length(0, 100),
+            )
+            .with_default(InputValue::Length(0)),
             StudyInput::new(
                 "initial_balance_extensions",
                 "Initial balance extensions",
@@ -920,6 +934,7 @@ impl Indicator for TimePriceOpportunity {
                 self.row_ticks = ticks;
                 self.update_tick_size();
             }
+            ("auto_rows_nearest", InputValue::Toggle(v)) => self.config.auto_rows_nearest = v,
             ("value_area", InputValue::Number(percent)) if (1.0..=100.0).contains(&percent) => {
                 self.config.value_area_pct = percent / 100.0
             }
@@ -962,6 +977,9 @@ impl Indicator for TimePriceOpportunity {
             ("block_color", InputValue::Color(color)) => self.config.solid_color = color,
             ("outside_value_area_opacity", InputValue::Length(percent @ 0..=100)) => {
                 self.config.outside_value_area_opacity = percent as f32 / 100.0
+            }
+            ("initial_balance_periods", InputValue::Length(n @ 0..=100)) => {
+                self.config.initial_balance_periods = n as u32
             }
             ("initial_balance_minutes", InputValue::Length(minutes @ 1..=1440)) => {
                 self.config.initial_balance_minutes = minutes as u32

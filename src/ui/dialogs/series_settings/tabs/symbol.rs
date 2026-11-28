@@ -1228,13 +1228,23 @@ impl SymbolTab {
                 ui.label_inputs_by(label.id, |ui| {
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut params.tpo_initial_balance, "");
-                        ui.add(
+                        ui.add_enabled(
+                            params.tpo_initial_balance_periods == 0,
                             egui::DragValue::new(&mut params.tpo_initial_balance_minutes)
                                 .range(1..=1440)
                                 .suffix(l10n::text(ui.ctx(), " min")),
                         );
                     })
                 });
+                ui.end_row();
+                let label = ui.label(l10n::text(
+                    ui.ctx(),
+                    "Initial balance periods (0 = minutes)",
+                ));
+                ui.add(
+                    egui::DragValue::new(&mut params.tpo_initial_balance_periods).range(0..=100),
+                )
+                .labelled_by(label.id);
                 ui.end_row();
                 for (name, enabled) in [
                     ("Point of control", &mut params.tpo_poc),
@@ -1307,6 +1317,11 @@ impl SymbolTab {
                 )
                 .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(
+                    ui,
+                    "Round automatic rows to nearest",
+                    &mut params.tpo_auto_rows_nearest,
+                );
                 let label = ui.label(l10n::text(ui.ctx(), "Value area"));
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_value_area)

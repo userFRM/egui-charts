@@ -220,6 +220,10 @@ pub struct VolumeProfileConfig {
     /// High and low colours of the developing value area lines, unmultiplied RGBA; blue `#2196F3`
     /// by default.
     pub developing_value_area_colors: [[u8; 4]; 2],
+    /// Paint study rows in their colours' own opacity beneath price bars. Levels and values
+    /// stay above them. Off by default; volume profile drawings ignore this.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exact_row_opacity: bool,
 }
 
 /// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
@@ -277,6 +281,8 @@ struct VolumeProfileFields {
     developing_poc_color: [u8; 4],
     #[serde(default = "developing_value_area_colors")]
     developing_value_area_colors: [[u8; 4]; 2],
+    #[serde(default)]
+    exact_row_opacity: bool,
 }
 
 impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
@@ -308,6 +314,7 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.show_developing_value_area = fields.show_developing_value_area;
         config.developing_poc_color = fields.developing_poc_color;
         config.developing_value_area_colors = fields.developing_value_area_colors;
+        config.exact_row_opacity = fields.exact_row_opacity;
         config
             .with_row_size(fields.row_size)
             .ok_or("volume profile row height must be finite and positive")?
@@ -476,6 +483,7 @@ impl Default for VolumeProfileConfig {
             show_developing_value_area: false,
             developing_poc_color: developing_poc_color(),
             developing_value_area_colors: developing_value_area_colors(),
+            exact_row_opacity: false,
         }
     }
 }

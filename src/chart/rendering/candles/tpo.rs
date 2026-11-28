@@ -328,7 +328,7 @@ thread_local! {
 fn same_profiles(old: &TPOConfig, new: &TPOConfig) -> bool {
     old.tick_size.to_bits() == new.tick_size.to_bits()
         && old.period_minutes == new.period_minutes
-        && old.initial_balance_minutes == new.initial_balance_minutes
+        && old.initial_balance_length() == new.initial_balance_length()
         && old.value_area_pct.to_bits() == new.value_area_pct.to_bits()
         && old.show_volume_profile == new.show_volume_profile
         && old.custom_letters == new.custom_letters
@@ -741,6 +741,7 @@ pub fn render_live_tpo(
                 }
             }
         };
+    let mut widest = 0.0_f64;
     visit_profiles(
         full_data,
         visible.clone(),
@@ -749,6 +750,7 @@ pub fn render_live_tpo(
         clock,
         (price_rect, &x),
         |profile, config, anchor_x, column_width, room, label_room| {
+            widest = widest.max(profile.tick_size);
             let (poor, right) = draw_session_profile(
                 painter,
                 price_rect,
@@ -768,6 +770,24 @@ pub fn render_live_tpo(
             }
         },
     );
+    if base_config.tick_size > 0.0
+        && let Some(tick) = instrument_tick.filter(|t| t.is_finite() && *t > 0.0)
+        && widest
+            > crate::model::tpo::whole_ticks(base_config.tick_size, tick) * tick * (1.0 + 1e-9)
+    {
+        let theme = painter.ctx().active_theme();
+        painter.text(
+            price_rect.left_top() + egui::vec2(8.0, 8.0),
+            egui::Align2::LEFT_TOP,
+            l10n::format_text(
+                painter.ctx(),
+                "Rows widened to {ticks} ticks to stay within 1,000 rows",
+                &[("ticks", format!("{:.0}", widest / tick))],
+            ),
+            FontId::proportional(crate::styles::typography::XS),
+            theme.ui.text,
+        );
+    }
     if !base_config.extends_levels()
         || base_config.latest_session_only
         || visible.start == 0
@@ -993,7 +1013,8 @@ fn row_config(
     let mut config = base_config.clone();
     config.instrument_tick = instrument_tick;
     if config.tick_size <= 0.0 || !config.tick_size.is_finite() {
-        config.tick_size = crate::model::tpo::auto_row_height(bars, instrument_tick)?;
+        config.tick_size =
+            crate::model::tpo::auto_row_height(bars, instrument_tick, config.auto_rows_nearest)?;
     }
     Some(config)
 }
@@ -5545,5 +5566,64 @@ mod tests {
                 && texts.iter().any(|t| t == "60.000"),
             "statistics texts {texts:?}"
         );
+    }
+    /// Manual row widening is visible once per plot, while automatic or unchanged rows are quiet.
+    #[test]
+    fn widened_manual_rows_say_so() {
+        for (high, row, expected) in [
+            (2000.0, 1.0, true),
+            (2000.0, 2.0, false),
+            (2000.0, 0.0, false),
+            (999.0, 1.0, false),
+        ] {
+            let bars = [Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                0.0,
+                high,
+                0.0,
+                high,
+                1.0,
+            )];
+            let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0));
+            let map = PriceMap::new(
+                crate::scales::PriceTransform::default(),
+                crate::scales::PriceRange::new(0.0, high),
+                0.0,
+                400.0,
+                false,
+            );
+            let config = TPOConfig {
+                tick_size: row,
+                ..Default::default()
+            };
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                render_live_tpo(
+                    ui.painter(),
+                    rect,
+                    &bars,
+                    0..1,
+                    0,
+                    &map,
+                    &config,
+                    Some(1.0),
+                    &crate::model::Timeframe::Min30.into(),
+                    |i, _| i as f32 * 30.0,
+                    0.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                )
+            });
+            let count = output
+                .shapes
+                .iter()
+                .filter(|s| {
+                    matches!(&s.shape, Shape::Text(t)
+                if t.galley.text() == "Rows widened to 2 ticks to stay within 1,000 rows")
+                })
+                .count();
+            output.textures_delta.clear();
+            assert_eq!(count, usize::from(expected), "{high}, {row}");
+        }
     }
 }

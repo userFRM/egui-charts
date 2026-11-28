@@ -1295,6 +1295,9 @@ pub struct ChartTypeParams {
     pub tpo_period_minutes: u32,
     /// TPO: minutes from the session open included in the initial balance, 60 by default.
     pub tpo_initial_balance_minutes: u32,
+    /// TPO: initial balance length in periods; zero, the default and in earlier saves, counts
+    /// `tpo_initial_balance_minutes` instead.
+    pub tpo_initial_balance_periods: u32,
     /// TPO: saved by earlier releases for poor highs and lows together; when on, both are marked.
     /// The settings write `tpo_poor_high` and `tpo_poor_low` and turn it off.
     pub tpo_poor_highs_lows: bool,
@@ -1319,8 +1322,12 @@ pub struct ChartTypeParams {
     /// rows from the price range of the latest 300 bars up to the last visible bar, aiming at
     /// about 80 rows: the ticks per row round up to a multiple of 5 below 100 ticks, of 50 below
     /// 1,000, of 500 below 10,000 and so on. Without a tick size the row is a 1, 2, 2.5 or 5
-    /// step. Zooming or scrolling the price scale keeps the rows.
+    /// step. `tpo_auto_rows_nearest` instead rounds to the nearest step. Zooming or scrolling
+    /// the price scale keeps the rows.
     pub tpo_row_ticks: u32,
+    /// TPO: round automatic rows to the nearest step rather than up. Off by default and in
+    /// earlier saves; see [`TPOConfig::auto_rows_nearest`](super::TPOConfig::auto_rows_nearest).
+    pub tpo_auto_rows_nearest: bool,
     /// TPO: share of the TPOs in the value area, in percent.
     pub tpo_value_area: f64,
     /// TPO: saved by earlier releases for a profile of each segment of the day. When on while
@@ -1493,6 +1500,7 @@ impl Default for ChartTypeParams {
             columns_base: None,
             tpo_period_minutes: 30,
             tpo_initial_balance_minutes: 60,
+            tpo_initial_balance_periods: 0,
             tpo_poor_highs_lows: false,
             tpo_poor_high: false,
             tpo_poor_low: false,
@@ -1503,6 +1511,7 @@ impl Default for ChartTypeParams {
             tpo_extend_single_prints: false,
             tpo_initial_balance_extensions: false,
             tpo_row_ticks: 0,
+            tpo_auto_rows_nearest: false,
             tpo_value_area: 70.0,
             tpo_split_sessions: false,
             tpo_session: ProfileSession::Chart,
@@ -1548,9 +1557,11 @@ impl ChartTypeParams {
         let session = self.tpo_hours();
         super::TPOConfig {
             // A zero row lets the renderer size the rows from the bars.
+            auto_rows_nearest: self.tpo_auto_rows_nearest,
             tick_size: tick_size.map_or(0.0, |tick| tick * f64::from(self.tpo_row_ticks)),
             period_minutes: self.tpo_period_minutes,
             initial_balance_minutes: self.tpo_initial_balance_minutes,
+            initial_balance_periods: self.tpo_initial_balance_periods,
             show_initial_balance: self.tpo_initial_balance,
             labels: self.tpo_labels,
             show_poc: self.tpo_poc,
@@ -2471,6 +2482,8 @@ mod tests {
             assert!(config.splits.is_empty());
             assert_eq!((config.profile_period, config.profile_periods), (period, 1));
             assert_eq!(config.initial_balance_minutes, minutes);
+            assert_eq!(config.initial_balance_periods, 0);
+            assert!(!config.auto_rows_nearest);
             assert_eq!(config.show_poor_high, enabled);
             assert_eq!(config.show_poor_low, enabled);
             assert_eq!(config.show_single_prints, single_prints);

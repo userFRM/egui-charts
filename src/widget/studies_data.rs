@@ -3620,4 +3620,35 @@ pub(super) mod tests {
             }
         }
     }
+    /// Advertised intervals supply session detail only when explicit suggestions are absent.
+    #[test]
+    fn session_profiles_read_advertised_intervals_without_suggestions() {
+        use crate::model::ProfileResolution;
+        use crate::studies::VolProfileSession;
+        let instrument = Instrument::new("MAIN").with_supported_timeframes([
+            Timeframe::Min1,
+            Timeframe::Min15,
+            Timeframe::Min30,
+        ]);
+        for (instrument, expected) in [
+            (instrument.clone(), Timeframe::Min1),
+            (
+                instrument
+                    .with_profile_resolutions([ProfileResolution::new(Timeframe::Min30, None)]),
+                Timeframe::Min30,
+            ),
+            (
+                Instrument::new("MAIN").with_native_timeframes([Timeframe::Min1, Timeframe::Day1]),
+                Timeframe::Min1,
+            ),
+        ] {
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[1.0; 48], 60)));
+            chart.set_timeframe(Timeframe::Hour1);
+            chart.set_instrument(Some(instrument));
+            chart.add_indicator(Box::new(VolProfileSession::default()));
+            let requests = chart.study_data_requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].timeframe, Some(expected));
+        }
+    }
 }
