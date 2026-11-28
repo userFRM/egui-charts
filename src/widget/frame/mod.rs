@@ -2027,7 +2027,10 @@ impl Chart {
             .rposition(|bar| !bar.is_whitespace())
             .map(|at| last_from + at);
         let last = last_at.map(|at| &last_bars[at]);
-        let last_color = last_at.map(|at| self.main_value_color(last_bars, at));
+        let last_color = last_at.map(|at| {
+            self.range_value_color(style.price_line_source)
+                .unwrap_or_else(|| self.main_value_color(last_bars, at))
+        });
         let heikin_style = self.chart_type_params.styles.heikin.clone();
         let heikin_last = (self.chart_type == ChartType::Heikin && !self.state.data().is_empty())
             .then(|| {

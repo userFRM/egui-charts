@@ -115,6 +115,17 @@ pub enum ProfileDisplay {
     Delta,
 }
 
+/// Side of its range a fixed range volume profile drawing's rows grow from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ProfilePlacement {
+    /// From the range's left edge, growing right.
+    #[default]
+    Left,
+    /// From the range's right edge, growing left.
+    Right,
+}
+
 fn profile_up_color() -> [u8; 4] {
     [38, 166, 154, 180]
 }
@@ -124,6 +135,9 @@ fn profile_down_color() -> [u8; 4] {
 
 fn profile_shown() -> bool {
     true
+}
+fn histogram_width() -> u8 {
+    30
 }
 fn profile_line_colors() -> [[u8; 4]; 2] {
     [ecolor::Color32::PLACEHOLDER.to_srgba_unmultiplied(); 2]
@@ -155,6 +169,14 @@ pub struct VolumeProfileConfig {
     pub show_value_area_lines: bool,
     /// Draw the price rows; hiding them leaves the profile's levels.
     pub show_rows: bool,
+    /// Side of a fixed range drawing's span its rows grow from, Left by default and in older
+    /// saves. Extend right moves the span's right edge to the last bar. Anchored drawings keep
+    /// rows at the pane's right edge; studies use their Placement input. Both ignore this.
+    pub placement: ProfilePlacement,
+    /// Widest drawing row as a whole percent of its range, or of the pane when anchored.
+    /// Defaults to 30, including older saves, and is drawn between 1 and 100. Studies use
+    /// their Width input and ignore this.
+    pub histogram_width: u8,
     /// Write each row's volume beside it, following `display`, in [`Self::values_color`], or
     /// inside the value area in [`Self::value_area_values_color`].
     pub show_values: bool,
@@ -222,6 +244,10 @@ struct VolumeProfileFields {
     #[serde(default = "profile_shown")]
     show_rows: bool,
     #[serde(default)]
+    placement: ProfilePlacement,
+    #[serde(default = "histogram_width")]
+    histogram_width: u8,
+    #[serde(default)]
     show_values: bool,
     #[serde(default)]
     values_color: Option<[u8; 4]>,
@@ -265,6 +291,8 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.value_area_colors = fields.value_area_colors;
         config.show_value_area_lines = fields.show_value_area_lines;
         config.show_rows = fields.show_rows;
+        config.placement = fields.placement;
+        config.histogram_width = fields.histogram_width;
         config.show_values = fields.show_values;
         config.values_color = fields.values_color;
         config.value_area_values_color = fields.value_area_values_color;
@@ -431,6 +459,8 @@ impl Default for VolumeProfileConfig {
             value_area_colors: None,
             show_value_area_lines: false,
             show_rows: true,
+            placement: ProfilePlacement::Left,
+            histogram_width: histogram_width(),
             show_values: false,
             values_color: None,
             value_area_values_color: None,

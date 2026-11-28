@@ -89,7 +89,9 @@ and the data window read them as they read the bars that traded.
 Bars built from trades are marked the same way: a trade beyond a price gap closes
 a bar at each boundary on the way, and only the first of them holds a trade.
 The bar in progress, the newest one until its range is complete, is drawn in its
-forming colour; a trade that ends exactly on a boundary leaves every bar complete.
+forming colour, and the last price line and label take the colour it is drawn in;
+a bar that closes where it opened is falling. A trade that ends exactly on a
+boundary leaves every bar complete.
 See the [order-flow guide](../../../../../order-flow.md) for supplying executions.
 
 The price scale of Renko, Kagi, Line Break and Point and Figure labels the last
