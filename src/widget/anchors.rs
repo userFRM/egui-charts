@@ -839,7 +839,9 @@ mod tests {
     /// whose smoothing equals its period. A Knoxville record stored while the study offered
     /// Symbol and Interval matches the Knoxville that offers neither. A Trading Sessions record
     /// from before session hours were times of day matches the study that reports them so.
-    /// Loading and pasting agree.
+    /// A Multi MA record from before its number of averages had an input matches the Multi MA
+    /// of four averages restored from it, even with a six-average pane before it, and never
+    /// selects a six-average pane alone. Loading, pasting and linked panes agree.
     #[cfg(feature = "studies")]
     #[test]
     fn stored_pane_survives_a_new_study_input() {
@@ -860,6 +862,16 @@ mod tests {
                 })
                 .with_overlay(false),
             )
+        };
+        let four: Study = || {
+            // Restored from a save with four averages, moved into its own pane.
+            let mut averages = crate::studies::MultipleMA::new();
+            averages
+                .set_input("average_count", InputValue::Length(4))
+                .unwrap();
+            let mut study = ConfiguredStudy::new(Box::new(averages));
+            study.set_overlay(false);
+            Box::new(study)
         };
         let smi: Study = || Box::new(StochasticMomentumIndex::new(10, 3, 3, 10));
         let adx: Study = || Box::new(ADX::new(20));
@@ -1012,6 +1024,7 @@ mod tests {
         };
         let (last, inner) = (without("wait_for_close"), without("smoothing_deviation"));
         let no_smoothing = without("adx_smoothing");
+        let no_count = without("average_count");
         let (no_average, sma, ema) = (without("smoothing"), earlier(1), earlier(2));
         let (equal, unequal) = (split(3), split(4));
         let wait = |on| Some(("wait_for_close", InputValue::Toggle(on)));
@@ -1024,7 +1037,7 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 17] = [
+        let cases: [Case<'_>; 18] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
@@ -1052,6 +1065,7 @@ mod tests {
             (smi, &equal, length("smoothing", 4), false),
             // From before session hours were times of day and zones were time zones.
             (sessions, &minute_counts, None, true),
+            (four, &no_count, None, true),
         ];
         for (at, (study, edit, input, shown)) in cases.into_iter().enumerate() {
             let text = copied(study);
@@ -1072,6 +1086,81 @@ mod tests {
                 }
                 let drawn = target.drawings().drawings[0].pane;
                 assert_eq!(drawn, shown.then_some(pane.0), "case {at}, paste {paste}");
+            }
+        }
+        // Default and edited four-average pane records captured on origin/main 8f93e7379.
+        // The six-average candidate shares every saved input; its extra averages keep defaults.
+        for record in [
+            r#"{"studies":[["Multi MA",[["cross_first",{"Choice":0}],["cross_second",{"Choice":0}],["period_0",{"Length":20}],["kind_0",{"Choice":0}],["source_0",{"Choice":3}],["period_1",{"Length":50}],["kind_1",{"Choice":0}],["source_1",{"Choice":3}],["period_2",{"Length":100}],["kind_2",{"Choice":0}],["source_2",{"Choice":3}],["period_3",{"Length":200}],["kind_3",{"Choice":0}],["source_3",{"Choice":3}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]]]],"rank":0}"#,
+            r#"{"studies":[["Multi MA",[["cross_first",{"Choice":1}],["cross_second",{"Choice":4}],["period_0",{"Length":5}],["kind_0",{"Choice":0}],["source_0",{"Choice":0}],["period_1",{"Length":8}],["kind_1",{"Choice":1}],["source_1",{"Choice":1}],["period_2",{"Length":11}],["kind_2",{"Choice":2}],["source_2",{"Choice":2}],["period_3",{"Length":14}],["kind_3",{"Choice":0}],["source_3",{"Choice":3}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]]]],"rank":0}"#,
+        ] {
+            let stored: serde_json::Value = serde_json::from_str(record).unwrap();
+            let inputs: Vec<(String, InputValue)> =
+                serde_json::from_value(stored["studies"][0][1].clone()).unwrap();
+            let candidate = |count| {
+                let mut study = ConfiguredStudy::new(Box::new(crate::studies::MultipleMA::new()));
+                study
+                    .set_input("average_count", InputValue::Length(count))
+                    .unwrap();
+                for (id, value) in &inputs {
+                    study.set_input(id, value.clone()).unwrap();
+                }
+                study.set_overlay(false);
+                study
+            };
+            // A host supplies the legacy input schema to exercise linked_pane without adding
+            // the new count. Its chart inputs must match the literal record too.
+            let schema = candidate(4)
+                .declared_study()
+                .inputs()
+                .into_iter()
+                .filter(|input| input.id != "average_count")
+                .collect();
+            let mut legacy = CustomIndicator::new("Multi MA", |_| Vec::new())
+                .with_inputs(schema, |_, _, _, _| Vec::new())
+                .unwrap()
+                .with_overlay(false);
+            if !inputs.iter().any(|(id, _)| id == "plot_offset") {
+                legacy = legacy.with_data_requests(|_| Vec::new());
+            }
+            let mut source = Chart::new(BarData::from_bars(bars.clone()));
+            let legacy = source.add_indicator(Box::new(legacy));
+            let source_pane = source.series_pane(legacy).unwrap();
+            assert_eq!(
+                serde_json::to_value(source.stored_pane(source_pane).unwrap()).unwrap(),
+                stored
+            );
+            let text = copied(four);
+            let (prefix, json) = text.split_once('\n').unwrap();
+            let mut json: serde_json::Value = serde_json::from_str(json).unwrap();
+            json["drawings"][0]["pane"] = stored;
+            for counts in [&[6, 4][..], &[4, 6], &[6]] {
+                for paste in [false, true] {
+                    let mut target = Chart::new(BarData::from_bars(bars.clone()));
+                    target.set_symbol("A");
+                    let mut owner = None;
+                    for &count in counts {
+                        let id = target.add_indicator(Box::new(candidate(count)));
+                        if count == 4 {
+                            owner = Some(id);
+                        }
+                    }
+                    if paste {
+                        target.paste_drawings(&format!("{prefix}\n{json}")).unwrap();
+                    } else {
+                        target.load_drawings(&json.to_string()).unwrap();
+                    }
+                    assert_eq!(
+                        target.drawings().drawings[0].pane,
+                        owner.map(|id| id.0),
+                        "{record}, counts {counts:?}, paste {paste}"
+                    );
+                    assert_eq!(
+                        source.linked_pane(source_pane, &target),
+                        owner.and_then(|id| target.series_pane(id)),
+                        "{record}, counts {counts:?}, linked"
+                    );
+                }
             }
         }
         // Pane records saved before the custom timeframe switch existed, with and without a

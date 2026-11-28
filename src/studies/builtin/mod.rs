@@ -11,7 +11,7 @@
 //! [`SMA`], [`EMA`], [`WMA`], [`DEMA`], [`TEMA`], [`HMA`], [`ALMA`],
 //! [`VWMA`], [`LSMA`], [`SWMA`], [`KAMA`], [`SmoothedMA`], [`GuppyMA`],
 //! [`McGinleyDynamic`], [`VIDYA`], [`ZLEMA`], [`HammingMA`],
-//! [`MultipleMA`], [`EMACross`], [`MACross`]
+//! [`MultipleMA`], [`DoubleMA`], [`EMACross`], [`MACross`]
 //!
 //! ## Momentum / oscillators
 //! [`RSI`], [`MACD`], [`Stochastic`], [`StochasticRSI`], [`WilliamsR`],
@@ -513,7 +513,7 @@ pub use ma_cross::MACross;
 pub use ma_ema_cross::EMACross;
 pub use ma_hamming::HammingMA;
 pub use ma_multiple::MultipleMA;
-pub use ma_presets::{MARibbon, MixedMACross, TripleMA};
+pub use ma_presets::{DoubleMA, MARibbon, MixedMACross, TripleMA};
 pub use smoothed_ma::SmoothedMA;
 
 // Re-exports - Tenth batch (Statistics)

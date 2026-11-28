@@ -2104,18 +2104,35 @@ mod tests {
         }
     }
 
-    /// Overlay rendering consumes ribbon widths/fades and both crossing directions.
+    /// Rendering paints every preset line, ribbon widths/fades and only chosen crossings.
+    /// Alternating closes 1 and 2 keep SMA(14) at 1.5 while SMA(21) alternates around it.
     #[test]
     fn ribbon_styles_and_crossing_markers_are_painted() {
+        use crate::studies::{DoubleMA, InputValue, TripleMA};
+        let mut triple_cross = TripleMA::default();
+        triple_cross
+            .set_input("cross_first", InputValue::Choice(1))
+            .unwrap();
+        triple_cross
+            .set_input("cross_second", InputValue::Choice(2))
+            .unwrap();
         let cross = MACombination::new(vec![
             AverageLine::new(AverageType::Simple, 1, Color32::BLUE),
             AverageLine::new(AverageType::Simple, 2, Color32::RED),
         ])
         .unwrap();
-        for (study, filled, marked) in [
-            (Box::new(MARibbon::new()) as Box<dyn Indicator>, true, false),
-            (Box::new(MARibbon::muted()), false, false),
-            (Box::new(cross.clone()), false, true),
+        for (study, filled, marked, lines) in [
+            (
+                Box::new(MARibbon::new()) as Box<dyn Indicator>,
+                true,
+                false,
+                12,
+            ),
+            (Box::new(MARibbon::muted()), false, false, 12),
+            (Box::new(cross.clone()), false, true, 2),
+            (Box::new(TripleMA::default()), false, false, 3),
+            (Box::new(triple_cross), false, true, 3),
+            (Box::new(DoubleMA::default()), false, false, 2),
             (
                 {
                     let mut pane = crate::studies::ConfiguredStudy::new(Box::new(cross));
@@ -2124,14 +2141,28 @@ mod tests {
                 },
                 false,
                 true,
+                2,
             ),
         ] {
+            assert_eq!(study.colors().len(), lines);
             for (_, theme) in crate::theme::presets() {
                 let mut chart = chart(&[0.0], &[1.0, 2.0]);
                 chart.add_indicator(study.clone_box());
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let shapes = shapes(&ctx, &mut chart, 0.0, Vec::new());
+                for color in study.colors() {
+                    assert!(
+                        shapes.iter().any(|shape| match shape {
+                            Shape::Path(path) =>
+                                path.stroke.color == egui::epaint::ColorMode::Solid(color),
+                            Shape::LineSegment { stroke, .. } => stroke.color == color,
+                            _ => false,
+                        }),
+                        "{} line {color:?}",
+                        study.name()
+                    );
+                }
                 let fading = shapes.iter().any(|shape| matches!(shape,Shape::Mesh(mesh)
                 if mesh.vertices.len()==4 && mesh.vertices[0].color.a()==38 && mesh.vertices[2].color.a()==10));
                 assert_eq!(fading, filled, "bottom fade");

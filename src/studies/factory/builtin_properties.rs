@@ -29,6 +29,7 @@ fn builtins_with(l: impl Fn(usize) -> usize, x: impl Fn(f64) -> f64) -> Vec<Box<
         Box::new(EMACross::new(l(0), l(1))),
         Box::new(MACross::new(l(0), l(1))),
         Box::new(MixedMACross::new(l(0), l(1))),
+        Box::new(DoubleMA::new(l(0), l(1))),
         Box::new(TripleMA::new(l(0), l(1), l(2))),
         Box::new(MARibbon::new()),
         Box::new(RSI::new(l(0))),
