@@ -799,6 +799,7 @@ pub struct OrderFlowSettings {
 /// use egui_charts::widget::settings::ChartSettingsState;
 ///
 /// let mut settings = ChartSettingsState::default();
+/// settings.status_line = egui_charts::widget::settings::StatusLineOptions::default();
 /// settings.candle_colors.show_wick = false;
 /// settings.status_line.show_logo = false;
 /// settings.trading = egui_charts::widget::settings::TradingSettings::default();

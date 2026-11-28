@@ -767,6 +767,7 @@ fn main_series_legend_actions_preserve_studies_and_comparisons() {
 #[test]
 fn new_charts_hide_the_legend_volume_and_saved_settings_keep_it() {
     use crate::widget::settings::ChartSettingsState;
+    assert!(!ChartSettingsState::default().status_line.show_volume);
     let ctx = egui::Context::default();
     let mut chart = chart(&[100.0], &[110.0]);
     let volume_shown = |painted: &[Shape], right: f32| {
