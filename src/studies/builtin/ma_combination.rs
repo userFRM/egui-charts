@@ -749,8 +749,10 @@ macro_rules! impl_ma_preset {
     ($ty:ident, $name:literal, $description:literal) => {
         impl crate::studies::Indicator for $ty {
             fn inputs(&self) -> Vec<crate::studies::StudyInput> {
-                self.inner
-                    .preset_inputs(matches!($name, "MA Ribbon"), matches!($name, "Multi MA"))
+                self.inner.preset_inputs(
+                    matches!($name, "MA Ribbon"),
+                    matches!($name, "Multi MA" | "MA Ribbon"),
+                )
             }
             fn set_input(
                 &mut self,
@@ -904,11 +906,13 @@ mod tests {
             ),
             (
                 "MA Ribbon",
+                vec!["SMA(20)", "SMA(50)", "SMA(100)", "SMA(200)"],
                 vec![
-                    "EMA(5)", "EMA(10)", "EMA(15)", "EMA(20)", "EMA(25)", "EMA(30)", "EMA(35)",
-                    "EMA(40)", "EMA(45)", "EMA(50)", "EMA(55)", "EMA(60)",
+                    Color32::from_rgb(246, 195, 9),
+                    Color32::from_rgb(251, 152, 0),
+                    Color32::from_rgb(251, 101, 0),
+                    Color32::from_rgb(246, 12, 12),
                 ],
-                vec![Color32::from_rgb(98, 55, 174); 12],
                 false,
             ),
         ] {
@@ -926,14 +930,14 @@ mod tests {
             assert_eq!(study.line_names(), names, "{name}");
             assert_eq!(study.colors(), colors, "{name}");
             let inputs = study.inputs();
-            if name == "Multi MA" {
+            if matches!(name, "Multi MA" | "MA Ribbon") {
                 let count = inputs
                     .iter()
                     .find(|input| input.id == "average_count")
                     .unwrap();
                 assert_eq!(
                     (&count.value, &count.default),
-                    (&InputValue::Length(6), &InputValue::Length(6))
+                    (&InputValue::Length(averages), &InputValue::Length(averages))
                 );
                 assert!(
                     !count.is_shown(&inputs),
@@ -953,6 +957,10 @@ mod tests {
             }
             study.calculate(&bars);
             assert_eq!(has_marks(study.as_ref()), marked, "{name} by default");
+            if name == "MA Ribbon" {
+                study.set_input("period_0", InputValue::Length(1)).unwrap();
+                study.set_input("period_1", InputValue::Length(2)).unwrap();
+            }
             study.set_input("cross_first", Choice(1)).unwrap();
             study.set_input("cross_second", Choice(2)).unwrap();
             study.calculate(&bars);

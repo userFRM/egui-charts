@@ -141,7 +141,7 @@ impl StudyTemplateSet {
     ///
     /// - "Bill Williams' 3 Lines": [`WilliamsAlligator`].
     /// - "Displaced EMA": an [`EMA`] drawn 5 bars ahead.
-    /// - "MA Exp Ribbon": [`MARibbon`].
+    /// - "MA Exp Ribbon": [`MARibbon::exponential`].
     /// - "Oscillators": [`RSI`], [`StochasticRSI`] and [`CCI`].
     /// - "Swing Trading": [`BollingerBands`], [`MACD`] and [`Stochastic`].
     /// - "Volume Based": [`OnBalanceVolume`] and [`MoneyFlowIndex`].
@@ -161,7 +161,7 @@ impl StudyTemplateSet {
                 vec![Box::new(WilliamsAlligator::default())],
             ),
             ("Displaced EMA", vec![Box::new(displaced)]),
-            ("MA Exp Ribbon", vec![Box::new(MARibbon::default())]),
+            ("MA Exp Ribbon", vec![Box::new(MARibbon::exponential())]),
             (
                 "Oscillators",
                 vec![
@@ -334,7 +334,7 @@ impl StudyTemplate {
             .collect();
         // Templates carry saved plot styles, even when a host supplies only some inputs.
         // Pane identities have no saved styles and infer the count from their complete inputs.
-        if study.name() == "Multi MA"
+        if matches!(study.name(), "Multi MA" | "MA Ribbon")
             && !self.inputs.iter().any(|(id, _)| id == "average_count")
             && let Some((_, count)) = inputs.iter_mut().find(|(id, _)| id == "average_count")
         {
@@ -1179,7 +1179,7 @@ impl StudyTemplate {
             }
             // A legacy pane identity lists each average but has no saved plot styles. The
             // candidate study's styles must not determine how many averages the record held.
-            "Multi MA" if declares("average_count") && !has("average_count") => {
+            "Multi MA" | "MA Ribbon" if declares("average_count") && !has("average_count") => {
                 template.inputs.insert(
                     0,
                     (
@@ -2010,6 +2010,18 @@ mod tests {
     /// restore without those inputs, and Parabolic SAR, saved with two identical plots, with one.
     #[test]
     fn templates_saved_before_symbol_and_offset_restore_unchanged() {
+        let ribbon = StudyTemplateSet::builtin_named("MA Exp Ribbon").unwrap();
+        assert_eq!(
+            ribbon
+                .studies
+                .iter()
+                .find(|study| study.name == "MA Ribbon")
+                .unwrap()
+                .create()
+                .unwrap()
+                .line_count(),
+            12
+        );
         let factory = IndicatorFactory::new();
         // Two bars per session over more than 52 weeks warm up every saved study.
         let bars: Vec<_> = (0..800)
@@ -2032,6 +2044,8 @@ mod tests {
             .collect();
         // Literal saves captured on origin/main 1b270ce51, each with one edited input.
         for text in [
+            // Saved on origin/main 834e0d769 with twelve exponential averages.
+            r#"{"name":"MA Ribbon","inputs":[["directional",{"Toggle":true}],["cross_first",{"Choice":0}],["cross_second",{"Choice":0}],["period_0",{"Length":5}],["kind_0",{"Choice":1}],["source_0",{"Choice":3}],["period_1",{"Length":10}],["kind_1",{"Choice":1}],["source_1",{"Choice":3}],["period_2",{"Length":15}],["kind_2",{"Choice":1}],["source_2",{"Choice":3}],["period_3",{"Length":22}],["kind_3",{"Choice":1}],["source_3",{"Choice":3}],["period_4",{"Length":25}],["kind_4",{"Choice":1}],["source_4",{"Choice":3}],["period_5",{"Length":30}],["kind_5",{"Choice":1}],["source_5",{"Choice":3}],["period_6",{"Length":35}],["kind_6",{"Choice":1}],["source_6",{"Choice":3}],["period_7",{"Length":40}],["kind_7",{"Choice":1}],["source_7",{"Choice":3}],["period_8",{"Length":45}],["kind_8",{"Choice":1}],["source_8",{"Choice":3}],["period_9",{"Length":50}],["kind_9",{"Choice":1}],["source_9",{"Choice":3}],["period_10",{"Length":55}],["kind_10",{"Choice":1}],["source_10",{"Choice":3}],["period_11",{"Length":60}],["kind_11",{"Choice":1}],["source_11",{"Choice":3}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MARibbon.html","plots":[{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[98,55,174,255],"width":3.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[6,3,11,16],"untagged_plots":[0,1,2,3,4,5,6,7,8,9,10,11],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[],[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
             r#"{"name":"PSAR","inputs":[["initial_af",{"Number":0.03}],["af_step",{"Number":0.02}],["max_af",{"Number":0.2}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ParabolicSAR.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true},{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
             r#"{"name":"MA Cross","inputs":[["cross_first",{"Choice":0}],["cross_second",{"Choice":2}],["period_0",{"Length":9}],["kind_0",{"Choice":0}],["source_0",{"Choice":3}],["period_1",{"Length":21}],["kind_1",{"Choice":0}],["source_1",{"Choice":3}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MACross.html","plots":[{"color":[255,109,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[67,160,71,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,7,0,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
             r#"{"name":"VWAP Auto Anchored","inputs":[["anchor",{"Choice":0}],["length",{"Length":5}],["source",{"Choice":5}],["percentage_bands",{"Toggle":false}],["band_multiplier",{"Number":1.0}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VwapAutoAnchored.html","plots":[{"color":[30,136,229,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[128,128,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[128,128,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[0,137,123,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[0,137,123,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,9,14,16],"untagged_plots":[3,4,5,6],"price_line_plots":[],"plot_variants":[[],[],[],[],[],[],[]],"background":null,"background_visible":true,"fills":[{"color":[4,9,4,13],"inverted_color":null,"visible":true,"independent":true}],"gradients":[]},"visible":true,"scale":"Main"}"#,
@@ -2116,9 +2130,16 @@ mod tests {
                 expected.plots.truncate(1);
                 expected.plot_variants.truncate(1);
             }
-            if saved.name == "MA Cross" {
+            if matches!(
+                saved.name.as_str(),
+                "MA Cross" | "EMA Cross" | "SMA/EMA Cross"
+            ) {
                 expected.plots.push(crate::studies::PlotStyle {
-                    color: crate::studies::palette::BLUE,
+                    color: if saved.name == "MA Cross" {
+                        crate::studies::palette::BLUE
+                    } else {
+                        crate::studies::palette::LIGHT_BLUE
+                    },
                     width: 4.0,
                     pattern: crate::model::LineStyle::Solid,
                     plot_type: crate::studies::PlotType::Crosses,
@@ -2131,6 +2152,14 @@ mod tests {
             assert_eq!(restored.is_visible(), saved.visible, "{}", saved.name);
             assert_eq!(Some(restored.scale()), saved.scale, "{}", saved.name);
             let mut fresh = ConfiguredStudy::new(factory.create(&saved.name).unwrap());
+            if saved.name == "MA Ribbon" {
+                fresh
+                    .set_input(
+                        "average_count",
+                        InputValue::Length(saved.settings.plots.len()),
+                    )
+                    .unwrap();
+            }
             for (id, value) in &saved.inputs {
                 if fresh
                     .inputs()

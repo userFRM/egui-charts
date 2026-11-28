@@ -91,19 +91,45 @@ impl Default for DoubleMA {
 }
 impl_ma_preset!(DoubleMA, "Double MA", "Two simple moving averages");
 
-/// Twelve evenly spaced exponential averages coloured by their individual direction.
+/// Four moving averages with independent formulas, sources and lengths.
 #[derive(Clone, Debug)]
 pub struct MARibbon {
     inner: MACombination,
 }
 impl MARibbon {
-    /// Direction-coloured ribbon with a thicker slowest line and fading bottom fill.
+    /// Four simple averages of 20, 50, 100 and 200 bars from yellow to red,
+    /// each with its own formula, source and length.
     pub fn new() -> Self {
+        Self {
+            inner: MACombination::new(
+                [
+                    (20, (246, 195, 9)),
+                    (50, (251, 152, 0)),
+                    (100, (251, 101, 0)),
+                    (200, (246, 12, 12)),
+                ]
+                .into_iter()
+                .map(|(period, (r, g, b))| {
+                    AverageLine::new(
+                        AverageType::Simple,
+                        period,
+                        egui::Color32::from_rgb(r, g, b),
+                    )
+                })
+                .collect(),
+            )
+            .unwrap()
+            .without_crossings(),
+        }
+    }
+    /// Twelve exponential averages of lengths 5 through 60, coloured by their own direction,
+    /// the slowest 3 px wide over a fading fill: the ribbon of the MA Exp Ribbon template.
+    pub fn exponential() -> Self {
         Self {
             inner: MACombination::ribbon(),
         }
     }
-    /// Dim magenta lines without a fill, each 1 px wide.
+    /// The twelve-average ribbon in dim magenta without a fill, each line 1 px wide.
     pub fn muted() -> Self {
         Self {
             inner: MACombination::muted_ribbon(),
@@ -118,5 +144,5 @@ impl Default for MARibbon {
 impl_ma_preset!(
     MARibbon,
     "MA Ribbon",
-    "Twelve exponential averages of lengths 5 through 60"
+    "Four moving averages of independent formula, source and length"
 );

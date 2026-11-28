@@ -2123,7 +2123,7 @@ mod tests {
         .unwrap();
         for (study, filled, marked, lines) in [
             (
-                Box::new(MARibbon::new()) as Box<dyn Indicator>,
+                Box::new(MARibbon::exponential()) as Box<dyn Indicator>,
                 true,
                 false,
                 12,
