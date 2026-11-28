@@ -1000,7 +1000,6 @@ mod tests {
     #[test]
     fn crossing_presets_draw_each_average_from_its_own_warm_up() {
         use super::AverageType::{self, Exponential, Simple};
-        use crate::studies::CrossDirection;
         let bars: Vec<Bar> = (0..60)
             .chain((1..=60).rev())
             .map(|close| make_bar(f64::from(close)))
@@ -1009,7 +1008,7 @@ mod tests {
             &'a str,
             &'a [(AverageType, usize)],
             &'a [(usize, usize, Option<f64>)],
-            &'a [(usize, CrossDirection, f64)],
+            &'a [(usize, f64)],
         );
         let rows: &[Row<'_>] = &[
             (
@@ -1022,7 +1021,7 @@ mod tests {
                     (1, 19, None),
                     (1, 20, Some(10.0)),
                 ],
-                &[(70, CrossDirection::Down, 54.0)],
+                &[(70, 54.0)],
             ),
             (
                 "SMA/EMA Cross",
@@ -1036,7 +1035,7 @@ mod tests {
                 &[],
             ),
         ];
-        for &(name, lines, probes, markers) in rows {
+        for &(name, lines, probes, crossings) in rows {
             let mut study = IndicatorFactory::new().create(name).unwrap();
             let inputs = study.inputs();
             for (line, &(kind, period)) in lines.iter().enumerate() {
@@ -1080,9 +1079,9 @@ mod tests {
                 .iter()
                 .enumerate()
                 .filter(|(_, v)| v.is_finite())
-                .map(|(bar, value)| (bar, CrossDirection::Down, *value))
+                .map(|(bar, value)| (bar, *value))
                 .collect();
-            assert_eq!(actual, markers, "{name}");
+            assert_eq!(actual, crossings, "{name}");
         }
     }
 
