@@ -2296,6 +2296,13 @@ impl Chart {
             .and_then(element_at)
             .map(|(id, _)| id);
         let main_on_top = on_top == Some(super::ChartElementId::Series(super::SeriesId::MAIN));
+        let shown_study = |id: &super::SeriesId| {
+            self.study_ids
+                .iter()
+                .position(|study| study == id)
+                .map(|idx| &studies.indicators()[idx])
+                .filter(|study| self.shows_study(study.as_ref()))
+        };
         let paint_overlay = |id: &super::SeriesId| {
             if let Some(item) = self.main_pane_series().find(|item| item.id == *id) {
                 self.paint_series(
@@ -2306,13 +2313,7 @@ impl Chart {
                 );
                 return;
             }
-            let Some(study) = self
-                .study_ids
-                .iter()
-                .position(|study| study == id)
-                .map(|idx| &studies.indicators()[idx])
-                .filter(|study| self.shows_study(study.as_ref()))
-            else {
+            let Some(study) = shown_study(id) else {
                 return;
             };
             if self.host_events.annotation_target.borrow().is_some()
@@ -2388,12 +2389,43 @@ impl Chart {
                     }
                 }
             } else if study.is_overlay() {
-                rendering::IndicatorRenderer::render(
+                rendering::IndicatorRenderer::render_overlay(
                     &price_ctx,
-                    std::slice::from_ref(study),
+                    study.as_ref(),
                     visible_data,
                     &price_map,
                     &coords,
+                    rendering::PlotLayer::Foreground,
+                );
+            } else if !study.plots_on_price() {
+                let mapping = rendering::study_mapping(study.as_ref(), &coords);
+                rendering::IndicatorRenderer::render_study_layer(
+                    &price_ctx,
+                    study.as_ref(),
+                    visible_data,
+                    start_idx,
+                    &mapping.price,
+                    &mapping,
+                    rendering::PlotLayer::Foreground,
+                );
+            }
+        };
+        // Background colour plots and tints lie beneath every series, study and drawing of the pane.
+        let paint_backgrounds = |id: &super::SeriesId| {
+            let Some(study) = shown_study(id) else {
+                return;
+            };
+            if self.has_renderer(*id) || (study.is_volume() && !self.chart_type.supports_volume()) {
+                return;
+            }
+            if study.is_overlay() {
+                rendering::IndicatorRenderer::render_overlay(
+                    &price_ctx,
+                    study.as_ref(),
+                    visible_data,
+                    &price_map,
+                    &coords,
+                    rendering::PlotLayer::Backgrounds,
                 );
             } else if !study.plots_on_price() {
                 let mapping = rendering::study_mapping(study.as_ref(), &coords);
@@ -2402,13 +2434,14 @@ impl Chart {
                         .with_clip_rect(price_rect)
                         .rect_filled(price_rect, 0.0, color);
                 }
-                rendering::IndicatorRenderer::render_study(
+                rendering::IndicatorRenderer::render_study_layer(
                     &price_ctx,
                     study.as_ref(),
                     visible_data,
                     start_idx,
                     &mapping.price,
                     &mapping,
+                    rendering::PlotLayer::Backgrounds,
                 );
             }
         };
@@ -2608,6 +2641,26 @@ impl Chart {
                 paint_overlay(id);
             }
         };
+        for id in behind.iter().chain(front) {
+            paint_backgrounds(id);
+        }
+        for study in studies.indicators().iter().filter(|study| {
+            self.shows_study(study.as_ref()) && study.plots_on_price() && !study.is_overlay()
+        }) {
+            let mapping = crate::chart::coords::ChartMapping {
+                price: price_map,
+                ..coords.clone()
+            };
+            rendering::IndicatorRenderer::render_study_layer(
+                &price_ctx,
+                study.as_ref(),
+                visible_data,
+                mapping.start_idx,
+                &mapping.price,
+                &mapping,
+                rendering::PlotLayer::Backgrounds,
+            );
+        }
         #[cfg(feature = "drawings")]
         let mut marks = Vec::new();
         for id in behind {
@@ -2672,13 +2725,14 @@ impl Chart {
                     price: price_map,
                     ..coords.clone()
                 };
-                rendering::IndicatorRenderer::render_study(
+                rendering::IndicatorRenderer::render_study_layer(
                     &price_ctx,
                     study.as_ref(),
                     visible_data,
                     mapping.start_idx,
                     &mapping.price,
                     &mapping,
+                    rendering::PlotLayer::Foreground,
                 );
             }
             crate::chart::indicators::plots::paint_price_segments(

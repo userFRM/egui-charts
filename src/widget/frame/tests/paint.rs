@@ -2830,6 +2830,224 @@ fn drawings_take_their_place_among_the_series_and_studies() {
     }
 }
 
+/// A pattern's Background lies beneath its formation candles, mark and label in either theme
+/// and scale direction, at its default place, sent back and brought forward, even opaque (#4443).
+/// Hiding Background leaves the candles, mark and label visible.
+#[cfg(feature = "studies")]
+#[test]
+fn pattern_backgrounds_lie_beneath_candles_marks_and_labels() {
+    use crate::model::{Bar, BarData};
+    use crate::studies::{IndicatorFactory, InputValue};
+    use crate::theme::Theme;
+    use crate::widget::{Chart, VisualOrder};
+    use chrono::{TimeZone, Utc};
+    use egui::{Color32, Event};
+
+    type Row = (
+        &'static str,
+        &'static str,
+        bool,
+        &'static [(f64, f64, f64, f64)],
+    );
+    #[rustfmt::skip]
+    let rows: [Row; 32] = [
+        ("Dark Cloud Cover - Bearish", "DCC", false, &[(100.0, 103.5, 99.5, 103.0), (104.0, 104.5, 101.0, 101.25)]),
+        ("Doji", "D", false, &[(100.0, 102.0, 98.0, 100.0625)]),
+        ("Doji Star - Bearish", "DS", false, &[(100.0, 103.25, 99.75, 103.0), (103.5, 104.5, 102.5, 103.5625)]),
+        ("Doji Star - Bullish", "DS", true, &[(103.0, 103.25, 99.75, 100.0), (99.5, 100.5, 98.5, 99.4375)]),
+        ("Dragonfly Doji - Bullish", "DD", true, &[(100.0, 100.0625, 96.0, 100.0625)]),
+        ("Engulfing - Bearish", "BE", false, &[(100.5, 101.25, 100.25, 101.0), (101.25, 101.5, 99.75, 100.0)]),
+        ("Engulfing - Bullish", "BE", true, &[(101.0, 101.25, 100.25, 100.5), (100.25, 101.75, 100.0, 101.5)]),
+        ("Evening Doji Star - Bearish", "EDS", false, &[(100.0, 104.25, 99.75, 104.0), (105.0, 106.0, 104.5, 105.0625), (104.5, 104.75, 101.0, 101.5)]),
+        ("Evening Star - Bearish", "ES", false, &[(100.0, 104.25, 99.75, 104.0), (105.0, 106.0, 104.5, 105.5), (104.5, 104.75, 101.0, 101.5)]),
+        ("Falling Three Methods - Bearish", "FTM", true, &[(104.0, 104.5, 99.5, 100.0), (101.0, 101.75, 100.75, 101.5), (101.0, 101.75, 100.75, 101.5),
+                  (101.0, 101.75, 100.75, 101.5), (101.5, 101.75, 98.5, 99.0)]),
+        ("Falling Window - Bearish", "FW", true, &[(101.0, 101.5, 99.5, 100.0), (99.0, 99.25, 98.0, 98.5)]),
+        ("Gravestone Doji - Bearish", "GD", false, &[(100.0, 104.0, 100.0, 100.0625)]),
+        ("Hammer - Bullish", "H", true, &[(100.0, 100.5, 98.0, 100.5)]),
+        ("Hanging Man - Bearish", "HM", false, &[(100.0, 100.5, 98.0, 100.5)]),
+        ("Harami - Bearish", "BH", false, &[(100.0, 104.5, 99.5, 104.0), (102.5, 103.0, 101.5, 102.0)]),
+        ("Harami - Bullish", "BH", true, &[(104.0, 104.5, 99.5, 100.0), (101.5, 103.0, 101.0, 102.0)]),
+        ("Harami Cross - Bearish", "HC", false, &[(100.0, 104.5, 99.5, 104.0), (102.0, 103.0, 101.0, 102.0625)]),
+        ("Harami Cross - Bullish", "HC", true, &[(104.0, 104.5, 99.5, 100.0), (102.0, 103.0, 101.0, 102.0625)]),
+        ("Inverted Hammer - Bullish", "IH", true, &[(100.0, 102.5, 100.0, 100.5)]),
+        ("Kicking - Bearish", "K", false, &[(105.0, 107.0, 105.0, 107.0), (104.0, 104.0, 102.0, 102.0)]),
+        ("Abandoned Baby - Bearish", "AB", false, &[(100.0, 103.0, 99.5, 102.5), (104.0, 105.0, 103.5, 104.0625), (103.0, 103.25, 100.0, 100.5)]),
+        ("Abandoned Baby - Bullish", "AB", true, &[(102.5, 103.0, 99.5, 100.0), (98.5, 99.0, 97.5, 98.5625), (99.5, 102.5, 99.25, 102.0)]),
+        ("Rising Window - Bullish", "RW", true, &[(100.0, 101.5, 99.5, 101.0), (102.0, 103.0, 101.75, 102.5)]),
+        ("Shooting Star - Bearish", "SS", false, &[(100.0, 102.5, 100.0, 100.5)]),
+        ("Spinning Top Black", "STB", false, &[(100.5, 102.0, 98.0, 100.0)]),
+        ("Spinning Top White", "STW", false, &[(100.0, 102.0, 98.0, 100.5)]),
+        ("Three Black Crows - Bearish", "3BC", false, &[(104.0, 104.5, 102.0, 102.0), (103.0, 103.5, 101.0, 101.0), (102.0, 102.5, 100.0, 100.0)]),
+        ("Three White Soldiers - Bullish", "3WS", true, &[(100.0, 102.0, 99.5, 102.0), (101.0, 103.0, 100.5, 103.0), (102.0, 104.0, 101.5, 104.0)]),
+        ("Tri-Star - Bearish", "3S", false, &[(100.0, 101.0, 99.0, 100.0), (102.0, 103.0, 101.0, 102.0), (100.0, 101.0, 99.0, 100.0)]),
+        ("Tri-Star - Bullish", "3S", true, &[(100.0, 101.0, 99.0, 100.0), (98.0, 99.0, 97.0, 98.0), (100.0, 101.0, 99.0, 100.0)]),
+        ("Tweezer Bottom - Bullish", "TB", true, &[(103.0, 103.25, 99.5, 100.0), (100.0, 101.5, 99.5, 101.0)]),
+        ("Tweezer Top - Bearish", "TT", false, &[(100.0, 103.5, 99.75, 103.0), (103.0, 103.5, 101.5, 102.0)]),
+    ];
+    for (name, abbr, down, formation) in rows {
+        let mut bars: Vec<_> = (0..14)
+            .map(|i| {
+                let close = if down {
+                    100.0 + f64::from(14 - i)
+                } else {
+                    100.0 - f64::from(14 - i)
+                };
+                let open = close + if down { 1.0 } else { -1.0 };
+                Bar::new(
+                    Utc.timestamp_opt(1_700_000_000 + i64::from(i) * 60, 0)
+                        .unwrap(),
+                    open,
+                    open.max(close) + 0.25,
+                    open.min(close) - 0.25,
+                    close,
+                    1.0,
+                )
+            })
+            .collect();
+        bars.extend(formation.iter().enumerate().map(|(i, &(o, h, l, c))| {
+            Bar::new(
+                Utc.timestamp_opt(1_700_000_000 + (14 + i as i64) * 60, 0)
+                    .unwrap(),
+                o,
+                h,
+                l,
+                c,
+                1.0,
+            )
+        }));
+        for (theme_name, theme) in [("light", Theme::light()), ("dark", Theme::dark())] {
+            for inverted in [false, true] {
+                for colour in [None, Some(Color32::from_rgb(1, 2, 3))] {
+                    for visible in [true, false] {
+                        let ctx = egui::Context::default();
+                        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+                        chart.set_theme(&ctx, &theme);
+                        chart.config_mut().show_volume = false;
+                        chart.price_scale_mut().options_mut().invert_scale = inverted;
+                        let mut study = IndicatorFactory::new().create(name).unwrap();
+                        if study.inputs().iter().any(|input| input.id == "trend") {
+                            study.set_input("trend", InputValue::Choice(2)).unwrap();
+                        }
+                        let id = chart.add_indicator(study);
+                        let study = chart.indicator_mut(id).unwrap();
+                        let mut settings = study.settings();
+                        if let Some(colour) = colour {
+                            settings.plots[1].color = colour;
+                        }
+                        settings.plots[1].visible = visible;
+                        study.apply_settings(&[], settings).unwrap();
+                        let (_, study) = chart.indicators().find(|(key, _)| *key == id).unwrap();
+                        let tint = study.plot_style(1).color;
+                        let mark_colour = study.plot_style(0).color;
+                        chart.fit_content();
+                        for (step, order) in [
+                            None,
+                            Some(VisualOrder::SendToBack),
+                            Some(VisualOrder::BringToFront),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            if let Some(order) = order {
+                                assert!(chart.reorder_indicator(id, order));
+                            }
+                            let message = format!(
+                                "{name} {theme_name} inverted={inverted} {colour:?} visible={visible} step={step}"
+                            );
+                            let time = step as f64;
+                            frame(&ctx, &mut chart, time, vec![Event::PointerGone]);
+                            frame(&ctx, &mut chart, time + 0.1, vec![Event::PointerGone]);
+                            let painted =
+                                shapes(&ctx, &mut chart, time + 0.2, vec![Event::PointerGone]);
+                            let map = chart.get_chart_mapping();
+                            let backgrounds: Vec<_> = painted
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(i, shape)| match shape {
+                                    Shape::Rect(rect)
+                                        if rect.fill == tint
+                                            && (rect.rect.height() - map.rect.height()).abs()
+                                                < 0.1 =>
+                                    {
+                                        Some((i, rect.rect))
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                            assert_eq!(
+                                backgrounds.len(),
+                                if visible { formation.len() } else { 0 },
+                                "{message}"
+                            );
+                            let mut candles = Vec::new();
+                            for (k, &(o, _, _, c)) in formation.iter().enumerate() {
+                                let x = map.idx_to_x(14 + k);
+                                if visible {
+                                    assert!(
+                                        (backgrounds[k].1.center().x - x).abs() < 0.1,
+                                        "{message}"
+                                    );
+                                    assert!(
+                                        (backgrounds[k].1.width() - map.bar_spacing).abs() < 0.1,
+                                        "{message}"
+                                    );
+                                }
+                                let body = egui::pos2(x, map.price_to_y((o + c) / 2.0));
+                                candles.push(painted.iter().position(|shape| matches!(shape,
+                                Shape::Rect(rect) if rect.fill != tint && rect.rect.contains(body)
+                                    && rect.rect.width() < map.bar_spacing && rect.rect.height() < map.rect.height()
+                            )).unwrap_or_else(|| panic!("candle {k}: {message}")));
+                            }
+                            let label = painted
+                                .iter()
+                                .position(|shape| {
+                                    matches!(shape,
+                                        Shape::Text(text) if text.galley.text() == abbr
+                                    )
+                                })
+                                .unwrap_or_else(|| panic!("label: {message}"));
+                            let x = map.idx_to_x(bars.len() - 1);
+                            let mark = painted
+                                .iter()
+                                .position(|shape| match shape {
+                                    Shape::Circle(circle) => {
+                                        circle.fill == mark_colour
+                                            && (circle.center.x - x).abs() < 0.1
+                                    }
+                                    Shape::Path(path) => {
+                                        path.points.len() == 3
+                                            && path.fill == mark_colour
+                                            && (path.points.iter().map(|p| p.x).sum::<f32>() / 3.0
+                                                - x)
+                                                .abs()
+                                                < 0.1
+                                    }
+                                    _ => false,
+                                })
+                                .unwrap_or_else(|| panic!("mark: {message}"));
+                            if let Some(&(last_background, _)) = backgrounds.last() {
+                                assert!(
+                                    last_background < *candles.iter().min().unwrap(),
+                                    "background before candles: {message}"
+                                );
+                                assert!(
+                                    last_background < label,
+                                    "background before label: {message}"
+                                );
+                                assert!(
+                                    last_background < mark,
+                                    "background before mark: {message}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The panel shares quote intents, replaces the legend buttons, clamps movement, counts one
 /// layout edit per drag and restores its place. Old saves retain the default placement.
 #[cfg(feature = "ui")]
