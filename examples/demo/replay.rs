@@ -1061,6 +1061,7 @@ impl DemoApp {
                 }
             }
             self.replay_session = Some((session, self.replay_interval));
+            self.replay_session_automatic = self.replay_control.uses_automatic_update_interval();
             // Another symbol's preceding source bar can be earlier than the shared market cursor.
             self.replay_session_cutoff = self
                 .chart
@@ -1452,6 +1453,7 @@ impl DemoApp {
             ReplayStartAction::Resume => {
                 if let Some((session, interval)) = self.replay_session.clone() {
                     let cutoff = self.replay_session_cutoff;
+                    let automatic = self.replay_session_automatic;
                     self.replay_selecting = false;
                     self.restore_replayed_charts(&session.charts);
                     if session.symbol != self.state.symbol {
@@ -1484,6 +1486,7 @@ impl DemoApp {
                     self.replay_interval = interval;
                     self.push_replay_window_to_chart();
                     self.set_replay_interval(interval);
+                    self.replay_control.set_automatic_update_interval(automatic);
                     if interval.is_trade_based()
                         && self.chart.replay_driver().is_some()
                         && let Some(cutoff) = cutoff
@@ -3422,6 +3425,62 @@ mod tests {
                     text == "Saved replay needs its market recording, which is no longer available"
                 }));
             }
+        }
+    }
+
+    /// Resume keeps the saved update policy: Automatic follows later chart interval changes,
+    /// a fixed interval stays, and an older save stays fixed.
+    #[test]
+    fn resuming_keeps_the_update_interval_policy() {
+        use super::super::tests::{AppStorage, settle};
+        let ctx = egui::Context::default();
+        let now = "2026-11-12T15:00:00Z".parse().unwrap();
+        // (Automatic chosen, policy saved, update interval once the chart turns daily)
+        for (automatic, saved, daily) in [
+            (true, true, Timeframe::Day1),
+            (false, true, Timeframe::Hour1),
+            (true, false, Timeframe::Hour1),
+        ] {
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                now,
+                true,
+            );
+            settle(&mut app, &ctx);
+            app.switch_timeframe(Timeframe::Hour1);
+            settle(&mut app, &ctx);
+            app.start_replay_at(10);
+            if automatic {
+                app.set_automatic_replay_interval();
+            }
+            assert_eq!(
+                app.replay_control.uses_automatic_update_interval(),
+                automatic
+            );
+            let mut storage = AppStorage::default();
+            eframe::App::save(&mut *app, &mut storage);
+            if !saved {
+                eframe::Storage::remove_string(&mut storage, "replay_session_automatic");
+            }
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut restored = DemoApp::new_at(&cc, now, true);
+            settle(&mut restored, &ctx);
+            restored.apply_replay_start(ReplayStartAction::Resume);
+            assert_eq!(restored.chart.replay_time(), app.chart.replay_time());
+            assert_eq!(
+                (
+                    restored.replay_interval,
+                    restored.replay_control.uses_automatic_update_interval()
+                ),
+                (Timeframe::Hour1, automatic && saved)
+            );
+            restored.switch_timeframe(Timeframe::Day1);
+            settle(&mut restored, &ctx);
+            assert_eq!(
+                restored.replay_interval, daily,
+                "automatic {automatic}, saved {saved}"
+            );
         }
     }
 

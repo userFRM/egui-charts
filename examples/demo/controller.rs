@@ -523,6 +523,8 @@ pub struct DemoApp {
     replay_scope: ReplayScope,
     replay_session: Option<(ReplaySession, Timeframe)>,
     replay_session_cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether the saved replay session followed the chart with Automatic updates.
+    replay_session_automatic: bool,
     replay_slots: Vec<usize>,
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
@@ -981,6 +983,10 @@ impl DemoApp {
                 .storage
                 .and_then(|storage| eframe::get_value(storage, "replay_session_cutoff"))
                 .flatten(),
+            replay_session_automatic: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "replay_session_automatic"))
+                .unwrap_or(false),
             replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -2053,6 +2059,11 @@ impl eframe::App for DemoApp {
             storage,
             "replay_session_cutoff",
             &self.replay_session_cutoff,
+        );
+        eframe::set_value(
+            storage,
+            "replay_session_automatic",
+            &self.replay_session_automatic,
         );
         self.checkpoint_workspace();
         self.storage.persist(storage);
