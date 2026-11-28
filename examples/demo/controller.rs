@@ -375,6 +375,7 @@ pub struct DemoApp {
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     loading_bars: bool,
+    study_events: Vec<marks::StudyEvents>,
     /// The preset and displayed interval, with its load and plot-fitting state.
     range_fit: Option<(DateRange, Timeframe, RangeFit)>,
     pub theme: Theme,
@@ -745,6 +746,7 @@ impl DemoApp {
             },
             bars: Vec::new(),
             loading_bars: false,
+            study_events: Vec::new(),
             range_fit: None,
             theme,
             theme_choice,
@@ -1385,6 +1387,7 @@ impl DemoApp {
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
+        self.chart.set_time_scale_events(Vec::new());
         self.chart.set_mark_source(None);
         self.chart.set_signal_source(None);
         if !self.live.loading() {
@@ -4250,7 +4253,12 @@ impl DemoApp {
                 charts.insert(self.layout_slot, &mut self.chart);
                 // Only this symbol's feed prepares footprint rows, so its tape can wait for a reader
                 // and its first footprint page can hold only the bars on view.
-                for chart in &mut charts {
+                self.study_events
+                    .resize_with(charts.len(), Default::default);
+                for (chart, events) in charts.iter_mut().zip(&mut self.study_events) {
+                    if self.own_data.is_none() {
+                        events.refresh(chart);
+                    }
                     let prepared = chart.symbol() == live::PREPARED_FOOTPRINT_SYMBOL;
                     chart.set_trade_history_on_demand(prepared);
                     chart.set_footprint_history_by_view(prepared);
@@ -5429,6 +5437,7 @@ fn load_view(chart: &mut Chart, live: &LiveFeed, session: SessionType, adjusted:
     live.set_price_unit(cents);
     chart.set_conversion(replay::conversion(cents, adjusted));
     chart.reload_feed();
+    chart.set_time_scale_events(Vec::new());
     chart.set_instrument(Some(live.instrument()));
     chart.set_extended_hours(session != SessionType::RTH);
 }
@@ -6828,26 +6837,27 @@ mod tests {
         assert_eq!(study.order_flow_inputs().len(), 1);
     }
 
-    /// An earnings anchor chosen through the dialog starts only when a supplied event is reached.
+    /// Every corporate anchor chosen through the dialog uses the loaded symbol's demo events.
     #[test]
     fn vwap_auto_anchored_starts_at_earnings_in_the_demo() {
         use egui::accesskit::{Action, ActionRequest, TreeId};
-        use egui_charts::model::{EventKind, TimeScaleEvent};
+        use egui_charts::model::EventKind;
         use egui_charts::studies::{IndicatorFactory, InputValue};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         app.chart.set_feed_paused(true);
         settle(&mut app, &ctx);
-        let click = |app: &mut DemoApp, node: &egui::accesskit::Node| {
-            let b = node.bounds().unwrap();
-            ui_click(
+        let click = |app: &mut DemoApp, target_node| {
+            draw(
                 &ctx,
-                egui::vec2(1440.0, 900.0),
-                egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32),
-                |ui| {
-                    app.show_dialogs(ui.ctx());
-                },
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: None,
+                })],
             );
         };
         let id = app.chart.add_indicator(
@@ -6855,53 +6865,87 @@ mod tests {
                 .create("VWAP Auto Anchored")
                 .unwrap(),
         );
-        app.open_indicator_settings(id);
-        for _ in 0..3 {
-            draw(&ctx, &mut app, vec![]);
+        for (symbol, timeframe) in [("SAMPLE", Timeframe::Min1), ("STOCKA", Timeframe::Day1)] {
+            app.chart.set_symbol(symbol);
+            app.follow_chart_symbol(false);
+            app.switch_timeframe(timeframe);
+            settle(&mut app, &ctx);
+            for (label, choice, kind) in [
+                ("Earnings", 11, EventKind::Earnings),
+                ("Dividends", 12, EventKind::Dividend),
+                ("Splits", 13, EventKind::Split),
+            ] {
+                app.open_indicator_settings(id);
+                for _ in 0..3 {
+                    draw(&ctx, &mut app, vec![]);
+                }
+                let nodes = draw(&ctx, &mut app, vec![]);
+                click(&mut app, control(&nodes, "Anchor Period").0);
+                let nodes = draw(&ctx, &mut app, vec![]);
+                draw(
+                    &ctx,
+                    &mut app,
+                    vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                        action: Action::ScrollIntoView,
+                        target_tree: TreeId::ROOT,
+                        target_node: control(&nodes, label).0,
+                        data: None,
+                    })],
+                );
+                draw(&ctx, &mut app, vec![]);
+                let nodes = draw(&ctx, &mut app, vec![]);
+                click(&mut app, control(&nodes, label).0);
+                let nodes = draw(&ctx, &mut app, vec![]);
+                click(&mut app, control(&nodes, "Apply").0);
+                assert!(!app.indicator_settings.is_open());
+                settle(&mut app, &ctx);
+                let bars = app.chart.bars(SeriesId::MAIN);
+                let source = marks::DemoMarks {
+                    live: app.live.clone(),
+                    extended_hours: app.chart.extended_hours(),
+                    samples: false,
+                    notifications: None,
+                    times: Default::default(),
+                };
+                let events = source
+                    .annotations(&egui_charts::services::MarksRequest::new(
+                        symbol,
+                        timeframe,
+                        bars[0].time,
+                        bars.last().unwrap().time,
+                    ))
+                    .events;
+                let time = events
+                    .iter()
+                    .filter(|event| event.kind == kind)
+                    .map(|event| event.time)
+                    .max()
+                    .expect("a normal demo corporate event");
+                assert!(events.iter().all(|event| event.id.contains(symbol)));
+                let anchor = bars.partition_point(|bar| bar.time < time);
+                let study = app.chart.indicator_mut(id).unwrap();
+                assert_eq!(
+                    study
+                        .inputs()
+                        .iter()
+                        .find(|input| input.id == "anchor")
+                        .unwrap()
+                        .value,
+                    InputValue::Choice(choice)
+                );
+                assert!(
+                    study.values().value(0, anchor).is_some(),
+                    "{symbol} {label}"
+                );
+                if anchor > 0 {
+                    assert_eq!(
+                        study.values().value(0, anchor - 1),
+                        None,
+                        "{symbol} {label}"
+                    );
+                }
+            }
         }
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Anchor Period").1);
-        let nodes = draw(&ctx, &mut app, vec![]);
-        draw(
-            &ctx,
-            &mut app,
-            vec![egui::Event::AccessKitActionRequest(ActionRequest {
-                action: Action::ScrollIntoView,
-                target_tree: TreeId::ROOT,
-                target_node: control(&nodes, "Earnings").0,
-                data: None,
-            })],
-        );
-        draw(&ctx, &mut app, vec![]);
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Earnings").1);
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Apply").1);
-        assert!(!app.indicator_settings.is_open());
-        assert_eq!(
-            app.chart
-                .indicator_mut(id)
-                .unwrap()
-                .inputs()
-                .iter()
-                .find(|input| input.id == "anchor")
-                .unwrap()
-                .value,
-            InputValue::Choice(11)
-        );
-        let bars = app.chart.bars(SeriesId::MAIN);
-        let anchor = bars.len() - 30;
-        let time = bars[anchor].time;
-        app.chart.set_time_scale_events(vec![TimeScaleEvent::new(
-            "e",
-            time,
-            EventKind::Earnings,
-            "",
-        )]);
-        settle(&mut app, &ctx);
-        let study = app.chart.indicator_mut(id).unwrap();
-        assert_eq!(study.values().value(0, anchor - 1), None);
-        assert!(study.values().value(0, anchor).is_some());
     }
 
     /// The Style tab offers a plot the character its study declares, also for a plot saved as
