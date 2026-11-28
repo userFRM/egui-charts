@@ -777,7 +777,10 @@ mod tests {
             };
             frames(&mut terminal);
             if matches!(path, "history" | "visible") {
-                let bars = (800..1100).map(|at| bar(at * 5, at as f64 + 1.0)).collect();
+                let start = if path == "history" { 0 } else { 800 };
+                let bars = (start..1100)
+                    .map(|at| bar(at * 5, at as f64 + 1.0))
+                    .collect();
                 terminal
                     .chart_mut()
                     .set_data(egui_charts::widget::SeriesId::MAIN, bars);
@@ -857,6 +860,12 @@ mod tests {
             }
             if path == "history" {
                 let before = terminal.alerts.panel.log().len();
+                // Shorter chart history cannot replace the alert's captured calculation span.
+                let bars = (800..1100).map(|at| bar(at * 5, at as f64 + 1.0)).collect();
+                terminal
+                    .chart_mut()
+                    .set_data(egui_charts::widget::SeriesId::MAIN, bars);
+                frames(&mut terminal);
                 terminal.chart_mut().set_symbol("SHOWN");
                 frames(&mut terminal);
                 terminal.chart_mut().set_symbol("OTHER");
