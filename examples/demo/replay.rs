@@ -1203,14 +1203,10 @@ impl DemoApp {
         let slots: Vec<_> = (0..self.extra_charts.len() + 1)
             .filter(|&slot| scope == ReplayScope::AllCharts || slot == source)
             .collect();
-        // An open recording plays on the covered charts of its symbol; other charts replay
-        // their own history to its cursor.
-        let recording = self
-            .chart
-            .replay_driver()
-            .filter(|_| self.recording_files.opened)
-            .cloned();
+        // Rejoining charts of the same symbol keep the current market source and its cursor.
+        let driver = self.chart.replay_driver().cloned();
         let symbol = self.chart.symbol().to_owned();
+        let unit = self.live.instrument().unit;
         let mut released = Vec::new();
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
             let slot = if index >= source { index + 1 } else { index };
@@ -1225,8 +1221,9 @@ impl DemoApp {
                 extra.chart.set_replay_time(Some(time));
                 let (bars, clock) = replay_source(&extra.live, self.replay_interval, &extra.chart);
                 extra.chart.set_replay_source(bars, clock);
-                if let Some(driver) = &recording
+                if let Some(driver) = &driver
                     && extra.chart.symbol() == symbol
+                    && (self.recording_files.opened || extra.live.instrument().unit == unit)
                 {
                     extra.chart.set_conversion(None);
                     extra.chart.set_market_replay(Some(driver.clone()));
@@ -3315,6 +3312,8 @@ mod tests {
         app.switch_timeframe(Timeframe::Min5);
         app.activate_chart_slot(0);
         app.switch_timeframe(Timeframe::Min1);
+        app.chart.set_order_book_visible(true);
+        app.extra_charts[0].chart.set_order_book_visible(true);
         settle(&mut app, &ctx);
         app.advance_sample_to(app.live.now() + chrono::TimeDelta::seconds(90));
         settle(&mut app, &ctx);
@@ -3326,20 +3325,51 @@ mod tests {
             let driver = app.chart.replay_driver().cloned();
             assert_eq!(driver.is_some(), interval.is_trade_based());
             let cutoff = app.chart.replay_time().unwrap();
+            let cursor = app.replay.as_ref().unwrap().state.curr_bar;
+            settle(&mut app, &ctx);
+            let book = app.chart.order_book(SeriesId::MAIN).cloned();
+            if driver.is_some() {
+                for chart in [&app.chart, &app.extra_charts[0].chart] {
+                    assert!(chart.order_book(SeriesId::MAIN).is_some());
+                }
+                app.checkpoint_replay();
+                assert_eq!(app.replay_session_cutoff, Some(cutoff));
+                app.set_replay_scope(ReplayScope::ThisChart);
+                assert!(app.extra_charts[0].chart.replay_driver().is_none());
+                app.set_replay_scope(ReplayScope::AllCharts);
+            }
             for slot in [1, 0, 1, 0] {
                 app.layout.set_active(slot);
                 ctx.run_ui(egui::RawInput::default(), |ui| demo(&mut app, ui))
                     .drop_without_applying_deltas();
+                settle(&mut app, &ctx);
                 assert_eq!(app.layout_slot, slot);
                 assert!(!app.replay.as_ref().unwrap().state.is_playing());
                 assert_eq!(app.replay_interval, interval);
                 assert!(!app.replay_control.uses_automatic_update_interval());
                 assert_eq!(app.replay_slots, [0, 1]);
+                assert_eq!(app.replay_scope, ReplayScope::AllCharts);
+                assert_eq!(
+                    app.replay.as_ref().unwrap().state.scope,
+                    ReplayScope::AllCharts
+                );
+                assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, cursor);
                 for chart in [&app.chart, &app.extra_charts[0].chart] {
                     assert_eq!(chart.replay_time(), Some(cutoff));
                     if let Some(driver) = &driver {
-                        assert!(Arc::ptr_eq(chart.replay_driver().unwrap(), driver));
+                        assert!(
+                            chart
+                                .replay_driver()
+                                .is_some_and(|shared| Arc::ptr_eq(shared, driver)),
+                            "a rejoined chart must keep the shared market driver after activation"
+                        );
+                        assert_eq!(chart.order_book(SeriesId::MAIN), book.as_ref());
+                        assert_eq!(driver.time() + chrono::TimeDelta::nanoseconds(1), cutoff);
                     }
+                }
+                if driver.is_some() {
+                    app.checkpoint_replay();
+                    assert_eq!(app.replay_session_cutoff, Some(cutoff));
                 }
             }
             app.handle_replay_control(ReplayControlAction::Play);
