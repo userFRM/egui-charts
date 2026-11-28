@@ -112,6 +112,9 @@ pub struct TPOConfig {
     pub period_minutes: u32,
     /// Duration of initial balance in minutes (typically 60)
     pub initial_balance_minutes: u32,
+    /// Initial balance length in periods, retaining that count when the period length changes.
+    /// Zero, the default and in earlier saves, counts `initial_balance_minutes` instead.
+    pub initial_balance_periods: u32,
     /// Value area percentage (typically 0.70 for 70%)
     pub value_area_pct: f64,
     /// Show letters or blocks
@@ -247,6 +250,7 @@ impl Default for TPOConfig {
             tick_size: 1.0,
             period_minutes: 30,
             initial_balance_minutes: 60,
+            initial_balance_periods: 0,
             value_area_pct: 0.70,
             display_mode: TPODisplayMode::Letters,
             split_periods: false,
@@ -729,6 +733,15 @@ impl TPOConfig {
     /// Only one-day profiles split at transitions between regular, extended and overnight hours.
     pub(crate) fn split_hours(&self) -> bool {
         self.split_sessions && !self.joins_sessions()
+    }
+
+    /// Initial balance length in minutes, from its period count when set.
+    pub(crate) fn initial_balance_length(&self) -> i64 {
+        if self.initial_balance_periods > 0 {
+            i64::from(self.initial_balance_periods) * i64::from(self.period_minutes.max(1))
+        } else {
+            i64::from(self.initial_balance_minutes)
+        }
     }
 
     /// The length of the periods: `period_minutes`, at least one minute.
@@ -1235,7 +1248,8 @@ pub(crate) fn profile_parts(
 /// known. A gap leaves empty periods, and each period places one letter on
 /// every row from the lowest low to the highest high of its bars, as one bar of the period
 /// would. The initial balance covers the bars that open
-/// within `config.initial_balance_minutes` of the same instant.
+/// within `config.initial_balance_periods` periods of the same instant, or
+/// `config.initial_balance_minutes` minutes when the period count is zero.
 ///
 /// Rows are `config.tick_size` widened so the bars cover at most about 1,000
 /// rows (see [`TPOProfile::tick_size`]). With `config.instrument_tick` rows are
@@ -1411,7 +1425,7 @@ fn profiles_for_parts(
             profile.profile_low = profile.profile_low.min(bar.low);
 
             // Update initial balance (first N minutes)
-            if elapsed < i64::from(config.initial_balance_minutes) {
+            if elapsed < config.initial_balance_length() {
                 profile.initial_balance_high = profile.initial_balance_high.max(bar.high);
                 profile.initial_balance_low = profile.initial_balance_low.min(bar.low);
             }
@@ -2925,6 +2939,41 @@ mod tests {
             )];
             assert_eq!(auto_row_height(&bars, Some(1.0), false), Some(ceiling));
             assert_eq!(auto_row_height(&bars, Some(1.0), true), Some(nearest));
+        }
+    }
+    /// Initial balance follows a period count after a block edit, while zero keeps minutes.
+    #[test]
+    fn initial_balance_can_count_periods_instead_of_minutes() {
+        let bars: Vec<_> = (0..5)
+            .map(|i| {
+                Bar::new(
+                    DateTime::UNIX_EPOCH + Duration::minutes(i * 15),
+                    100.0,
+                    101.0 + i as f64,
+                    99.0 - i as f64,
+                    100.0,
+                    1.0,
+                )
+            })
+            .collect();
+        for (period_minutes, initial_balance_periods, high, low) in [
+            (30, 2, 104.0, 96.0),
+            (15, 2, 102.0, 98.0),
+            (15, 0, 104.0, 96.0),
+        ] {
+            let config = TPOConfig {
+                period_minutes,
+                initial_balance_periods,
+                ..Default::default()
+            };
+            let profiles = to_tpo_profiles(&bars, &config, &BarClock::new(Timeframe::Min15));
+            assert_eq!(
+                (
+                    profiles[0].initial_balance_high,
+                    profiles[0].initial_balance_low
+                ),
+                (high, low)
+            );
         }
     }
 }

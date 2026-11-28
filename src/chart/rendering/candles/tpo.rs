@@ -328,7 +328,7 @@ thread_local! {
 fn same_profiles(old: &TPOConfig, new: &TPOConfig) -> bool {
     old.tick_size.to_bits() == new.tick_size.to_bits()
         && old.period_minutes == new.period_minutes
-        && old.initial_balance_minutes == new.initial_balance_minutes
+        && old.initial_balance_length() == new.initial_balance_length()
         && old.value_area_pct.to_bits() == new.value_area_pct.to_bits()
         && old.show_volume_profile == new.show_volume_profile
         && old.custom_letters == new.custom_letters

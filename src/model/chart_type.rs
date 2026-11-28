@@ -1295,6 +1295,9 @@ pub struct ChartTypeParams {
     pub tpo_period_minutes: u32,
     /// TPO: minutes from the session open included in the initial balance, 60 by default.
     pub tpo_initial_balance_minutes: u32,
+    /// TPO: initial balance length in periods; zero, the default and in earlier saves, counts
+    /// `tpo_initial_balance_minutes` instead.
+    pub tpo_initial_balance_periods: u32,
     /// TPO: saved by earlier releases for poor highs and lows together; when on, both are marked.
     /// The settings write `tpo_poor_high` and `tpo_poor_low` and turn it off.
     pub tpo_poor_highs_lows: bool,
@@ -1497,6 +1500,7 @@ impl Default for ChartTypeParams {
             columns_base: None,
             tpo_period_minutes: 30,
             tpo_initial_balance_minutes: 60,
+            tpo_initial_balance_periods: 0,
             tpo_poor_highs_lows: false,
             tpo_poor_high: false,
             tpo_poor_low: false,
@@ -1557,6 +1561,7 @@ impl ChartTypeParams {
             tick_size: tick_size.map_or(0.0, |tick| tick * f64::from(self.tpo_row_ticks)),
             period_minutes: self.tpo_period_minutes,
             initial_balance_minutes: self.tpo_initial_balance_minutes,
+            initial_balance_periods: self.tpo_initial_balance_periods,
             show_initial_balance: self.tpo_initial_balance,
             labels: self.tpo_labels,
             show_poc: self.tpo_poc,
@@ -2477,6 +2482,8 @@ mod tests {
             assert!(config.splits.is_empty());
             assert_eq!((config.profile_period, config.profile_periods), (period, 1));
             assert_eq!(config.initial_balance_minutes, minutes);
+            assert_eq!(config.initial_balance_periods, 0);
+            assert!(!config.auto_rows_nearest);
             assert_eq!(config.show_poor_high, enabled);
             assert_eq!(config.show_poor_low, enabled);
             assert_eq!(config.show_single_prints, single_prints);

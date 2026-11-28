@@ -387,6 +387,7 @@ fn apply_to_other_chart(
             line_break_real_price: source.line_break_real_price,
             pnf_real_price: source.pnf_real_price,
             tpo_initial_balance_minutes: source.tpo_initial_balance_minutes,
+            tpo_initial_balance_periods: source.tpo_initial_balance_periods,
             tpo_poor_highs_lows: source.tpo_poor_highs_lows,
             tpo_poor_high: source.tpo_poor_high,
             tpo_poor_low: source.tpo_poor_low,
@@ -1231,6 +1232,7 @@ mod tests {
         params.tpo_close_price = true;
         params.tpo_initial_balance = false;
         params.tpo_initial_balance_minutes = 30;
+        params.tpo_initial_balance_periods = 2;
         params.tpo_extend_poor = true;
         params.tpo_extend_poc = true;
         params.tpo_extend_vah = true;
@@ -1357,8 +1359,9 @@ mod tests {
                 params.tpo_volume_profile,
                 params.tpo_initial_balance,
                 params.tpo_initial_balance_minutes,
+                params.tpo_initial_balance_periods,
             ),
-            (false, true, false, 30),
+            (false, true, false, 30, 2),
             "the TPO display switches and initial balance minutes follow the source"
         );
         assert_eq!(

@@ -675,6 +675,13 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Length(60)),
             StudyInput::new(
+                "initial_balance_periods",
+                "Initial balance periods (0 = minutes)",
+                InputValue::Length(self.config.initial_balance_periods as usize),
+                InputKind::Length(0, 100),
+            )
+            .with_default(InputValue::Length(0)),
+            StudyInput::new(
                 "initial_balance_extensions",
                 "Initial balance extensions",
                 InputValue::Toggle(self.config.show_initial_balance_extensions),
@@ -970,6 +977,9 @@ impl Indicator for TimePriceOpportunity {
             ("block_color", InputValue::Color(color)) => self.config.solid_color = color,
             ("outside_value_area_opacity", InputValue::Length(percent @ 0..=100)) => {
                 self.config.outside_value_area_opacity = percent as f32 / 100.0
+            }
+            ("initial_balance_periods", InputValue::Length(n @ 0..=100)) => {
+                self.config.initial_balance_periods = n as u32
             }
             ("initial_balance_minutes", InputValue::Length(minutes @ 1..=1440)) => {
                 self.config.initial_balance_minutes = minutes as u32
