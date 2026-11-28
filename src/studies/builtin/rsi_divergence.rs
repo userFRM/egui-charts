@@ -6,11 +6,11 @@
 //!
 //! # Rule
 //!
-//! The RSI is Wilder's RSI of the close ([`RSI`](super::RSI)). Its pivot lows and highs are found
-//! with `left` and `right` bars on each side as in
+//! The RSI is Wilder's RSI of the chosen source, Close by default ([`RSI`](super::RSI)). Its pivots
+//! use `left` and `right` bars on each side as in
 //! [`PivotPointsHighLow`](super::PivotPointsHighLow), so a pivot is known `right` bars later.
-//! Each pivot low is compared with the previous pivot low `q` when `min_range <= p - q - 1 <=
-//! max_range` bars lie between them:
+//! Pivots compare the bars' highs and lows whatever the source. Each pivot low is compared with
+//! the previous pivot low `q` when `min_range <= p - q - 1 <= max_range` bars lie between them:
 //!
 //! ```text
 //! Regular bullish: RSI[p] > RSI[q] and low[p] < low[q]
@@ -142,11 +142,11 @@ pub(super) struct Pivots {
 /// A divergence found on bar `confirming`: its segment over `sources`, from one pivot's RSI to
 /// the other's, and its mark on the last of them.
 pub(super) struct Segment {
-    lines: (usize, usize),
+    pub(super) lines: (usize, usize),
     sources: Vec<usize>,
     from: f64,
     to: f64,
-    confirming: usize,
+    pub(super) confirming: usize,
 }
 
 impl Pivots {
@@ -370,6 +370,25 @@ impl Default for RsiDivergence {
 }
 
 impl Indicator for RsiDivergence {
+    fn source(&self) -> Option<crate::studies::StudySource> {
+        Some(crate::studies::StudySource::Price(
+            crate::model::PriceSource::Close,
+        ))
+    }
+
+    /// Replace the close alone so divergence comparisons keep the original highs and lows.
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        let bars: Vec<_> = data
+            .iter()
+            .enumerate()
+            .map(|(at, bar)| Bar {
+                close: source.get(at).copied().unwrap_or(f64::NAN),
+                ..bar.clone()
+            })
+            .collect();
+        self.update(&bars, from);
+    }
+
     fn level_style(&self, _value: f64) -> crate::model::LineStyle {
         crate::model::LineStyle::Dotted
     }
@@ -560,6 +579,77 @@ mod tests {
     use super::*;
     use crate::studies::StudyTemplate;
 
+    /// Selecting a source changes only the RSI prices; divergence comparisons keep the wicks.
+    #[test]
+    fn the_source_replaces_the_close_and_pivots_keep_the_wicks() {
+        use crate::model::PriceSource;
+        use crate::studies::{ConfiguredStudy, InputValue, StudySource};
+        let bars: Vec<_> = (0..240)
+            .map(|i| {
+                let p = 100.0 + (i as f64 * 0.2).sin() * (5.0 + i as f64 * 0.05);
+                Bar::new(
+                    chrono::DateTime::from_timestamp(i * 60, 0).unwrap(),
+                    p - 0.4,
+                    p + 1.0 + (i / 30 % 2) as f64 * 8.0,
+                    p - 2.0 - (i / 30 % 3) as f64 * 8.0,
+                    p,
+                    1000.0,
+                )
+            })
+            .collect();
+        let mut raw = RsiDivergence::default();
+        raw.calculate(&bars);
+        assert!(
+            (0..bars.len())
+                .any(|bar| raw.plot_text(5, bar).is_some() || raw.plot_text(7, bar).is_some())
+        );
+        let mut configured = ConfiguredStudy::new(Box::new(RsiDivergence::default()));
+        let input = configured
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "source")
+            .unwrap();
+        let close = InputValue::Source(StudySource::Price(PriceSource::Close));
+        assert_eq!(input.value, close);
+        assert_eq!(input.default, close);
+        configured.calculate(&bars);
+        assert_eq!(
+            format!("{:?}", configured.values()),
+            format!("{:?}", raw.values())
+        );
+        configured
+            .set_input(
+                "source",
+                InputValue::Source(StudySource::Price(PriceSource::Open)),
+            )
+            .unwrap();
+        configured.calculate(&bars);
+        let sourced: Vec<_> = bars
+            .iter()
+            .map(|bar| Bar {
+                close: bar.open,
+                ..bar.clone()
+            })
+            .collect();
+        raw.calculate(&sourced);
+        assert_eq!(
+            format!("{:?}", configured.values()),
+            format!("{:?}", raw.values())
+        );
+        // The varying wicks make replacing every price with the source observably wrong.
+        let expected = format!("{:?}", raw.values());
+        let flattened: Vec<_> = sourced
+            .iter()
+            .map(|bar| Bar {
+                high: bar.close,
+                low: bar.close,
+                ..bar.clone()
+            })
+            .collect();
+        raw.calculate(&flattened);
+        assert_ne!(format!("{:?}", raw.values()), expected);
+    }
+
     /// A colour list names each of the nine plots in turn, so a saved study restores as it was
     /// saved, and recolouring the RSI line, or Hidden Bullish through its own colour, leaves every
     /// other plot the colour it had and never reads the level fill as a plot colour.
@@ -577,6 +667,16 @@ mod tests {
         let plots = |study: &dyn Indicator| -> Vec<Color32> {
             (0..9).map(|line| study.plot_style(line).color).collect()
         };
+        assert_eq!(
+            restored()
+                .inputs()
+                .iter()
+                .find(|input| input.id == "source")
+                .map(|input| &input.value),
+            Some(&crate::studies::InputValue::Source(
+                crate::studies::StudySource::Price(crate::model::PriceSource::Close)
+            ))
+        );
         let (green, red) = (palette::GREEN, palette::RED);
         let saved_plots = [
             palette::BLUE,

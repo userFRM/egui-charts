@@ -26,6 +26,8 @@
 //! defaults are 15 gaps, a deviation of 30%, partial closing off and a trail length of 300
 //! bars, off.
 //!
+//! While bars are loaded and no gap meets the settings, the study shows a notice in its pane.
+//!
 //! # Example
 //!
 //! ```rust
@@ -51,7 +53,9 @@ use super::clamp_param;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues, StudyZone};
+use crate::studies::{
+    Indicator, IndicatorValue, IndicatorValues, StudyCell, StudyTable, StudyZone,
+};
 use egui::Color32;
 
 /// Most gaps a chart shows.
@@ -74,6 +78,7 @@ pub struct Gaps {
     before_last_closed: usize,
     expired: Vec<(usize, (usize, StudyZone))>,
     zones: Vec<StudyZone>,
+    notice: Option<StudyTable>,
     up_color: Color32,
     down_color: Color32,
     visible: bool,
@@ -131,6 +136,7 @@ impl Gaps {
             before_last_closed: 0,
             expired: Vec::new(),
             zones: Vec::new(),
+            notice: None,
             up_color: palette::GREEN,
             down_color: palette::RED,
             visible: true,
@@ -309,6 +315,21 @@ impl Indicator for Gaps {
             self.zones
                 .extend(state.open.iter().map(|gap| gap.zone(last).1));
         }
+        let wanted = self.zones.is_empty() && state.usable > 0;
+        if wanted != self.notice.is_some() {
+            self.notice = wanted.then(|| StudyTable {
+                title: "Gaps".to_owned(),
+                columns: vec!["Settings".to_owned()],
+                rows: vec![vec![StudyCell::Text(
+                    "No gaps found that match these settings".into(),
+                )]],
+                ..StudyTable::default()
+            });
+        }
+    }
+
+    fn table(&self) -> Option<&StudyTable> {
+        self.notice.as_ref()
     }
 
     fn is_incremental(&self) -> bool {
@@ -370,6 +391,57 @@ impl Indicator for Gaps {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+
+    /// A half-point gap is below 30% of range 2, but meets 25% exactly.
+    #[test]
+    fn a_notice_shows_while_no_gap_meets_the_settings() {
+        use crate::studies::{InputValue, StudyCell};
+        let bars: Vec<_> = [100.0; 14]
+            .into_iter()
+            .chain([102.5])
+            .enumerate()
+            .map(|(i, p)| {
+                Bar::new(
+                    Utc.timestamp_opt(i as i64 * 60, 0).unwrap(),
+                    p,
+                    p + 1.0,
+                    p - 1.0,
+                    p,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut gaps = Gaps::default();
+        gaps.calculate(&bars);
+        assert!(gaps.zones().is_empty());
+        assert_eq!(
+            gaps.table().unwrap().rows,
+            [vec![StudyCell::Text(
+                "No gaps found that match these settings".into()
+            )]]
+        );
+        gaps.set_input("deviation", InputValue::Number(25.0))
+            .unwrap();
+        gaps.calculate(&bars);
+        assert_eq!(gaps.table(), None);
+        assert_eq!(
+            gaps.zones(),
+            [StudyZone {
+                bars: 13..15,
+                top: 101.5,
+                bottom: 101.0,
+                plot: 0
+            }]
+        );
+        gaps.calculate(&[]);
+        assert_eq!(gaps.table(), None);
+        let mut invalid = bars;
+        for bar in &mut invalid {
+            bar.high = f64::NAN;
+        }
+        gaps.calculate(&invalid);
+        assert_eq!(gaps.table(), None);
+    }
 
     /// Gaps keep no per-bar column, so their memory follows the gaps shown, not the bars.
     #[test]
