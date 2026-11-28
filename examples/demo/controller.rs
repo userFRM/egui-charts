@@ -6682,15 +6682,17 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         app.chart.set_feed_paused(true);
-        let click = |app: &mut DemoApp, node: &egui::accesskit::Node| {
-            let b = node.bounds().unwrap();
-            ui_click(
+        let click = |app: &mut DemoApp, label: &str| {
+            let nodes = draw(&ctx, app, vec![]);
+            draw(
                 &ctx,
-                egui::vec2(1440.0, 900.0),
-                egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32),
-                |ui| {
-                    app.show_dialogs(ui.ctx());
-                },
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: control(&nodes, label).0,
+                    data: None,
+                })],
             );
         };
         let factory = IndicatorFactory::new();
@@ -6701,8 +6703,7 @@ mod tests {
         for _ in 0..3 {
             draw(&ctx, &mut app, vec![]);
         }
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Style").1);
+        click(&mut app, "Style");
         let nodes = draw(&ctx, &mut app, vec![]);
         let mut pickers: Vec<_> = nodes
             .iter()
@@ -6716,8 +6717,50 @@ mod tests {
         });
         assert_eq!(pickers.len(), 3);
         assert_eq!(pickers[2].1.value(), Some("Dashes"));
-        click(&mut app, &control(&nodes, "Apply").1);
+        click(&mut app, "Apply");
         assert!(!app.indicator_settings.is_open());
+        app.open_indicator_settings(up_down);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        click(&mut app, "Use custom timeframe");
+        click(&mut app, "Apply");
+        let study = app.chart.indicator_mut(up_down).unwrap();
+        for (id, want) in [
+            (
+                "lower_interval",
+                InputValue::Timeframe(Some(Timeframe::Min1)),
+            ),
+            ("custom_interval", InputValue::Toggle(true)),
+        ] {
+            assert_eq!(
+                study.inputs().iter().find(|i| i.id == id).map(|i| &i.value),
+                Some(&want),
+                "{id}"
+            );
+        }
+        let delta = app
+            .chart
+            .add_indicator(factory.create("Volume Delta").unwrap());
+        app.open_indicator_settings(delta);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        click(&mut app, "Data aggregation");
+        click(&mut app, "Ticks");
+        click(&mut app, "Apply");
+        assert!(!app.indicator_settings.is_open());
+        let study = app.chart.indicator_mut(delta).unwrap();
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .find(|i| i.id == "aggregation")
+                .unwrap()
+                .value,
+            InputValue::Choice(1)
+        );
+        assert_eq!(study.order_flow_inputs().len(), 1);
         let cvd = app
             .chart
             .add_indicator(factory.create("Cumulative Volume Delta").unwrap());
@@ -6735,10 +6778,10 @@ mod tests {
                 .iter()
                 .any(|(_, n)| n.label() == Some("Lower interval"))
         );
-        click(&mut app, &control(&nodes, "Use custom timeframe").1);
+        click(&mut app, "Use custom timeframe");
         let nodes = draw(&ctx, &mut app, vec![]);
         control(&nodes, "Lower interval");
-        click(&mut app, &control(&nodes, "Anchor period").1);
+        click(&mut app, "Anchor period");
         let nodes = draw(&ctx, &mut app, vec![]);
         draw(
             &ctx,
@@ -6751,15 +6794,12 @@ mod tests {
             })],
         );
         draw(&ctx, &mut app, vec![]);
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Interval").1);
+        click(&mut app, "Interval");
         let nodes = draw(&ctx, &mut app, vec![]);
         control(&nodes, "Anchor interval (minutes)");
-        click(&mut app, &control(&nodes, "Data aggregation").1);
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Ticks").1);
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Apply").1);
+        click(&mut app, "Data aggregation");
+        click(&mut app, "Ticks");
+        click(&mut app, "Apply");
         assert!(!app.indicator_settings.is_open());
         let study = app.chart.indicator_mut(cvd).unwrap();
         for (id, want) in [
@@ -6774,6 +6814,82 @@ mod tests {
             );
         }
         assert_eq!(study.order_flow_inputs().len(), 1);
+    }
+
+    /// An earnings anchor chosen through the dialog starts only when a supplied event is reached.
+    #[test]
+    fn vwap_auto_anchored_starts_at_earnings_in_the_demo() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        use egui_charts::model::{EventKind, TimeScaleEvent};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        settle(&mut app, &ctx);
+        let click = |app: &mut DemoApp, node: &egui::accesskit::Node| {
+            let b = node.bounds().unwrap();
+            ui_click(
+                &ctx,
+                egui::vec2(1440.0, 900.0),
+                egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32),
+                |ui| {
+                    app.show_dialogs(ui.ctx());
+                },
+            );
+        };
+        let id = app.chart.add_indicator(
+            IndicatorFactory::new()
+                .create("VWAP Auto Anchored")
+                .unwrap(),
+        );
+        app.open_indicator_settings(id);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Anchor Period").1);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        draw(
+            &ctx,
+            &mut app,
+            vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                action: Action::ScrollIntoView,
+                target_tree: TreeId::ROOT,
+                target_node: control(&nodes, "Earnings").0,
+                data: None,
+            })],
+        );
+        draw(&ctx, &mut app, vec![]);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Earnings").1);
+        let nodes = draw(&ctx, &mut app, vec![]);
+        click(&mut app, &control(&nodes, "Apply").1);
+        assert!(!app.indicator_settings.is_open());
+        assert_eq!(
+            app.chart
+                .indicator_mut(id)
+                .unwrap()
+                .inputs()
+                .iter()
+                .find(|input| input.id == "anchor")
+                .unwrap()
+                .value,
+            InputValue::Choice(11)
+        );
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let anchor = bars.len() - 30;
+        let time = bars[anchor].time;
+        app.chart.set_time_scale_events(vec![TimeScaleEvent::new(
+            "e",
+            time,
+            EventKind::Earnings,
+            "",
+        )]);
+        settle(&mut app, &ctx);
+        let study = app.chart.indicator_mut(id).unwrap();
+        assert_eq!(study.values().value(0, anchor - 1), None);
+        assert!(study.values().value(0, anchor).is_some());
     }
 
     /// The Style tab offers a plot the character its study declares, also for a plot saved as
