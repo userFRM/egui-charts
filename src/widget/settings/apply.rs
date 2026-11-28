@@ -1972,6 +1972,7 @@ mod tests {
         let before = chart.chart_type_params().clone();
         let mut edited = before.clone();
         edited.tpo_blocks = false;
+        edited.tpo_letters = false;
         edited.tpo_profile_period = TPOProfilePeriod::Week;
         edited.tpo_profile_periods = 3;
         edited.tpo_volume_profile = true;
@@ -2007,6 +2008,14 @@ mod tests {
             .restore(&serde_json::from_str(&saved).unwrap())
             .unwrap();
         assert_eq!(restored.chart_type_params(), &edited);
+        // Display choices saved before Hidden retain their indices and their appearance.
+        let legacy: crate::studies::StudyTemplate = serde_json::from_str(r#"{"name":"Time Price Opportunity","inputs":[["period",{"Length":30}],["row_ticks",{"Length":0}],["value_area",{"Number":70.0}],["split_sessions",{"Toggle":false}],["single_prints",{"Toggle":false}],["midpoint",{"Toggle":false}],["statistics",{"Toggle":false}],["display",{"Choice":0}],["sessions",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TimePriceOpportunity.html","plots":[],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[16,16,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
+        let restored = legacy.create().unwrap();
+        assert_eq!(restored.settings(), legacy.settings);
+        assert_eq!(
+            restored.tpo().unwrap().display_mode,
+            crate::model::TPODisplayMode::Letters
+        );
     }
 
     /// A Heikin-Ashi layout without the chart type's style, or without any chart type styles,

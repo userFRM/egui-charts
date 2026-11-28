@@ -667,6 +667,22 @@ pub fn render_live_tpo(
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
+    // Bars longer than a period cannot be divided into it; name the interval it needs.
+    if !base_config.fits_periods(clock.timeframe()) {
+        let theme = painter.ctx().active_theme();
+        painter.text(
+            price_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            l10n::format_text(
+                painter.ctx(),
+                "Use {minutes} min bars or shorter",
+                &[("minutes", base_config.period_minutes.max(1).to_string())],
+            ),
+            FontId::proportional(theme.text.title),
+            theme.ui.text,
+        );
+        return;
+    }
     let render_config = TpoRenderConfig {
         poc_color: base_config
             .poc_color
@@ -1266,7 +1282,9 @@ fn draw_session_profile(
     let row_y = |price: f64| row_center_y(coords, profile, price);
     let readable = column_width.min(measured_height) >= LETTER_MIN_COLUMN_PX;
     // `Both` paints the cells of `Blocks` and adds the letters while they stay readable.
-    let use_letters = readable && config.display_mode == TPODisplayMode::Letters;
+    let hidden = config.display_mode == TPODisplayMode::Hidden;
+    // Hidden keeps the levels of letters alone and paints no entries.
+    let use_letters = hidden || (readable && config.display_mode == TPODisplayMode::Letters);
     let letters_in_cells = readable && config.display_mode == TPODisplayMode::Both;
 
     let row_height = measured_height.min(render_config.row_height * 1.5);
@@ -1391,70 +1409,76 @@ fn draw_session_profile(
     let half_tick = profile.instrument_tick * 0.5;
     // The cells, their letters and the profile's lines go to the painter in one call, in paint order.
     let mut shapes = Vec::with_capacity(if use_letters { 4 } else { letters.len() + 4 });
-    for row in letters.chunk_by(|a, b| a.price == b.price) {
-        let price = row[0].price;
-        let y = coords.price_to_y(((price - half_tick) + (price + tick_size - half_tick)) * 0.5);
-        if y < price_rect.top() - row_height || y > price_rect.bottom() + row_height {
-            continue;
-        }
-        let is_poc = config.show_poc && (price - profile.poc_price).abs() < tick_size * 0.5;
-        let single_print = config.show_single_prints && row.len() == 1;
-        let dimmed = !is_poc && dims_outside_value_area && !profile.is_in_value_area(price);
-        let row_tone = if is_poc {
-            Some(poc_color)
-        } else if by_period {
-            None
-        } else {
-            let color = tone(0, price);
-            Some(if dimmed { dim(color) } else { color })
-        };
-        let period_tones = if dimmed { &dimmed_tones } else { &tones };
-        // Rounded once for the row; only the horizontal edges differ between its cells.
-        let top = (y - block_height * 0.5).round_to_pixels(pixels_per_point);
-        let bottom = (y + block_height * 0.5).round_to_pixels(pixels_per_point);
-
-        for (col, letter) in row.iter().enumerate() {
-            let col = starts
-                .as_ref()
-                .map_or(col, |starts| starts.partition_point(|ts| *ts < letter.ts));
-            let x = anchor_x + col as f32 * column_width + column_width * 0.5;
-
-            let color = row_tone.unwrap_or_else(|| period_tones[letter.period_idx]);
-
-            if use_letters {
-                painter.text(
-                    Pos2::new(x, y),
-                    egui::Align2::CENTER_CENTER,
-                    letter.letter.to_string(),
-                    FontId::monospace(render_config.letter_font_size),
-                    color,
-                );
+    if !hidden {
+        for row in letters.chunk_by(|a, b| a.price == b.price) {
+            let price = row[0].price;
+            let y =
+                coords.price_to_y(((price - half_tick) + (price + tick_size - half_tick)) * 0.5);
+            if y < price_rect.top() - row_height || y > price_rect.bottom() + row_height {
+                continue;
+            }
+            let is_poc = config.show_poc && (price - profile.poc_price).abs() < tick_size * 0.5;
+            let single_print = config.show_single_prints && row.len() == 1;
+            let dimmed = !is_poc && dims_outside_value_area && !profile.is_in_value_area(price);
+            let row_tone = if is_poc {
+                Some(poc_color)
+            } else if by_period {
+                None
             } else {
-                let (left, right) = column_edges.get(col).copied().unwrap_or_else(|| edges(col));
-                let cell = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
-                // An opaque cell hides the highlight behind it, so a single print takes the colour
-                // itself: a tint barely shows on a cell dimmed toward a light background. The POC
-                // row keeps its colour, as every row of a one-period profile is a single print.
-                let color = if single_print && !is_poc {
-                    render_config.single_print_color.to_opaque()
+                let color = tone(0, price);
+                Some(if dimmed { dim(color) } else { color })
+            };
+            let period_tones = if dimmed { &dimmed_tones } else { &tones };
+            // Rounded once for the row; only the horizontal edges differ between its cells.
+            let top = (y - block_height * 0.5).round_to_pixels(pixels_per_point);
+            let bottom = (y + block_height * 0.5).round_to_pixels(pixels_per_point);
+
+            for (col, letter) in row.iter().enumerate() {
+                let col = starts
+                    .as_ref()
+                    .map_or(col, |starts| starts.partition_point(|ts| *ts < letter.ts));
+                let x = anchor_x + col as f32 * column_width + column_width * 0.5;
+
+                let color = row_tone.unwrap_or_else(|| period_tones[letter.period_idx]);
+
+                if use_letters {
+                    painter.text(
+                        Pos2::new(x, y),
+                        egui::Align2::CENTER_CENTER,
+                        letter.letter.to_string(),
+                        FontId::monospace(render_config.letter_font_size),
+                        color,
+                    );
                 } else {
-                    color
-                };
-                shapes.push(Shape::rect_filled(cell, 0.0, color));
-                if letters_in_cells {
-                    let letter_tone = config
-                        .letter_color
-                        .unwrap_or_else(|| cell_letter_color(color, &chart));
-                    let mut format =
-                        TextFormat::simple(FontId::proportional(cell_font_size), letter_tone);
-                    format.coords.push("wght", 700.0);
-                    let galley = painter
-                        .layout_job(LayoutJob::single_section(letter.letter.to_string(), format));
-                    let origin = egui::Align2::CENTER_CENTER
-                        .anchor_size(cell.center(), galley.size())
-                        .min;
-                    if !galley.is_empty() {
-                        shapes.push(Shape::galley(origin, galley, letter_tone));
+                    let (left, right) =
+                        column_edges.get(col).copied().unwrap_or_else(|| edges(col));
+                    let cell = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
+                    // An opaque cell hides the highlight behind it, so a single print takes the colour
+                    // itself: a tint barely shows on a cell dimmed toward a light background. The POC
+                    // row keeps its colour, as every row of a one-period profile is a single print.
+                    let color = if single_print && !is_poc {
+                        render_config.single_print_color.to_opaque()
+                    } else {
+                        color
+                    };
+                    shapes.push(Shape::rect_filled(cell, 0.0, color));
+                    if letters_in_cells {
+                        let letter_tone = config
+                            .letter_color
+                            .unwrap_or_else(|| cell_letter_color(color, &chart));
+                        let mut format =
+                            TextFormat::simple(FontId::proportional(cell_font_size), letter_tone);
+                        format.coords.push("wght", 700.0);
+                        let galley = painter.layout_job(LayoutJob::single_section(
+                            letter.letter.to_string(),
+                            format,
+                        ));
+                        let origin = egui::Align2::CENTER_CENTER
+                            .anchor_size(cell.center(), galley.size())
+                            .min;
+                        if !galley.is_empty() {
+                            shapes.push(Shape::galley(origin, galley, letter_tone));
+                        }
                     }
                 }
             }
@@ -3692,14 +3716,14 @@ mod tests {
                 TPOColorMode::ByInitialBalance,
             ] {
                 // The chart type's Letters and Blocks switches, the column width, and whether
-                // letters are painted alone or in cells; the rest paint blocks.
-                for (tpo_letters, tpo_blocks, column, letters, in_cells) in [
-                    (true, false, 12.0, true, false),
-                    (true, false, 3.5, false, false),
-                    (false, true, 12.0, false, false),
-                    (false, false, 12.0, false, false),
-                    (true, true, 12.0, false, true),
-                    (true, true, 3.5, false, false),
+                // letters are painted alone, in cells or hidden; the rest paint blocks.
+                for (tpo_letters, tpo_blocks, column, letters, per_cell) in [
+                    (true, false, 12.0, true, 1),
+                    (true, false, 3.5, false, 1),
+                    (false, true, 12.0, false, 1),
+                    (false, false, 12.0, false, 0),
+                    (true, true, 12.0, false, 2),
+                    (true, true, 3.5, false, 1),
                 ] {
                     let display_mode = crate::model::ChartTypeParams {
                         tpo_letters,
@@ -3708,6 +3732,21 @@ mod tests {
                     }
                     .tpo_config(None)
                     .display_mode;
+                    #[cfg(feature = "studies")]
+                    {
+                        use crate::studies::{Indicator, InputValue, TimePriceOpportunity};
+                        let mut study = TimePriceOpportunity::default();
+                        let choice = match (tpo_letters, tpo_blocks) {
+                            (true, false) => 0,
+                            (false, true) => 1,
+                            (true, true) => 2,
+                            (false, false) => 3,
+                        };
+                        study
+                            .set_input("display", InputValue::Choice(choice))
+                            .unwrap();
+                        assert_eq!(study.tpo().unwrap().display_mode, display_mode);
+                    }
                     for (show_poc, show_value_area) in [(false, false), (false, true), (true, true)]
                     {
                         for density in [1.0, 1.5] {
@@ -3743,14 +3782,25 @@ mod tests {
                                 .iter()
                                 .filter(|s| matches!(s.shape, Shape::Rect(_) | Shape::Text(_)))
                                 .collect();
-                            let shapes_per_cell = if in_cells { 2 } else { 1 };
                             assert_eq!(
                                 painted.len(),
-                                cells.len() * shapes_per_cell,
+                                cells.len() * per_cell,
                                 "letters {tpo_letters}, blocks {tpo_blocks}, column {column}"
                             );
+                            if per_cell == 0 {
+                                let lines = output
+                                    .shapes
+                                    .iter()
+                                    .filter(|s| matches!(s.shape, Shape::LineSegment { .. }))
+                                    .count();
+                                // Nine dashes on each value area edge and one POC underline.
+                                assert_eq!(
+                                    lines,
+                                    usize::from(show_value_area) * 18 + usize::from(show_poc)
+                                );
+                            }
                             for (shapes, (price, period, col)) in
-                                painted.chunks(shapes_per_cell).zip(cells)
+                                painted.chunks(per_cell.max(1)).zip(cells)
                             {
                                 let shape = shapes[0];
                                 let mut color = if letters {
@@ -3795,7 +3845,7 @@ mod tests {
                                         )
                                         .round_to_pixels(density);
                                         assert_eq!(block.rect, expected);
-                                        if in_cells {
+                                        if per_cell == 2 {
                                             let Shape::Text(text) = &shapes[1].shape else {
                                                 panic!("no letter: {:?}", shapes[1].shape);
                                             };
