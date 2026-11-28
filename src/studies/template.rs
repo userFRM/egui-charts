@@ -285,6 +285,22 @@ impl StudyTemplate {
         let study_name = own
             .as_ref()
             .map_or(self.name.as_str(), |study| study.name());
+        if study_name == "Relative Volume at Time"
+            && own_inputs.iter().any(|input| {
+                input.id == "anchor" && matches!(input.kind, crate::studies::InputKind::Timeframe)
+            })
+            && self
+                .inputs
+                .iter()
+                .filter(|(id, _)| id == "anchor")
+                .nth(1)
+                .is_some()
+        {
+            return Err(crate::studies::StudyError::InvalidInput {
+                id: "anchor".to_owned(),
+                reason: "is saved more than once".to_owned(),
+            });
+        }
         let builtin_source = self.metric.is_none() && !factory.is_host(&self.name);
         let upgraded = if self.metric.is_none() {
             self.upgraded(study_name, &own_inputs, builtin_source)
@@ -3113,15 +3129,39 @@ mod tests {
             Some(&InputValue::Timeframe(Some(Timeframe::Day1)))
         );
 
-        for choice in [3, usize::MAX] {
-            let mut invalid = saved.clone();
-            invalid
-                .inputs
-                .push(("anchor".to_owned(), InputValue::Choice(choice)));
-            assert!(
-                invalid.create().is_err(),
-                "invalid duplicate anchor {choice}"
-            );
+        for anchors in [
+            [InputValue::Choice(0), InputValue::Choice(0)],
+            [InputValue::Choice(0), InputValue::Choice(1)],
+            [InputValue::Choice(0), InputValue::Choice(3)],
+            [InputValue::Choice(0), InputValue::Choice(usize::MAX)],
+            [
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+            ],
+            [
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+                InputValue::Timeframe(Some(Timeframe::Week1)),
+            ],
+            [
+                InputValue::Timeframe(None),
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+            ],
+            [
+                InputValue::Choice(0),
+                InputValue::Timeframe(Some(Timeframe::Day1)),
+            ],
+        ] {
+            for pair in [anchors.clone(), [anchors[1].clone(), anchors[0].clone()]] {
+                let mut invalid = saved.clone();
+                invalid.inputs.retain(|(id, _)| id != "anchor");
+                invalid
+                    .inputs
+                    .extend(pair.clone().map(|value| ("anchor".to_owned(), value)));
+                assert!(
+                    matches!(invalid.create(), Err(crate::studies::StudyError::InvalidInput { id, .. }) if id == "anchor"),
+                    "duplicate anchors {pair:?}"
+                );
+            }
         }
 
         // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
