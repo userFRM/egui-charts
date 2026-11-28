@@ -523,7 +523,13 @@ pub struct DemoApp {
     replay_scope: ReplayScope,
     replay_session: Option<(ReplaySession, Timeframe)>,
     replay_session_cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether the saved replay session followed the chart with Automatic updates.
+    replay_session_automatic: bool,
+    /// The market recording the saved replay session played, when it ran on one.
+    replay_session_recording: Option<Arc<replay::ReplayRecording>>,
     replay_slots: Vec<usize>,
+    /// The recording the market replay plays while one runs.
+    replay_recording: Option<Arc<replay::ReplayRecording>>,
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
     replay_toolbar: bool,
@@ -981,7 +987,17 @@ impl DemoApp {
                 .storage
                 .and_then(|storage| eframe::get_value(storage, "replay_session_cutoff"))
                 .flatten(),
+            replay_session_automatic: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "replay_session_automatic"))
+                .unwrap_or(false),
+            replay_session_recording: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "replay_session_recording"))
+                .and_then(replay::ReplayRecording::from_saved)
+                .map(Arc::new),
             replay_slots: Vec::new(),
+            replay_recording: None,
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
             replay_toolbar: false,
@@ -2009,6 +2025,7 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.remove_string("replay_session_recording");
         eframe::set_value(
             storage,
             "theme_choice",
@@ -2059,6 +2076,11 @@ impl eframe::App for DemoApp {
             "replay_session_cutoff",
             &self.replay_session_cutoff,
         );
+        eframe::set_value(
+            storage,
+            "replay_session_automatic",
+            &self.replay_session_automatic,
+        );
         self.checkpoint_workspace();
         self.storage.persist(storage);
         eframe::set_value(
@@ -2079,6 +2101,14 @@ impl eframe::App for DemoApp {
             "chart_type_preferences",
             &self.top_toolbar.chart_type_selector.preferences(),
         );
+        // Written last, after its old copy went first, to leave room for other web settings.
+        if let Some(saved) = self
+            .replay_session_recording
+            .as_ref()
+            .and_then(|recording| recording.saved())
+        {
+            eframe::set_value(storage, "replay_session_recording", saved);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -4834,10 +4864,8 @@ impl DemoApp {
             return;
         }
         self.replay_control.set_selecting(self.replay_selecting);
-        self.replay_control.set_scope(
-            (self.layout.mode.chart_count() > 1 && !self.recording_files.opened)
-                .then_some(self.replay_scope),
-        );
+        self.replay_control
+            .set_scope((self.layout.mode.chart_count() > 1).then_some(self.replay_scope));
         self.replay_control
             .set_can_resume(self.replay.is_none() && self.replay_session.is_some());
         match self.replay.as_ref() {
@@ -11925,28 +11953,105 @@ mod tests {
 
         // With the replay bar shown its keys step and play, and the chart keeps its own: the jump
         // keys, which hold Alt beside the replay's Shift and arrow, and the list keys below.
+        app.switch_timeframe(Timeframe::Min1);
+        settle(&mut app, &ctx);
+        let bars = (0..40)
+            .map(|i| {
+                let time = chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap();
+                Bar::new(time, 100.0, 101.0, 99.0, 100.5, 1_000.0)
+            })
+            .collect();
+        app.chart.set_data(SeriesId::MAIN, bars);
         app.start_replay();
-        app.handle_replay_control(ReplayControlAction::Pause);
+        app.replay
+            .as_mut()
+            .unwrap()
+            .handle_action(ReplayAction::JumpToBar(5));
+        app.push_replay_window_to_chart();
         settle(&mut app, &ctx);
         let jump = Modifiers::ALT | Modifiers::SHIFT;
-        // The cursor's move, unchecked while the replay plays, and whether it plays afterwards.
-        for (key, modifiers, moved, playing) in [
-            (Key::ArrowRight, Modifiers::NONE, Some(1), false),
-            (Key::ArrowLeft, Modifiers::NONE, Some(-1), false),
-            (Key::ArrowDown, Modifiers::SHIFT, None, true),
-            (Key::ArrowDown, Modifiers::SHIFT, None, false),
-            (Key::ArrowRight, jump, Some(0), false),
-            (Key::ArrowLeft, jump, Some(0), false),
-            (Key::ArrowRight, Modifiers::SHIFT, Some(1), false),
+        // Setup action, key, modifiers, cursor and revealed bars (unchecked during playback), play.
+        for (before, key, modifiers, position, playing) in [
+            (
+                ReplayAction::Play,
+                Key::ArrowRight,
+                Modifiers::SHIFT,
+                Some((6, 7)),
+                false,
+            ),
+            (
+                ReplayAction::Play,
+                Key::ArrowLeft,
+                Modifiers::SHIFT,
+                Some((5, 6)),
+                false,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowRight,
+                Modifiers::NONE,
+                Some((6, 7)),
+                false,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowLeft,
+                Modifiers::NONE,
+                Some((5, 6)),
+                false,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowDown,
+                Modifiers::SHIFT,
+                None,
+                true,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowDown,
+                Modifiers::SHIFT,
+                None,
+                false,
+            ),
+            (
+                ReplayAction::JumpToBar(5),
+                Key::ArrowRight,
+                jump,
+                Some((5, 6)),
+                false,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowLeft,
+                jump,
+                Some((5, 6)),
+                false,
+            ),
+            (
+                ReplayAction::JumpToStart,
+                Key::ArrowLeft,
+                Modifiers::SHIFT,
+                Some((0, 1)),
+                false,
+            ),
+            (
+                ReplayAction::JumpToEnd,
+                Key::ArrowRight,
+                Modifiers::SHIFT,
+                Some((39, 40)),
+                false,
+            ),
         ] {
-            let before = app.replay.as_ref().unwrap().state.curr_bar;
+            app.replay.as_mut().unwrap().handle_action(before);
+            app.push_replay_window_to_chart();
             press(&mut app, key, modifiers);
             assert_eq!(app.chart.symbol(), "STOCKA");
             let replay = app.replay.as_ref().unwrap();
-            if let Some(moved) = moved {
+            if let Some(position) = position {
                 assert_eq!(
-                    replay.state.curr_bar as isize - before as isize,
-                    moved,
+                    (replay.state.curr_bar, app.chart.bars(SeriesId::MAIN).len()),
+                    position,
                     "{key:?} / {modifiers:?}"
                 );
             }
