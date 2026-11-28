@@ -300,7 +300,14 @@ impl DemoApp {
             return;
         }
         self.range_fit = None;
-        self.stop_replay();
+        // An all charts replay covers the chart activated too, which takes over at its cursor.
+        let keep = self.replay.is_some()
+            && !self.recording_files.opened
+            && self.replay_slots.contains(&slot)
+            && self.replay_slots.contains(&self.layout_slot);
+        if !keep {
+            self.stop_replay();
+        }
         // `chart` always holds the active slot so every existing toolbar and dialog acts on it.
         let other = if slot < self.layout_slot {
             slot
@@ -308,6 +315,11 @@ impl DemoApp {
             slot - 1
         };
         if let Some(target) = self.extra_charts.get_mut(other) {
+            let cutoff = self.chart.replay_time().filter(|_| keep);
+            if keep {
+                // The chart leaving the active slot replays on as the other charts do.
+                self.live.set_paused(self.live_was_paused);
+            }
             std::mem::swap(&mut self.chart, &mut target.chart);
             std::mem::swap(&mut self.live, &mut target.live);
             std::mem::swap(&mut self.comparisons, &mut target.comparisons);
@@ -324,6 +336,9 @@ impl DemoApp {
             self.layout.set_active(slot);
             self.chart.set_storage(self.storage.clone());
             self.refresh_active_chart();
+            if keep {
+                self.take_over_replay(cutoff);
+            }
         }
     }
 
@@ -874,6 +889,8 @@ impl DemoApp {
         // The fixed table names its chart by slot, which now holds the layout's chart.
         self.fixed_data_table.0.close();
         self.layout_tabs[self.layout_tab].name = name;
+        // A layout replaces the charts a replay names by slot.
+        self.stop_replay();
         if self.layout_slot >= layout.charts.len() {
             self.activate_chart_slot(0);
         }
