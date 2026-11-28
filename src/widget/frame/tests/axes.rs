@@ -1493,7 +1493,7 @@ fn heikin_last_visible_price_line_without_main_bars() {
 /// Study value tags read their plot at the last bar in view, in the price pane, in a study pane
 /// and on the volume overlay, and read the newest values again at the latest bars. Bar `i` has
 /// its low at 100 + i, closes 10 above it except on every third bar and trades i + 1 lots; the
-/// SMA(3) and MACD(12, 26, 9) values are worked out by hand from those closes.
+/// SMA(3) and MACD(12, 26, 9) values use full simple means to seed their averages.
 #[cfg(feature = "studies")]
 #[test]
 fn study_value_tags_read_the_last_bar_in_view() {
@@ -1514,7 +1514,7 @@ fn study_value_tags_read_the_last_bar_in_view() {
     frame(&ctx, &mut chart, 0.0, vec![]);
     // Scrolled back 40 bars the view ends at bar 59.
     for (offset, expected) in [
-        (-40.0, ["164.67", "7.22", "60"]),
+        (-40.0, ["164.67", "7.30", "60"]),
         (0.0, ["204.67", "6.69", "100"]),
     ] {
         let scale = chart.state.time_scale_mut();

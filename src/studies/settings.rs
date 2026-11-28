@@ -3620,12 +3620,13 @@ mod tests {
                 Timeframe::Month1
             ]
         );
-        let hourly = [10., 12.]
+        let hourly = [10.; 10]
             .into_iter()
+            .chain([12.])
             .enumerate()
             .map(|(i, close)| {
                 Bar::new(
-                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(i as i64),
+                    chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::hours(i as i64 - 9),
                     close,
                     close,
                     close,
@@ -3637,7 +3638,7 @@ mod tests {
         let chart = (0..12)
             .map(|i| {
                 Bar::new(
-                    hourly[1].time + chrono::TimeDelta::minutes(i * 5),
+                    hourly[10].time + chrono::TimeDelta::minutes(i * 5),
                     12.,
                     12.,
                     12.,
@@ -3669,7 +3670,7 @@ mod tests {
                 _ => panic!("text cell"),
             })
             .collect();
-        assert_eq!(row, ["1h", "Strong Buy", "N/A", "Strong Buy", "23%"]);
+        assert_eq!(row, ["1h", "Strong Buy", "N/A", "Strong Buy", "12%"]);
         // The table rates the forming hour while the confirmed plot holds the previous hour.
         assert_eq!(study.values().value(2, chart.len() - 1), Some(0.0));
         study
@@ -3687,7 +3688,7 @@ mod tests {
         assert_eq!(study.data_start(&requests[0]), None);
         assert_eq!(
             study.data_start(&requests[1]),
-            Some(hourly[1].time - chrono::TimeDelta::hours(8000))
+            Some(hourly[10].time - chrono::TimeDelta::hours(8000))
         );
         study
             .set_input("calculation_symbol", InputValue::Symbol("X".into()))
@@ -3711,7 +3712,7 @@ mod tests {
         assert_eq!(study.data_start(&other[0]), None);
         assert_eq!(
             study.data_start(&other[1]),
-            Some(hourly[1].time - chrono::TimeDelta::hours(8000))
+            Some(hourly[10].time - chrono::TimeDelta::hours(8000))
         );
         study
             .set_input("calculation_symbol", InputValue::Symbol(String::new()))

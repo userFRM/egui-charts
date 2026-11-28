@@ -2,7 +2,7 @@
 //! reads the trend of its SAR on those bars. A crossing requires a strict inequality now and the
 //! opposite inequality or equality one bar ago.
 
-use super::{StrategyFactory, length, number, number_input, set_input, timeframe};
+use super::{StrategyFactory, number, number_input, set_input, timeframe};
 use crate::model::{Bar, OrderSide, OrderType, PriceSource, StudySource, Timeframe};
 use crate::strategies::{OrderSize, Strategy, StrategyContext};
 use crate::studies::{
@@ -305,13 +305,7 @@ impl Strategy for StudyStrategy {
         let zero = vec![0.; bars.len()];
         let values = self.studies[0].values();
         let line = |column| values.line(column);
-        // MACD reveals its seeded history only after its whole-run warm-up.
-        // Do not trade those earlier values before a prefix could have exposed them.
         let schema = self.studies[0].inputs();
-        let warmup = match self.rule {
-            Rule::Macd => length(&schema, "slow_period").max(length(&schema, "signal_period")),
-            _ => 1,
-        };
         // Whether the SAR is in an uptrend on each bar, which its one column does not tell.
         let trend = match self.rule {
             Rule::Sar => ParabolicSAR::new(
@@ -322,20 +316,9 @@ impl Strategy for StudyStrategy {
             .trends(bars),
             _ => Vec::new(),
         };
-        let mut usable = 0;
         self.signals = (0..bars.len())
             .map(|i| {
                 let bar = &bars[i];
-                let valid = match self.rule {
-                    Rule::SuperTrend => {
-                        [bar.high, bar.low, bar.close].iter().all(|v| v.is_finite())
-                    }
-                    _ => bar.close.is_finite(),
-                };
-                usable += usize::from(valid);
-                if usable < warmup {
-                    return [None, None];
-                }
                 let previous = i.checked_sub(1);
                 let value = |column| values.value(column, i);
                 let before = |column| previous.and_then(|i| values.value(column, i));
