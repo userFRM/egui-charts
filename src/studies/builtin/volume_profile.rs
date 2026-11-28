@@ -31,9 +31,9 @@
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
 use crate::data::{
-    DevelopingVolume, FootprintBar, OrderFlowFootprints, OrderFlowInput, ProfileDisplay,
-    ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
-    VolumeProfileConfig, grid_row,
+    DevelopingVolume, FootprintBar, FootprintBarView, FootprintLevel, OrderFlowFootprints,
+    OrderFlowInput, ProfileDisplay, ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile,
+    VolumeProfile, VolumeProfileConfig, grid_row,
 };
 use crate::model::{
     Bar, BarClock, CustomProfileSession, CustomProfileSessions, EventKind, Instrument,
@@ -112,6 +112,8 @@ struct ProfileStudy {
     source: Option<Timeframe>,
     /// Read the interval the instrument suggests while `source` follows the chart.
     feed_source: bool,
+    /// Count executions by candle direction instead of their aggressor side.
+    candle_sides: bool,
     adaptive: bool,
     /// The Sessions choice: 0 for the exchange trading day, 1 for regular hours, 2 for regular
     /// and extended hours, 3 for `custom`, 4 for the pre-market, 5 for the post-market and 6 for
@@ -198,6 +200,33 @@ const DETAIL: [(i64, i64); 8] = [
     (7_200_000, 900_000),
     (14_400_000, 1_800_000),
 ];
+
+/// All executions on the candle's side, including unknown aggressors and running delta.
+fn sided(bar: FootprintBarView<'_>, up: bool) -> FootprintBar {
+    let mut result = FootprintBar::empty(bar.time);
+    for level in bar.levels.values() {
+        let mut row = FootprintLevel {
+            level: level.level,
+            ..Default::default()
+        };
+        if up {
+            row.ask = level.volume();
+            row.ask_trades = level.trades();
+        } else {
+            row.bid = level.volume();
+            row.bid_trades = level.trades();
+        }
+        result.levels.insert(row.level, row);
+    }
+    if up {
+        result.ask = bar.volume();
+        result.max_delta = bar.volume();
+    } else {
+        result.bid = bar.volume();
+        result.min_delta = -bar.volume();
+    }
+    result
+}
 
 /// The kinds of level the extend inputs carry, in their order.
 const LEVELS: [ProfileLevelKind; 3] = [
@@ -376,6 +405,7 @@ impl ProfileStudy {
             clock: BarClock::new(Timeframe::Min1),
             source: None,
             feed_source: true,
+            candle_sides: false,
             adaptive: false,
             sessions: 0,
             custom: std::array::from_fn(|i| {
@@ -474,6 +504,12 @@ impl ProfileStudy {
                 "feed_source",
                 "Feed suggested interval",
                 InputValue::Toggle(self.feed_source),
+                InputKind::Toggle,
+            ),
+            StudyInput::new(
+                "candle_sides",
+                "Executions by candle direction",
+                InputValue::Toggle(self.candle_sides),
                 InputKind::Toggle,
             ),
         ];
@@ -860,6 +896,7 @@ impl ProfileStudy {
             ("display", InputValue::Choice(v)) => self.display = DISPLAYS[v],
             ("source_interval", InputValue::Timeframe(v)) => self.source = v,
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
+            ("candle_sides", InputValue::Toggle(v)) => self.candle_sides = v,
             ("adaptive_rows", InputValue::Toggle(v)) => self.adaptive = v,
             ("sessions", InputValue::Choice(v)) => self.sessions = v,
             ("hours_only", InputValue::Toggle(v)) => self.hours_only = v,
@@ -1191,23 +1228,36 @@ impl ProfileStudy {
         // Bars stamped before the first held bar hold none of the executions.
         let from = range.start + self.data[range.clone()].partition_point(|bar| bar.time < first);
         let mut opens = Vec::with_capacity(range.end - from);
-        for bar in &self.data[from..range.end] {
+        for (i, bar) in self.data.iter().enumerate().take(range.end).skip(from) {
             let open = open(bar);
-            if open != bar.time || opens.last().is_some_and(|&last| last >= open) {
+            if open != bar.time || opens.last().is_some_and(|&(last, _)| last >= open) {
                 return None;
             }
-            opens.push(open);
+            opens.push((open, i));
         }
         let mut opens = opens.into_iter().peekable();
         let mut merged = FootprintBar::empty(start);
         for bar in held {
             let time = bar.time;
-            while opens.next_if(|&open| open < time).is_some() {}
+            while opens.next_if(|&(open, _)| open < time).is_some() {}
             // Executions in a slot that no bar of the range opens belong to bars it lacks.
-            if opens.peek() != Some(&time) {
+            let Some(&(open, i)) = opens.peek() else {
+                return None;
+            };
+            if open != time {
                 return None;
             }
-            merged.absorb_grouped(bar, 1);
+            let candle = &self.data[i];
+            if self.candle_sides && candle.open.is_finite() && candle.close.is_finite() {
+                let up = if range.len() == 1 {
+                    candle.close > candle.open
+                } else {
+                    candle.close >= candle.open
+                };
+                merged.absorb_grouped((&sided(bar, up)).into(), 1);
+            } else {
+                merged.absorb_grouped(bar, 1);
+            }
         }
         let complete = flow.span_is_complete(start, end);
         Some((merged, complete))
@@ -5799,5 +5849,86 @@ mod rendering_tests {
         study.interval = Timeframe::Hour1;
         study.feed_source = false;
         assert_eq!(study.advertised_source(), None);
+    }
+    /// Candle classification retains totals and uses the single-bar flat-close rule.
+    #[test]
+    fn candle_sides_count_executions_by_bar_direction() {
+        use crate::model::{OrderSide, Tick};
+        let time = |i| DateTime::UNIX_EPOCH + TimeDelta::minutes(i);
+        for kind in [Kind::Anchored, Kind::Auto, Kind::Fixed, Kind::Visible] {
+            for (candles, trades, aggressor, expected) in [
+                (
+                    vec![(11.0, 10.0)],
+                    vec![(0, 10.0, Some(OrderSide::Buy))],
+                    (10.0, 0.0),
+                    (0.0, 10.0),
+                ),
+                (
+                    vec![(11.0, 10.0), (10.0, 11.0)],
+                    vec![
+                        (0, 10.0, Some(OrderSide::Buy)),
+                        (1, 4.0, Some(OrderSide::Sell)),
+                    ],
+                    (10.0, 4.0),
+                    (4.0, 10.0),
+                ),
+                (
+                    vec![(10.5, 10.5)],
+                    vec![(0, 6.0, Some(OrderSide::Buy))],
+                    (6.0, 0.0),
+                    (0.0, 6.0),
+                ),
+                (
+                    vec![(10.0, 11.0), (10.5, 10.5)],
+                    vec![(1, 6.0, Some(OrderSide::Buy))],
+                    (6.0, 0.0),
+                    (6.0, 0.0),
+                ),
+                (
+                    vec![(11.0, 10.0)],
+                    vec![(0, 6.0, None)],
+                    (0.0, 0.0),
+                    (0.0, 6.0),
+                ),
+            ] {
+                let bars: Vec<_> = candles
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(open, close))| {
+                        Bar::new(time(i as i64), open, 11.0, 10.0, close, 10.0)
+                    })
+                    .collect();
+                let mut study = ProfileStudy::new(kind, 2);
+                assert!(
+                    study
+                        .inputs()
+                        .iter()
+                        .any(|i| i.id == "candle_sides" && i.value == InputValue::Toggle(false))
+                );
+                study.flow.set_tick_size(Some(1.0));
+                for (i, volume, side) in trades {
+                    study.flow.push_trade(
+                        &BarClock::new(Timeframe::Min1),
+                        &Tick::new(time(i), 10.5, volume, side),
+                    );
+                }
+                study.view = 0..bars.len();
+                for (enabled, expected) in [(false, aggressor), (true, expected)] {
+                    study
+                        .set_input("candle_sides", InputValue::Toggle(enabled))
+                        .unwrap();
+                    study.calculate(&bars);
+                    let plot = &study.profiles(0..bars.len())[0];
+                    assert_eq!(
+                        (
+                            plot.profile.up().iter().sum::<f64>(),
+                            plot.profile.down().iter().sum::<f64>()
+                        ),
+                        expected,
+                        "{kind:?}, {candles:?}, {enabled}"
+                    );
+                }
+            }
+        }
     }
 }
