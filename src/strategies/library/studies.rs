@@ -196,6 +196,12 @@ impl Strategy for StudyStrategy {
                 if matches!(self.rule, Rule::Rsi) && input.id != "period" {
                     continue;
                 }
+                // Average signals read the base line only; keep presentation smoothing out.
+                if matches!(self.rule, Rule::Average | Rule::TwoAverages)
+                    && input.id.starts_with("smoothing")
+                {
+                    continue;
+                }
                 if matches!(self.rule, Rule::TwoAverages) {
                     let prefix = if index == 0 { "fast" } else { "slow" };
                     input.id = format!("{prefix}.{}", input.id);

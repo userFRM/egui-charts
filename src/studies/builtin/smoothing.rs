@@ -278,4 +278,76 @@ mod tests {
         assert_eq!(study.plot_value(1, 1), None);
         assert!((study.plot_value(1, 2).unwrap() + 40.0).abs() < 1e-9);
     }
+    /// SMA(2) ends 8, 6.5, 4; EMA(2) ends 8, 20/3, 32/9. Bands use population deviation.
+    #[test]
+    fn moving_averages_take_the_shared_smoothing() {
+        use crate::studies::{ConfiguredStudy, IndicatorFactory, StudyTemplate};
+        for (name, want) in [
+            ("SMA", [4., 5.25, 7.75, 2.75]),
+            ("EMA", [32. / 9., 46. / 9., 74. / 9., 2.]),
+        ] {
+            let mut study = ConfiguredStudy::new(IndicatorFactory::new().create(name).unwrap());
+            for (id, value) in [
+                ("period", InputValue::Length(2)),
+                ("smoothing", InputValue::Choice(2)),
+                ("smoothing_length", InputValue::Length(2)),
+            ] {
+                study.set_input(id, value).unwrap();
+            }
+            let fixture = [(9., 1.), (7., 3.), (6., 2.), (2., 4.)];
+            let mut corrected = fixture;
+            corrected[3] = (5., 9.);
+            study.calculate(&bars(&corrected));
+            study.update(&bars(&fixture), 3);
+            assert_eq!(study.values().value(1, 1), None);
+            for (line, want) in want.into_iter().enumerate() {
+                assert!(
+                    (study.values().value(line, 3).unwrap() - want).abs() < 1e-9,
+                    "{name} {line}"
+                );
+            }
+            assert_eq!(
+                &study.line_names()[1..],
+                ["MA-based MA", "Upper band", "Lower band"]
+            );
+            assert_eq!(study.fills().len(), 1);
+            let appended = [fixture.as_slice(), &[(8., 5.)]].concat();
+            study.update(&bars(&appended), 4);
+            let mut fresh = study.clone();
+            fresh.calculate(&bars(&appended));
+            assert_eq!(
+                format!("{:?}", study.values()),
+                format!("{:?}", fresh.values())
+            );
+            study.set_input("smoothing", InputValue::Choice(6)).unwrap();
+            study.calculate(&bars(&[(9., 0.), (7., 0.), (6., 0.), (2., 4.)]));
+            assert_eq!(study.values().value(1, 2), None, "{name} zero volume");
+            assert!((study.values().value(1, 3).unwrap() - want[0]).abs() < 1e-9);
+            study.set_input("smoothing", InputValue::Choice(1)).unwrap();
+            let gaps = [fixture.as_slice(), &[(f64::NAN, 5.), (8., 5.), (10., 5.)]].concat();
+            study.calculate(&bars(&gaps));
+            assert_eq!(study.values().value(1, 4), None, "{name} gap");
+            let expected = if name == "SMA" { 6.5 } else { 622. / 81. };
+            assert!(
+                (study.values().value(1, 6).unwrap() - expected).abs() < 1e-9,
+                "{name} resumes after gap"
+            );
+            let mut saved = StudyTemplate::from_study(&study);
+            saved.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
+            saved.settings.plots.truncate(1);
+            saved.settings.plot_variants.truncate(1);
+            saved.settings.fills.clear();
+            let restored = saved.create().unwrap();
+            assert_eq!(restored.line_count(), 1);
+            assert_eq!(
+                restored
+                    .inputs()
+                    .iter()
+                    .find(|i| i.id == "smoothing")
+                    .unwrap()
+                    .value,
+                InputValue::Choice(0)
+            );
+        }
+    }
 }
