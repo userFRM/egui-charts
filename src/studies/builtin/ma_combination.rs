@@ -97,6 +97,23 @@ fn average_slot(id: &str) -> Option<usize> {
     }
 }
 
+/// The common Simple, Exponential or Weighted formula, or Simple for mixed formulas.
+fn shared(lines: &[AverageLine]) -> usize {
+    let kind = lines[0].kind;
+    if lines.iter().all(|line| line.kind == kind) {
+        [
+            AverageType::Simple,
+            AverageType::Exponential,
+            AverageType::Weighted,
+        ]
+        .iter()
+        .position(|candidate| *candidate == kind)
+        .unwrap_or(0)
+    } else {
+        0
+    }
+}
+
 /// Two to fourteen independently configured averages. Two to four form a
 /// combination; longer configurations form a ribbon. Each line keeps its
 /// standalone study's seed and warm-up. A missing line is NaN.
@@ -124,6 +141,8 @@ pub struct MACombination {
     touch_crosses: bool,
     crosses: Option<Color32>,
     max_period: usize,
+    shared_method: bool,
+    weighted_delay: bool,
     /// Whether each line is coloured by its own direction, the slowest wide and filled.
     directional: bool,
     default_directional: bool,
@@ -143,6 +162,8 @@ impl std::fmt::Debug for MACombination {
             .field("touch_crosses", &self.touch_crosses)
             .field("crosses", &self.crosses)
             .field("max_period", &self.max_period)
+            .field("shared_method", &self.shared_method)
+            .field("weighted_delay", &self.weighted_delay)
             .field("directional", &self.directional)
             .field("default_directional", &self.default_directional)
             .field("visible", &self.visible)
@@ -178,6 +199,8 @@ impl MACombination {
             touch_crosses: false,
             crosses: None,
             max_period: usize::MAX,
+            shared_method: false,
+            weighted_delay: false,
             directional: false,
             default_directional: false,
             visible: true,
@@ -219,6 +242,11 @@ impl MACombination {
 
     pub(super) fn with_crosses(mut self, color: Color32) -> Self {
         self.crosses = Some(color);
+        self
+    }
+
+    pub(super) fn with_shared_method(mut self) -> Self {
+        self.shared_method = true;
         self
     }
 
@@ -267,7 +295,9 @@ impl MACombination {
                 _ => true,
             })
             .map(|mut input| {
-                if input.id == "average_count" {
+                if input.id == "average_count"
+                    || (self.shared_method && input.id.starts_with("kind_"))
+                {
                     input = input.shown_when("cross_first", Vec::new());
                 }
                 if let ("cross_first" | "cross_second", InputKind::Choice(picks)) =
@@ -393,6 +423,29 @@ impl Indicator for MACombination {
                 )),
             ]
         }));
+        if self.shared_method {
+            inputs.extend([
+                StudyInput::new(
+                    "method",
+                    "Method",
+                    InputValue::Choice(shared(&self.lines)),
+                    InputKind::Choice(
+                        ["Simple", "Exponential", "Weighted"]
+                            .map(String::from)
+                            .to_vec(),
+                    ),
+                )
+                .with_default(InputValue::Choice(shared(&self.defaults))),
+                StudyInput::new(
+                    "weighted_delay",
+                    "Weighted starts one bar later",
+                    InputValue::Toggle(self.weighted_delay),
+                    InputKind::Toggle,
+                )
+                .with_default(InputValue::Toggle(false))
+                .shown_when("method", vec![2]),
+            ]);
+        }
         inputs
     }
 
@@ -409,11 +462,17 @@ impl Indicator for MACombination {
         if average_slot(id).is_some_and(|index| (self.lines.len()..MAX_AVERAGES).contains(&index)) {
             return Ok(());
         }
-        let schema = self
+        let mut schema = self
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
             .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
+        // The editor can show a held older length; new edits still use the declared bound.
+        if id.starts_with("period_")
+            && let InputKind::Length(_, max) = &mut schema.kind
+        {
+            *max = self.max_period;
+        }
         if value != schema.value
             && !schema.accepts(&value)
             && !crate::studies::inputs::restores(id, &value)
@@ -433,6 +492,18 @@ impl Indicator for MACombination {
                     self.lines.push(line);
                 }
             }
+            ("method", InputValue::Choice(method)) => {
+                if method != shared(&self.lines) {
+                    for line in &mut self.lines {
+                        line.kind = [
+                            AverageType::Simple,
+                            AverageType::Exponential,
+                            AverageType::Weighted,
+                        ][method];
+                    }
+                }
+            }
+            ("weighted_delay", InputValue::Toggle(delay)) => self.weighted_delay = delay,
             ("directional", InputValue::Toggle(directional)) => self.directional = directional,
             ("cross_first", InputValue::Choice(pick)) => self.cross[0] = pick,
             ("cross_second", InputValue::Choice(pick)) => self.cross[1] = pick,
@@ -526,7 +597,17 @@ impl Indicator for MACombination {
                 let mut lines: Vec<_> = self
                     .averages
                     .iter()
-                    .map(|average| average.values().value(0, i).unwrap_or(f64::NAN))
+                    .zip(&self.lines)
+                    .map(|(average, line)| {
+                        if self.weighted_delay
+                            && line.kind == AverageType::Weighted
+                            && i < line.period
+                        {
+                            f64::NAN
+                        } else {
+                            average.values().value(0, i).unwrap_or(f64::NAN)
+                        }
+                    })
                     .collect();
                 if lines.iter().all(|v| !v.is_finite()) {
                     state.1 = None;
@@ -1164,5 +1245,106 @@ mod tests {
                 [(4, crate::studies::CrossDirection::Down), (5, direction)]
             );
         }
+    }
+    /// The shared method applies after hidden per-line settings, including a dialog snapshot.
+    #[test]
+    fn multi_average_presets_share_one_method() {
+        use crate::studies::{ConfiguredStudy, Indicator, StudyTemplate, WMA};
+        use InputValue::{Choice, Length, Toggle};
+        let bars: Vec<_> = (0..=210).map(|v| make_bar(f64::from(v))).collect();
+        for name in ["Double MA", "Triple MA", "Multi MA"] {
+            let mut study = ConfiguredStudy::new(IndicatorFactory::new().create(name).unwrap());
+            if name == "Double MA" {
+                study.set_input("period_0", Length(1)).unwrap();
+                study.set_input("period_1", Length(14)).unwrap();
+            }
+            let mut snapshot: Vec<_> = study
+                .inputs()
+                .into_iter()
+                .map(|i| (i.id, i.value))
+                .collect();
+            snapshot
+                .iter_mut()
+                .find(|(id, _)| id == "method")
+                .unwrap()
+                .1 = Choice(1);
+            study.apply_settings(&snapshot, study.settings()).unwrap();
+            assert!(study.line_names().iter().all(|n| n.starts_with("EMA(")));
+            study.set_input("method", Choice(2)).unwrap();
+            let inputs = study.inputs();
+            for input in &inputs {
+                if input.id.starts_with("kind_") {
+                    assert!(!input.is_shown(&inputs));
+                    assert_eq!(input.value, Choice(2));
+                }
+            }
+            assert!(
+                inputs
+                    .iter()
+                    .find(|i| i.id == "method")
+                    .unwrap()
+                    .is_shown(&inputs)
+            );
+            assert!(
+                inputs
+                    .iter()
+                    .find(|i| i.id == "weighted_delay")
+                    .unwrap()
+                    .is_shown(&inputs)
+            );
+            study.calculate(&bars);
+            let periods: Vec<_> = inputs
+                .iter()
+                .filter_map(|i| match i.value {
+                    Length(n) if i.id.starts_with("period_") => Some(n),
+                    _ => None,
+                })
+                .collect();
+            for (line, &period) in periods.iter().enumerate() {
+                assert!(study.values().value(line, period - 1).is_some());
+            }
+            study.set_input("weighted_delay", Toggle(true)).unwrap();
+            study.calculate(&bars);
+            for (line, &period) in periods.iter().enumerate() {
+                let mut wma = WMA::new(period);
+                wma.calculate(&bars);
+                assert_eq!(study.values().value(line, period - 1), None);
+                assert_eq!(
+                    study.values().value(line, period),
+                    wma.values().value(0, period)
+                );
+                assert_eq!(study.line_names()[line], format!("WMA({period})"));
+            }
+            let restored = StudyTemplate::from_study(&study).create().unwrap();
+            assert_eq!(
+                format!("{:?}", restored.inputs()),
+                format!("{:?}", study.inputs())
+            );
+            for line in 0..periods.len() {
+                let id = format!("period_{line}");
+                study.set_input(&id, Length(10000)).unwrap();
+                for n in [0, 10001] {
+                    assert!(study.set_input(&id, Length(n)).is_err());
+                }
+            }
+        }
+        let mut mixed = IndicatorFactory::new().create("Double MA").unwrap();
+        mixed.set_input("kind_1", Choice(5)).unwrap();
+        assert_eq!(
+            mixed
+                .inputs()
+                .iter()
+                .find(|i| i.id == "method")
+                .unwrap()
+                .value,
+            Choice(0)
+        );
+        assert_eq!(
+            StudyTemplate::from_study(mixed.as_ref())
+                .create()
+                .unwrap()
+                .line_names(),
+            mixed.line_names()
+        );
     }
 }

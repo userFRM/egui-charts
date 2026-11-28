@@ -30,7 +30,9 @@ impl MultipleMA {
                     .collect(),
             )
             .unwrap()
-            .without_crossings(),
+            .without_crossings()
+            .with_shared_method()
+            .with_max_period(10_000),
         }
     }
 }

@@ -50,7 +50,9 @@ impl TripleMA {
                     .collect(),
             )
             .unwrap()
-            .without_crossings(),
+            .without_crossings()
+            .with_shared_method()
+            .with_max_period(10_000),
         }
     }
 }
@@ -76,7 +78,9 @@ impl DoubleMA {
                 AverageLine::new(AverageType::Simple, second, palette::LIGHT_BLUE),
             ])
             .unwrap()
-            .without_crossings(),
+            .without_crossings()
+            .with_shared_method()
+            .with_max_period(10_000),
         }
     }
 }

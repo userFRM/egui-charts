@@ -1241,6 +1241,34 @@ impl StudyTemplate {
             template.settings.untagged_plots.push(2);
             changed = true;
         }
+        // Pane identities saved before Method derive it from their per-average formulas.
+        if matches!(study, "Double MA" | "Triple MA" | "Multi MA")
+            && declares("method")
+            && !has("method")
+        {
+            let kinds: Vec<_> = self
+                .inputs
+                .iter()
+                .filter_map(|(id, value)| {
+                    if id.starts_with("kind_")
+                        && let InputValue::Choice(kind) = value
+                    {
+                        Some(*kind)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let method = kinds
+                .first()
+                .copied()
+                .filter(|kind| *kind <= 2 && kinds.iter().all(|k| k == kind))
+                .unwrap_or(0);
+            template
+                .inputs
+                .push(("method".to_owned(), InputValue::Choice(method)));
+            changed = true;
+        }
         // Hours saved as minute counts and zones saved as text, before inputs had a time of day
         // and a time zone, and whole numbers saved for inputs that now take decimals, in the
         // form `own` declares them now.
@@ -2204,6 +2232,11 @@ mod tests {
         use InputValue::{Choice, Integer, Length, Number, Text, Toggle};
         let rows = [
             (
+                "Double MA",
+                vec![("period_1", Length(20000))],
+                vec![("period_1", Length(20000))],
+            ),
+            (
                 "MA Cross",
                 vec![("period_0", Length(5000))],
                 vec![("period_0", Length(5000))],
@@ -2691,6 +2724,7 @@ mod tests {
             }
             // Keeping a legacy value does not admit new values outside the declared range.
             let refused = match name {
+                "Double MA" => Some(("period_1", Length(10001))),
                 "MA Cross" => Some(("period_0", Length(2001))),
                 "C2C Vol" => Some(("trading_days", Number(0.5))),
                 "Volatility Stop" => Some(("multiplier", Number(0.125))),
