@@ -831,6 +831,9 @@ pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
     /// The stable factory key, independent of the wrapped study's display name.
     registered: String,
+    /// The factory's default-source migration decision when restored through a template.
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    pub(crate) builtin_source: Option<bool>,
     settings: StudySettings,
     timeframe: Option<Timeframe>,
     instrument_precision: Option<u8>,
@@ -896,6 +899,12 @@ impl std::fmt::Debug for ConfiguredStudy {
 }
 
 impl ConfiguredStudy {
+    /// The study before the wrapper adds chart controls and default overrides.
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    pub(crate) fn declared_study(&self) -> &(dyn Indicator + 'static) {
+        self.study.as_ref()
+    }
+
     /// Only main-bar calculations can be regenerated from a trade checkpoint. In particular,
     /// an evicted prefix may have contributed to kept values that no longer follow from the
     /// retained bars alone.
@@ -933,6 +942,8 @@ impl ConfiguredStudy {
         Self {
             study,
             registered: self.registered.clone(),
+            #[cfg(all(feature = "widget", feature = "studies"))]
+            builtin_source: self.builtin_source,
             settings: self.settings.clone(),
             timeframe: self.timeframe,
             instrument_precision: self.instrument_precision,
@@ -999,9 +1010,15 @@ impl ConfiguredStudy {
         }
         match_declared_styles(study.as_ref(), &mut settings);
         let registered = study.registered_name().to_owned();
+        #[cfg(all(feature = "widget", feature = "studies"))]
+        let builtin_source = study
+            .concrete::<Self>()
+            .and_then(|study| study.builtin_source);
         Self {
             study,
             registered,
+            #[cfg(all(feature = "widget", feature = "studies"))]
+            builtin_source,
             settings,
             timeframe: None,
             instrument_precision: None,
@@ -1259,8 +1276,6 @@ impl Indicator for ConfiguredStudy {
         let mut inputs = self.study.inputs();
         if let Some(default) = self.study.source() {
             let own = inputs.iter().find(|input| input.id == "source");
-            // A study that names its source, where only part of it reads the source, keeps that name.
-            let label = own.map_or_else(|| "Source".into(), |input| input.label.clone());
             let initial = own
                 .and_then(|input| match input.default {
                     InputValue::Choice(index) => crate::model::PriceSource::all()
@@ -1271,16 +1286,21 @@ impl Indicator for ConfiguredStudy {
                     _ => None,
                 })
                 .unwrap_or(default);
-            inputs.retain(|input| input.id != "source");
-            inputs.push(
+            // Keep the declared label, tab, condition and prompt while the chart supplies the source.
+            let mut source = own.cloned().unwrap_or_else(|| {
                 super::StudyInput::new(
                     "source",
-                    label,
-                    InputValue::Source(self.source.unwrap_or(default)),
+                    "Source",
+                    InputValue::Source(default),
                     super::InputKind::Source,
                 )
-                .with_default(InputValue::Source(initial)),
-            );
+            });
+            source.kind = super::InputKind::Source;
+            source.value = InputValue::Source(self.source.unwrap_or(default));
+            source.default = InputValue::Source(initial);
+            source.step = None;
+            inputs.retain(|input| input.id != "source");
+            inputs.push(source);
         }
         use super::{InputKind, StudyInput};
         if self.offers_offset() {

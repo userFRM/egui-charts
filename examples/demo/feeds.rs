@@ -323,15 +323,55 @@ pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
     stories
 }
 
-/// The story or highlight `id` names among those published on the hours before `now`, and
-/// whether it is a highlight.
-pub(super) fn story(id: &str, now: DateTime<Utc>) -> Option<(bool, NewsStory)> {
-    [false, true].into_iter().find_map(|highlights| {
-        stories(&[], highlights, now)
-            .into_iter()
-            .find(|story| story.id == id)
-            .map(|story| (highlights, story))
-    })
+/// Rebuild the publication named by the notification, regardless of the feed clock.
+pub(super) fn story(
+    id: &str,
+    time: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<(bool, NewsStory)> {
+    let (symbol, index) = id.rsplit_once('-')?;
+    let highlight_symbol = symbol.strip_suffix("-highlight");
+    let highlights = highlight_symbol.is_some();
+    let symbol = highlight_symbol.unwrap_or(symbol);
+    let spec = DemoSymbol::catalog()
+        .iter()
+        .find(|spec| spec.symbol == symbol)?;
+    let index = index.parse::<usize>().ok()?;
+    let story = published_story(spec, highlights, index, time)?;
+    let feed_hour = time.checked_add_signed(publication_age(index))?;
+    if feed_hour > now || feed_hour.duration_trunc(TimeDelta::hours(1)).ok()? != feed_hour {
+        return None;
+    }
+    (story.id == id).then_some((highlights, story))
+}
+
+fn published_story(
+    spec: &DemoSymbol,
+    highlights: bool,
+    index: usize,
+    time: DateTime<Utc>,
+) -> Option<NewsStory> {
+    let templates = if highlights { HIGHLIGHTS } else { HEADLINES };
+    let (headline, body) = templates.get(index)?;
+    let fill = |text: &str| {
+        text.replace("{name}", spec.company_name)
+            .replace("{symbol}", spec.symbol)
+    };
+    let template = if highlights {
+        format!("{}-highlight-{index}", spec.symbol)
+    } else {
+        format!("{}-{index}", spec.symbol)
+    };
+    let mut story = NewsStory::new(template.clone(), time, fill(headline));
+    story.source = "Demo Wire".into();
+    story.body = fill(body);
+    story.symbols = vec![spec.symbol.into()];
+    story.url = Some(format!("https://example.com/news/{template}"));
+    Some(story)
+}
+
+fn publication_age(index: usize) -> TimeDelta {
+    TimeDelta::hours(index as i64 * 7)
 }
 
 /// The synthetic headlines, or highlights, of `symbols`, or of every catalog symbol when it is
@@ -350,32 +390,16 @@ fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<News
             .collect()
     };
     let templates = if highlights { HIGHLIGHTS } else { HEADLINES };
-    let hour = now.duration_trunc(TimeDelta::hours(1)).unwrap_or(now);
+    let Ok(hour) = now.duration_trunc(TimeDelta::hours(1)) else {
+        return Vec::new();
+    };
     specs
         .iter()
         .flat_map(|spec| {
-            templates
-                .iter()
-                .enumerate()
-                .map(move |(i, (headline, body))| {
-                    let fill = |text: &str| {
-                        text.replace("{name}", spec.company_name)
-                            .replace("{symbol}", spec.symbol)
-                    };
-                    let age = TimeDelta::hours(i as i64 * 7);
-                    // Highlights keep their own ids, so one id names one story.
-                    let id = if highlights {
-                        format!("{}-highlight-{i}", spec.symbol)
-                    } else {
-                        format!("{}-{i}", spec.symbol)
-                    };
-                    let mut story = NewsStory::new(id, hour - age, fill(headline));
-                    story.source = "Demo Wire".into();
-                    story.body = fill(body);
-                    story.symbols = vec![spec.symbol.into()];
-                    story.url = Some(format!("https://example.com/news/{}", story.id));
-                    story
-                })
+            templates.iter().enumerate().filter_map(move |(i, _)| {
+                let age = publication_age(i);
+                published_story(spec, highlights, i, hour.checked_sub_signed(age)?)
+            })
         })
         .collect()
 }
@@ -1450,6 +1474,32 @@ impl Sharing for DemoSharing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notification_opens_the_original_story_after_the_clock_advances() {
+        let before = "2026-11-21T12:30:00Z".parse::<DateTime<Utc>>().unwrap();
+        let after = before + TimeDelta::hours(1);
+        let symbols = vec![DemoSymbol::catalog()[0].symbol.to_owned()];
+        assert_ne!(
+            stories(&symbols, false, before)[1].id,
+            stories(&symbols, true, before)[1].id
+        );
+        for highlights in [false, true] {
+            let older = stories(&symbols, highlights, before);
+            let newer = stories(&symbols, highlights, after);
+            let original = &older[1];
+            let latest = &newer[1];
+            assert_eq!(original.id, latest.id);
+            assert_eq!(original.url, latest.url);
+            let (is_highlight, opened) = story(&original.id, original.time, after).unwrap();
+            assert_eq!(is_highlight, highlights);
+            assert_eq!(opened.id, original.id);
+            assert_eq!(opened.time, original.time);
+            assert_ne!(opened.time, latest.time);
+            assert!(story(&original.id, latest.time, before).is_none());
+            assert!(story(&original.id, original.time + TimeDelta::seconds(1), after).is_none());
+        }
+    }
 
     #[test]
     fn demo_chat_history_pages_to_the_end_without_duplicates() {

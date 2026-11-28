@@ -62,7 +62,8 @@ pub struct AlertDialog {
     /// assert_eq!(dialog.strategy_runs[0].0, "run-7");
     /// ```
     pub strategy_runs: Vec<(String, String)>,
-    /// Whether the host feeds `OrderFlowDetectors::take_footprint_events` to
+    /// Whether the host has `OrderFlowDetectors::watch_footprint_alerts` read its alerts and
+    /// feeds `OrderFlowDetectors::take_footprint_events` to
     /// `AlertEngine::footprint_events`. Only then is Footprint offered; an existing footprint
     /// alert shows its condition either way.
     pub footprint_conditions: bool,

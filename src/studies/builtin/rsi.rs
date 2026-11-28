@@ -45,6 +45,8 @@
 //! below the previous one, on a bar whose high is above, is bearish. Each is a segment of the RSI
 //! between the two pivots and a "Bull" or "Bear" mark on the second. A source other than the
 //! close changes the RSI and leaves the highs and lows compared. The input is off by default.
+//! Regular bullish divergence and Regular bearish divergence alert conditions hold on the bar
+//! that confirms a divergence, `right` bars after its mark, and never while divergences are off.
 //!
 //! # Default colour
 //!
@@ -86,6 +88,8 @@ pub struct RSI {
     values: IndicatorValues,
     stepper: Stepper<Averaged>,
     confirmed: Confirmed,
+    /// Confirming bars, ascending, with condition 0 for bullish and 1 for bearish.
+    confirmations: Vec<(usize, usize)>,
     color: Color32,
     smoothing_colors: [Color32; 3],
     fill_color: Color32,
@@ -178,6 +182,7 @@ impl RSI {
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             confirmed: Confirmed::default(),
+            confirmations: Vec::new(),
             color: palette::PURPLE,
             smoothing_colors: SMOOTHING_COLORS,
             fill_color: palette::PURPLE.gamma_multiply_u8(26),
@@ -271,6 +276,7 @@ impl Indicator for RSI {
         if !self.confirmed.begin(&mut self.values, data.len(), from) {
             return;
         }
+        self.confirmations.retain(|&(bar, _)| bar < from);
         let (period, kind, length, deviation) = (
             self.period,
             self.smoothing,
@@ -317,11 +323,33 @@ impl Indicator for RSI {
                 row.resize(first + 4, f64::NAN);
                 IndicatorValue::Multiple(row)
             });
+        for segment in &found {
+            let entry = (segment.confirming, segment.lines.0 - first);
+            // Replaying bars before `from` can find their confirmations again.
+            if let Err(at) = self.confirmations.binary_search(&entry) {
+                self.confirmations.insert(at, entry);
+            }
+        }
         self.confirmed.draw(&mut self.values, found, data.len());
     }
 
     fn is_incremental(&self) -> bool {
         true
+    }
+
+    /// Regular divergences on their confirming bars, with indices independent of smoothing.
+    fn alert_conditions(&self) -> Vec<String> {
+        ["Regular bullish divergence", "Regular bearish divergence"]
+            .map(str::to_owned)
+            .into()
+    }
+
+    fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
+        if condition > 1 {
+            return None;
+        }
+        self.values.value(0, bar)?;
+        Some(self.divergence && self.confirmations.binary_search(&(bar, condition)).is_ok())
     }
 
     fn values(&self) -> &IndicatorValues {
@@ -625,6 +653,11 @@ mod tests {
         bars[21].high = 110.0;
         let (low, high) = (100.0 * 993.0 / 16384.0, 100.0 * 993.0 / 1024.0);
         let tied = 100.0 * 115681.0 / 131072.0 / (1.0 + tie);
+        let holds = |study: &RSI, condition| -> Vec<_> {
+            (0..bars.len())
+                .filter(|&bar| study.alert_condition(condition, bar) == Some(true))
+                .collect()
+        };
 
         // The four outputs follow the RSI, or the average and its bands.
         for (smoothing, first) in [(0, 1), (2, 4)] {
@@ -636,6 +669,23 @@ mod tests {
                 .set_input("divergence", InputValue::Toggle(true))
                 .unwrap();
             study.calculate(&bars);
+            assert_eq!(
+                study.alert_conditions(),
+                ["Regular bullish divergence", "Regular bearish divergence"]
+            );
+            // Marks are on 17 and 21; five later usable bars confirm them on 22 and 26.
+            assert_eq!(holds(&study, 0), [22]);
+            assert_eq!(holds(&study, 1), [26]);
+            assert_eq!(study.alert_condition(0, 0), None);
+            assert_eq!(study.alert_condition(0, 10), None);
+            assert_eq!(study.alert_condition(2, 26), None);
+            let mut off = study.clone();
+            off.set_input("divergence", InputValue::Toggle(false))
+                .unwrap();
+            off.calculate(&bars);
+            assert!(holds(&off, 0).is_empty() && holds(&off, 1).is_empty());
+            assert_eq!(off.alert_condition(0, 26), Some(false));
+            assert_eq!(off.alert_conditions(), study.alert_conditions());
             assert_eq!(study.line_count(), first + 4);
             let value =
                 |study: &RSI, output: usize, bar: usize| study.values().value(first + output, bar);
@@ -674,6 +724,8 @@ mod tests {
             study.update(&corrected, 26);
             assert!(drawn(&study, 1).is_empty() && drawn(&study, 3).is_empty());
             assert_eq!(drawn(&study, 0).len(), 10);
+            assert_eq!(holds(&study, 0), [22]);
+            assert!(holds(&study, 1).is_empty());
         }
     }
 

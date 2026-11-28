@@ -1133,6 +1133,10 @@ impl DemoApp {
                     .error(format!("Could not restore detectors: {error}")),
             }
         }
+        app.trading.display = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "trading_display"))
+            .unwrap_or_default();
         app.trading.presets = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "order_presets"))
@@ -1445,13 +1449,22 @@ impl DemoApp {
         {
             self.toasts.error(format!("Alert data: {error}"));
         }
-        // Footprint alerts follow the detectors whose rule the active chart sets.
-        let footprint = self.live.detectors().take_footprint_events();
-        if self.replay.is_none() {
-            engine.footprint_events(&footprint, now);
+        // Every chart's detectors read saved intervals and rules; repeated deliveries fire once.
+        let alerts = engine.alerts();
+        let mut read: Vec<Arc<egui_charts::services::OrderFlowDetectors>> = Vec::new();
+        for live in std::iter::once(&self.live).chain(self.extra_charts.iter().map(|s| &s.live)) {
+            let detectors = live.detectors();
+            if read.iter().any(|seen| Arc::ptr_eq(seen, &detectors)) {
+                continue;
+            }
+            detectors.watch_footprint_alerts(&alerts);
+            let footprint = detectors.take_footprint_events();
+            if self.replay.is_none() {
+                engine.footprint_events(&footprint, now);
+            }
+            read.push(detectors);
         }
-        if engine
-            .alerts()
+        if alerts
             .iter()
             .any(|alert| alert.status == egui_charts::model::AlertStatus::Active)
         {
@@ -2035,6 +2048,7 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "alert_list_options", self.alerts.options());
         // The live account: a replay session trades an account of its own, which is not kept.
         eframe::set_value(storage, "paper_account", &self.paper.save());
+        eframe::set_value(storage, "trading_display", &self.trading.display);
         eframe::set_value(storage, "order_presets", &self.trading.presets);
         eframe::set_value(storage, "paper_connected", &self.trading.has_broker());
         eframe::set_value(storage, "account_panel_height", &self.account_panel_height);
@@ -2136,7 +2150,7 @@ impl eframe::App for DemoApp {
         let detectors = self.live.detectors();
         let mut settings = detectors.settings();
         let before = settings.clone();
-        // Footprint alerts read the imbalances and rows the active chart shows.
+        // Panel markers and alerts without a saved rule follow the active chart's footprint.
         let rows = self.chart.footprint_row_ticks();
         settings
             .footprint
@@ -2733,10 +2747,7 @@ impl DemoApp {
                 }
             }
             TopToolbarAction::ApplyBuiltinIndicatorTemplate(id) => {
-                if let Some((_, template)) = StudyTemplateSet::builtin()
-                    .into_iter()
-                    .find(|(name, _)| *name == id)
-                {
+                if let Some(template) = StudyTemplateSet::builtin_named(&id) {
                     self.load_study_template(&template);
                 }
             }
@@ -5737,6 +5748,35 @@ mod tests {
         h.get_by_role_and_label(egui::Role::Button, "Next");
     }
 
+    #[test]
+    fn demo_opens_older_news_notification_and_keeps_reader_on_hourly_refresh() {
+        use egui_charts::services::{Notification, NotificationTarget};
+
+        let mut h = calendar_news_harness(SidePanel::Notifications);
+        h.run_steps(5);
+        let now = h.state().live.now();
+        let mut query = egui_charts::data::NewsQuery::new(1);
+        query.symbols = vec![h.state().chart.symbol().into()];
+        let story = feeds::news(&query, now - chrono::Duration::hours(1)).remove(0);
+        let mut entry = Notification::new(story.time, "Older publication");
+        entry.target = Some(NotificationTarget::Story(story.id));
+        h.state_mut().notifications.push(entry);
+        h.run_steps(5);
+        h.get_by_label("Open story").click();
+        h.run_steps(5);
+        assert!(h.state().open_panel == Some(SidePanel::News));
+        let publication = format!("{} UTC · Demo Wire", story.time.format("%b %-d, %H:%M"));
+        h.get_by_label(&publication);
+        h.get_by_label(&story.body);
+
+        h.state().live.set_paused(false);
+        h.state().live.advance(now + chrono::Duration::hours(1));
+        h.state().live.set_paused(true);
+        h.run_steps(8);
+        h.get_by_label(&publication);
+        h.get_by_label(&story.body);
+    }
+
     /// Guards the demo's chat author menu: Reply answers the message through the demo host, View
     /// profile opens the author's card, and its Message opens a direct chat with them.
     #[test]
@@ -6424,13 +6464,14 @@ mod tests {
     }
 
     /// The dialog saves a footprint condition and frequency, then the demo forwards the
-    /// execution that completes its stack exactly once to the alert engine.
+    /// execution that completes its stack exactly once to the alert engine, keeping its interval
+    /// and rule when the chart changes interval and footprint settings.
     #[test]
     fn footprint_alerts_reach_the_demo_alert_dialog() {
         use egui::accesskit::{Action, ActionRequest, TreeId};
         use egui_charts::data::MarketEvent;
         use egui_charts::model::{
-            AlertFrequency, ChartTypeParams, FootprintCondition,
+            AlertFrequency, FootprintCondition,
             OrderSide::{Buy, Sell},
             Tick,
         };
@@ -6477,13 +6518,6 @@ mod tests {
             AlertCondition::Footprint(FootprintCondition::StackedBuyImbalance)
         );
         assert_eq!(saved[0].frequency, AlertFrequency::OncePerBar);
-        let detectors = app.live.detectors();
-        let mut settings = detectors.settings();
-        settings
-            .footprint
-            .rule
-            .follow_chart(&ChartTypeParams::default(), 1);
-        detectors.set_settings(settings);
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
         let bars = app.chart.bars(SeriesId::MAIN);
         let last = bars.last().unwrap();
@@ -6492,6 +6526,16 @@ mod tests {
         let p = (last.close / tick).round() * tick;
         let symbol = app.chart.symbol().to_owned();
         let fired = engine.triggers().len();
+        app.monitor_alerts(&ctx);
+        app.switch_timeframe(Timeframe::Min5);
+        let mut params = app.chart.chart_type_params().clone();
+        params.footprint_imbalance_ratio = 100.0;
+        params.footprint_stack = 5;
+        app.chart.set_chart_type_params(params);
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min5));
+        let detectors = app.live.detectors();
+        assert_eq!(detectors.settings().footprint.rule.imbalance_ratio, 100.0);
         for (second, row, size, side) in [
             (1, 0.0, 1.0, Sell),
             (2, 1.0, 1.0, Sell),
@@ -10203,20 +10247,89 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let before = names(&app);
-        let (name, set) = &builtin[3];
-        app.handle_top_toolbar(
-            &ctx,
-            TopToolbarAction::ApplyBuiltinIndicatorTemplate((*name).to_owned()),
+        let before_panes = app.chart.panes();
+        let before_can_undo = app.chart.can_undo();
+        type Row = (
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static [usize]],
         );
-        assert_eq!(
-            names(&app),
-            set.studies
+        let cases: [Row; 10] = [
+            (
+                "Bill Williams' 3 Lines",
+                &["Volume", "Williams Alligator"],
+                &[&[0, 1]],
+            ),
+            ("Displaced EMA", &["Volume", "EMA"], &[&[0, 1]]),
+            ("MA Exp Ribbon", &["Volume", "MA Ribbon"], &[&[0, 1]]),
+            (
+                "Oscillators",
+                &["Volume", "RSI", "StochRSI", "CCI"],
+                &[&[0], &[1], &[2], &[3]],
+            ),
+            (
+                "Swing Trading",
+                &["Volume", "BB", "MACD", "Stochastic"],
+                &[&[0, 1], &[2], &[3]],
+            ),
+            (
+                "Volume Based",
+                &["Volume", "OBV", "MFI"],
+                &[&[0], &[1], &[2]],
+            ),
+            (
+                "Williams Alligator",
+                &["Volume", "Williams Alligator"],
+                &[&[0, 1]],
+            ),
+            (
+                "Moving average ribbon",
+                &["Volume", "MA Ribbon"],
+                &[&[0, 1]],
+            ),
+            (
+                "Swing trading",
+                &["Volume", "BB", "MACD", "Stochastic"],
+                &[&[0, 1], &[2], &[3]],
+            ),
+            (
+                "Volume analysis",
+                &["Volume", "OBV", "MFI"],
+                &[&[0], &[1], &[2]],
+            ),
+        ];
+        for (name, studies, panes) in cases {
+            app.handle_top_toolbar(
+                &ctx,
+                TopToolbarAction::ApplyBuiltinIndicatorTemplate(name.to_owned()),
+            );
+            assert_eq!(names(&app), studies, "{name}");
+            let ids: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
+            let expected: Vec<Vec<_>> = panes
                 .iter()
-                .map(|study| study.name.clone())
-                .collect::<Vec<_>>()
-        );
-        assert!(app.chart.undo());
-        assert_eq!(names(&app), before);
+                .enumerate()
+                .map(|(at, pane)| {
+                    (at == 0)
+                        .then_some(egui_charts::widget::SeriesId::MAIN)
+                        .into_iter()
+                        .chain(pane.iter().map(|&position| ids[position]))
+                        .collect()
+                })
+                .collect();
+            assert_eq!(
+                app.chart
+                    .panes()
+                    .into_iter()
+                    .map(|pane| app.chart.pane_series(pane))
+                    .collect::<Vec<_>>(),
+                expected,
+                "{name}"
+            );
+            assert!(app.chart.undo(), "{name}");
+            assert_eq!(names(&app), before, "{name}");
+            assert_eq!(app.chart.panes(), before_panes, "{name}");
+            assert_eq!(app.chart.can_undo(), before_can_undo, "{name}");
+        }
     }
 
     #[test]
@@ -15819,6 +15932,112 @@ mod tests {
             .find_map(|order| order["request"]["order_type"]["Stop"].as_f64())
             .unwrap();
         assert_eq!(((tp - sl) / tick).round(), 30.0);
+    }
+
+    /// Undocking restores the chart's width and keeps the choice in the settings the host saves.
+    #[test]
+    fn the_order_ticket_undocks_into_a_window_and_docks_again() {
+        use egui_charts::model::{OrderRequest, OrderSide, OrderType};
+        use egui_kittest::kittest::NodeT as _;
+
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-12T15:00:00Z".parse().unwrap(),
+            true,
+        );
+        app.connect_paper();
+        settle(&mut app, &ctx);
+        let symbol = app.chart.symbol().to_owned();
+        app.trading.open_ticket(OrderRequest::new(
+            &symbol,
+            OrderSide::Buy,
+            1.0,
+            OrderType::Market,
+        ));
+        let harness = |app| {
+            Harness::builder()
+                .with_accessibility_check(false)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, app: &mut Box<DemoApp>| {
+                        eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                    },
+                    app,
+                )
+        };
+        let mut h = harness(app);
+        h.run_steps(3);
+        let docked = h.state().chart.get_chart_mapping().rect.right();
+        h.get_by_label("Undock ticket").click();
+        h.run_steps(3);
+        let display = serde_json::to_value(h.state().chart_settings_state().trading).unwrap();
+        assert_eq!(display["undocked_ticket"], true);
+        assert!(h.state().chart.get_chart_mapping().rect.right() >= docked + 300.0);
+        assert!(
+            h.query_all_by_role(egui::accesskit::Role::Button)
+                .any(|node| {
+                    node.accesskit_node()
+                        .label()
+                        .is_some_and(|label| label.ends_with(&format!(" {symbol} MKT")))
+                })
+        );
+        h.state_mut().trading.display.bid_ask_labels = true;
+        for undocked in [true, false] {
+            if !undocked {
+                h.get_by_label("Dock ticket").click();
+                h.run_steps(3);
+                assert!(!h.state().trading.display.undocked_ticket);
+                assert!((h.state().chart.get_chart_mapping().rect.right() - docked).abs() < 1.0);
+            }
+            let expected = h.state().trading.display.clone();
+            let mut storage = AppStorage::default();
+            eframe::App::save(&mut **h.state_mut(), &mut storage);
+            let fresh = egui::Context::default();
+            let mut cc = eframe::CreationContext::_new_kittest(fresh.clone());
+            cc.storage = Some(&storage);
+            let mut restored = DemoApp::new_at(&cc, "2026-11-12T15:00:00Z".parse().unwrap(), true);
+            assert_eq!(
+                restored.trading.display.undocked_ticket, undocked,
+                "saved ticket presentation must survive restart"
+            );
+            assert_eq!(restored.trading.display, expected);
+            assert_eq!(restored.chart_settings_state().trading, expected);
+            restored.trading.open_ticket(OrderRequest::new(
+                &symbol,
+                OrderSide::Buy,
+                1.0,
+                OrderType::Market,
+            ));
+            settle(&mut restored, &fresh);
+            let mut restarted = harness(restored);
+            restarted.run_steps(3);
+            restarted.get_by_label(if undocked {
+                "Dock ticket"
+            } else {
+                "Undock ticket"
+            });
+            let right = restarted.state().chart.get_chart_mapping().rect.right();
+            if undocked {
+                assert!(right >= docked + 300.0);
+            } else {
+                assert!((right - docked).abs() < 1.0);
+            }
+        }
+
+        let older = AppStorage(std::collections::HashMap::from([
+            ("theme_choice".into(), "\"dark\"".into()),
+            ("paper_connected".into(), "true".into()),
+            ("account_panel_height".into(), "470.0".into()),
+        ]));
+        let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+        cc.storage = Some(&older);
+        let restored = DemoApp::new_at(&cc, "2026-11-12T15:00:00Z".parse().unwrap(), true);
+        assert!(!restored.trading.display.undocked_ticket);
+        assert_eq!(restored.theme_choice.as_deref(), Some("dark"));
+        assert!(restored.trading.has_broker());
+        assert_eq!(restored.account_panel_height, 470.0);
     }
 
     /// The paper account attaches exits to open positions, so a position line shows its TP and
