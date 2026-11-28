@@ -104,7 +104,7 @@ impl Default for CandleColorConfig {
     }
 }
 
-/// Status line display options. Saved settings without a field take its default.
+/// Status line display options. Saved omissions keep their former display.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -136,7 +136,8 @@ pub struct StatusLineOptions {
     pub show_change: bool,
     /// Whether the legend shows the percentage price change.
     pub show_change_percent: bool,
-    /// Whether the legend shows volume. Off by default.
+    /// Whether the legend shows volume. Off by default; saved omissions keep it on.
+    #[serde(default = "saved_legend_volume")]
     pub show_volume: bool,
     /// Whether the legend shows the change of the last price from the previous session's close.
     pub show_last_day_change: bool,
@@ -147,6 +148,10 @@ pub struct StatusLineOptions {
     pub show_indicator_background: bool,
     /// Opacity of the study rows' backdrop, from 0 to 100 percent.
     pub indicator_background_opacity: u8,
+}
+
+fn saved_legend_volume() -> bool {
+    true
 }
 
 impl Default for StatusLineOptions {

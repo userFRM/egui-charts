@@ -763,7 +763,7 @@ fn main_series_legend_actions_preserve_studies_and_comparisons() {
     assert!(chart.series_scale(other).is_some());
 }
 
-/// A new chart omits legend volume; an explicit saved choice still restores it.
+/// New charts omit legend volume; saved choices and omissions keep their former display.
 #[test]
 fn new_charts_hide_the_legend_volume_and_saved_settings_keep_it() {
     use crate::widget::settings::ChartSettingsState;
@@ -782,16 +782,44 @@ fn new_charts_hide_the_legend_volume_and_saved_settings_keep_it() {
     ));
     let settings = ChartSettingsState::from_chart(&chart);
     assert!(!settings.status_line.show_volume);
-    let mut saved = serde_json::to_value(settings).unwrap();
-    saved["status_line"]["show_volume"] = true.into();
-    let restored: ChartSettingsState = serde_json::from_value(saved).unwrap();
-    restored.apply_to_chart(&mut chart).unwrap();
-    frame(&ctx, &mut chart, 0.2, vec![]);
-    let painted = shapes(&ctx, &mut chart, 0.3, vec![]);
-    assert!(volume_shown(
-        &painted,
-        chart.last_rendered_price_rect.right()
-    ));
+    for (status_line, expected) in [
+        (r#"{"show_volume":true}"#, true),
+        (r#"{"show_volume":false}"#, false),
+        (r#"{}"#, true),
+    ] {
+        let status_line: serde_json::Value = serde_json::from_str(status_line).unwrap();
+        let mut saved = serde_json::to_value(&settings).unwrap();
+        saved["status_line"] = status_line.clone();
+        let restored: ChartSettingsState = serde_json::from_value(saved).unwrap();
+        // Templates store ChartSettingsState; saving again must retain the restored choice.
+        let restored: ChartSettingsState =
+            serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+        restored.apply_to_chart(&mut chart).unwrap();
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.3, vec![]);
+        assert_eq!(
+            volume_shown(&painted, chart.last_rendered_price_rect.right()),
+            expected,
+            "saved status line: {status_line}"
+        );
+        #[cfg(feature = "ui")]
+        {
+            let mut saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+            saved["config"] = serde_json::Value::Null;
+            saved["settings"]["status_line"] = status_line.clone();
+            let mut restored = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            restored
+                .restore(&serde_json::from_value(saved).unwrap())
+                .unwrap();
+            frame(&ctx, &mut restored, 0.4, vec![]);
+            let painted = shapes(&ctx, &mut restored, 0.5, vec![]);
+            assert_eq!(
+                volume_shown(&painted, restored.last_rendered_price_rect.right()),
+                expected,
+                "legacy layout status line: {status_line}"
+            );
+        }
+    }
 }
 
 /// The Background switch reaches both legend sites and retains the saved opacity.
