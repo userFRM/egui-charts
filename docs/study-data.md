@@ -115,7 +115,26 @@ keeps paging. A new live bar, a stream reset or a renewed subscription clears th
 error; an outstanding history error takes precedence and keeps its existing retry policy.
 The fixed range and anchored volume profile drawings add the finer interval that
 [`Instrument::profile_resolutions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#structfield.profile_resolutions) suggests for their span and dates to these requests. A connected feed
-loads it back to the first bar of the span. A volume profile study asks for each interval its profiles read, each back to the first profile that reads it. Profiles still estimate volume from those bars;
+loads it back to the first bar of the span. A volume profile study asks for each interval its profiles read, each back to the first profile that reads it. While Source interval follows the chart and Feed suggested interval is on, a study without
+profile resolution suggestions selects from `supported_timeframes`, or `native_timeframes` when
+supported intervals are unspecified. It reads the coarsest time interval reaching the detail below,
+else the finest interval shorter than the chart's. Suggestions always take precedence, including
+their history dates. Explicit sources, trade-based charts and instruments advertising no shorter
+interval keep their existing source.
+
+| Chart interval up to | Detail |
+| --- | --- |
+| 10 seconds | 1 second |
+| 15 seconds | 5 seconds |
+| 59 seconds | 15 seconds |
+| 15 minutes | 1 minute |
+| 30 minutes | 5 minutes |
+| 60 minutes | 10 minutes |
+| 120 minutes | 15 minutes |
+| 240 minutes | 30 minutes |
+| Longer intervals | 60 minutes |
+
+Profiles still estimate volume from those bars;
 a chart bar without finer inputs keeps its own estimate.
 A feed that keeps its finer bars for recent dates only states that history with
 [`ProfileResolution::with_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ProfileResolution.html#method.with_history),

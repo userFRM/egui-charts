@@ -6,7 +6,8 @@
 //! bar instead; a chart bar without finer bars keeps the estimate, so no volume is lost.
 //! With an instrument tick size and Whole ticks per row, Row count picks whole tick rows too.
 //! While the source interval follows the chart, the study reads the interval the chart
-//! instrument suggests for the length and dates of each profile,
+//! instrument suggests for the length and dates of each profile, or without suggestions the
+//! advertised interval nearest its detail, through Feed suggested interval and
 //! [`Instrument::profile_resolutions`](crate::model::Instrument::profile_resolutions).
 //! [`ProfileInput`] tells how much of a profile the finer bars cover.
 //! The chart notes each profile "Estimated from bars", also when finer bars cover all of it:
@@ -127,6 +128,9 @@ struct ProfileStudy {
     /// The instrument's volume decimals, which row values are written in, from `set_instrument`.
     volume_decimals: Option<u8>,
     resolutions: Vec<ProfileResolution>,
+    /// Advertised time intervals, from supported intervals or else native intervals, read
+    /// while the instrument suggests no profile resolutions.
+    advertised: Vec<Timeframe>,
     /// The finer intervals and their data starts stated before the chart emptied the profile
     /// to wait for its full recompute, still stated until it has bars again.
     held: Option<Vec<(Timeframe, Option<DateTime<Utc>>)>>,
@@ -182,6 +186,18 @@ struct DevelopingRange {
     opening: Option<VolumeProfile>,
     layout: VolumeProfileConfig,
 }
+
+/// Chart interval to automatic detail in milliseconds; first matching bound, else one hour.
+const DETAIL: [(i64, i64); 8] = [
+    (10_000, 1_000),
+    (15_000, 5_000),
+    (59_000, 15_000),
+    (900_000, 60_000),
+    (1_800_000, 300_000),
+    (3_600_000, 600_000),
+    (7_200_000, 900_000),
+    (14_400_000, 1_800_000),
+];
 
 /// The kinds of level the extend inputs carry, in their order.
 const LEVELS: [ProfileLevelKind; 3] = [
@@ -379,6 +395,7 @@ impl ProfileStudy {
             tick_size: None,
             volume_decimals: None,
             resolutions: Vec::new(),
+            advertised: Vec::new(),
             held: None,
             view: 0..0,
             days: ExchangeDays::default(),
@@ -899,6 +916,34 @@ impl ProfileStudy {
         !source.is_trade_based() && source.duration_ms() < self.interval.duration_ms()
     }
 
+    /// The coarsest advertised interval reaching the chart's detail, else the finest shorter
+    /// interval. Equal durations keep the first advertised entry.
+    fn advertised_source(&self) -> Option<Timeframe> {
+        if self.source.is_some()
+            || !self.feed_source
+            || !self.resolutions.is_empty()
+            || self.interval.is_trade_based()
+        {
+            return None;
+        }
+        let detail = DETAIL
+            .iter()
+            .find(|(bound, _)| self.interval.duration_ms() <= *bound)
+            .map_or(3_600_000, |d| d.1);
+        let shorter = || {
+            self.advertised
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(_, t)| self.shorter(*t))
+        };
+        shorter()
+            .filter(|(_, t)| t.duration_ms() <= detail)
+            .min_by_key(|(i, t)| (std::cmp::Reverse(t.duration_ms()), *i))
+            .or_else(|| shorter().min_by_key(|(i, t)| (t.duration_ms(), *i)))
+            .map(|(_, t)| t)
+    }
+
     /// Whether the instrument's suggestions choose the interval of each profile by its dates.
     /// Otherwise every profile reads the same interval.
     fn by_date(&self) -> bool {
@@ -915,7 +960,10 @@ impl ProfileStudy {
     /// length, and holds the profile's dates while the source follows the chart.
     fn finer_of(&self, span: Option<TimeDelta>, range: &Range<usize>) -> Option<Timeframe> {
         if self.source.is_some() || !self.feed_source || self.resolutions.is_empty() {
-            return self.source.filter(|source| self.shorter(*source));
+            return self
+                .source
+                .filter(|source| self.shorter(*source))
+                .or_else(|| self.advertised_source());
         }
         let end = range.end.min(self.data.len());
         let first = self.data.get(range.start).filter(|_| range.start < end)?;
@@ -954,6 +1002,7 @@ impl ProfileStudy {
             return self
                 .source
                 .filter(|source| self.shorter(*source))
+                .or_else(|| self.advertised_source())
                 .into_iter()
                 .collect();
         }
@@ -2268,7 +2317,16 @@ macro_rules! profile_study {
                 let resolutions =
                     instrument.map_or_else(Vec::new, |i| i.profile_resolutions.clone());
                 // A profile whose dates move it to another held interval is built again.
-                let hints_changed = self.profile.resolutions != resolutions;
+                let advertised = instrument
+                    .and_then(|i| {
+                        i.supported_timeframes
+                            .clone()
+                            .or_else(|| i.native_timeframes.clone())
+                    })
+                    .unwrap_or_default();
+                let hints_changed = self.profile.resolutions != resolutions
+                    || self.profile.advertised != advertised;
+                self.profile.advertised = advertised;
                 self.profile.resolutions = resolutions;
                 let tick_size = instrument
                     .and_then(|i| i.tick_size)
@@ -5670,5 +5728,76 @@ mod rendering_tests {
         other.calculate(&chart);
         other.update_data(&chart, 0, &[]);
         assert_eq!(other.profile_inputs(0..2)[0].coverage, 0.0);
+    }
+    /// Every profile kind selects advertised detail and keeps its own requested history start.
+    #[test]
+    fn advertised_intervals_serve_every_profile_kind() {
+        let bars: Vec<_> = (0..48)
+            .map(|i| {
+                Bar::new(
+                    DateTime::UNIX_EPOCH + TimeDelta::hours(i),
+                    10.0,
+                    11.0 + i as f64,
+                    9.0,
+                    10.0,
+                    1.0,
+                )
+            })
+            .collect();
+        for kind in [
+            Kind::Anchored,
+            Kind::Auto,
+            Kind::Fixed,
+            Kind::Visible,
+            Kind::Session,
+            Kind::Periodic,
+        ] {
+            let mut study = ProfileStudy::new(kind, 24);
+            study.interval = Timeframe::Hour1;
+            study.advertised = vec![Timeframe::Min1, Timeframe::Min15, Timeframe::Min30];
+            study.start_time = bars[2].time.timestamp_millis() as f64;
+            study.end_time = bars[4].time.timestamp_millis() as f64;
+            study.view = 2..5;
+            study.calculate(&bars);
+            assert_eq!(study.finer_intervals(), [Timeframe::Min1], "{kind:?}");
+            if matches!(kind, Kind::Anchored | Kind::Fixed | Kind::Visible) {
+                assert_eq!(study.data_start(Some(Timeframe::Min1)), Some(bars[2].time));
+            }
+            if kind == Kind::Visible {
+                study.view = 0..5;
+                assert_eq!(study.data_start(Some(Timeframe::Min1)), Some(bars[0].time));
+            }
+            if kind == Kind::Auto {
+                study.set_input("anchor", InputValue::Choice(1)).unwrap();
+                study.calculate(&bars);
+                assert_eq!(study.finer_intervals(), [Timeframe::Min1]);
+                assert_eq!(study.data_start(Some(Timeframe::Min1)), Some(bars[47].time));
+            }
+        }
+        let mut study = ProfileStudy::new(Kind::Session, 24);
+        study.interval = Timeframe::Hour1;
+        for (advertised, expected) in [
+            (
+                vec![Timeframe::Min15, Timeframe::Min30],
+                Some(Timeframe::Min15),
+            ),
+            (vec![Timeframe::Hour1, Timeframe::Day1], None),
+            (vec![], None),
+            (
+                vec![Timeframe::Custom(60), Timeframe::Min1],
+                Some(Timeframe::Custom(60)),
+            ),
+        ] {
+            study.advertised = advertised;
+            assert_eq!(study.advertised_source(), expected);
+        }
+        study.advertised = vec![Timeframe::Min1];
+        study.interval = Timeframe::Min1;
+        assert_eq!(study.advertised_source(), None);
+        study.interval = Timeframe::Ticks(NonZeroU64::MIN);
+        assert_eq!(study.advertised_source(), None);
+        study.interval = Timeframe::Hour1;
+        study.feed_source = false;
+        assert_eq!(study.advertised_source(), None);
     }
 }
