@@ -1772,6 +1772,118 @@ mod tests {
         assert_eq!(counts, (1, 2, 2));
     }
 
+    #[cfg(feature = "ui")]
+    #[test]
+    fn an_ended_position_alert_follows_its_drawing_and_starts_again_when_it_moves() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::model::{AlertCondition, AlertPositionProgress};
+
+        let feed = Arc::new(Feed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let mut drawing = Drawing::new(9, DrawingToolType::LongPos);
+        drawing.completed = true;
+        drawing.chart_points = vec![
+            ChartPoint::new(0.0, 310.0),
+            ChartPoint::new(5.0, 330.0),
+            ChartPoint::new(5.0, 290.0),
+        ];
+        let mut alert = Alert::new(
+            "SYM",
+            AlertCondition::Position {
+                levels: Box::new([0, 1, 2].map(|level| drawing.alert_source(level))),
+                progress: AlertPositionProgress::AwaitingEntry,
+            },
+        );
+        alert.timeframe = Some(Timeframe::Min1);
+        let fired = Arc::new(Mutex::new(Vec::new()));
+        let sink = fired.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, event| {
+                if let crate::services::AlertEvent::TriggeredForSymbol { message, price, .. } =
+                    event
+                {
+                    sink.lock().unwrap().push((message.clone(), price.unwrap()));
+                }
+            });
+        let ctx = egui::Context::default();
+        let factory = IndicatorFactory::new();
+        let drawing_bars = [bar(-15, 300.0), bar(0, 300.0)];
+        let poll = |evaluator: &mut AlertEvaluator, drawing: &Drawing| {
+            assert!(
+                evaluator
+                    .poll(
+                        &engine,
+                        &factory,
+                        &[AlertData {
+                            request: AlertFeed::history_request("SYM", Timeframe::Min15),
+                            bars: &drawing_bars,
+                            history_complete: true,
+                            drawings: std::slice::from_ref(drawing),
+                            signals: Vec::new(),
+                            exchange: None,
+                        }],
+                        &ctx,
+                        DateTime::from_timestamp(1_000, 0).unwrap(),
+                    )
+                    .is_empty()
+            );
+        };
+        let push = |minute, close| {
+            feed.subscriptions
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|subscription| subscription.timeframe == Timeframe::Min1)
+                .unwrap()
+                .sink
+                .push_bar(bar(minute, close));
+        };
+        for _ in 0..6 {
+            poll(&mut evaluator, &drawing);
+        }
+        for (minute, close) in [(1, 305.0), (2, 310.0), (3, 330.0)] {
+            push(minute, close);
+            poll(&mut evaluator, &drawing);
+            poll(&mut evaluator, &drawing);
+        }
+        assert_eq!(
+            *fired.lock().unwrap(),
+            [
+                ("Position entered".into(), 310.0),
+                ("Position target reached".into(), 330.0),
+            ]
+        );
+        assert_eq!(engine.alerts()[0].status, AlertStatus::Triggered);
+        drawing.chart_points[1].price = 340.0;
+        poll(&mut evaluator, &drawing);
+        poll(&mut evaluator, &drawing);
+        assert_eq!(engine.alerts()[0].status, AlertStatus::Active);
+        assert!(matches!(
+            engine.alerts()[0].condition,
+            AlertCondition::Position {
+                progress: AlertPositionProgress::AwaitingEntry,
+                ..
+            }
+        ));
+        assert_eq!(fired.lock().unwrap().len(), 2, "the edit fires nothing");
+        for (minute, close) in [(4, 320.0), (5, 310.0), (6, 340.0)] {
+            push(minute, close);
+            poll(&mut evaluator, &drawing);
+            poll(&mut evaluator, &drawing);
+        }
+        assert_eq!(
+            *fired.lock().unwrap(),
+            [
+                ("Position entered".into(), 310.0),
+                ("Position target reached".into(), 330.0),
+                ("Position entered".into(), 310.0),
+                ("Position target reached".into(), 340.0),
+            ]
+        );
+        assert_eq!(engine.alerts()[0].status, AlertStatus::Triggered);
+    }
+
     /// Trades through a level, or out of a channel and back, that one poll folds into the bar
     /// fire the alert once.
     #[test]

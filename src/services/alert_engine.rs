@@ -32,7 +32,8 @@ const TRIGGER_HISTORY: usize = 5_000;
 /// watchlist each member's time in [`member_triggered_at`](Alert::member_triggered_at), as its
 /// last firing (see *Restarts*). An alert with frequency [`Once`](AlertFrequency::Once) that
 /// fired stays [`Triggered`](AlertStatus::Triggered). A [`Position`](AlertCondition::Position)
-/// keeps its progress in its condition, so it resumes waiting for the entry or for an exit.
+/// keeps its progress in its condition, so it resumes waiting for the entry or for an exit,
+/// and retains the levels that progress reached, see *Positions*.
 ///
 /// # Rules
 ///
@@ -115,12 +116,15 @@ const TRIGGER_HISTORY: usize = 5_000;
 /// after an `Upsert` carrying its new progress, and becomes `Triggered` after the exit. Outside
 /// its schedule the triggers are silent but progress still moves. An empty message reads the
 /// progress reached, such as "Position entered". Saving it active after its exit starts it again
-/// from the entry.
+/// from the entry. Moving the entry of an entered position, or any level after its exit, also
+/// starts it again from the entry with an `Upsert` and no trigger; the new entry needs a value
+/// observed after the edit. Moving the target or the stop of an entered position keeps it entered.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
-/// and expires without data. Disabled, triggered and expired alerts are not evaluated, and
-/// saving changes to what an alert watches or its status, or removing it, discards its evaluation
+/// and expires without data. Disabled, triggered and expired alerts are not evaluated, except
+/// that a position that reached its exit keeps reading its levels. Saving changes to what an
+/// alert watches or its status, or removing it, discards its evaluation
 /// state, so a resumed alert starts afresh. Display and delivery edits keep a watchlist alert's
 /// member record.
 ///
@@ -394,13 +398,14 @@ impl AlertEngine {
         self.lock().triggers.retain(keep);
     }
 
-    /// Active symbols still armed for `id`, including watchlist members. A once-per-member
+    /// Active symbols still armed for `id`, including watchlist members, and the symbol of a
+    /// position that reached its exit, whose levels the engine still follows. A once-per-member
     /// alert omits symbols that already fired, so a host can release their subscriptions.
     pub fn subjects(&self, id: &AlertId) -> Vec<String> {
         let state = self.lock();
         let Some(alert) = state.alerts.iter().find(|alert| {
             alert.id.as_ref() == Some(id)
-                && alert.status == AlertStatus::Active
+                && (alert.status == AlertStatus::Active || ended_position(alert))
                 && alert.is_valid()
                 && !alert.condition.is_event()
         }) else {
@@ -526,7 +531,7 @@ impl AlertEngine {
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
-            alert.status == AlertStatus::Active
+            (alert.status == AlertStatus::Active || ended_position(alert))
                 && alert.is_valid()
                 && alert.starts.is_none_or(|starts| starts <= now)
                 && !alert.condition.is_event()
@@ -583,6 +588,16 @@ impl AlertEngine {
                 }
             }
             if !matched || !ready {
+                continue;
+            }
+            if restart_position(alert, run) {
+                if let Some(events) = events {
+                    events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+                }
+                continue;
+            }
+            // An ended position only follows its levels.
+            if alert.status != AlertStatus::Active {
                 continue;
             }
             let Some((bar, messages, silent)) =
@@ -1616,6 +1631,7 @@ fn evaluate(
     }
     if let (Some(value), Some(entry), Some(target), Some(stop)) = (value, entry, target, stop) {
         stages.extend(position_exit(value, entry, target, stop));
+        alert.position_levels = Some([entry, target, stop]);
     }
     let mut messages = Vec::new();
     for stage in stages {
@@ -1696,6 +1712,54 @@ fn reads_previous(condition: &AlertCondition) -> bool {
         ),
         _ => false,
     }
+}
+
+/// Whether `alert` is a position that reached its exit, whose levels still need watching.
+fn ended_position(alert: &Alert) -> bool {
+    alert.status == AlertStatus::Triggered
+        && matches!(
+            alert.condition,
+            AlertCondition::Position {
+                progress: AlertPositionProgress::TargetReached | AlertPositionProgress::StopReached,
+                ..
+            }
+        )
+}
+
+/// Restarts a position when its entry moved after entry, or any level moved after exit. The
+/// observation reading the edit becomes its baseline, so the edit cannot fire. Older saved
+/// alerts adopt the first resolved levels without changing their progress.
+fn restart_position(alert: &mut Alert, run: &mut Run) -> bool {
+    let AlertCondition::Position { progress, .. } = &mut alert.condition else {
+        return false;
+    };
+    let Some(newest) = run.intervals.get(&alert.timeframe.unwrap_or_default()) else {
+        return false;
+    };
+    // A position has one rule: the value and its entry, target and stop.
+    let Some(&[_, Some(entry), Some(target), Some(stop)]) = newest.seen.rules.first() else {
+        return false;
+    };
+    let levels = [entry, target, stop];
+    let moved = match (*progress, alert.position_levels) {
+        (AlertPositionProgress::AwaitingEntry, _) => false,
+        (_, None) => {
+            alert.position_levels = Some(levels);
+            false
+        }
+        (AlertPositionProgress::Entered, Some(reached)) => reached[0] != entry,
+        (_, Some(reached)) => reached != levels,
+    };
+    if moved {
+        *progress = AlertPositionProgress::AwaitingEntry;
+        alert.status = AlertStatus::Active;
+        alert.position_levels = None;
+        run.joined = vec![newest.seen.clone()];
+        run.fired = None;
+        run.silent = None;
+        run.done = false;
+    }
+    moved
 }
 
 /// Whether `alert`, a once alert on a watchlist, fired for `symbol` before, as its saved member
@@ -2499,6 +2563,196 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn editing_a_reached_position_level_starts_the_alert_again() {
+        use AlertPositionProgress::{AwaitingEntry, Entered, StopReached, TargetReached};
+        type PositionRow = (
+            [f64; 3],
+            f64,
+            Vec<f64>,
+            AlertPositionProgress,
+            [f64; 3],
+            Vec<f64>,
+            Vec<(&'static str, f64)>,
+        );
+        let entered = "Position entered";
+        let target = "Position target reached";
+        let stop = "Position stop reached";
+        let rows: Vec<PositionRow> = vec![
+            (
+                [100.0, 110.0, 95.0],
+                98.0,
+                vec![100.0, 105.0],
+                Entered,
+                [110.0, 130.0, 100.0],
+                vec![100.0, 110.0, 100.0],
+                vec![(entered, 110.0), (stop, 100.0)],
+            ),
+            (
+                [100.0, 90.0, 105.0],
+                102.0,
+                vec![100.0, 97.0],
+                Entered,
+                [95.0, 85.0, 100.0],
+                vec![100.0, 95.0, 100.0],
+                vec![(entered, 95.0), (stop, 100.0)],
+            ),
+            (
+                [100.0, 110.0, 95.0],
+                98.0,
+                vec![99.0, 100.0, 110.0],
+                TargetReached,
+                [100.0, 120.0, 95.0],
+                vec![99.0, 100.0, 120.0],
+                vec![(entered, 100.0), (target, 120.0)],
+            ),
+            (
+                [100.0, 90.0, 105.0],
+                102.0,
+                vec![100.0, 104.0, 105.0],
+                StopReached,
+                [100.0, 90.0, 108.0],
+                vec![102.0, 99.0, 108.0],
+                vec![(entered, 99.0), (stop, 108.0)],
+            ),
+        ];
+        for (index, (before, history, closes, reached, after, reloaded, expected)) in
+            rows.into_iter().enumerate()
+        {
+            let position = |ids: [&str; 3], progress| {
+                alert(
+                    AlertCondition::Position {
+                        levels: Box::new(ids.map(|id| AlertSource::Drawing(id.into()))),
+                        progress,
+                    },
+                    AlertFrequency::Once,
+                )
+            };
+            let host = Host::new(vec![
+                position(["p", "p#1", "p#2"], AwaitingEntry),
+                position(["q", "q#1", "q#2"], Entered),
+            ]);
+            let levels = std::cell::Cell::new(before);
+            let now = std::cell::Cell::new(1_000);
+            let update = |host: &Host, bars: &[Bar]| {
+                host.engine.update(
+                    "SYM",
+                    None,
+                    Timeframe::Min1,
+                    bars,
+                    time(now.get()),
+                    |source, _| {
+                        let AlertSource::Drawing(id) = source else {
+                            return None;
+                        };
+                        ["p", "p#1", "p#2"]
+                            .iter()
+                            .position(|name| *name == id)
+                            .map(|n| levels.get()[n])
+                            .or_else(|| {
+                                ["q", "q#1", "q#2"]
+                                    .iter()
+                                    .position(|name| *name == id)
+                                    .map(|n| [50.0, 1_000.0, 10.0][n])
+                            })
+                    },
+                );
+                now.set(now.get() + 1);
+            };
+            let mut bars = vec![bar(0, history, 1.0)];
+            for close in closes {
+                bars.push(bar(bars.len() as i64, close, 1.0));
+                update(&host, &bars);
+            }
+            let p = host.engine.alerts().remove(0);
+            let id = p.id.clone().unwrap();
+            assert!(
+                matches!(p.condition, AlertCondition::Position { progress, .. } if progress == reached)
+            );
+            assert!(host.events().iter().all(|event| !matches!(
+                event, AlertEvent::TriggeredForSymbol { id: fired, .. } if *fired != id
+            )));
+            // A drawing still loading must not discard reached progress or its recorded levels.
+            levels.set([after[0], after[1], f64::NAN]);
+            update(&host, &bars);
+            assert_eq!(host.engine.alerts()[0], p, "row {index}: unavailable stop");
+            assert!(host.events().is_empty());
+            levels.set(after);
+            update(&host, &bars);
+            let restarted = host.engine.alerts().remove(0);
+            assert!(
+                matches!(
+                    restarted.condition,
+                    AlertCondition::Position {
+                        progress: AwaitingEntry,
+                        ..
+                    }
+                ),
+                "row {index}: edited levels restart the position"
+            );
+            assert_eq!(restarted.status, AlertStatus::Active, "row {index}");
+            assert_eq!(restarted.last_triggered_at, p.last_triggered_at);
+            assert_eq!(host.events(), vec![AlertEvent::Upsert(Box::new(restarted))]);
+
+            let host = Host::new(
+                serde_json::from_value(serde_json::to_value(host.engine.alerts()).unwrap())
+                    .unwrap(),
+            );
+            for close in reloaded {
+                bars.push(bar(bars.len() as i64, close, 1.0));
+                update(&host, &bars);
+            }
+            let events = host.events();
+            let fired: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    AlertEvent::TriggeredForSymbol {
+                        id: fired,
+                        message,
+                        price: Some(price),
+                        ..
+                    } => {
+                        assert_eq!(*fired, id, "row {index}: unrelated position stays entered");
+                        Some((message.as_str(), *price))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(fired, expected, "row {index}");
+            let saved = host.engine.alerts();
+            let ended = if expected.last().unwrap().0 == target {
+                TargetReached
+            } else {
+                StopReached
+            };
+            assert_eq!(saved[0].status, AlertStatus::Triggered);
+            assert!(
+                matches!(saved[0].condition, AlertCondition::Position { progress, .. } if progress == ended)
+            );
+            assert_eq!(saved[1].status, AlertStatus::Active);
+            assert!(matches!(
+                saved[1].condition,
+                AlertCondition::Position {
+                    progress: Entered,
+                    ..
+                }
+            ));
+            let host =
+                Host::new(serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap());
+            host.events();
+            update(&host, &bars);
+            assert!(
+                host.events().is_empty(),
+                "row {index}: unchanged restore stays ended"
+            );
+            let saved = host.engine.alerts().remove(0);
+            assert_eq!(saved.status, AlertStatus::Triggered);
+            assert!(
+                matches!(saved.condition, AlertCondition::Position { progress, .. } if progress == ended)
+            );
+        }
     }
 
     /// An hourly alert fired at 10:05 in the 10:00 bar, was saved and is restored at 10:20. Each

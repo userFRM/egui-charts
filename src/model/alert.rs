@@ -95,6 +95,13 @@ pub struct Alert {
     /// clears it when a save changes what the alert watches or its status.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub member_triggered_at: BTreeMap<String, DateTime<Utc>>,
+    /// The entry, target and stop read when a [`Position`](AlertCondition::Position) alert's
+    /// progress last moved. Hosts keep these with the alert, as they keep `last_triggered_at`.
+    /// Moving the entry of an entered position, or any level of one that reached its exit,
+    /// starts it again from [`AwaitingEntry`](AlertPositionProgress::AwaitingEntry).
+    /// `None` before the first move and for other alerts; ignored while waiting for entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_levels: Option<[f64; 3]>,
     /// Draw the threshold across the pane in addition to its marker. Enabled by default.
     #[serde(default = "alert_display_enabled")]
     pub extend_line: bool,
@@ -410,6 +417,7 @@ impl Alert {
             created_at: None,
             last_triggered_at: None,
             member_triggered_at: BTreeMap::new(),
+            position_levels: None,
             extend_line: true,
             blink_on_trigger: true,
             symbol: symbol.into(),
@@ -440,10 +448,11 @@ impl Alert {
         copy.last_triggered_at = other.last_triggered_at;
         copy.member_triggered_at
             .clone_from(&other.member_triggered_at);
+        copy.position_levels = other.position_levels;
         copy.extend_line = other.extend_line;
         copy.blink_on_trigger = other.blink_on_trigger;
         copy.delivery.clone_from(&other.delivery);
-        // A position's progress is what evaluation reports, not what it watches.
+        // A position's progress and the levels it reached are reported state, not what it watches.
         if let (
             AlertCondition::Position { progress, .. },
             AlertCondition::Position {
@@ -814,9 +823,12 @@ pub enum AlertCondition {
     /// the previous value was; the stop counts first when both are reached, and no exit is
     /// reached while the target equals the entry. The alert fires on the entry and on the exit,
     /// both on one evaluation that passes through the entry to an exit, and ends after the exit
-    /// with status `Triggered`. Each trigger moves `progress` on, also outside the alert's
-    /// schedule, where it is only logged. It takes frequency `Once`, no additional rules and no
-    /// watchlist.
+    /// with status `Triggered`. Moving the entry of an entered position, or any level after its
+    /// exit, starts it again from `AwaitingEntry` with status `Active`: the new entry needs a
+    /// value observed after the edit, and nothing fires for the edit itself. Moving the target
+    /// or the stop of an entered position keeps it entered. Each trigger moves `progress` on,
+    /// also outside the alert's schedule, where it is only logged. It takes frequency `Once`,
+    /// no additional rules and no watchlist.
     Position {
         /// The entry, the target and the stop, in this order, such as levels 0, 1 and 2 of a
         /// position drawing's `Drawing::alert_source`.
@@ -1104,7 +1116,8 @@ impl std::fmt::Display for AlertChannelComparison {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertPositionProgress {
-    /// Waiting for the value to reach the entry, also after an ended alert is made active again.
+    /// Waiting for the value to reach the entry, also after an ended alert is made active again
+    /// or an edit of its levels starts it again.
     #[default]
     AwaitingEntry,
     /// The entry was reached; waiting for the target or the stop.
@@ -2238,6 +2251,7 @@ mod tests {
                 created_at: None,
                 last_triggered_at: None,
                 member_triggered_at: BTreeMap::new(),
+                position_levels: None,
                 extend_line: true,
                 blink_on_trigger: true,
                 name: String::new(),
