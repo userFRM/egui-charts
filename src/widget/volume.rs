@@ -395,7 +395,7 @@ mod tests {
                 .set_input("period", InputValue::Length(2))
                 .unwrap();
         });
-        for (time, redo, period) in [(1.01, false, 9), (1.02, true, 2), (1.03, false, 9)] {
+        for (time, redo, period) in [(1.01, false, 20), (1.02, true, 2), (1.03, false, 20)] {
             assert!(if redo { chart.redo() } else { chart.undo() });
             shapes(&ctx, &mut chart, time, vec![]);
             assert!(

@@ -1944,87 +1944,108 @@ mod tests {
         use crate::model::{AlertCondition, AlertFrequency, FootprintMetric, OrderSide, Tick};
         use AlertFrequency::{OncePerBar, OncePerBarClose};
         use FootprintMetric::{BuyVolume, Delta, SellVolume};
-        let feed = Arc::new(Feed::default());
-        let mut evaluator = AlertEvaluator::new(feed.clone());
-        let alerts = [
-            (BuyVolume, AlertCondition::Above(10.0), OncePerBar),
-            (SellVolume, AlertCondition::Above(10.0), OncePerBar),
-            (Delta, AlertCondition::CrossingDown(0.0), OncePerBar),
-            (BuyVolume, AlertCondition::Above(10.0), OncePerBarClose),
-        ]
-        .map(|(metric, condition, frequency)| {
-            let mut alert = Alert::new("SYM", condition);
-            alert.source = AlertSource::Footprint(metric);
-            alert.timeframe = Some(Timeframe::Min1);
-            alert.frequency = frequency;
-            // The evaluator consumes the same shape a host restores from storage.
-            serde_json::from_str(&serde_json::to_string(&alert).unwrap()).unwrap()
-        });
-        let fired = Arc::new(Mutex::new(Vec::new()));
-        let recorded = fired.clone();
-        let engine = AlertEngine::new()
-            .with_alerts(alerts.to_vec())
-            .on_trigger(move |alert, _| {
-                recorded
-                    .lock()
-                    .unwrap()
-                    .push((alert.source.clone(), alert.frequency));
+        for timeframe in [
+            Timeframe::Min1,
+            Timeframe::Ticks(std::num::NonZeroU64::new(5).unwrap()),
+        ] {
+            let feed = Arc::new(Feed::default());
+            let mut evaluator = AlertEvaluator::new(feed.clone());
+            let alerts = [
+                (BuyVolume, AlertCondition::Above(10.0), OncePerBar),
+                (SellVolume, AlertCondition::Above(10.0), OncePerBar),
+                (Delta, AlertCondition::CrossingDown(0.0), OncePerBar),
+                (BuyVolume, AlertCondition::Above(10.0), OncePerBarClose),
+            ]
+            .map(|(metric, condition, frequency)| {
+                let mut alert = Alert::new("SYM", condition);
+                alert.source = AlertSource::Footprint(metric);
+                alert.timeframe = Some(timeframe);
+                alert.frequency = frequency;
+                // The evaluator consumes the same shape a host restores from storage.
+                serde_json::from_str(&serde_json::to_string(&alert).unwrap()).unwrap()
             });
-        #[cfg(feature = "ui")]
-        let ctx = egui::Context::default();
-        let poll = |evaluator: &mut AlertEvaluator| {
-            assert!(
-                evaluator
-                    .poll(
-                        &engine,
-                        &IndicatorFactory::new(),
-                        &[],
-                        #[cfg(feature = "ui")]
-                        &ctx,
-                        DateTime::from_timestamp(1000, 0).unwrap()
-                    )
-                    .is_empty()
-            );
-        };
-        for _ in 0..4 {
+            let fired = Arc::new(Mutex::new(Vec::new()));
+            let recorded = fired.clone();
+            let engine =
+                AlertEngine::new()
+                    .with_alerts(alerts.to_vec())
+                    .on_trigger(move |alert, _| {
+                        recorded
+                            .lock()
+                            .unwrap()
+                            .push((alert.source.clone(), alert.frequency));
+                    });
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            let poll = |evaluator: &mut AlertEvaluator| {
+                assert!(
+                    evaluator
+                        .poll(
+                            &engine,
+                            &IndicatorFactory::new(),
+                            &[],
+                            #[cfg(feature = "ui")]
+                            &ctx,
+                            DateTime::from_timestamp(1000, 0).unwrap()
+                        )
+                        .is_empty()
+                );
+            };
+            for _ in 0..4 {
+                poll(&mut evaluator);
+            }
+            let trade = |second, size, side| {
+                for subscription in feed.subscriptions.lock().unwrap().iter() {
+                    subscription.sink.push_tick(
+                        Tick::new(
+                            DateTime::from_timestamp(second, 0).unwrap(),
+                            340.0,
+                            size,
+                            side,
+                        )
+                        .with_id(second as u64),
+                    );
+                }
+            };
+            trade(61, 6.0, Some(OrderSide::Buy));
             poll(&mut evaluator);
-        }
-        let trade = |second, size, side| {
+            assert!(fired.lock().unwrap().is_empty());
+            trade(62, 5.0, Some(OrderSide::Buy));
+            trade(63, 8.0, None);
+            trade(64, 3.0, Some(OrderSide::Sell));
+            poll(&mut evaluator);
+            let a = (AlertSource::Footprint(BuyVolume), OncePerBar);
+            let b = (AlertSource::Footprint(SellVolume), OncePerBar);
+            let c = (AlertSource::Footprint(Delta), OncePerBar);
+            let d = (AlertSource::Footprint(BuyVolume), OncePerBarClose);
+            assert_eq!(*fired.lock().unwrap(), [a.clone()]);
             for subscription in feed.subscriptions.lock().unwrap().iter() {
-                subscription.sink.push_tick(Tick::new(
-                    DateTime::from_timestamp(second, 0).unwrap(),
-                    340.0,
-                    size,
-                    side,
-                ));
+                subscription.sink.push_tick(
+                    Tick::new(
+                        DateTime::from_timestamp(62, 0).unwrap(),
+                        340.0,
+                        5.0,
+                        Some(OrderSide::Buy),
+                    )
+                    .with_id(62)
+                    .with_aggressor_order_id(7),
+                );
             }
-        };
-        trade(61, 6.0, Some(OrderSide::Buy));
-        poll(&mut evaluator);
-        assert!(fired.lock().unwrap().is_empty());
-        trade(62, 5.0, Some(OrderSide::Buy));
-        trade(63, 8.0, None);
-        trade(64, 3.0, Some(OrderSide::Sell));
-        poll(&mut evaluator);
-        let a = (AlertSource::Footprint(BuyVolume), OncePerBar);
-        let b = (AlertSource::Footprint(SellVolume), OncePerBar);
-        let c = (AlertSource::Footprint(Delta), OncePerBar);
-        let d = (AlertSource::Footprint(BuyVolume), OncePerBarClose);
-        assert_eq!(*fired.lock().unwrap(), [a.clone()]);
-        trade(65, 9.0, Some(OrderSide::Sell));
-        poll(&mut evaluator);
-        // Evaluations are keyed independently, so simultaneous firings have no ordering.
-        let has = |expected: &[_]| {
-            let actual = fired.lock().unwrap();
-            assert_eq!(actual.len(), expected.len());
-            for event in expected {
-                assert!(actual.contains(event), "{actual:?}");
-            }
-        };
-        has(&[a.clone(), b.clone(), c.clone()]);
-        trade(121, 1.0, Some(OrderSide::Buy));
-        poll(&mut evaluator);
-        has(&[a, b, c, d]);
+            trade(65, 9.0, Some(OrderSide::Sell));
+            poll(&mut evaluator);
+            // Evaluations are keyed independently, so simultaneous firings have no ordering.
+            let has = |expected: &[_]| {
+                let actual = fired.lock().unwrap();
+                assert_eq!(actual.len(), expected.len());
+                for event in expected {
+                    assert!(actual.contains(event), "{actual:?}");
+                }
+            };
+            has(&[a.clone(), b.clone(), c.clone()]);
+            trade(121, 1.0, Some(OrderSide::Buy));
+            poll(&mut evaluator);
+            has(&[a, b, c, d]);
+        }
     }
 
     /// Trades through a level, or out of a channel and back, that one poll folds into the bar
