@@ -8,6 +8,7 @@
 //! Where Money Flow Volume = Money Flow Multiplier * Volume
 //! And Money Flow Multiplier = ((Close - Low) - (High - Close)) / (High - Low)
 //! A bar whose window holds no volume has no value.
+//! While no loaded bar has volume, the pane shows a notice that the symbol's data has no volume.
 //!
 //! # Interpretation
 //! - CMF > 0: Buying pressure (accumulation)
@@ -28,7 +29,7 @@ use super::over_finite_bars;
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::{update_window, usable_behind};
-use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{Indicator, IndicatorValue, IndicatorValues, StudyCell, StudyTable};
 use egui::Color32;
 
 /// Chaikin Money Flow indicator
@@ -36,6 +37,8 @@ use egui::Color32;
 pub struct ChaikinMoneyFlow {
     period: usize,
     values: IndicatorValues,
+    first_volume: Option<usize>,
+    notice: Option<StudyTable>,
     positive_color: Color32,
     negative_color: Color32,
     visible: bool,
@@ -50,6 +53,8 @@ impl ChaikinMoneyFlow {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            first_volume: None,
+            notice: None,
             positive_color: palette::DARK_GREEN,
             negative_color: palette::RED,
             visible: true,
@@ -136,6 +141,25 @@ impl Indicator for ChaikinMoneyFlow {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
+        let from = from.min(self.values.len()).min(data.len());
+        // A volume in the unchanged prefix still counts; otherwise search the changed bars.
+        if self.first_volume.is_none_or(|at| at >= from) {
+            self.first_volume = data[from..]
+                .iter()
+                .position(|bar| bar.volume.is_finite() && bar.volume > 0.0)
+                .map(|at| at + from);
+        }
+        let wanted = !data.is_empty() && self.first_volume.is_none();
+        if wanted != self.notice.is_some() {
+            self.notice = wanted.then(|| StudyTable {
+                title: "CMF".to_owned(),
+                columns: vec!["Volume".to_owned()],
+                rows: vec![vec![StudyCell::Text(
+                    "This symbol's data has no volume".into(),
+                )]],
+                ..StudyTable::default()
+            });
+        }
         let mut values = std::mem::take(&mut self.values);
         update_window(
             &mut values,
@@ -161,6 +185,10 @@ impl Indicator for ChaikinMoneyFlow {
             },
         );
         self.values = values;
+    }
+
+    fn table(&self) -> Option<&StudyTable> {
+        self.notice.as_ref()
     }
 
     fn is_incremental(&self) -> bool {
@@ -225,6 +253,46 @@ mod tests {
     use super::*;
     use crate::studies::test_support::make_range_bar;
 
+    /// The notice describes the loaded history, including live corrections, rather than a
+    /// single empty rolling window.
+    #[test]
+    fn history_without_volume_shows_a_notice() {
+        use crate::studies::StudyCell;
+        let mut data = vec![
+            Bar {
+                volume: 0.0,
+                ..make_range_bar(12.0, 10.0, 11.5)
+            };
+            200
+        ];
+        let mut cmf = ChaikinMoneyFlow::default();
+        cmf.calculate(&data);
+        assert_eq!(
+            cmf.table().unwrap().rows,
+            [vec![StudyCell::Text(
+                "This symbol's data has no volume".into()
+            )]]
+        );
+        data.push(Bar {
+            volume: 1000.0,
+            ..data[0].clone()
+        });
+        cmf.update(&data, 200);
+        assert_eq!(cmf.table(), None);
+        data[200].volume = 0.0;
+        cmf.update(&data, 200);
+        assert!(cmf.table().is_some());
+        cmf.calculate(&data[..200]);
+        assert!(cmf.table().is_some());
+        for volume in [f64::NAN, -1.0] {
+            data[0].volume = volume;
+            cmf.calculate(&data);
+            assert!(cmf.table().is_some());
+        }
+        cmf.calculate(&[]);
+        assert_eq!(cmf.table(), None);
+    }
+
     /// Money flow over a window without volume is undefined, not balanced: 20 bars with volume, 20 without,
     /// then one with volume again.
     #[test]
@@ -242,6 +310,7 @@ mod tests {
             .collect();
         let mut cmf = ChaikinMoneyFlow::new(20);
         cmf.calculate(&data);
+        assert_eq!(cmf.table(), None);
         let expected = |i: usize| match i {
             0..19 => None,
             19..39 => Some(0.5),

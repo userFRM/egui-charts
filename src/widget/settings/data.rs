@@ -594,6 +594,10 @@ pub struct TradingSettings {
     /// Show only side, order type, prices and quantity above the send button, with the order's
     /// exits listed one per line. The ticket's More menu switches it.
     pub compact_ticket: bool,
+    /// Show the order ticket as a movable window over the chart, leaving the chart its full
+    /// width. The ticket header switches it. Defaults to false, including for settings saved
+    /// without this field.
+    pub undocked_ticket: bool,
     /// Show current Bid and Ask tags supplied by the quote source.
     pub bid_ask_labels: bool,
     /// Ask the host to play [`execution_sound`](Self::execution_sound) for every fill, through
@@ -645,6 +649,7 @@ impl Default for TradingSettings {
         Self {
             instant_orders: false,
             compact_ticket: false,
+            undocked_ticket: false,
             bid_ask_labels: false,
             play_execution_sound: false,
             execution_sound: String::new(),
@@ -789,6 +794,7 @@ pub struct OrderFlowSettings {
 /// let mut settings = ChartSettingsState::default();
 /// settings.candle_colors.show_wick = false;
 /// settings.status_line.show_logo = false;
+/// settings.trading = egui_charts::widget::settings::TradingSettings::default();
 /// settings.trading.instant_orders = true;
 /// settings.alerts.sound_volume = 0.5;
 /// settings.session_background = Some(egui_charts::widget::settings::SessionBackgroundSettings::default());

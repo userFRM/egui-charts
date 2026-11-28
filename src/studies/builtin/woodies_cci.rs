@@ -1,27 +1,29 @@
 //! Woodies CCI, after Ken Wood's CCI trading method.
 //!
-//! Two Commodity Channel Index lines of the close, a fast "turbo" CCI and the trading CCI, with the
+//! Two Commodity Channel Index lines of the typical price by default, a fast "turbo" CCI and the trading CCI, with the
 //! trading CCI also drawn as columns coloured by how long it has held one side of zero.
 //!
 //! # Formula
 //!
 //! ```text
-//! CCI(n) = (close - SMA(close, n)) / (0.015 * mean absolute deviation of close over n)
+//! CCI(n) = (tp - SMA(tp, n)) / (0.015 * mean absolute deviation of tp over n)
 //! ```
+//!
+//! Here tp = (high + low + close) / 3 by default, or the chosen source.
 //!
 //! Lines, in order: the CCI 14 columns, the CCI Turbo (6) and the CCI 14 line. Levels at 100, 0
 //! and -100.
 //!
-//! A line has no value until its window holds `n` finite closes, on a bar whose close is not
-//! finite, which no window includes, and on a bar whose window holds `n` equal closes: that window
+//! A line has no value until its window holds `n` finite prices, on a bar whose price is not
+//! finite, which no window includes, and on a bar whose window holds `n` equal prices: that window
 //! has no mean deviation, so the ratio divides zero by zero.
 //!
 //! # Column stages
 //!
 //! A column's stage follows its run: the bar itself and the unbroken CCI 14 values just before it
-//! on the same side of zero. Bars skipped for a non-finite close are not part of the series, so a
+//! on the same side of zero. Bars skipped for a non-finite price are not part of the series, so a
 //! run continues across them. A value of exactly zero is on neither side, so it has no run and
-//! ends the run before it. A bar whose CCI 14 window holds equal closes has no value and no
+//! ends the run before it. A bar whose CCI 14 window holds equal prices has no value and no
 //! column, and ends the run before it as a zero does. A zero after five values on one side keeps
 //! the established colour of that side.
 //!
@@ -59,7 +61,7 @@ pub struct WoodiesCCI {
     turbo_length: usize,
     cci_length: usize,
     values: IndicatorValues,
-    /// Whether each bar has a finite close but no CCI 14 value: a window of equal closes,
+    /// Whether each bar has a finite price but no CCI 14 value: a window of equal prices,
     /// which ends the column run, or a warm-up bar, before which no bar has a value.
     flat: Vec<bool>,
     /// Colors: [columns, CCI Turbo, CCI 14]; the columns colour is the established run above zero.
@@ -99,7 +101,7 @@ impl WoodiesCCI {
         }
     }
 
-    /// CCI of the close at bar `i`, or NaN before its window is full and where the window has no
+    /// CCI of the prices at bar `i`, or NaN before its window is full and where the window has no
     /// deviation, which makes the ratio 0 / 0.
     fn cci(closes: &[f64], i: usize, length: usize) -> f64 {
         let Some(start) = (i + 1).checked_sub(length) else {
@@ -118,15 +120,42 @@ impl WoodiesCCI {
         }
     }
 
-    /// The values over `data`, every bar of which has a finite close.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
+    /// The values over `data`, every bar of which has a finite price.
+    fn compute(&self, data: &[Bar], price: fn(&Bar) -> f64) -> IndicatorValues {
+        let closes: Vec<f64> = data.iter().map(price).collect();
         let mut values = IndicatorValues::new();
         for i in 0..closes.len() {
             let cci = Self::cci(&closes, i, self.cci_length);
             values.push_lines(&[cci, Self::cci(&closes, i, self.turbo_length), cci]);
         }
         values
+    }
+
+    fn update_with(&mut self, data: &[Bar], from: usize, price: fn(&Bar) -> f64) {
+        let mut values = std::mem::take(&mut self.values);
+        update_window(
+            &mut values,
+            data,
+            from,
+            usable_behind(self.turbo_length.max(self.cci_length) - 1, |b| {
+                price(b).is_finite()
+            }),
+            |data| {
+                over_finite_bars(
+                    data,
+                    |b| price(b).is_finite(),
+                    |data| self.compute(data, price),
+                )
+            },
+        );
+        // Kept beside the values: update_window keeps the first min(from, len) bars.
+        self.flat.truncate(from.min(data.len()));
+        let start = self.flat.len();
+        self.flat.extend(
+            (start..data.len())
+                .map(|bar| price(&data[bar]).is_finite() && values.value(0, bar).is_none()),
+        );
+        self.values = values;
     }
 }
 
@@ -147,7 +176,7 @@ impl Indicator for WoodiesCCI {
 
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
-            crate::model::PriceSource::Close,
+            crate::model::PriceSource::HLC3,
         ))
     }
 
@@ -188,7 +217,7 @@ impl Indicator for WoodiesCCI {
             return None;
         }
         let value = self.values.value(0, bar)?;
-        // A flat window ends the run; bars skipped for a non-finite close are not in it.
+        // A flat window ends the run; bars skipped for a non-finite price are not in it.
         let previous = (0..bar)
             .rev()
             .take_while(|&bar| self.flat.get(bar) != Some(&true))
@@ -228,24 +257,19 @@ impl Indicator for WoodiesCCI {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let mut values = std::mem::take(&mut self.values);
-        update_window(
-            &mut values,
-            data,
-            from,
-            usable_behind(self.turbo_length.max(self.cci_length) - 1, |b| {
-                b.close.is_finite()
-            }),
-            |data| over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data)),
-        );
-        // Kept beside the values: update_window keeps the first min(from, len) bars.
-        self.flat.truncate(from.min(data.len()));
-        let start = self.flat.len();
-        self.flat.extend(
-            (start..data.len())
-                .map(|bar| data[bar].close.is_finite() && values.value(0, bar).is_none()),
-        );
-        self.values = values;
+        self.update_with(data, from, Bar::typical_price);
+    }
+
+    fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        let bars: Vec<_> = data
+            .iter()
+            .enumerate()
+            .map(|(at, bar)| Bar {
+                close: source.get(at).copied().unwrap_or(f64::NAN),
+                ..bar.clone()
+            })
+            .collect();
+        self.update_with(&bars, from, |bar| bar.close);
     }
 
     fn is_incremental(&self) -> bool {

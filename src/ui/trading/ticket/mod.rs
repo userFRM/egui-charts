@@ -2496,6 +2496,7 @@ mod tests {
                 &mut std::collections::BTreeMap::new(),
                 &mut false,
                 &mut false,
+                &mut false,
             );
         });
         let risk = output.shapes.iter().any(|shape| {
@@ -3411,6 +3412,7 @@ mod tests {
                             &mut std::collections::BTreeMap::new(),
                             &mut false,
                             &mut false,
+                            &mut false,
                         );
                     });
                     let theme = ctx.active_theme();
@@ -3480,6 +3482,7 @@ mod tests {
                     ui,
                     &market,
                     &mut std::collections::BTreeMap::new(),
+                    &mut false,
                     &mut false,
                     &mut false,
                 );

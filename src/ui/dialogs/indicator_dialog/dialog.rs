@@ -2190,6 +2190,7 @@ mod tests {
             ("Klinger Oscillator", &["Klinger"], &[]),
             ("Linear Regression Curve", &["LinReg"], &["LinReg Slope"]),
             ("Moon Phases", &["Lunar Phases"], &[]),
+            ("Zig Zag", &["ZigZag"], &[]),
             ("Visible Range Volume Profile", &["Vol Profile VR"], &[]),
             ("Volume Profile Visible Range", &["Vol Profile VR"], &[]),
             ("Visible Range", &["Vol Profile VR"], &[]),

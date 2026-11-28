@@ -53,7 +53,7 @@ pub trait Notifications: MaybeSend + 'static {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Notification {
-    /// UTC timestamp supplied by the host.
+    /// UTC timestamp supplied by the host. For a story target, use the publication time.
     pub time: DateTime<Utc>,
     /// Display title.
     pub title: String,
@@ -77,9 +77,9 @@ pub enum NotificationTarget {
     /// An idea or short post, by the host's identifier: the feed entry identifier the ideas
     /// panel opens and the link [`Posts`](super::Posts) resolves.
     Post(String),
-    /// A news story, by the [`id`](crate::data::NewsStory::id) its feed gave it. The host finds
-    /// the story again by it, so a feed whose stories alerts report keeps one identifier for
-    /// one story.
+    /// A news story, by the stable [`id`](crate::data::NewsStory::id) its feed gave it.
+    /// Set [`Notification::time`] to the story's publication time so the host can resolve
+    /// the exact publication by identifier and time.
     Story(String),
 }
 
