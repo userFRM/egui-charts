@@ -568,7 +568,7 @@ impl StudyTemplate {
                 }) && matches!(value("anchor"), Some(InputValue::Choice(0..=2))) =>
             {
                 for (id, value) in &mut template.inputs {
-                    if let ("anchor", InputValue::Choice(choice)) = (id.as_str(), &*value) {
+                    if let ("anchor", InputValue::Choice(choice @ 0..=2)) = (id.as_str(), &*value) {
                         let interval =
                             [Timeframe::Day1, Timeframe::Week1, Timeframe::Month1][*choice];
                         *value = InputValue::Timeframe(Some(interval));
@@ -3112,6 +3112,17 @@ mod tests {
                 .map(|input| &input.value),
             Some(&InputValue::Timeframe(Some(Timeframe::Day1)))
         );
+
+        for choice in [3, usize::MAX] {
+            let mut invalid = saved.clone();
+            invalid
+                .inputs
+                .push(("anchor".to_owned(), InputValue::Choice(choice)));
+            assert!(
+                invalid.create().is_err(),
+                "invalid duplicate anchor {choice}"
+            );
+        }
 
         // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
         let saved: StudyTemplate = serde_json::from_str(
