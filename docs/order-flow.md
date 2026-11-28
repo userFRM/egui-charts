@@ -561,9 +561,16 @@ alert engine, independently of the panel switches. The host drains live conditio
 [`OrderFlowDetectors::take_footprint_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.OrderFlowDetectors.html#method.take_footprint_events) and passes them to [`AlertEngine::footprint_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.AlertEngine.html#method.footprint_events).
 Only once fires at the execution that first meets the condition and ends the alert; Once per
 bar does so on each forming bar; Once per bar close fires on each closed bar that meets it.
-The demo's alert dialog offers these conditions and frequencies. They use the same rule's
-ratio, comparison, minimum volume, stack and rows as the panel, and repeated delivery from
-another chart fires nothing more. History and interval rebuilds report no events.
+The demo's alert dialog offers these conditions and frequencies. Each alert reads the bars
+of its own interval with the ratio, comparison, minimum volume, stack and rows saved in
+[`AlertInputs::footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.AlertInputs.html#structfield.footprint)
+when it was created, independently of later chart changes. Call
+[`OrderFlowDetectors::watch_footprint_alerts`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.OrderFlowDetectors.html#method.watch_footprint_alerts)
+with the alerts before draining, for example every frame. Repeated delivery from another
+chart fires nothing more, and history and a newly read alert's earlier trades report no events.
+An alert needs a time-based interval; one saved without a footprint rule reads the detectors'
+rule as before. The host supplies and streams each tracked symbol's executions; the demo reads
+all open charts' detectors.
 
 For other conditions and frequencies, such as sell volume below a level at bar close or delta
 leaving a range, add the Buy and Sell Volume study and alert on its outputs.

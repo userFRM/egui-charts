@@ -17,7 +17,10 @@ use chrono::{DateTime, Utc};
 use super::{Events, SignalEvent, Signals};
 use crate::data::depth::Book;
 use crate::data::{FeedError, MarketEvent, OrderQueue};
-use crate::model::{BarClock, Instrument, Signal, Tick, Timeframe, TimezoneId};
+use crate::model::{
+    Alert, AlertCondition, AlertStatus, BarClock, FootprintAlertRule, Instrument, Signal, Tick,
+    Timeframe, TimezoneId,
+};
 use absorption::Absorption;
 pub use absorption::AbsorptionRule;
 pub use alerts::{CountAlert, CountWindow, DetectionAlert, DetectionCounts};
@@ -332,6 +335,7 @@ struct State {
     subscriptions: HashMap<String, Subscription>,
     delivery: Delivery,
     footprint_events: VecDeque<crate::model::FootprintAlertEvent>,
+    watched: Vec<Watched>,
 }
 
 struct Subscription {
@@ -357,7 +361,27 @@ struct Tracked {
     big_trades: BigTrades,
     stop_runs: StopRuns,
     stop_sweeps: StopSweeps,
+    watches: Vec<Watch>,
     counting: Counting,
+}
+
+/// An interval and rule read for one symbol, or every tracked symbol for a watchlist alert.
+#[derive(Clone, PartialEq)]
+struct Watched {
+    symbol: Option<String>,
+    timeframe: Timeframe,
+    rule: Option<FootprintAlertRule>,
+}
+
+/// The footprint bars of one watched interval and rule on a tracked symbol.
+// shortcut: each watched interval and rule keeps its own copy of the up to 100,000 retained
+// trades; share one buffer per symbol when hosts watch many distinct rules.
+struct Watch {
+    timeframe: Timeframe,
+    rule: Option<FootprintAlertRule>,
+    /// Every detector disabled, with the watched rule, or the service's for `rule: None`.
+    settings: DetectorSettings,
+    sweeps: StopSweeps,
 }
 
 impl Default for OrderFlowDetectors {
@@ -429,7 +453,15 @@ impl OrderFlowDetectors {
     /// footprint level is not finite or a volume level is negative.
     pub fn set_settings(&self, settings: DetectorSettings) {
         settings.validate().expect("invalid detector settings");
-        self.lock().settings = settings;
+        let mut state = self.lock();
+        for tracked in state.symbols.values_mut() {
+            for watch in &mut tracked.watches {
+                if watch.rule.is_none() {
+                    watch.settings.footprint.rule = settings.footprint.rule.clone();
+                }
+            }
+        }
+        state.settings = settings;
     }
 
     /// Detects on `event` of `symbol`, observed at feed time `time`. Events of untracked symbols
@@ -442,11 +474,15 @@ impl OrderFlowDetectors {
             subscriptions,
             delivery,
             footprint_events,
+            ..
         } = &mut *state;
         let Some(tracked) = symbols.get_mut(symbol) else {
             return;
         };
         tracked.stop_sweeps.go_live(time);
+        for watch in &mut tracked.watches {
+            watch.sweeps.go_live(time);
+        }
         let mut out = Vec::new();
         // A loss clears the book, which waits for the next snapshot, and is not a detection.
         match event {
@@ -557,14 +593,18 @@ impl OrderFlowDetectors {
             &mut out,
         );
         tracked.stop_sweeps.advance(time, settings, &mut out);
-        if let Some(subscription) = subscriptions.get(symbol) {
-            for met in tracked.stop_sweeps.met.drain(..) {
+        tracked.stop_sweeps.met.clear();
+        for watch in &mut tracked.watches {
+            watch.sweeps.advance(time, &watch.settings, &mut Vec::new());
+            for met in watch.sweeps.met.drain(..) {
                 footprint_events.push_back(crate::model::FootprintAlertEvent {
                     symbol: symbol.to_owned(),
                     exchange: tracked.instrument.exchange.clone(),
-                    timeframe: subscription.timeframe,
+                    timeframe: watch.timeframe,
+                    rule: watch.rule,
                     condition: met.condition,
                     bar: met.bar,
+                    bar_end: met.bar_end,
                     closed: met.closed,
                     time: met.time,
                     price: met.price,
@@ -582,16 +622,62 @@ impl OrderFlowDetectors {
         deliver(Some(tracked), subscriptions.get_mut(symbol), out);
     }
 
-    /// Drains footprint conditions met by live bars, oldest first, for
+    /// Drains footprint conditions met by live bars of the intervals and rules that
+    /// [`watch_footprint_alerts`](Self::watch_footprint_alerts) reads, oldest first, for
     /// `AlertEngine::footprint_events`. A forming bar reports each condition once, at the
     /// execution that first meets it; a closed bar reports each condition it meets when the
     /// event that closes it arrives. The footprint rule's ratio, comparison, minimum volume,
     /// stack and rows apply even with the detector or its switches disabled: those choose
     /// chart markers and panel alerts only. Loaded history, bars opened before the first live
-    /// event's bar, the first retained bar, trade-based intervals and interval rebuilds report
-    /// nothing. At most the newest 5,000 events are kept; drain them every frame.
+    /// event's bar and the first retained bar report nothing. Trade-based intervals are not
+    /// read, and an interval and rule newly read report nothing for the trades before it.
+    /// At most the newest 5,000 events are kept; drain them every frame.
     pub fn take_footprint_events(&self) -> Vec<crate::model::FootprintAlertEvent> {
         self.lock().footprint_events.drain(..).collect()
+    }
+
+    /// Reads the footprint conditions of `alerts` for
+    /// [`take_footprint_events`](Self::take_footprint_events): each active
+    /// `AlertCondition::Footprint` alert with a time-based interval, on the bars of that interval
+    /// and with the rule of its `AlertInputs::footprint`, or this service's footprint rule when
+    /// its inputs hold none, independently of chart subscriptions. A watchlist alert is read
+    /// on every tracked symbol. Call whenever alerts change, for example every frame with
+    /// `AlertEngine::alerts`: an interval and rule already read keep their bars, and a new one
+    /// starts from retained trades without reporting them, as an interval change does.
+    pub fn watch_footprint_alerts(&self, alerts: &[Alert]) {
+        let mut watched = Vec::new();
+        for alert in alerts {
+            if !matches!(alert.condition, AlertCondition::Footprint(_))
+                || alert.status != AlertStatus::Active
+            {
+                continue;
+            }
+            let Some(timeframe) = alert.timeframe.filter(|tf| !tf.is_trade_based()) else {
+                continue;
+            };
+            let key = Watched {
+                symbol: alert.watchlist.is_none().then(|| alert.symbol.clone()),
+                timeframe,
+                rule: alert.inputs.as_deref().and_then(|inputs| inputs.footprint),
+            };
+            if !watched.contains(&key) {
+                watched.push(key);
+            }
+        }
+        let mut state = self.lock();
+        if state.watched == watched {
+            return;
+        }
+        state.watched = watched;
+        let State {
+            watched,
+            symbols,
+            settings,
+            ..
+        } = &mut *state;
+        for tracked in symbols.values_mut() {
+            tracked.watch(watched, settings);
+        }
     }
 
     /// Detects on the loaded trade history of `symbol`, in time order, before the live trades
@@ -627,6 +713,9 @@ impl OrderFlowDetectors {
             );
         }
         tracked.stop_sweeps.met.clear();
+        for watch in &mut tracked.watches {
+            watch.sweeps.met.clear();
+        }
         deliver(Some(tracked), subscriptions.get_mut(symbol), out);
     }
 }
@@ -698,6 +787,7 @@ impl State {
             big_trades: BigTrades::new(tick, instrument.volume_decimals),
             stop_runs: StopRuns::new(instrument.volume_decimals),
             stop_sweeps: StopSweeps::new(tick, instrument.volume_decimals),
+            watches: Vec::new(),
             counting: Counting::default(),
         };
         let timeframe = subscription.as_ref().map(|s| s.timeframe);
@@ -707,6 +797,7 @@ impl State {
             &self.settings,
             &mut Vec::new(),
         );
+        tracked.watch(&self.watched, &self.settings);
         if self
             .symbols
             .insert(instrument.symbol.clone(), tracked)
@@ -718,6 +809,43 @@ impl State {
 }
 
 impl Tracked {
+    fn watch(&mut self, watched: &[Watched], settings: &DetectorSettings) {
+        let mut wanted = Vec::new();
+        for key in watched {
+            if key
+                .symbol
+                .as_ref()
+                .is_none_or(|symbol| *symbol == self.instrument.symbol)
+                && !wanted.contains(&(key.timeframe, key.rule))
+            {
+                wanted.push((key.timeframe, key.rule));
+            }
+        }
+        self.watches
+            .retain(|watch| wanted.contains(&(watch.timeframe, watch.rule)));
+        for (timeframe, rule) in wanted {
+            if self
+                .watches
+                .iter()
+                .any(|watch| watch.timeframe == timeframe && watch.rule == rule)
+            {
+                continue;
+            }
+            let mut watch_settings = DetectorSettings::default();
+            watch_settings.footprint.rule =
+                rule.map_or_else(|| settings.footprint.rule.clone(), FootprintRule::reading);
+            let sweeps = self
+                .stop_sweeps
+                .watching(clock(&self.instrument, timeframe), &watch_settings);
+            self.watches.push(Watch {
+                timeframe,
+                rule,
+                settings: watch_settings,
+                sweeps,
+            });
+        }
+    }
+
     fn lose_depth(&mut self, out: &mut Vec<SignalEvent>) {
         self.depth = Depth::default();
         self.icebergs.clear();
@@ -799,6 +927,9 @@ impl Tracked {
             out,
         );
         self.stop_sweeps.trade(trade, settings, out);
+        for watch in &mut self.watches {
+            watch.sweeps.trade(trade, &watch.settings, &mut Vec::new());
+        }
         let big = &settings.big_trades;
         (self.big_trades).trade(trade, &big.rule, big.enabled, out);
     }
@@ -1902,6 +2033,7 @@ mod tests {
             })
             .to_vec(),
         );
+        host.detectors.watch_footprint_alerts(&engine.alerts());
         let mut seen = HashSet::new();
         let mut fired = 0;
         for (second, price, size, side, names) in [
@@ -1973,6 +2105,173 @@ mod tests {
             );
         }
         assert!(host.detectors.take_alerts().is_empty());
+    }
+
+    /// Simultaneous saved intervals, ratios and rows give the same notifications as isolated
+    /// runs while chart subscriptions and the service rule change. Re-registering keeps bars.
+    #[cfg(feature = "alert-engine")]
+    #[test]
+    fn footprint_alerts_keep_their_interval_and_rule_across_chart_subscriptions() {
+        use crate::model::{AlertFrequency as F, AlertInputs, FootprintCondition as C};
+        use crate::services::AlertEngine;
+        use OrderSide::{Buy, Sell};
+        let rule = FootprintAlertRule::default();
+        let alerts = [
+            (
+                "stack",
+                C::StackedBuyImbalance,
+                F::OncePerBar,
+                Timeframe::Min1,
+                rule,
+            ),
+            (
+                "stack close 5m",
+                C::StackedBuyImbalance,
+                F::OncePerBarClose,
+                Timeframe::Min5,
+                rule,
+            ),
+            ("buy", C::BuyImbalance, F::OncePerBar, Timeframe::Min1, rule),
+            (
+                "buy ratio 13",
+                C::BuyImbalance,
+                F::OncePerBar,
+                Timeframe::Min1,
+                FootprintAlertRule {
+                    imbalance_ratio: 13.0,
+                    ..rule
+                },
+            ),
+            (
+                "buy rows 2",
+                C::BuyImbalance,
+                F::OncePerBar,
+                Timeframe::Min1,
+                FootprintAlertRule {
+                    row_ticks: 2,
+                    ..rule
+                },
+            ),
+        ]
+        .map(|(name, condition, frequency, timeframe, rule)| {
+            let mut alert = Alert::new("ES", AlertCondition::Footprint(condition));
+            alert.name = name.into();
+            alert.frequency = frequency;
+            alert.timeframe = Some(timeframe);
+            alert.inputs = Some(Box::new(AlertInputs {
+                footprint: Some(rule),
+                ..AlertInputs::default()
+            }));
+            serde_json::from_str(&serde_json::to_string(&alert).unwrap()).unwrap()
+        });
+        let executions = [
+            (0, 100.0, 1.0, Buy),
+            (360, 100.0, 1.0, Sell),
+            (361, 100.25, 1.0, Sell),
+            (362, 100.5, 1.0, Sell),
+            (363, 100.25, 12.0, Buy),
+            (364, 100.5, 9.0, Buy),
+            (365, 100.75, 15.0, Buy),
+            (420, 100.0, 1.0, Sell),
+            (600, 100.0, 1.0, Buy),
+        ];
+        let run = |alerts: Vec<Alert>, churn: bool| {
+            let mut host = Host::new(None);
+            host.detectors.set_settings(DetectorSettings::default());
+            let engine = AlertEngine::new().with_alerts(alerts);
+            host.detectors.watch_footprint_alerts(&engine.alerts());
+            let mut seen = HashSet::new();
+            for (second, price, size, side) in executions {
+                host.detectors.push(
+                    "ES",
+                    time(second),
+                    &MarketEvent::Trade(fill(second, price, size, side, None)),
+                );
+                host.detectors.watch_footprint_alerts(&engine.alerts());
+                let events = host.detectors.take_footprint_events();
+                for event in &events {
+                    let rule = event.rule.map(|rule| {
+                        (
+                            rule.imbalance_ratio.to_bits(),
+                            rule.diagonal,
+                            rule.imbalance_min_volume.to_bits(),
+                            rule.stack,
+                            rule.row_ticks,
+                        )
+                    });
+                    assert!(
+                        seen.insert((
+                            event.timeframe,
+                            rule,
+                            event.condition,
+                            event.bar,
+                            event.closed
+                        )),
+                        "duplicate event at {second}: {event:?}"
+                    );
+                }
+                engine.footprint_events(&events, time(second));
+                engine.footprint_events(&events, time(second));
+                if churn {
+                    match second {
+                        361 => {
+                            host.timeframe = Timeframe::Min5;
+                            host.subscribe();
+                        }
+                        363 => {
+                            let mut settings = DetectorSettings::default();
+                            settings.footprint.rule.imbalance_ratio = 100.0;
+                            settings.footprint.rule.stack = 5;
+                            settings.footprint.rule.row_ticks = 4;
+                            host.detectors.set_settings(settings);
+                        }
+                        364 => {
+                            host.timeframe = Timeframe::Min1;
+                            host.subscribe();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            engine
+                .triggers()
+                .into_iter()
+                .map(|trigger| (trigger.name, trigger.time, trigger.price, trigger.message))
+                .collect::<Vec<_>>()
+        };
+        let actual = run(alerts.to_vec(), true);
+        // Diagonal buys are 12/1, 9/1 and 15/1. Grouping two ticks makes the lower row's
+        // sells 2, so the upper row first qualifies at 364 (9 >= 3 * 2). The 5m close
+        // includes the sale at 420: its three buy rows still meet 12/2, 9/1 and 15/1.
+        let expected = [
+            ("buy", 363, 100.25, "Buy imbalance on 1 row"),
+            ("buy rows 2", 364, 100.5, "Buy imbalance on 1 row"),
+            ("stack", 365, 100.75, "Stacked buy imbalance of 3 rows"),
+            ("buy ratio 13", 365, 100.75, "Buy imbalance on 1 row"),
+            (
+                "stack close 5m",
+                600,
+                100.0,
+                "Stacked buy imbalance of 3 rows",
+            ),
+        ]
+        .map(|(name, second, price, message)| {
+            (
+                name.to_owned(),
+                time(second),
+                Some(price),
+                message.to_owned(),
+            )
+        });
+        assert_eq!(actual, expected);
+        for alert in alerts {
+            let expected: Vec<_> = actual
+                .iter()
+                .filter(|(name, ..)| *name == alert.name)
+                .cloned()
+                .collect();
+            assert_eq!(run(vec![alert], false), expected);
+        }
     }
 
     #[test]
@@ -2210,7 +2509,6 @@ mod tests {
                 assert_eq!(alerts(&host), expected, "{name}, second {second}");
             }
             if name == "stack" {
-                host.detectors.take_footprint_events();
                 host.events();
                 let (listener, events) = Listener::new(&host.inbox, 1);
                 host.listeners.push(listener);
@@ -2218,10 +2516,6 @@ mod tests {
                 let id = SignalId("footprint-stacked-buy-60000".into());
                 assert!(host.events().contains(&SignalEvent::Remove(id)), "{name}");
                 assert!(alerts(&host).is_empty(), "{name}: rebuilt five-minute bars");
-                assert!(
-                    host.detectors.take_footprint_events().is_empty(),
-                    "{name}: rebuilt bars report nothing"
-                );
                 let (listener, events) = Listener::new(&host.inbox, 1);
                 host.listeners.push(listener);
                 host.detectors.subscribe("ES", Timeframe::Min1, events);
@@ -2229,10 +2523,6 @@ mod tests {
                     "ES",
                     time(121),
                     &MarketEvent::Trade(fill(121, 100.5, 1.0, Buy, None)),
-                );
-                assert!(
-                    host.detectors.take_footprint_events().is_empty(),
-                    "{name}: rebuilding live minute bars reports nothing"
                 );
             }
         }
@@ -2317,6 +2607,12 @@ mod tests {
         // Loaded history, with 101 sold on its own row: marked, never alerted, also when the first
         // live event closes the last history bar.
         let host = Host::new(Some(1_000.0));
+        let mut minute_alert = Alert::new(
+            "ES",
+            AlertCondition::Footprint(crate::model::FootprintCondition::StackedBuyImbalance),
+        );
+        minute_alert.timeframe = Some(Timeframe::Min1);
+        host.detectors.watch_footprint_alerts(&[minute_alert]);
         host.detectors.set_settings(settings(0.0));
         let mut history: Vec<_> = stacked(&[])[..7]
             .iter()

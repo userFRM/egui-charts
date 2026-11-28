@@ -319,6 +319,14 @@ impl IndicatorSettingsDialog {
                 )
                 .show(ui);
                 ui.separator();
+                let default_zones;
+                let zones = match &self.time_zones {
+                    Some(zones) => zones.as_slice(),
+                    None => {
+                        default_zones = crate::ui::timeframe_toolbar::default_time_zones();
+                        default_zones.as_slice()
+                    }
+                };
                 egui::ScrollArea::both()
                     .max_height((ui.available_height() - 72.0).max(0.0))
                     .show(ui, |ui| match self.tab {
@@ -350,15 +358,6 @@ impl IndicatorSettingsDialog {
                                 .iter()
                                 .map(|input| input.is_shown(&self.inputs))
                                 .collect();
-                            let default_zones;
-                            let zones = match &self.time_zones {
-                                Some(zones) => zones.as_slice(),
-                                None => {
-                                    default_zones =
-                                        crate::ui::timeframe_toolbar::default_time_zones();
-                                    default_zones.as_slice()
-                                }
-                            };
                             FormGrid::new("study_inputs").show(ui, |ui| {
                                 for (input, shown) in self.inputs.iter_mut().zip(shown) {
                                     if study_source
@@ -451,8 +450,12 @@ impl IndicatorSettingsDialog {
                                             crate::ui::strategy_report::inputs::show_input(
                                                 ui,
                                                 input,
-                                                &[],
-                                                &[],
+                                                if input.id == "source" {
+                                                    self.sources.as_slice()
+                                                } else {
+                                                    &[]
+                                                },
+                                                zones,
                                             );
                                         }
                                     }
@@ -2940,6 +2943,288 @@ mod tests {
                 offered,
                 "{combo}, histories {histories}"
             );
+        }
+    }
+
+    /// A wrapped source keeps its tab and condition, retains its hidden value and applies to
+    /// the calculation. Both tabs offer the chart's other study outputs.
+    #[test]
+    fn custom_source_keeps_its_tab_and_condition() {
+        use crate::model::{Bar, BarData, PriceSource};
+        use crate::studies::{CustomIndicator, IndicatorValue, RSI, StudySource};
+        use crate::widget::Chart;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let bars = vec![Bar::new(
+            chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            10.0,
+            14.0,
+            8.0,
+            12.0,
+            1.0,
+        )];
+        let price = |source| InputValue::Source(StudySource::Price(source));
+        for style in [false, true] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_timeframe(Timeframe::Min1);
+            chart.add_indicator(Box::new(RSI::new(14)));
+            let mut source = StudyInput::new(
+                "source",
+                "Source",
+                price(PriceSource::HL2),
+                InputKind::Source,
+            )
+            .shown_when("enabled", vec![1]);
+            if style {
+                source = source.in_style_tab();
+            }
+            let study = CustomIndicator::new("Custom", |_| Vec::new())
+                .with_inputs(
+                    vec![
+                        StudyInput::new(
+                            "enabled",
+                            "Enabled",
+                            InputValue::Toggle(false),
+                            InputKind::Toggle,
+                        ),
+                        source,
+                    ],
+                    |_, _, source, _| source.iter().map(|v| IndicatorValue::Single(*v)).collect(),
+                )
+                .unwrap();
+            let id = chart.add_indicator(Box::new(study));
+            let study = chart.indicator_mut(id).unwrap();
+            study.calculate(&bars);
+            // HL2 = (14 + 8) / 2 = 11; Open below will read 10.
+            assert_eq!(study.values().value(0, 0), Some(11.0));
+            let mut dialog = IndicatorSettingsDialog::default();
+            assert!(dialog.open_for_chart(&chart, id));
+            for tab in [Tab::Inputs, Tab::Style] {
+                dialog.tab = tab;
+                let mut harness = Harness::builder()
+                    .with_context_setup(egui_extras::install_image_loaders)
+                    .with_size(egui::vec2(1440.0, 900.0))
+                    .build_ui(|ui| {
+                        let _ = dialog.show(ui.ctx(), &Theme::dark());
+                    });
+                harness.run();
+                assert!(
+                    harness.query_by_label("Source").is_none(),
+                    "{style} {tab:?}"
+                );
+            }
+            dialog.tab = Tab::Inputs;
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    let _ = dialog.show(ui.ctx(), &Theme::dark());
+                });
+            harness.run();
+            harness.get_by_label("Enabled").click();
+            harness.run();
+            drop(harness);
+            assert_eq!(
+                dialog
+                    .inputs
+                    .iter()
+                    .find(|input| input.id == "source")
+                    .unwrap()
+                    .value,
+                price(PriceSource::HL2)
+            );
+            dialog.tab = if style { Tab::Inputs } else { Tab::Style };
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    let _ = dialog.show(ui.ctx(), &Theme::dark());
+                });
+            harness.run();
+            assert!(harness.query_by_label("Source").is_none());
+            drop(harness);
+            dialog.tab = if style { Tab::Style } else { Tab::Inputs };
+            let mut applied = None;
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    if let Some(edit) = dialog.show(ui.ctx(), &Theme::dark()) {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            harness.get_by_label("Source").click();
+            harness.run();
+            assert!(harness.query_by_label("RSI: RSI(14)").is_some());
+            harness.get_by_label("Open").click();
+            harness.run();
+            harness.get_by_label("Apply").click();
+            harness.run();
+            drop(harness);
+            let edit = applied.unwrap();
+            for (id, value) in [
+                ("enabled", InputValue::Toggle(true)),
+                ("source", price(PriceSource::Open)),
+            ] {
+                assert_eq!(
+                    edit.inputs
+                        .iter()
+                        .find(|(input, _)| input == id)
+                        .map(|(_, value)| value),
+                    Some(&value)
+                );
+            }
+            chart.user_action(|chart| {
+                chart
+                    .indicator_mut(id)
+                    .unwrap()
+                    .apply_settings(&edit.inputs, edit.settings)
+                    .unwrap();
+            });
+            let study = chart.indicator_mut(id).unwrap();
+            assert_eq!(study.source(), Some(StudySource::Price(PriceSource::Open)));
+            study.calculate(&bars);
+            assert_eq!(study.values().value(0, 0), Some(10.0));
+        }
+    }
+
+    /// Style time zones use the same host list as Inputs and preview, cancel and apply like
+    /// calculation inputs.
+    #[cfg(feature = "timezones")]
+    #[test]
+    fn style_time_zone_offers_the_configured_zones() {
+        use crate::model::{Bar, BarData, TimezoneId};
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::widget::Chart;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let bars = vec![Bar::new(
+            chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            10.0,
+            14.0,
+            8.0,
+            12.0,
+            1.0,
+        )];
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.set_timeframe(Timeframe::Min1);
+        let study = CustomIndicator::new("Custom", |_| Vec::new())
+            .with_inputs(
+                vec![
+                    StudyInput::new(
+                        "zone",
+                        "Session time zone",
+                        InputValue::TimeZone("UTC".into()),
+                        InputKind::TimeZone { exchange: true },
+                    ),
+                    StudyInput::new(
+                        "label_zone",
+                        "Label time zone",
+                        InputValue::TimeZone("UTC".into()),
+                        InputKind::TimeZone { exchange: true },
+                    )
+                    .in_style_tab(),
+                ],
+                |bars, inputs, _, _| {
+                    let zurich = inputs.iter().any(|input| {
+                        input.id == "label_zone"
+                            && input.value == InputValue::TimeZone("Europe/Zurich".into())
+                    });
+                    vec![IndicatorValue::Single(if zurich { 1.0 } else { 0.0 }); bars.len()]
+                },
+            )
+            .unwrap();
+        let id = chart.add_indicator(Box::new(study));
+        let mut dialog = IndicatorSettingsDialog::default();
+        dialog.set_time_zones(vec![
+            TimezoneId::utc(),
+            TimezoneId::named("Europe/Zurich").unwrap(),
+        ]);
+        for action in ["Cancel", "Apply"] {
+            assert!(dialog.open_for_chart(&chart, id));
+            let mut applied = None;
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    chart.show(ui);
+                    if let Some(edit) =
+                        dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                    {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            harness.get_by_label("Session time zone").click();
+            harness.run();
+            assert!(harness.query_by_label("Europe/Zurich").is_some());
+            assert!(harness.query_by_label("Exchange time").is_some());
+            harness.get_by_label("UTC").click();
+            harness.run();
+            drop(harness);
+            dialog.tab = Tab::Style;
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    chart.show(ui);
+                    if let Some(edit) =
+                        dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                    {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            harness.get_by_label("Label time zone").click();
+            harness.run();
+            assert!(harness.query_by_label("Exchange time").is_some());
+            harness.get_by_label("Europe/Zurich").click();
+            harness.run();
+            drop(harness);
+            let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+            assert_eq!(study.values().value(0, 0), Some(1.0));
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    chart.show(ui);
+                    if let Some(edit) =
+                        dialog.show_preview_for_chart(ui.ctx(), &Theme::dark(), &mut chart)
+                    {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            harness.get_by_label(action).click();
+            harness.run();
+            drop(harness);
+            let (zone, value) = if action == "Apply" {
+                let edit = applied.unwrap();
+                chart.user_action(|chart| {
+                    chart
+                        .indicator_mut(id)
+                        .unwrap()
+                        .apply_settings(&edit.inputs, edit.settings)
+                        .unwrap();
+                });
+                ("Europe/Zurich", 1.0)
+            } else {
+                assert!(applied.is_none());
+                ("UTC", 0.0)
+            };
+            let study = chart.indicator_mut(id).unwrap();
+            assert_eq!(
+                study
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == "label_zone")
+                    .unwrap()
+                    .value,
+                InputValue::TimeZone(zone.into())
+            );
+            study.calculate(&bars);
+            assert_eq!(study.values().value(0, 0), Some(value));
         }
     }
 

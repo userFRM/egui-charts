@@ -1445,13 +1445,22 @@ impl DemoApp {
         {
             self.toasts.error(format!("Alert data: {error}"));
         }
-        // Footprint alerts follow the detectors whose rule the active chart sets.
-        let footprint = self.live.detectors().take_footprint_events();
-        if self.replay.is_none() {
-            engine.footprint_events(&footprint, now);
+        // Every chart's detectors read saved intervals and rules; repeated deliveries fire once.
+        let alerts = engine.alerts();
+        let mut read: Vec<Arc<egui_charts::services::OrderFlowDetectors>> = Vec::new();
+        for live in std::iter::once(&self.live).chain(self.extra_charts.iter().map(|s| &s.live)) {
+            let detectors = live.detectors();
+            if read.iter().any(|seen| Arc::ptr_eq(seen, &detectors)) {
+                continue;
+            }
+            detectors.watch_footprint_alerts(&alerts);
+            let footprint = detectors.take_footprint_events();
+            if self.replay.is_none() {
+                engine.footprint_events(&footprint, now);
+            }
+            read.push(detectors);
         }
-        if engine
-            .alerts()
+        if alerts
             .iter()
             .any(|alert| alert.status == egui_charts::model::AlertStatus::Active)
         {
@@ -2136,7 +2145,7 @@ impl eframe::App for DemoApp {
         let detectors = self.live.detectors();
         let mut settings = detectors.settings();
         let before = settings.clone();
-        // Footprint alerts read the imbalances and rows the active chart shows.
+        // Panel markers and alerts without a saved rule follow the active chart's footprint.
         let rows = self.chart.footprint_row_ticks();
         settings
             .footprint
@@ -6421,13 +6430,14 @@ mod tests {
     }
 
     /// The dialog saves a footprint condition and frequency, then the demo forwards the
-    /// execution that completes its stack exactly once to the alert engine.
+    /// execution that completes its stack exactly once to the alert engine, keeping its interval
+    /// and rule when the chart changes interval and footprint settings.
     #[test]
     fn footprint_alerts_reach_the_demo_alert_dialog() {
         use egui::accesskit::{Action, ActionRequest, TreeId};
         use egui_charts::data::MarketEvent;
         use egui_charts::model::{
-            AlertFrequency, ChartTypeParams, FootprintCondition,
+            AlertFrequency, FootprintCondition,
             OrderSide::{Buy, Sell},
             Tick,
         };
@@ -6474,13 +6484,6 @@ mod tests {
             AlertCondition::Footprint(FootprintCondition::StackedBuyImbalance)
         );
         assert_eq!(saved[0].frequency, AlertFrequency::OncePerBar);
-        let detectors = app.live.detectors();
-        let mut settings = detectors.settings();
-        settings
-            .footprint
-            .rule
-            .follow_chart(&ChartTypeParams::default(), 1);
-        detectors.set_settings(settings);
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
         let bars = app.chart.bars(SeriesId::MAIN);
         let last = bars.last().unwrap();
@@ -6489,6 +6492,16 @@ mod tests {
         let p = (last.close / tick).round() * tick;
         let symbol = app.chart.symbol().to_owned();
         let fired = engine.triggers().len();
+        app.monitor_alerts(&ctx);
+        app.switch_timeframe(Timeframe::Min5);
+        let mut params = app.chart.chart_type_params().clone();
+        params.footprint_imbalance_ratio = 100.0;
+        params.footprint_stack = 5;
+        app.chart.set_chart_type_params(params);
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min5));
+        let detectors = app.live.detectors();
+        assert_eq!(detectors.settings().footprint.rule.imbalance_ratio, 100.0);
         for (second, row, size, side) in [
             (1, 0.0, 1.0, Sell),
             (2, 1.0, 1.0, Sell),
