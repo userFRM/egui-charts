@@ -1168,6 +1168,7 @@ impl DemoApp {
             }
             self.replay = Some(next);
             self.replay_interval = interval;
+            self.hold_replay_cursor(Some(cutoff));
             for (index, extra) in self.extra_charts.iter_mut().enumerate() {
                 let slot = if index >= self.layout_slot {
                     index + 1
@@ -1209,11 +1210,12 @@ impl DemoApp {
             self.replay_session = Some((session, self.replay_interval));
             self.replay_session_automatic = self.replay_control.uses_automatic_update_interval();
             self.replay_session_imported = self.recording_files.opened;
-            // Another symbol's preceding source bar can be earlier than the shared market cursor.
+            // Another symbol's preceding source bar can be earlier than the shared market cursor,
+            // and a held cursor later than the source bar the session saves.
             self.replay_session_cutoff = self
                 .chart
                 .replay_time()
-                .filter(|_| self.chart.replay_driver().is_some());
+                .filter(|_| self.chart.replay_driver().is_some() || self.replay_cursor.is_some());
             self.replay_session_recording = self
                 .replay_recording
                 .clone()
@@ -1245,6 +1247,7 @@ impl DemoApp {
             }
             self.replay_updated = None;
             self.replay_applied = None;
+            self.replay_cursor = None;
             self.replay_slots.clear();
             self.chart.set_feed_paused(false);
             self.live.set_paused(self.live_was_paused);
@@ -1320,10 +1323,37 @@ impl DemoApp {
             return;
         };
         let clock = source_clock(&self.chart, self.replay_interval);
-        let Some(time) = replay.cutoff(&clock) else {
+        let Some(mut time) = replay.cutoff(&clock) else {
             return;
         };
+        match self.replay_cursor {
+            Some((cursor, bar)) if replay.curr_ts() == Some(&bar) => time = cursor,
+            // The replay moved, so its own cutoff applies again.
+            _ => self.replay_cursor = None,
+        }
         self.apply_replay_window(time);
+    }
+
+    /// Keeps `cutoff` as the cursor while the replay stays on its current source bar, when no
+    /// source bar opens from that bar up to the cursor: the active chart has no bar there, as
+    /// outside its session. A bar in progress at the cursor is cut at its close instead.
+    fn hold_replay_cursor(&mut self, cutoff: Option<DateTime<Utc>>) {
+        let clock = source_clock(&self.chart, self.replay_interval);
+        self.replay_cursor = self
+            .replay
+            .as_ref()
+            .zip(cutoff)
+            .and_then(|(replay, cutoff)| {
+                let bar = *replay.curr_ts()?;
+                if replay.cutoff(&clock)? >= cutoff {
+                    return None;
+                }
+                let (source, _) = replay_source(&self.live, self.replay_interval, &self.chart);
+                let next = source.partition_point(|source| source.time <= bar);
+                (source.get(next))
+                    .is_none_or(|next| next.time >= cutoff)
+                    .then_some((cutoff, bar))
+            });
     }
 
     fn apply_replay_window(&mut self, time: DateTime<Utc>) {
@@ -1496,6 +1526,9 @@ impl DemoApp {
             (None, None)
         };
         let mut cutoff = self.chart.replay_time();
+        // Only a candle replay holds a cursor; a trade replay's cursor is its driver's time.
+        let held =
+            cutoff.filter(|_| market_driver.is_none() && self.chart.replay_driver().is_none());
         if let Some(driver) = &market_driver {
             let Some((from, to)) = driver.time_range() else {
                 self.notify("No recorded market events available yet");
@@ -1548,6 +1581,7 @@ impl DemoApp {
         self.replay = Some(next);
         self.replay_recording = recording;
         self.replay_interval = interval;
+        self.hold_replay_cursor(held);
         self.replay_control.set_automatic_update_interval(false);
         self.push_replay_window_to_chart();
         self.chart.set_replay_source(bars, clock);
@@ -1726,6 +1760,9 @@ impl DemoApp {
                         && let Some(cutoff) = cutoff
                     {
                         self.apply_replay_window(cutoff);
+                    } else if self.chart.replay_driver().is_none() {
+                        self.hold_replay_cursor(cutoff);
+                        self.push_replay_window_to_chart();
                     }
                 }
             }
@@ -3603,6 +3640,93 @@ mod tests {
                 [app.live.paused(), app.extra_charts[0].live.paused()],
                 pauses
             );
+        }
+    }
+
+    /// Activating a chart whose exchange is closed at the cursor of a paused All charts replay
+    /// keeps that cursor, the other chart's revealed bars, the speed and the pause over later
+    /// frames, a change of the chart interval and a saved session; the next step goes on from
+    /// the cursor to the chart's first bar after it.
+    #[test]
+    fn activating_a_closed_session_chart_keeps_the_shared_cursor() {
+        use super::super::tests::settle;
+        let ctx = egui::Context::default();
+        let frame = |app: &mut DemoApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| demo(app, ui))
+                .drop_without_applying_deltas();
+            settle(app, &ctx);
+        };
+        let utc = |time: &str| time.parse::<DateTime<Utc>>().unwrap();
+        let noon = utc("2026-11-12T12:00:00Z");
+        // The second row's interval change replays STOCKA's own minute bars instead of 5 minutes.
+        for (token, cursor, later) in [
+            (Timeframe::Min1, "2026-11-12T12:01:00Z", Timeframe::Min15),
+            (Timeframe::Min5, "2026-11-12T12:05:00Z", Timeframe::Min1),
+        ] {
+            let cursor = utc(cursor);
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                utc("2026-11-12T15:00:00Z"),
+                true,
+            );
+            settle(&mut app, &ctx);
+            app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+            app.layout.sync.sync_symbol = false;
+            for (slot, symbol, interval) in [(1, "STOCKA", Timeframe::Min5), (0, "TOKENA", token)] {
+                app.activate_chart_slot(slot);
+                app.switch_symbol(symbol);
+                app.switch_timeframe(interval);
+                settle(&mut app, &ctx);
+            }
+            assert_eq!(app.replay_scope, ReplayScope::AllCharts);
+            let start = app
+                .chart
+                .bars(SeriesId::MAIN)
+                .partition_point(|bar| bar.time < noon);
+            app.start_replay_at(start);
+            app.handle_replay_control(ReplayControlAction::SetSpeed(3.0));
+            frame(&mut app);
+            let revealed = app.chart.bars(SeriesId::MAIN).to_vec();
+            assert_eq!(revealed.last().map(|bar| bar.time), Some(noon));
+            let check = |app: &DemoApp, step: &str| {
+                let tokena = match app.layout_slot {
+                    0 => &app.chart,
+                    _ => &app.extra_charts[0].chart,
+                };
+                assert_eq!(tokena.symbol(), "TOKENA", "{token} {step}");
+                for chart in [&app.chart, &app.extra_charts[0].chart] {
+                    assert_eq!(chart.replay_time(), Some(cursor), "{token} {step}");
+                }
+                assert_eq!(tokena.bars(SeriesId::MAIN), revealed, "{token} {step}");
+                let replay = app.replay.as_ref().unwrap();
+                assert!(!replay.state.is_playing(), "{token} {step}");
+                assert_eq!(replay.state.speed.multiplier(), 3.0, "{token} {step}");
+            };
+            for slot in [1, 0, 1] {
+                app.layout.set_active(slot);
+                frame(&mut app);
+                frame(&mut app);
+                assert_eq!(app.layout_slot, slot);
+                check(&app, &format!("activating slot {slot}"));
+            }
+            assert_eq!(app.chart.symbol(), "STOCKA");
+            app.switch_timeframe(later);
+            frame(&mut app);
+            check(&app, &format!("STOCKA at {later}"));
+            app.stop_replay();
+            app.apply_replay_start(ReplayStartAction::Resume);
+            frame(&mut app);
+            check(&app, "resumed");
+            // STOCKA's session opens at 14:30 UTC, and replay steps by its minute bars.
+            app.handle_replay_control(ReplayControlAction::NextBar);
+            frame(&mut app);
+            for chart in [&app.chart, &app.extra_charts[0].chart] {
+                assert_eq!(
+                    chart.replay_time(),
+                    Some(utc("2026-11-12T14:31:00Z")),
+                    "{token}"
+                );
+            }
         }
     }
 
