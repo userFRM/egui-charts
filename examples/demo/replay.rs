@@ -362,7 +362,8 @@ fn recording_bytes(
 }
 
 /// The download limit on desktop; the web leaves room for other settings in local storage.
-const SAVED_RECORDING_BYTES: usize = if cfg!(target_arch = "wasm32") {
+/// Tests save with the web budget, the only one that leaves recordings out.
+const SAVED_RECORDING_BYTES: usize = if cfg!(any(target_arch = "wasm32", test)) {
     512 * 1024
 } else {
     MAX_RECORDING_BYTES
@@ -592,13 +593,36 @@ impl DemoApp {
             }
             Ok(true) => match import
                 .finish()
-                .and_then(|loaded| self.open_recording(loaded))
+                .and_then(|loaded| self.open_picked_recording(loaded))
             {
                 Ok(()) => {}
                 Err(error) => self.notify(&error),
             },
             Err(error) => self.notify(&error),
         }
+    }
+
+    /// Opens a picked recording. The file a saved replay waits for, holding its symbol and its
+    /// saved execution, resumes that replay instead, which keeps the saved session until then.
+    fn open_picked_recording(&mut self, loaded: LoadedRecording) -> Result<(), String> {
+        let awaited = self.replay_session_imported
+            && self.replay_session_recording.is_none()
+            && self.replay_session.as_ref().is_some_and(|(session, _)| {
+                session.symbol == loaded.instrument.symbol
+                    && (loaded.bars)
+                        .binary_search_by_key(&session.time, |bar| bar.time)
+                        .is_ok()
+            });
+        if !awaited {
+            return self.open_recording(loaded);
+        }
+        self.replay_session_recording = Some(loaded.recording);
+        self.apply_replay_start(ReplayStartAction::Resume);
+        if !self.recording_files.opened {
+            // Resume said why it failed; the session waits for its file again.
+            self.replay_session_recording = None;
+        }
+        Ok(())
     }
 
     fn open_recording(&mut self, loaded: LoadedRecording) -> Result<(), String> {
@@ -3930,8 +3954,9 @@ mod tests {
 
     /// An imported recording becomes the saved replay session, in place of an older one: after a
     /// reload Resume opens it again at the saved execution, speed and update interval, with the
-    /// same bars and next step. Without its recording Resume keeps the session and says how to
-    /// recover it.
+    /// same bars and next step. Without its recording, which the web leaves out when it is too
+    /// large, Resume keeps the session and asks for the file; opening that file resumes it the
+    /// same way.
     #[test]
     fn resuming_reopens_an_imported_recording() {
         use super::super::tests::{AppStorage, settle};
@@ -3959,6 +3984,33 @@ mod tests {
             settle(&mut app, &ctx);
             let mut events = Vec::new();
             app.live.read_recording(&mut events);
+            if !kept {
+                // Ten thousand executions encode to more than the web saving budget.
+                let symbol = app.state.symbol.clone();
+                let book = egui_charts::model::OrderBook {
+                    ts: start,
+                    symbol: symbol.clone(),
+                    bids: vec![],
+                    asks: vec![],
+                };
+                events = vec![ReplayEvent::new(
+                    &symbol,
+                    start,
+                    0,
+                    MarketEvent::DepthSnapshot { sequence: 0, book },
+                )];
+                for i in 0..10_000 {
+                    let time = start + chrono::TimeDelta::milliseconds(i);
+                    let id = i as u64 + 1;
+                    let tick = Tick::new(time, 100.0, 1.0, Some(OrderSide::Buy)).with_id(id);
+                    events.push(ReplayEvent::new(
+                        &symbol,
+                        time,
+                        id,
+                        MarketEvent::Trade(tick),
+                    ));
+                }
+            }
             let bytes = recording_bytes(&app.live.instrument(), &events).unwrap();
             if previous {
                 app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() / 2);
@@ -3970,7 +4022,7 @@ mod tests {
             }
             let (tx, rx) = std::sync::mpsc::channel();
             app.recording_files.selected = Some(rx);
-            tx.send(Ok(Some(bytes))).unwrap();
+            tx.send(Ok(Some(bytes.clone()))).unwrap();
             for _ in 0..16 {
                 settle(&mut app, &ctx);
                 if app.recording_files.opened {
@@ -3991,10 +4043,11 @@ mod tests {
             assert_eq!(at(&app), saved);
             let mut storage = AppStorage::default();
             eframe::App::save(&mut *app, &mut storage);
-            if !kept {
-                // The web build keeps recordings of at most 512 KiB with the session.
-                eframe::Storage::remove_string(&mut storage, "replay_session_recording");
-            }
+            // Tests save with the web budget, which leaves the larger recording out.
+            assert_eq!(
+                eframe::Storage::get_string(&storage, "replay_session_recording").is_some(),
+                kept
+            );
             let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
             cc.storage = Some(&storage);
             let mut restored = DemoApp::new_at(&cc, until + chrono::TimeDelta::hours(1), true);
@@ -4010,7 +4063,18 @@ mod tests {
                 assert!(frames(&mut restored, &ctx).iter().any(|text| {
                     text == "Saved replay needs its recording file: open it again from Market recording > Open local recording"
                 }));
-                continue;
+                // Opening the identical file it asks for resumes the saved session.
+                let (tx, rx) = std::sync::mpsc::channel();
+                restored.recording_files.selected = Some(rx);
+                tx.send(Ok(Some(bytes))).unwrap();
+                for _ in 0..64 {
+                    settle(&mut restored, &ctx);
+                    if restored.recording_files.opened {
+                        break;
+                    }
+                }
+                // The chart shows the resumed bars on the frame after the file opened.
+                settle(&mut restored, &ctx);
             }
             assert!(restored.recording_files.opened, "previous {previous}");
             assert!(restored.chart.replay_driver().is_some());
@@ -4019,6 +4083,12 @@ mod tests {
             assert!(!state.is_playing());
             assert_eq!(state.speed.multiplier(), 3.0);
             assert_eq!(at(&restored), saved);
+            assert_eq!(restored.replay_session, app.replay_session);
+            assert_eq!(restored.replay_session_cutoff, app.replay_session_cutoff);
+            assert_eq!(
+                restored.replay_control.uses_automatic_update_interval(),
+                app.replay_control.uses_automatic_update_interval()
+            );
             restored.handle_replay_control(ReplayControlAction::NextBar);
             settle(&mut restored, &ctx);
             assert_eq!(at(&restored), next);
