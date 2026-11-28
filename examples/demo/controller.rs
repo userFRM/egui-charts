@@ -6239,13 +6239,19 @@ mod tests {
         app: &mut DemoApp,
         events: Vec<egui::Event>,
     ) -> Vec<(egui::accesskit::NodeId, egui::accesskit::Node)> {
+        draw_sized(ctx, app, egui::vec2(1440.0, 900.0), events)
+    }
+
+    fn draw_sized(
+        ctx: &egui::Context,
+        app: &mut DemoApp,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> Vec<(egui::accesskit::NodeId, egui::accesskit::Node)> {
         ctx.enable_accesskit();
         let output = ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1440.0, 900.0),
-                )),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events,
                 ..Default::default()
             },
@@ -6835,6 +6841,180 @@ mod tests {
             );
         }
         assert_eq!(study.order_flow_inputs().len(), 1);
+    }
+
+    /// The demo's generic settings bindings apply guides, precision and renamed inputs.
+    #[test]
+    fn study_enhancement_dialog_cases_apply_settings_and_readouts() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, Toggled, TreeId};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+
+        enum Change {
+            Zero,
+            Precision,
+            Inputs(&'static [(&'static str, &'static str, f64)]),
+        }
+        let cases = [
+            ("BBTrend", Change::Zero),
+            ("Bull Bear Power", Change::Zero),
+            ("SMI", Change::Precision),
+            (
+                "Trend Strength Index",
+                Change::Inputs(&[("Length", "period", 7.0)]),
+            ),
+            (
+                "PSAR",
+                Change::Inputs(&[
+                    ("Start", "initial_af", 0.03),
+                    ("Increment", "af_step", 0.04),
+                    ("Max Value", "max_af", 0.3),
+                ]),
+            ),
+        ];
+        for size in [egui::vec2(1440.0, 900.0), egui::vec2(480.0, 640.0)] {
+            for (name, change) in &cases {
+                let ctx = egui::Context::default();
+                let mut app = DemoApp::new_at(
+                    &eframe::CreationContext::_new_kittest(ctx.clone()),
+                    "2026-11-03T15:00:00Z".parse().unwrap(),
+                    true,
+                );
+                app.chart.set_feed_paused(true);
+                settle(&mut app, &ctx);
+                let id = app
+                    .chart
+                    .add_indicator(IndicatorFactory::new().create(name).unwrap());
+                app.open_indicator_settings(id);
+                for _ in 0..3 {
+                    draw_sized(&ctx, &mut app, size, vec![]);
+                }
+                let act = |app: &mut DemoApp, label: &str, action, data| {
+                    let nodes = draw_sized(&ctx, app, size, vec![]);
+                    let target = control(&nodes, label).0;
+                    draw_sized(
+                        &ctx,
+                        app,
+                        size,
+                        vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                            action: Action::ScrollIntoView,
+                            target_tree: TreeId::ROOT,
+                            target_node: target,
+                            data: None,
+                        })],
+                    );
+                    draw_sized(&ctx, app, size, vec![]);
+                    let nodes = draw_sized(&ctx, app, size, vec![]);
+                    let node = control(&nodes, label);
+                    let bounds = node.1.bounds().unwrap();
+                    assert!(
+                        bounds.x0 >= 0.0
+                            && bounds.x1 <= f64::from(size.x)
+                            && bounds.y0 >= 0.0
+                            && bounds.y1 <= f64::from(size.y),
+                        "{name} {label} outside {size:?}: {bounds:?}"
+                    );
+                    draw_sized(
+                        &ctx,
+                        app,
+                        size,
+                        vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                            action,
+                            target_tree: TreeId::ROOT,
+                            target_node: node.0,
+                            data,
+                        })],
+                    );
+                };
+                match change {
+                    Change::Zero => {
+                        act(&mut app, "Style", Action::Click, None);
+                        let nodes = draw_sized(&ctx, &mut app, size, vec![]);
+                        assert_eq!(control(&nodes, "Zero").1.toggled(), Some(Toggled::True));
+                        act(&mut app, "Zero", Action::Click, None);
+                        act(
+                            &mut app,
+                            "Level value",
+                            Action::SetValue,
+                            Some(ActionData::NumericValue(1.5)),
+                        );
+                    }
+                    Change::Precision => {
+                        act(&mut app, "Style", Action::Click, None);
+                        act(&mut app, "Automatic", Action::Click, None);
+                        act(
+                            &mut app,
+                            "Precision",
+                            Action::SetValue,
+                            Some(ActionData::NumericValue(5.0)),
+                        );
+                    }
+                    Change::Inputs(inputs) => {
+                        for (label, _, value) in *inputs {
+                            act(
+                                &mut app,
+                                label,
+                                Action::SetValue,
+                                Some(ActionData::NumericValue(*value)),
+                            );
+                        }
+                    }
+                }
+                act(&mut app, "Apply", Action::Click, None);
+                assert!(!app.indicator_settings.is_open(), "{name} {size:?}");
+                settle(&mut app, &ctx);
+                let study = app.chart.indicator_mut(id).unwrap();
+                match change {
+                    Change::Zero => {
+                        assert!(!study.settings().levels[0].visible, "{name}");
+                        assert_eq!(study.settings().levels[0].value, Some(1.5), "{name}");
+                    }
+                    Change::Precision => {
+                        assert_eq!(study.settings().precision, Some(5));
+                        assert_eq!(study.format_value(12.34567), "12.34567");
+                    }
+                    Change::Inputs(inputs) => {
+                        for (_, id, value) in *inputs {
+                            let want = if *id == "period" {
+                                InputValue::Length(*value as usize)
+                            } else {
+                                InputValue::Number(*value)
+                            };
+                            assert_eq!(
+                                study.inputs().iter().find(|i| i.id == *id).unwrap().value,
+                                want,
+                                "{name} {id}"
+                            );
+                        }
+                    }
+                }
+                let title = study.name().to_owned();
+                let info = app.build_data_window();
+                let reading = info
+                    .studies
+                    .iter()
+                    .find(|row| row.study.starts_with(&title))
+                    .unwrap();
+                assert!(reading.value.is_some(), "{name} must have a reading");
+                let precision = if matches!(change, Change::Precision) {
+                    5
+                } else {
+                    2
+                };
+                assert_eq!(reading.precision, precision, "{name}");
+                let text = reading
+                    .formatted
+                    .as_ref()
+                    .expect("a formatted demo reading");
+                assert_eq!(
+                    text.rsplit_once('.').unwrap().1.len(),
+                    precision,
+                    "{name}: {text}"
+                );
+                if matches!(change, Change::Precision) {
+                    assert_eq!(reading.format, egui_charts::scales::StudyFormat::Price);
+                }
+            }
+        }
     }
 
     /// Every corporate anchor chosen through the dialog uses the loaded symbol's demo events.

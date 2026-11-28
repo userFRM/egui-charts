@@ -649,7 +649,9 @@ mod tests {
                 if earlier {
                     events.push(event("earlier", 1, 0, kind));
                 }
-                study.set_input("anchor", InputValue::Choice(choice)).unwrap();
+                study
+                    .set_input("anchor", InputValue::Choice(choice))
+                    .unwrap();
                 study.set_time_scale_events(&events);
                 study.calculate(&bars);
                 for (close, want) in [
@@ -659,14 +661,18 @@ mod tests {
                     bars[1].close = close;
                     study.update(&bars, 1);
                     assert_eq!(
-                        readings(&study, 2), want,
+                        readings(&study, 2),
+                        want,
                         "{kind:?}, earlier event: {earlier}, close: {close}"
                     );
                     let mut fresh = study.clone();
                     fresh.calculate(&bars);
                     for line in 0..7 {
                         for bar in 0..2 {
-                            assert_eq!(study.values().value(line, bar), fresh.values().value(line, bar));
+                            assert_eq!(
+                                study.values().value(line, bar),
+                                fresh.values().value(line, bar)
+                            );
                         }
                     }
                 }
