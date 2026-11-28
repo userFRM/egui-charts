@@ -20,6 +20,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Opening a demo news or Highlights notification preserves its original publication after the feed clock advances. ([#4387](https://github.com/userFRM/egui-charts/issues/4387))
+
 - Trade Rate no longer reports a partial time candle's retained executions as its total. Its rolling rates use their own windows' coverage. ([#4202](https://github.com/userFRM/egui-charts/issues/4202))
 
 - An empty Watchlist keeps its hint above symbol details when the window shrinks. Scroll the list if the hint does not fit. ([#4161](https://github.com/userFRM/egui-charts/issues/4161))
