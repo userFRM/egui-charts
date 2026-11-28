@@ -43,7 +43,7 @@ pub use candles::{
 pub use context::{BarRenderParams, ChartMapping, RenderContext, StyleColors};
 pub use grid::{render_grid, render_vertical_grid};
 pub use indicator::IndicatorRenderer;
-pub(crate) use indicator::{paint_study_plot, triangle_centre};
+pub(crate) use indicator::{PlotLayer, paint_study_plot, triangle_centre};
 #[cfg(feature = "ui")]
 pub(crate) use legend::QuotePresets;
 pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};

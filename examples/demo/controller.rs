@@ -522,6 +522,7 @@ pub struct DemoApp {
     replay_interval: Timeframe,
     replay_scope: ReplayScope,
     replay_session: Option<(ReplaySession, Timeframe)>,
+    replay_session_cutoff: Option<chrono::DateTime<chrono::Utc>>,
     replay_slots: Vec<usize>,
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
@@ -976,6 +977,10 @@ impl DemoApp {
                 }
                 Some((session, interval))
             }),
+            replay_session_cutoff: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "replay_session_cutoff"))
+                .flatten(),
             replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -1444,13 +1449,22 @@ impl DemoApp {
         {
             self.toasts.error(format!("Alert data: {error}"));
         }
-        // Footprint alerts follow the detectors whose rule the active chart sets.
-        let footprint = self.live.detectors().take_footprint_events();
-        if self.replay.is_none() {
-            engine.footprint_events(&footprint, now);
+        // Every chart's detectors read saved intervals and rules; repeated deliveries fire once.
+        let alerts = engine.alerts();
+        let mut read: Vec<Arc<egui_charts::services::OrderFlowDetectors>> = Vec::new();
+        for live in std::iter::once(&self.live).chain(self.extra_charts.iter().map(|s| &s.live)) {
+            let detectors = live.detectors();
+            if read.iter().any(|seen| Arc::ptr_eq(seen, &detectors)) {
+                continue;
+            }
+            detectors.watch_footprint_alerts(&alerts);
+            let footprint = detectors.take_footprint_events();
+            if self.replay.is_none() {
+                engine.footprint_events(&footprint, now);
+            }
+            read.push(detectors);
         }
-        if engine
-            .alerts()
+        if alerts
             .iter()
             .any(|alert| alert.status == egui_charts::model::AlertStatus::Active)
         {
@@ -2040,6 +2054,11 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "account_panel_height", &self.account_panel_height);
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
+        eframe::set_value(
+            storage,
+            "replay_session_cutoff",
+            &self.replay_session_cutoff,
+        );
         self.checkpoint_workspace();
         self.storage.persist(storage);
         eframe::set_value(
@@ -2131,7 +2150,7 @@ impl eframe::App for DemoApp {
         let detectors = self.live.detectors();
         let mut settings = detectors.settings();
         let before = settings.clone();
-        // Footprint alerts read the imbalances and rows the active chart shows.
+        // Panel markers and alerts without a saved rule follow the active chart's footprint.
         let rows = self.chart.footprint_row_ticks();
         settings
             .footprint
@@ -4335,7 +4354,10 @@ impl DemoApp {
                 points,
                 self.theme.ui.border,
             )));
-        if !self.replay_selecting && self.replay.is_none() {
+        // An all charts replay moves to the chart activated; another waits for its end.
+        if !self.replay_selecting
+            && (self.replay.is_none() || self.replay_slots.contains(&self.layout.active()))
+        {
             self.activate_chart_slot(self.layout.active());
         }
         self.drain_chart_events(ui.ctx());
@@ -4868,11 +4890,6 @@ impl DemoApp {
             return;
         }
         let play = matches!(action, ReplayControlAction::Play);
-        let endpoint = match action {
-            ReplayControlAction::GoToStart => Some(false),
-            ReplayControlAction::GoToEnd => Some(true),
-            _ => None,
-        };
         let transport = matches!(
             action,
             ReplayControlAction::Play
@@ -4909,13 +4926,7 @@ impl DemoApp {
             ReplayControlAction::None => return,
             _ => {}
         }
-        if let Some(end) = endpoint
-            && let Some(driver) = self.chart.replay_driver().cloned()
-            && let Some((first, last)) = driver.time_range()
-        {
-            driver.seek(if end { last } else { first });
-            self.push_market_replay_window();
-        } else if !transport {
+        if !transport {
             self.push_replay_window_to_chart();
         }
         self.sync_replay_driver(play);
@@ -6197,14 +6208,16 @@ mod tests {
             .unwrap_or_else(|| panic!("missing control: {label}"))
     }
 
-    /// The demo's series settings reach the TPO chart type's statistics rows, hours, blocks,
+    /// The demo's series settings reach the TPO chart type's statistics rows, hours, Letters and Blocks,
     /// volume profile settings, profile length and price line, and the study settings the Time
     /// Price Opportunity study's statistics rows, profile period, value area edges and volume
-    /// profile levels.
+    /// profile levels and display.
     #[test]
     fn tpo_settings_reach_the_demo_chart() {
         use egui::accesskit::{Action, ActionData, ActionRequest, TreeId};
-        use egui_charts::model::{ChartType, PriceSource, ProfileSession, TPOProfilePeriod};
+        use egui_charts::model::{
+            ChartType, PriceSource, ProfileSession, TPODisplayMode, TPOProfilePeriod,
+        };
         use egui_charts::studies::{IndicatorFactory, InputValue};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
@@ -6268,6 +6281,7 @@ mod tests {
         }
         for label in [
             "Blocks",
+            "Letters",
             "Volume profile",
             "Volume point of control",
             "Volume placement",
@@ -6284,7 +6298,8 @@ mod tests {
         click(&mut app, "Ok");
         assert!(!app.series_settings.is_open);
         let params = app.chart.chart_type_params();
-        assert!(!params.tpo_blocks && params.tpo_volume_profile);
+        assert!(!params.tpo_letters && !params.tpo_blocks && params.tpo_volume_profile);
+        assert_eq!(params.tpo_config(None).display_mode, TPODisplayMode::Hidden);
         assert!(params.tpo_volume.poc && params.tpo_volume.left);
         assert_eq!(
             (params.tpo_profile_period, params.tpo_profile_periods),
@@ -6309,6 +6324,8 @@ mod tests {
             "Value area high",
             "Volume profile",
             "Volume point of control",
+            "Display",
+            "Hidden",
             "Apply",
         ] {
             click(&mut app, label);
@@ -6316,6 +6333,7 @@ mod tests {
         assert!(!app.indicator_settings.is_open());
         let inputs = app.chart.indicator_mut(id).unwrap().inputs();
         for (input, expected) in [
+            ("display", InputValue::Choice(3)),
             ("statistics", InputValue::Toggle(true)),
             ("statistics_total_volume", InputValue::Toggle(true)),
             ("profile_period", InputValue::Choice(1)),
@@ -6420,13 +6438,14 @@ mod tests {
     }
 
     /// The dialog saves a footprint condition and frequency, then the demo forwards the
-    /// execution that completes its stack exactly once to the alert engine.
+    /// execution that completes its stack exactly once to the alert engine, keeping its interval
+    /// and rule when the chart changes interval and footprint settings.
     #[test]
     fn footprint_alerts_reach_the_demo_alert_dialog() {
         use egui::accesskit::{Action, ActionRequest, TreeId};
         use egui_charts::data::MarketEvent;
         use egui_charts::model::{
-            AlertFrequency, ChartTypeParams, FootprintCondition,
+            AlertFrequency, FootprintCondition,
             OrderSide::{Buy, Sell},
             Tick,
         };
@@ -6473,13 +6492,6 @@ mod tests {
             AlertCondition::Footprint(FootprintCondition::StackedBuyImbalance)
         );
         assert_eq!(saved[0].frequency, AlertFrequency::OncePerBar);
-        let detectors = app.live.detectors();
-        let mut settings = detectors.settings();
-        settings
-            .footprint
-            .rule
-            .follow_chart(&ChartTypeParams::default(), 1);
-        detectors.set_settings(settings);
         assert_eq!(app.chart.timeframe(), Some(Timeframe::Min1));
         let bars = app.chart.bars(SeriesId::MAIN);
         let last = bars.last().unwrap();
@@ -6488,6 +6500,16 @@ mod tests {
         let p = (last.close / tick).round() * tick;
         let symbol = app.chart.symbol().to_owned();
         let fired = engine.triggers().len();
+        app.monitor_alerts(&ctx);
+        app.switch_timeframe(Timeframe::Min5);
+        let mut params = app.chart.chart_type_params().clone();
+        params.footprint_imbalance_ratio = 100.0;
+        params.footprint_stack = 5;
+        app.chart.set_chart_type_params(params);
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.timeframe(), Some(Timeframe::Min5));
+        let detectors = app.live.detectors();
+        assert_eq!(detectors.settings().footprint.rule.imbalance_ratio, 100.0);
         for (second, row, size, side) in [
             (1, 0.0, 1.0, Sell),
             (2, 1.0, 1.0, Sell),
@@ -11122,25 +11144,26 @@ mod tests {
             .find(|(_, study)| study.name() == "Doji")
             .unwrap()
             .0;
-        // Choose the study's visual order before checking that its tint is behind price.
-        assert!(
-            app.chart
-                .reorder_indicator(id, egui_charts::widget::VisualOrder::SendToBack)
-        );
-        for _ in 0..18 {
-            ui_frame(&ctx, size, vec![], |ui| {
-                app.ui(ui, &mut eframe::Frame::_new_kittest())
-            });
-        }
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                ..Default::default()
-            },
-            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
-        );
-        let shapes = std::mem::take(&mut output.shapes);
-        output.drop_without_applying_deltas();
+        // The tint lies behind the candle and the label wherever the study is ordered.
+        let capture = |app: &mut DemoApp| {
+            for _ in 0..18 {
+                ui_frame(&ctx, size, vec![], |ui| {
+                    app.ui(ui, &mut eframe::Frame::_new_kittest())
+                });
+            }
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events: vec![egui::Event::PointerGone],
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        let shapes = capture(&mut app);
         assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
         let (_, study) = app
             .chart
@@ -11168,17 +11191,42 @@ mod tests {
             })
             .collect();
         assert_eq!(backgrounds.len(), 1, "one tinted candle column");
-        let (background_at, rect) = backgrounds[0];
+        let (_, rect) = backgrounds[0];
         assert!((rect.center().x - x).abs() < 0.01);
         assert!((rect.width() - map.bar_spacing).abs() < 0.01);
         assert!((rect.top() - map.rect.top()).abs() < 0.01);
         assert!((rect.bottom() - map.rect.bottom()).abs() < 0.01);
-        let candle = egui::pos2(x, map.price.price_to_y(100.03125));
-        let candle_at = shapes.iter().position(|shape| matches!(&shape.shape,
-            egui::Shape::Rect(rect) if rect.fill != color && rect.rect.contains(candle)
-                && rect.rect.width() < map.bar_spacing && rect.rect.height() < map.rect.height()
-        )).expect("the Doji candle body");
-        assert!(background_at < candle_at, "the tint is behind the candle");
+        let check_order = |shapes: &[egui::epaint::ClippedShape]| {
+            let background_at = shapes
+                .iter()
+                .position(|shape| {
+                    matches!(&shape.shape,
+                        egui::Shape::Rect(rect) if rect.fill == color
+                    )
+                })
+                .expect("the formation background");
+            let candle = egui::pos2(x, map.price.price_to_y(100.03125));
+            let candle_at = shapes.iter().position(|shape| matches!(&shape.shape,
+                egui::Shape::Rect(rect) if rect.fill != color && rect.rect.contains(candle)
+                    && rect.rect.width() < map.bar_spacing && rect.rect.height() < map.rect.height()
+            )).expect("the Doji candle body");
+            let label_at = shapes
+                .iter()
+                .position(|shape| {
+                    matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == "D"
+                    )
+                })
+                .expect("the Doji label");
+            assert!(background_at < candle_at, "the tint is behind the candle");
+            assert!(background_at < label_at, "the tint is behind the label");
+        };
+        check_order(&shapes);
+        assert!(
+            app.chart
+                .reorder_indicator(id, egui_charts::widget::VisualOrder::SendToBack)
+        );
+        check_order(&capture(&mut app));
     }
 
     /// Quick search executes catalogue entries as well as opening settings.

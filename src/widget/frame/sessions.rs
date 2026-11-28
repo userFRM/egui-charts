@@ -298,8 +298,7 @@ mod tests {
             chart.set_instrument(Some(instrument.clone()));
             chart.config_mut().show_ohlc_info = false;
             chart.set_chart_type(ChartType::TimePriceOpportunity);
-            let saved =
-                serde_json::json!({"tpo_row_ticks": 1, "tpo_letters": true, "tpo_session": hours});
+            let saved = serde_json::json!({"tpo_period_minutes": 60, "tpo_row_ticks": 1, "tpo_letters": true, "tpo_session": hours});
             chart.set_chart_type_params(serde_json::from_value(saved).unwrap());
             let ctx = egui::Context::default();
             shapes(&ctx, &mut chart, 0.0, vec![]);

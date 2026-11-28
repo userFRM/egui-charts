@@ -32,7 +32,8 @@ const TRIGGER_HISTORY: usize = 5_000;
 /// watchlist each member's time in [`member_triggered_at`](Alert::member_triggered_at), as its
 /// last firing (see *Restarts*). An alert with frequency [`Once`](AlertFrequency::Once) that
 /// fired stays [`Triggered`](AlertStatus::Triggered). A [`Position`](AlertCondition::Position)
-/// keeps its progress in its condition, so it resumes waiting for the entry or for an exit.
+/// keeps its progress in its condition, so it resumes waiting for the entry or for an exit,
+/// and retains the levels that progress reached, see *Positions*.
 ///
 /// # Rules
 ///
@@ -115,12 +116,16 @@ const TRIGGER_HISTORY: usize = 5_000;
 /// after an `Upsert` carrying its new progress, and becomes `Triggered` after the exit. Outside
 /// its schedule the triggers are silent but progress still moves. An empty message reads the
 /// progress reached, such as "Position entered". Saving it active after its exit starts it again
-/// from the entry.
+/// from the entry. Moving any level after entry or exit also starts it again from the entry
+/// with an `Upsert` and no trigger; the new entry needs a value observed after the edit.
+/// The alert keeps that restart time separately from its last firing, so restoring it cannot
+/// replay an entry crossing from before the edit.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
-/// and expires without data. Disabled, triggered and expired alerts are not evaluated, and
-/// saving changes to what an alert watches or its status, or removing it, discards its evaluation
+/// and expires without data. Disabled, triggered and expired alerts are not evaluated, except
+/// that a position that reached its exit keeps reading its levels. Saving changes to what an
+/// alert watches or its status, or removing it, discards its evaluation
 /// state, so a resumed alert starts afresh. Display and delivery edits keep a watchlist alert's
 /// member record.
 ///
@@ -394,13 +399,14 @@ impl AlertEngine {
         self.lock().triggers.retain(keep);
     }
 
-    /// Active symbols still armed for `id`, including watchlist members. A once-per-member
+    /// Active symbols still armed for `id`, including watchlist members, and the symbol of a
+    /// position that reached its exit, whose levels the engine still follows. A once-per-member
     /// alert omits symbols that already fired, so a host can release their subscriptions.
     pub fn subjects(&self, id: &AlertId) -> Vec<String> {
         let state = self.lock();
         let Some(alert) = state.alerts.iter().find(|alert| {
             alert.id.as_ref() == Some(id)
-                && alert.status == AlertStatus::Active
+                && (alert.status == AlertStatus::Active || ended_position(alert))
                 && alert.is_valid()
                 && !alert.condition.is_event()
         }) else {
@@ -526,7 +532,7 @@ impl AlertEngine {
             ..
         } = &mut *state;
         for alert in alerts.iter_mut().filter(|alert| {
-            alert.status == AlertStatus::Active
+            (alert.status == AlertStatus::Active || ended_position(alert))
                 && alert.is_valid()
                 && alert.starts.is_none_or(|starts| starts <= now)
                 && !alert.condition.is_event()
@@ -583,6 +589,16 @@ impl AlertEngine {
                 }
             }
             if !matched || !ready {
+                continue;
+            }
+            if restart_position(alert, run, now) {
+                if let Some(events) = events {
+                    events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+                }
+                continue;
+            }
+            // An ended position only follows its levels.
+            if alert.status != AlertStatus::Active {
                 continue;
             }
             let Some((bar, messages, silent)) =
@@ -985,9 +1001,11 @@ impl AlertEngine {
     }
 
     /// Delivers the live conditions drained by `OrderFlowDetectors::take_footprint_events` to
-    /// footprint alerts on their symbol and interval. `Once` and `OncePerBar` fire at the first
-    /// execution that meets the condition; `OncePerBarClose` fires on a closed bar that meets
-    /// it. Each alert fires at most once per bar, including duplicate events from other charts.
+    /// footprint alerts of their symbol, interval and footprint rule. `Once` and `OncePerBar`
+    /// fire at the first execution that meets the condition; `OncePerBarClose` fires on a
+    /// closed bar that meets it. Each alert fires at most once per bar, including duplicate
+    /// events from other charts. Restored alerts ignore every bar covered by their saved last
+    /// firing, using the bar's close boundary for closed events rather than their delivery time.
     /// Triggers carry the event's time and price, and its message when the alert has none;
     /// custom messages expand as for `strategy_fills`.
     pub fn footprint_events(&self, events: &[FootprintAlertEvent], now: DateTime<Utc>) {
@@ -999,22 +1017,22 @@ impl AlertEngine {
                 now,
                 |alert| {
                     alert.condition == AlertCondition::Footprint(event.condition)
+                        && alert.timeframe == Some(event.timeframe)
+                        && alert.inputs.as_deref().and_then(|inputs| inputs.footprint) == event.rule
                         && (alert.frequency == AlertFrequency::OncePerBarClose) == event.closed
                 },
                 |_, seen, last| {
-                    // A restored run counts its saved firing only on its first delivery.
-                    if seen.fired.is_none()
+                    // Until a new bar fires, saved firings cover all older deliveries.
+                    if (seen.fired.is_none()
                         && last.is_some_and(|last| {
                             if event.closed {
-                                event.time <= last
+                                event.bar_end.is_some_and(|end| end <= last)
                             } else {
                                 event.bar <= last
                             }
-                        })
+                        }))
+                        || seen.fired.is_some_and(|bar| event.bar <= bar)
                     {
-                        seen.fired = Some(event.bar);
-                    }
-                    if seen.fired.is_some_and(|bar| event.bar <= bar) {
                         return Vec::new();
                     }
                     seen.fired = Some(event.bar);
@@ -1190,6 +1208,7 @@ impl State {
             alert.created_at = Some(Utc::now());
             alert.last_triggered_at = None;
             alert.member_triggered_at.clear();
+            alert.position_restarted_at = None;
             loop {
                 self.next_id += 1;
                 let id = AlertId(self.next_id.to_string());
@@ -1527,9 +1546,9 @@ fn evaluate(
     let last = match &alert.watchlist {
         _ if !restored => None,
         Some(_) => alert.member_triggered_at.get(symbol).copied(),
-        None => alert.last_triggered_at,
+        None => alert.last_triggered_at.max(alert.position_restarted_at),
     };
-    // A restored alert takes its saved last firing on its first evaluation.
+    // A restored alert takes its saved last firing or position restart on its first evaluation.
     if run.joined.is_empty()
         && let Some(last) = last
     {
@@ -1641,6 +1660,8 @@ fn evaluate(
     }
     if let (Some(value), Some(entry), Some(target), Some(stop)) = (value, entry, target, stop) {
         stages.extend(position_exit(value, entry, target, stop));
+        alert.position_levels = Some([entry, target, stop]);
+        alert.position_restarted_at = None;
     }
     let mut messages = Vec::new();
     for stage in stages {
@@ -1721,6 +1742,54 @@ fn reads_previous(condition: &AlertCondition) -> bool {
         ),
         _ => false,
     }
+}
+
+/// Whether `alert` is a position that reached its exit, whose levels still need watching.
+fn ended_position(alert: &Alert) -> bool {
+    alert.status == AlertStatus::Triggered
+        && matches!(
+            alert.condition,
+            AlertCondition::Position {
+                progress: AlertPositionProgress::TargetReached | AlertPositionProgress::StopReached,
+                ..
+            }
+        )
+}
+
+/// Restarts a position when any level moved after entry or exit. The
+/// observation reading the edit becomes its baseline, so the edit cannot fire. Older saved
+/// alerts adopt the first resolved levels without changing their progress.
+fn restart_position(alert: &mut Alert, run: &mut Run, now: DateTime<Utc>) -> bool {
+    let AlertCondition::Position { progress, .. } = &mut alert.condition else {
+        return false;
+    };
+    let Some(newest) = run.intervals.get(&alert.timeframe.unwrap_or_default()) else {
+        return false;
+    };
+    // A position has one rule: the value and its entry, target and stop.
+    let Some(&[_, Some(entry), Some(target), Some(stop)]) = newest.seen.rules.first() else {
+        return false;
+    };
+    let levels = [entry, target, stop];
+    let moved = match (*progress, alert.position_levels) {
+        (AlertPositionProgress::AwaitingEntry, _) => false,
+        (_, None) => {
+            alert.position_levels = Some(levels);
+            false
+        }
+        (_, Some(reached)) => reached != levels,
+    };
+    if moved {
+        *progress = AlertPositionProgress::AwaitingEntry;
+        alert.status = AlertStatus::Active;
+        alert.position_levels = None;
+        alert.position_restarted_at = Some(now);
+        run.joined = vec![newest.seen.clone()];
+        run.fired = None;
+        run.silent = None;
+        run.done = false;
+    }
+    moved
 }
 
 /// Whether `alert`, a once alert on a watchlist, fired for `symbol` before, as its saved member
@@ -2449,7 +2518,7 @@ mod tests {
     }
 
     #[test]
-    fn a_position_alert_resumes_after_a_restart_and_follows_a_moved_stop() {
+    fn a_position_alert_resumes_after_a_restart_and_restarts_after_a_moved_stop() {
         use AlertPositionProgress::{AwaitingEntry, StopReached};
         let condition = AlertCondition::Position {
             levels: Box::new(["p", "p#1", "p#2"].map(|id| AlertSource::Drawing(id.into()))),
@@ -2502,10 +2571,21 @@ mod tests {
         feed_position(&host, &[104.0]);
         assert!(host.fired().is_empty());
         stop.set(102.0);
+        feed_position(&host, &[104.0]);
+        assert!(matches!(
+            host.engine.alerts()[0].condition,
+            AlertCondition::Position {
+                progress: AwaitingEntry,
+                ..
+            }
+        ));
+        assert!(host.fired().is_empty());
         feed_position(&host, &[104.0, 103.0]);
         assert!(host.fired().is_empty());
         feed_position(&host, &[104.0, 103.0, 102.0]);
-        assert_eq!(host.fired(), [102.0]);
+        assert!(host.fired().is_empty());
+        feed_position(&host, &[104.0, 103.0, 102.0, 100.0]);
+        assert_eq!(host.fired(), [100.0, 100.0]);
         let mut again = host.engine.alerts().remove(0);
         assert_eq!(again.status, AlertStatus::Triggered);
         assert!(matches!(
@@ -2524,6 +2604,193 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn editing_a_reached_position_level_starts_the_alert_again() {
+        use AlertPositionProgress::{AwaitingEntry, Entered, StopReached, TargetReached};
+        type PositionRow = (
+            [f64; 3],
+            f64,
+            Vec<f64>,
+            AlertPositionProgress,
+            [f64; 3],
+            Vec<f64>,
+            Vec<(&'static str, f64)>,
+        );
+        let entered = "Position entered";
+        let target = "Position target reached";
+        let mut rows: Vec<PositionRow> = Vec::new();
+        for direction in [1.0, -1.0] {
+            let price = |offset| 100.0 + direction * offset;
+            let before = [price(0.0), price(10.0), price(-5.0)];
+            for (reached, close) in [(Entered, 5.0), (TargetReached, 10.0), (StopReached, -5.0)] {
+                for level in 0..3 {
+                    let mut after = before;
+                    after[level] = [price(3.0), price(20.0), price(-4.0)][level];
+                    rows.push((
+                        before,
+                        price(-2.0),
+                        vec![price(0.0), price(close)],
+                        reached,
+                        after,
+                        vec![price(close), after[0], after[1]],
+                        vec![(entered, after[0]), (target, after[1])],
+                    ));
+                }
+            }
+        }
+        for (index, (before, history, closes, reached, after, reloaded, expected)) in
+            rows.into_iter().enumerate()
+        {
+            let position = |ids: [&str; 3], progress| {
+                alert(
+                    AlertCondition::Position {
+                        levels: Box::new(ids.map(|id| AlertSource::Drawing(id.into()))),
+                        progress,
+                    },
+                    AlertFrequency::Once,
+                )
+            };
+            let host = Host::new(vec![
+                position(["p", "p#1", "p#2"], AwaitingEntry),
+                serde_json::from_str(
+                    r#"{
+                    "symbol":"SYM", "timeframe":"Min1", "frequency":"Once",
+                    "condition":{"Position":{
+                        "levels":[{"Drawing":"q"},{"Drawing":"q#1"},{"Drawing":"q#2"}],
+                        "progress":"Entered"
+                    }}
+                }"#,
+                )
+                .unwrap(),
+            ]);
+            let levels = std::cell::Cell::new(before);
+            let now = std::cell::Cell::new(0);
+            let update = |host: &Host, bars: &[Bar]| {
+                let at = now.get().max(bars.last().unwrap().time.timestamp());
+                host.engine
+                    .update("SYM", None, Timeframe::Min1, bars, time(at), |source, _| {
+                        let AlertSource::Drawing(id) = source else {
+                            return None;
+                        };
+                        ["p", "p#1", "p#2"]
+                            .iter()
+                            .position(|name| *name == id)
+                            .map(|n| levels.get()[n])
+                            .or_else(|| {
+                                ["q", "q#1", "q#2"]
+                                    .iter()
+                                    .position(|name| *name == id)
+                                    .map(|n| [50.0, 1_000.0, 10.0][n])
+                            })
+                    });
+                now.set(at + 1);
+            };
+            let mut bars = vec![bar(0, history, 1.0), bar(1, history, 1.0)];
+            for close in closes {
+                bars.push(bar(bars.len() as i64, close, 1.0));
+                update(&host, &bars);
+            }
+            let p = host.engine.alerts().remove(0);
+            let id = p.id.clone().unwrap();
+            assert!(
+                matches!(p.condition, AlertCondition::Position { progress, .. } if progress == reached)
+            );
+            assert!(host.events().iter().all(|event| !matches!(
+                event, AlertEvent::TriggeredForSymbol { id: fired, .. } if *fired != id
+            )));
+            // A drawing still loading must not discard reached progress or its recorded levels.
+            levels.set([after[0], after[1], f64::NAN]);
+            update(&host, &bars);
+            assert_eq!(host.engine.alerts()[0], p, "row {index}: unavailable stop");
+            assert!(host.events().is_empty());
+            levels.set(after);
+            update(&host, &bars);
+            let restarted = host.engine.alerts().remove(0);
+            assert!(
+                matches!(
+                    restarted.condition,
+                    AlertCondition::Position {
+                        progress: AwaitingEntry,
+                        ..
+                    }
+                ),
+                "row {index}: edited levels restart the position"
+            );
+            assert_eq!(restarted.status, AlertStatus::Active, "row {index}");
+            assert_eq!(restarted.last_triggered_at, p.last_triggered_at);
+            assert_eq!(restarted.position_restarted_at, Some(time(now.get() - 1)));
+            assert_eq!(host.events(), vec![AlertEvent::Upsert(Box::new(restarted))]);
+
+            let saved = host.engine.alerts();
+            let host =
+                Host::new(serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap());
+            host.events();
+            update(&host, &bars);
+            assert!(
+                host.events().is_empty(),
+                "row {index}: unchanged restore must not replay the crossing before the edit"
+            );
+            assert_eq!(
+                host.engine.alerts(),
+                saved,
+                "row {index}: restore keeps the restarted progress and actual last firing"
+            );
+            for close in reloaded {
+                bars.push(bar(bars.len() as i64, close, 1.0));
+                update(&host, &bars);
+            }
+            let events = host.events();
+            let fired: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    AlertEvent::TriggeredForSymbol {
+                        id: fired,
+                        message,
+                        price: Some(price),
+                        ..
+                    } => {
+                        assert_eq!(*fired, id, "row {index}: unrelated position stays entered");
+                        Some((message.as_str(), *price))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(fired, expected, "row {index}");
+            let saved = host.engine.alerts();
+            let ended = if expected.last().unwrap().0 == target {
+                TargetReached
+            } else {
+                StopReached
+            };
+            assert_eq!(saved[0].status, AlertStatus::Triggered);
+            assert_eq!(saved[0].position_restarted_at, None);
+            assert!(
+                matches!(saved[0].condition, AlertCondition::Position { progress, .. } if progress == ended)
+            );
+            assert_eq!(saved[1].status, AlertStatus::Active);
+            assert!(matches!(
+                saved[1].condition,
+                AlertCondition::Position {
+                    progress: Entered,
+                    ..
+                }
+            ));
+            let host =
+                Host::new(serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap());
+            host.events();
+            update(&host, &bars);
+            assert!(
+                host.events().is_empty(),
+                "row {index}: unchanged restore stays ended"
+            );
+            let saved = host.engine.alerts().remove(0);
+            assert_eq!(saved.status, AlertStatus::Triggered);
+            assert!(
+                matches!(saved.condition, AlertCondition::Position { progress, .. } if progress == ended)
+            );
+        }
     }
 
     /// An hourly alert fired at 10:05 in the 10:00 bar, was saved and is restored at 10:20. Each
@@ -2666,48 +2933,86 @@ mod tests {
     #[test]
     fn restored_footprint_alerts_count_each_symbols_last_firing() {
         use crate::model::FootprintCondition::{StackedBuyImbalance, StackedSellImbalance};
+        use crate::model::{Session, SessionWindow, TimezoneId};
         use AlertFrequency::{OncePerBar, OncePerBarClose};
+        use chrono::{NaiveTime, Weekday::*};
 
-        for (frequency, last, open, at, covered) in [
-            (OncePerBar, 65, 60, 70, true),
-            (OncePerBar, 65, 120, 125, false),
-            (OncePerBarClose, 120, 60, 120, true),
-            (OncePerBarClose, 120, 60, 121, false),
-            (OncePerBarClose, 120, 120, 180, false),
+        let minute = BarClock::new(Timeframe::Min1);
+        let session = Session::new([SessionWindow::new(
+            [Mon, Tue, Wed, Thu, Fri],
+            NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+            NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+        )]);
+        let hourly =
+            BarClock::new(Timeframe::Hour1).with_session(TimezoneId::utc(), session.clone(), false);
+        let daily = BarClock::new(Timeframe::Day1).with_session(TimezoneId::utc(), session, false);
+        let monthly = BarClock::new(Timeframe::Month1);
+        for (clock, frequency, last, open, at, covered) in [
+            (&minute, OncePerBar, 65, 60, 70, true),
+            (&minute, OncePerBar, 125, 60, 70, true),
+            (&minute, OncePerBar, 65, 120, 125, false),
+            (&minute, OncePerBarClose, 120, 60, 120, true),
+            (&minute, OncePerBarClose, 120, 60, 121, true),
+            (&minute, OncePerBarClose, 120, 120, 180, false),
+            // The shortened 15:30 hour and the trading date both close at 16:00.
+            (&hourly, OncePerBarClose, 57_600, 55_800, 57_660, true),
+            (&daily, OncePerBarClose, 57_600, 0, 57_660, true),
+            // February 1970 ends on March 1, after 28 days.
+            (
+                &monthly,
+                OncePerBarClose,
+                5_097_600,
+                2_678_400,
+                5_097_660,
+                true,
+            ),
         ] {
             for list in [false, true] {
                 for changed in [false, true] {
                     let mut saved =
                         alert(AlertCondition::Footprint(StackedBuyImbalance), frequency);
+                    saved.timeframe = clock.timeframe();
                     saved.id = Some(AlertId("1".into()));
                     saved.last_triggered_at = Some(time(last));
                     if list {
                         saved.symbol.clear();
                         saved.watchlist = Some("tech".into());
                         saved.member_triggered_at.insert("SYM".into(), time(last));
+                        saved
+                            .member_triggered_at
+                            .insert("SECOND".into(), time(last));
                         saved.last_triggered_at = Some(time(last + 60));
                     }
-                    let host = Host::new(vec![saved]);
+                    let serialized = serde_json::to_string(&saved).unwrap();
+                    let restored: Alert = serde_json::from_str(&serialized).unwrap();
+                    assert_eq!(restored, saved);
+                    let host = Host::new(vec![restored]);
                     host.engine
-                        .set_watchlist("tech", vec!["SYM".into(), "OTHER".into()]);
+                        .set_watchlist("tech", vec!["SYM".into(), "SECOND".into(), "OTHER".into()]);
                     if changed {
                         // A monitoring edit starts this session's alert with no restored guard.
                         let mut edited = host.engine.alerts().remove(0);
                         edited.condition = AlertCondition::Footprint(StackedSellImbalance);
                         assert_eq!(host.save(edited), Ok(()));
                     }
-                    let symbols: &[_] = if list { &["SYM", "OTHER"] } else { &["SYM"] };
+                    let symbols: &[_] = if list {
+                        &["SYM", "SECOND", "OTHER"]
+                    } else {
+                        &["SYM"]
+                    };
                     for symbol in symbols {
                         let mut event = FootprintAlertEvent {
                             symbol: (*symbol).into(),
                             exchange: None,
-                            timeframe: Timeframe::Min1,
+                            timeframe: clock.timeframe().unwrap(),
+                            rule: None,
                             condition: if changed {
                                 StackedSellImbalance
                             } else {
                                 StackedBuyImbalance
                             },
                             bar: time(open),
+                            bar_end: clock.bar_close(time(open)),
                             closed: frequency == OncePerBarClose,
                             time: time(at),
                             price: 100.0,
@@ -2726,13 +3031,122 @@ mod tests {
                         );
                         host.engine.footprint_events(&[event.clone()], time(at));
                         assert!(host.fired().is_empty(), "same bar stays silent");
-                        event.bar = time(open + 60);
-                        event.time = time(at + 60);
-                        host.engine.footprint_events(&[event], time(at + 60));
-                        assert_eq!(host.fired(), [100.0], "the next bar fires");
+                        let delay = event.time
+                            - if event.closed {
+                                event.bar_end.unwrap()
+                            } else {
+                                event.bar
+                            };
+                        for step in 1..=2 {
+                            event.bar = clock.next_open(event.bar).unwrap();
+                            event.bar_end = clock.bar_close(event.bar);
+                            event.time = if event.closed {
+                                event.bar_end.unwrap()
+                            } else {
+                                event.bar
+                            } + delay;
+                            host.engine.footprint_events(&[event.clone()], event.time);
+                            let still_covered = !changed
+                                && *symbol != "OTHER"
+                                && frequency == OncePerBar
+                                && last == 125
+                                && step == 1;
+                            assert_eq!(
+                                host.fired(),
+                                if still_covered { vec![] } else { vec![100.0] },
+                                "{frequency:?}, last {last}, open {open}, step {step}, list {list}, changed {changed}, {symbol}"
+                            );
+                        }
                     }
                 }
             }
+        }
+        #[cfg(feature = "detectors")]
+        {
+            use crate::data::MarketEvent;
+            use crate::model::{FootprintCondition::BuyImbalance, Instrument, OrderSide, Tick};
+            use crate::services::{DetectorSettings, OrderFlowDetectors};
+
+            let mut actual = Vec::new();
+            let mut expected = Vec::new();
+            for list in [false, true] {
+                let symbols: &[_] = if list { &["ES", "SECOND"] } else { &["ES"] };
+                let mut saved = alert(AlertCondition::Footprint(BuyImbalance), OncePerBarClose);
+                saved.id = Some(AlertId("1".into()));
+                saved.symbol = "ES".into();
+                saved.last_triggered_at = Some(time(60));
+                if list {
+                    saved.symbol.clear();
+                    saved.watchlist = Some("tech".into());
+                    for symbol in symbols {
+                        saved.member_triggered_at.insert((*symbol).into(), time(60));
+                    }
+                }
+                let serialized = serde_json::to_string(&saved).unwrap();
+                let restored: Alert = serde_json::from_str(&serialized).unwrap();
+                assert_eq!(restored, saved);
+                let host = Host::new(vec![restored]);
+                host.engine
+                    .set_watchlist("tech", symbols.iter().map(|s| (*s).into()).collect());
+                let detectors = OrderFlowDetectors::new();
+                let mut settings = DetectorSettings::default();
+                settings.footprint.rule.diagonal = false;
+                detectors.set_settings(settings);
+                detectors.watch_footprint_alerts(&host.engine.alerts());
+                for symbol in symbols {
+                    let mut instrument = Instrument::new(*symbol);
+                    instrument.tick_size = Some(0.25);
+                    detectors.track(&instrument).unwrap();
+                    let mut closed = Vec::new();
+                    for (feed, execution, side) in [
+                        (0, 0, Some(OrderSide::Buy)),
+                        (60, 60, Some(OrderSide::Buy)),
+                        (181, 181, None),
+                        (182, 125, Some(OrderSide::Buy)),
+                    ] {
+                        detectors.push(
+                            symbol,
+                            time(feed),
+                            &MarketEvent::Trade(Tick::new(time(execution), 100.0, 10.0, side)),
+                        );
+                        let events = detectors.take_footprint_events();
+                        closed.extend(
+                            events
+                                .iter()
+                                .filter(|e| e.closed && e.condition == BuyImbalance)
+                                .cloned(),
+                        );
+                        host.engine.footprint_events(&events, time(feed));
+                        host.engine.footprint_events(&events, time(feed));
+                    }
+                    assert_eq!(
+                        closed
+                            .iter()
+                            .map(|e| (e.bar, e.bar_end, e.time))
+                            .collect::<Vec<_>>(),
+                        [
+                            (time(60), Some(time(120)), time(181)),
+                            (time(120), Some(time(180)), time(182))
+                        ]
+                    );
+                    let times: Vec<_> = host
+                        .engine
+                        .triggers()
+                        .iter()
+                        .filter(|t| t.symbol == *symbol)
+                        .map(|t| t.time.timestamp())
+                        .collect();
+                    actual.push((list, *symbol, times));
+                    expected.push((list, *symbol, vec![181, 182]));
+                    host.fired();
+                    host.engine.footprint_events(&closed, time(183));
+                    assert!(host.fired().is_empty(), "both delivered bars stay silent");
+                }
+            }
+            assert_eq!(
+                actual, expected,
+                "delayed closes keep each newer bar eligible"
+            );
         }
     }
 

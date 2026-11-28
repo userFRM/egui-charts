@@ -1259,8 +1259,6 @@ impl Indicator for ConfiguredStudy {
         let mut inputs = self.study.inputs();
         if let Some(default) = self.study.source() {
             let own = inputs.iter().find(|input| input.id == "source");
-            // A study that names its source, where only part of it reads the source, keeps that name.
-            let label = own.map_or_else(|| "Source".into(), |input| input.label.clone());
             let initial = own
                 .and_then(|input| match input.default {
                     InputValue::Choice(index) => crate::model::PriceSource::all()
@@ -1271,16 +1269,21 @@ impl Indicator for ConfiguredStudy {
                     _ => None,
                 })
                 .unwrap_or(default);
-            inputs.retain(|input| input.id != "source");
-            inputs.push(
+            // Keep the declared label, tab, condition and prompt while the chart supplies the source.
+            let mut source = own.cloned().unwrap_or_else(|| {
                 super::StudyInput::new(
                     "source",
-                    label,
-                    InputValue::Source(self.source.unwrap_or(default)),
+                    "Source",
+                    InputValue::Source(default),
                     super::InputKind::Source,
                 )
-                .with_default(InputValue::Source(initial)),
-            );
+            });
+            source.kind = super::InputKind::Source;
+            source.value = InputValue::Source(self.source.unwrap_or(default));
+            source.default = InputValue::Source(initial);
+            source.step = None;
+            inputs.retain(|input| input.id != "source");
+            inputs.push(source);
         }
         use super::{InputKind, StudyInput};
         if self.offers_offset() {
