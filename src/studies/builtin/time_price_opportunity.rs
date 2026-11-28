@@ -79,7 +79,7 @@ type ProfileEdits<T> = (Option<MadeFor>, Vec<T>);
 /// the last visible bar, aiming at about 80 rows, with the ticks per row rounded up to a multiple
 /// of 5 below 100 ticks, of 50 below 1,000, of 500 below 10,000 and so on. Without an instrument
 /// tick size the row is a 1, 2, 2.5 or 5 step. Zooming or scrolling the price scale keeps the
-/// rows.
+/// rows. Round automatic rows to nearest selects the nearest step while Ticks per row is 0.
 #[derive(Clone, Debug)]
 pub struct TimePriceOpportunity {
     row_ticks: usize,
@@ -448,6 +448,13 @@ impl Indicator for TimePriceOpportunity {
                 InputKind::Length(0, 100_000),
             )
             .with_default(InputValue::Length(0)),
+            StudyInput::new(
+                "auto_rows_nearest",
+                "Round automatic rows to nearest",
+                InputValue::Toggle(self.config.auto_rows_nearest),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
             StudyInput::new(
                 "value_area",
                 "Value area (%)",
@@ -920,6 +927,7 @@ impl Indicator for TimePriceOpportunity {
                 self.row_ticks = ticks;
                 self.update_tick_size();
             }
+            ("auto_rows_nearest", InputValue::Toggle(v)) => self.config.auto_rows_nearest = v,
             ("value_area", InputValue::Number(percent)) if (1.0..=100.0).contains(&percent) => {
                 self.config.value_area_pct = percent / 100.0
             }

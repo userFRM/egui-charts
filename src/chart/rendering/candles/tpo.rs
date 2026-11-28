@@ -993,7 +993,8 @@ fn row_config(
     let mut config = base_config.clone();
     config.instrument_tick = instrument_tick;
     if config.tick_size <= 0.0 || !config.tick_size.is_finite() {
-        config.tick_size = crate::model::tpo::auto_row_height(bars, instrument_tick)?;
+        config.tick_size =
+            crate::model::tpo::auto_row_height(bars, instrument_tick, config.auto_rows_nearest)?;
     }
     Some(config)
 }

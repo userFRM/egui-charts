@@ -236,6 +236,9 @@ pub struct TPOConfig {
     /// footprint rows are: a row of n ticks holds the ticks from a multiple of n up to the next.
     /// `None`, or a tick that is not positive and finite, counts each row as one tick.
     pub instrument_tick: Option<f64>,
+    /// Round automatic rows to the nearest step rather than up, with at least one step.
+    /// Six ticks per row become five, seven and a half become ten. Off by default.
+    pub auto_rows_nearest: bool,
 }
 
 impl Default for TPOConfig {
@@ -290,6 +293,7 @@ impl Default for TPOConfig {
             splits: Vec::new(),
             latest_session_only: false,
             instrument_tick: None,
+            auto_rows_nearest: false,
         }
     }
 }
@@ -999,7 +1003,11 @@ const AUTO_ROWS: f64 = 80.0;
 /// counts as 1% of its price, as the price scale fits flat data. Bars without a finite low and high
 /// at or below it are skipped; `None` when no bar is left.
 #[cfg(feature = "widget")]
-pub(crate) fn auto_row_height(bars: &[Bar], instrument_tick: Option<f64>) -> Option<f64> {
+pub(crate) fn auto_row_height(
+    bars: &[Bar],
+    instrument_tick: Option<f64>,
+    nearest: bool,
+) -> Option<f64> {
     let window = &bars[bars.len().saturating_sub(AUTO_ROW_BARS)..];
     let (low, high) = window
         .iter()
@@ -1019,7 +1027,8 @@ pub(crate) fn auto_row_height(bars: &[Bar], instrument_tick: Option<f64>) -> Opt
         .filter(|tick| *tick > 0.0 && tick.is_finite())
         .and_then(|tick| {
             // Within one part in a billion, so that exactly n ticks per row stays n.
-            let per_row = range / tick / AUTO_ROWS * (1.0 - 1e-9);
+            let exact = range / tick / AUTO_ROWS;
+            let per_row = exact * (1.0 - 1e-9);
             if !per_row.is_finite() {
                 return None;
             }
@@ -1028,7 +1037,12 @@ pub(crate) fn auto_row_height(bars: &[Bar], instrument_tick: Option<f64>) -> Opt
                 step *= 10.0;
                 limit *= 10.0;
             }
-            let height = (per_row / step).ceil().max(1.0) * step * tick;
+            let rows = if nearest {
+                (exact / step).round()
+            } else {
+                (per_row / step).ceil()
+            };
+            let height = rows.max(1.0) * step * tick;
             height.is_finite().then_some(height)
         });
     Some(rounded.unwrap_or_else(|| derive_tick_size(range, AUTO_ROWS as usize)))
@@ -2668,7 +2682,11 @@ mod tests {
         ];
         for (bars, tick, expected) in cases {
             let range = bars.last().map(|bar| (bar.low, bar.high));
-            assert_eq!(auto_row_height(&bars, tick), expected, "{tick:?} {range:?}");
+            assert_eq!(
+                auto_row_height(&bars, tick, false),
+                expected,
+                "{tick:?} {range:?}"
+            );
         }
     }
 
@@ -2883,5 +2901,30 @@ mod tests {
         assert_eq!(partial.rotation_factor(), 2);
         assert_eq!(partial.range_extension(), Some((0.0, 0.0)));
         assert_eq!(partial.total_volume, 1000.0);
+    }
+    /// Half steps round up, smaller fractions round down, and rows keep at least one step.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn automatic_rows_round_up_or_to_the_nearest_step() {
+        for (range, ceiling, nearest) in [
+            (480.0, 10.0, 5.0),
+            (600.0, 10.0, 10.0),
+            (160.0, 5.0, 5.0),
+            (12_000.0, 150.0, 150.0),
+            (13_600.0, 200.0, 150.0),
+            (14_000.0, 200.0, 200.0),
+            (8_000.0, 100.0, 100.0),
+        ] {
+            let bars = [Bar::new(
+                DateTime::UNIX_EPOCH,
+                1000.0,
+                1000.0 + range,
+                1000.0,
+                1000.0,
+                1.0,
+            )];
+            assert_eq!(auto_row_height(&bars, Some(1.0), false), Some(ceiling));
+            assert_eq!(auto_row_height(&bars, Some(1.0), true), Some(nearest));
+        }
     }
 }

@@ -1319,8 +1319,12 @@ pub struct ChartTypeParams {
     /// rows from the price range of the latest 300 bars up to the last visible bar, aiming at
     /// about 80 rows: the ticks per row round up to a multiple of 5 below 100 ticks, of 50 below
     /// 1,000, of 500 below 10,000 and so on. Without a tick size the row is a 1, 2, 2.5 or 5
-    /// step. Zooming or scrolling the price scale keeps the rows.
+    /// step. `tpo_auto_rows_nearest` instead rounds to the nearest step. Zooming or scrolling
+    /// the price scale keeps the rows.
     pub tpo_row_ticks: u32,
+    /// TPO: round automatic rows to the nearest step rather than up. Off by default and in
+    /// earlier saves; see [`TPOConfig::auto_rows_nearest`](super::TPOConfig::auto_rows_nearest).
+    pub tpo_auto_rows_nearest: bool,
     /// TPO: share of the TPOs in the value area, in percent.
     pub tpo_value_area: f64,
     /// TPO: saved by earlier releases for a profile of each segment of the day. When on while
@@ -1503,6 +1507,7 @@ impl Default for ChartTypeParams {
             tpo_extend_single_prints: false,
             tpo_initial_balance_extensions: false,
             tpo_row_ticks: 0,
+            tpo_auto_rows_nearest: false,
             tpo_value_area: 70.0,
             tpo_split_sessions: false,
             tpo_session: ProfileSession::Chart,
@@ -1548,6 +1553,7 @@ impl ChartTypeParams {
         let session = self.tpo_hours();
         super::TPOConfig {
             // A zero row lets the renderer size the rows from the bars.
+            auto_rows_nearest: self.tpo_auto_rows_nearest,
             tick_size: tick_size.map_or(0.0, |tick| tick * f64::from(self.tpo_row_ticks)),
             period_minutes: self.tpo_period_minutes,
             initial_balance_minutes: self.tpo_initial_balance_minutes,

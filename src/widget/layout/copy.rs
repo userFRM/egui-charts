@@ -443,6 +443,7 @@ fn apply_to_other_chart(
             columns_base: own.columns_base,
             tpo_period_minutes: own.tpo_period_minutes,
             tpo_row_ticks: own.tpo_row_ticks,
+            tpo_auto_rows_nearest: own.tpo_auto_rows_nearest,
             tpo_value_area: own.tpo_value_area,
             tpo_split_sessions: own.tpo_split_sessions,
             tpo_session: own.tpo_session,

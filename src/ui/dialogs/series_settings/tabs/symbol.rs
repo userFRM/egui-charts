@@ -1307,6 +1307,11 @@ impl SymbolTab {
                 )
                 .labelled_by(label.id);
                 ui.end_row();
+                Self::switch(
+                    ui,
+                    "Round automatic rows to nearest",
+                    &mut params.tpo_auto_rows_nearest,
+                );
                 let label = ui.label(l10n::text(ui.ctx(), "Value area"));
                 ui.add(
                     egui::DragValue::new(&mut params.tpo_value_area)
