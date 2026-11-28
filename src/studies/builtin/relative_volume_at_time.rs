@@ -5,6 +5,11 @@
 //! 10:30 means twice the usual volume by 10:30, so unusual activity shows early in the day
 //! instead of once the day is complete.
 //!
+//! The anchor can be any interval. Shorter intervals use bars on the chart's clock; longer
+//! intervals group trading days into calendar blocks (custom blocks start from 1970-01-01).
+//! When the anchor is not above the chart interval, each bar is its own period, compared with
+//! the previous `n` bars.
+//!
 //! # Calculation
 //! For a bar at offset `d` into its period, with `n` the length:
 //!
@@ -41,7 +46,9 @@
 //! assert_eq!(study.values().value(0, 5), Some(2.0));
 //! ```
 
-use crate::model::{Bar, BarClock, ExchangeSessionProvider, Instrument, Session, TimezoneId};
+use crate::model::{
+    Bar, BarClock, ExchangeSessionProvider, Instrument, Session, Timeframe, TimezoneId,
+};
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
@@ -51,6 +58,7 @@ use egui::Color32;
 const DAY_MS: i64 = 86_400_000;
 
 /// The period at whose start [`RelativeVolumeAtTime`] restarts its comparison.
+/// A shorthand for [`RelativeVolumeAtTime::with_anchor_interval`] with 1D, 1W or 1M.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RelativeVolumeAnchor {
@@ -61,29 +69,6 @@ pub enum RelativeVolumeAnchor {
     Week,
     /// Each calendar month of trading days.
     Month,
-}
-
-impl RelativeVolumeAnchor {
-    /// The label study inputs show for this choice.
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Day => "Day",
-            Self::Week => "Week",
-            Self::Month => "Month",
-        }
-    }
-
-    /// The period that holds trading day `day`, and the days from the period's first day.
-    fn locate(self, day: NaiveDate) -> ((i32, u32), u32) {
-        match self {
-            Self::Day => ((day.year(), day.ordinal()), 0),
-            Self::Week => (
-                (day.iso_week().year(), day.iso_week().week()),
-                day.weekday().num_days_from_monday(),
-            ),
-            Self::Month => ((day.year(), day.month()), day.day0()),
-        }
-    }
 }
 
 /// The volume compared by [`RelativeVolumeAtTime`].
@@ -111,16 +96,16 @@ impl RelativeVolumeMode {
 ///
 /// A bar with a non-finite volume has no value and adds nothing. The chart supplies the
 /// instrument's time zone and session through [`Indicator::set_instrument`] and its interval
-/// through [`Indicator::set_bar_clock`]. Without them trading days are UTC days, and direct
+/// and clock for intraday anchors through [`Indicator::set_bar_clock`]. Without them trading
+/// days are UTC days, and direct
 /// callers on daily bars stamped away from UTC midnight pass a daily clock.
 #[derive(Clone, Debug)]
 pub struct RelativeVolumeAtTime {
     length: usize,
-    anchor: RelativeVolumeAnchor,
+    anchor: Option<Timeframe>,
     mode: RelativeVolumeMode,
     instrument: Option<(TimezoneId, Option<Session>)>,
-    /// Whether the chart interval is a day or longer.
-    daily: bool,
+    clock: Option<BarClock>,
     values: IndicatorValues,
     stepper: Stepper<State>,
     periods: std::collections::VecDeque<Vec<(i64, f64)>>,
@@ -132,7 +117,7 @@ pub struct RelativeVolumeAtTime {
 #[derive(Clone, Debug, Default)]
 struct State {
     source: usize,
-    key: Option<(i32, u32)>,
+    key: Option<i64>,
     cumulative: f64,
     calendar_date: Option<NaiveDate>,
     opens: Vec<(chrono::DateTime<chrono::Utc>, NaiveDate)>,
@@ -150,10 +135,10 @@ impl RelativeVolumeAtTime {
     pub fn new(length: usize) -> Self {
         Self {
             length: length.max(1),
-            anchor: RelativeVolumeAnchor::Day,
+            anchor: Some(Timeframe::Day1),
             mode: RelativeVolumeMode::Cumulative,
             instrument: None,
-            daily: false,
+            clock: None,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             periods: std::collections::VecDeque::new(),
@@ -168,7 +153,19 @@ impl RelativeVolumeAtTime {
 
     /// Restarts at each selected period.
     pub fn with_anchor(mut self, anchor: RelativeVolumeAnchor) -> Self {
-        self.anchor = anchor;
+        self.anchor = Some(match anchor {
+            RelativeVolumeAnchor::Day => Timeframe::Day1,
+            RelativeVolumeAnchor::Week => Timeframe::Week1,
+            RelativeVolumeAnchor::Month => Timeframe::Month1,
+        });
+        self
+    }
+
+    /// Restarts at each bar of `interval`, or at every bar with `None`, as the Chart interval
+    /// choice does. An interval that is not above the chart's, or that counts trades, also
+    /// makes every bar a period of its own.
+    pub fn with_anchor_interval(mut self, interval: Option<Timeframe>) -> Self {
+        self.anchor = interval;
         self
     }
 
@@ -187,7 +184,7 @@ impl Default for RelativeVolumeAtTime {
 
 impl Indicator for RelativeVolumeAtTime {
     crate::studies::inputs::study_inputs!(self;
-        anchor: choice("Anchor", [RelativeVolumeAnchor::Day, RelativeVolumeAnchor::Week, RelativeVolumeAnchor::Month]),
+        anchor: timeframe("Anchor"),
         length: length("Length", 1, usize::MAX),
         mode: choice("Calculation mode", [RelativeVolumeMode::Cumulative, RelativeVolumeMode::Regular])
     ; {});
@@ -254,7 +251,24 @@ impl Indicator for RelativeVolumeAtTime {
             }
         }
         self.undo = Undo::default();
-        let provider = (!self.daily).then(|| {
+        let chart = self.clock.as_ref().and_then(BarClock::timeframe);
+        let daily = chart.is_some_and(|tf| tf.duration_ms() >= DAY_MS);
+        let anchor = self.anchor.filter(|anchor| {
+            anchor.duration_ms() > 0
+                && chart.is_none_or(|chart| anchor.duration_ms() > chart.duration_ms())
+        });
+        let calendar = anchor.is_some_and(|anchor| anchor.duration_ms() >= DAY_MS);
+        let clock = anchor.map(|anchor| {
+            if calendar {
+                BarClock::new(anchor)
+            } else {
+                self.clock
+                    .clone()
+                    .unwrap_or_else(|| BarClock::new(anchor))
+                    .for_timeframe(anchor)
+            }
+        });
+        let provider = (calendar && !daily).then(|| {
             let (zone, session) = self
                 .instrument
                 .clone()
@@ -268,20 +282,37 @@ impl Indicator for RelativeVolumeAtTime {
                 if !bar.volume.is_finite() {
                     return IndicatorValue::None;
                 }
-                if !self.daily && state.calendar_date != Some(bar.time.date_naive()) {
-                    state.opens = provider.as_ref().unwrap().opens([bar.time]);
-                    state.calendar_date = Some(bar.time.date_naive());
-                }
-                let (open, day) = if self.daily {
-                    (bar.time, bar.time.date_naive())
-                } else {
-                    match state.opens.partition_point(|(open, _)| *open <= bar.time) {
-                        0 => (bar.time, bar.time.date_naive()),
-                        n => state.opens[n - 1],
+                let (period, offset) = if calendar {
+                    if !daily && state.calendar_date != Some(bar.time.date_naive()) {
+                        state.opens = provider.as_ref().unwrap().opens([bar.time]);
+                        state.calendar_date = Some(bar.time.date_naive());
                     }
+                    let (open, day) = if daily {
+                        (bar.time, bar.time.date_naive())
+                    } else {
+                        match state.opens.partition_point(|(open, _)| *open <= bar.time) {
+                            0 => (bar.time, bar.time.date_naive()),
+                            n => state.opens[n - 1],
+                        }
+                    };
+                    let start = clock
+                        .as_ref()
+                        .unwrap()
+                        .bar_open(day.and_hms_opt(0, 0, 0).unwrap().and_utc())
+                        .date_naive();
+                    (
+                        i64::from(start.num_days_from_ce()),
+                        (day - start).num_days() * DAY_MS + (bar.time - open).num_milliseconds(),
+                    )
+                } else if let Some(clock) = &clock {
+                    let open = clock.bar_open(bar.time);
+                    (
+                        open.timestamp_millis(),
+                        (bar.time - open).num_milliseconds(),
+                    )
+                } else {
+                    (source as i64, 0)
                 };
-                let (period, days) = self.anchor.locate(day);
-                let offset = i64::from(days) * DAY_MS + (bar.time - open).num_milliseconds();
                 let last = source + 1 == data.len();
                 if state.key != Some(period) {
                     state.key = Some(period);
@@ -344,11 +375,8 @@ impl Indicator for RelativeVolumeAtTime {
     }
 
     fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
-        let daily = clock.timeframe().is_some_and(|timeframe| {
-            timeframe.duration_ms() >= crate::model::Timeframe::Day1.duration_ms()
-        });
-        let changed = daily != self.daily;
-        self.daily = daily;
+        let changed = self.clock.as_ref() != Some(clock);
+        self.clock = Some(clock.clone());
         changed
     }
 

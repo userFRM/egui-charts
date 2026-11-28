@@ -1592,6 +1592,36 @@ fn time_studies(bars: &[Bar]) -> Vec<(&'static str, Box<dyn Indicator>, Vec<Bar>
             daily,
         ),
         (
+            "RVOL-4h",
+            clock(
+                Box::new(RelativeVolumeAtTime::new(1).with_anchor_interval(Some(Timeframe::Hour4))),
+                Timeframe::Hour1,
+            ),
+            volumes(
+                &[
+                    (0, 10.0),
+                    (1, 20.0),
+                    (2, 30.0),
+                    (3, 40.0),
+                    (4, 20.0),
+                    (5, 10.0),
+                    (6, 30.0),
+                    (7, 140.0),
+                ]
+                .map(|(h, v)| (h * 3600, v)),
+            ),
+        ),
+        (
+            "RVOL-bars",
+            clock(
+                Box::new(RelativeVolumeAtTime::new(2).with_anchor_interval(Some(
+                    Timeframe::Custom(std::num::NonZeroU64::new(2400).unwrap()),
+                ))),
+                Timeframe::Hour1,
+            ),
+            volumes(&[(0, 10.0), (1, 20.0), (2, 30.0), (3, 60.0)].map(|(h, v)| (h * 3600, v))),
+        ),
+        (
             "Seasonality-hand",
             Box::new(Seasonality::new()),
             seasons.clone(),

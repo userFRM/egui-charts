@@ -559,6 +559,21 @@ impl StudyTemplate {
                     .inputs
                     .push(("custom_interval".to_owned(), InputValue::Toggle(custom)));
             }
+            // Before the anchor took any interval it chose a day, a week or a month.
+            "Relative Volume at Time"
+                if own.iter().any(|input| {
+                    input.id == "anchor"
+                        && matches!(input.kind, crate::studies::InputKind::Timeframe)
+                }) && matches!(value("anchor"), Some(InputValue::Choice(0..=2))) =>
+            {
+                for (id, value) in &mut template.inputs {
+                    if let ("anchor", InputValue::Choice(choice)) = (id.as_str(), &*value) {
+                        let interval =
+                            [Timeframe::Day1, Timeframe::Week1, Timeframe::Month1][*choice];
+                        *value = InputValue::Timeframe(Some(interval));
+                    }
+                }
+            }
             // Older Knoxville saves drew only momentum and its confirmation marks, and saves
             // from before the window rule took pivot sides and the momentum pane's own scale.
             "Knoxville Divergence"
@@ -2157,6 +2172,21 @@ mod tests {
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::{Choice, Integer, Length, Number, Text, Toggle};
         let rows = [
+            (
+                "Relative Volume at Time",
+                vec![("anchor", Choice(0))],
+                vec![("anchor", InputValue::Timeframe(Some(Timeframe::Day1)))],
+            ),
+            (
+                "Relative Volume at Time",
+                vec![("anchor", Choice(1))],
+                vec![("anchor", InputValue::Timeframe(Some(Timeframe::Week1)))],
+            ),
+            (
+                "Relative Volume at Time",
+                vec![("anchor", Choice(2))],
+                vec![("anchor", InputValue::Timeframe(Some(Timeframe::Month1)))],
+            ),
             (
                 "CCI",
                 vec![("period", Length(20))],

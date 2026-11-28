@@ -333,6 +333,8 @@ RVOL-cumulative 0 - - - - - 0.592592592593 0.5 5 4 4 4.66666666667
 RVOL-regular 0 - - - - - 0.941176470588 0.380952380952 5 1 4 2
 RVOL-chicago 0 - - - 3 2 4
 RVOL-week-daily 0 - - - - - 0.75 1 1.2
+RVOL-4h 0 - - - - 2 1 1 2
+RVOL-bars 0 - - 2 2.4
 Seasonality-hand 0 - - - - - 132 132 113.4 113.4 141.9 136.333333333
 Seasonality-hand 1 - - - - - 120 120 126 126 132 140
 Seasonality-hand 2 - - - - - 10 10 -10 -10 7.5 -2.61904761905
