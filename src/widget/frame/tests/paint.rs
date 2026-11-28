@@ -1007,11 +1007,44 @@ fn compact_legend_shows_the_close_and_day_change_unless_turned_off() {
                 "{text}: {texts:?}"
             );
         }
+        // Matching bar and day changes still keep the separately enabled absolute value.
+        let bars = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+        chart.config_mut().show_ohlc_change = false;
+        chart.config_mut().show_last_day_change = true;
+        for (timeframe, data, percent, day_change) in [
+            (
+                Timeframe::Day1,
+                vec![bars[2].clone(), bars[5].clone()],
+                "+3.00%",
+                "+3.00 (+3.00%)",
+            ),
+            (
+                Timeframe::Hour1,
+                bars[..4].to_vec(),
+                "+2.00%",
+                "+2.00 (+2.00%)",
+            ),
+        ] {
+            chart.set_data(crate::widget::SeriesId::MAIN, data);
+            chart.set_timeframe(timeframe);
+            for width in [450.0, 800.0] {
+                let texts = read(chart, width);
+                for text in [percent, day_change] {
+                    assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+                }
+            }
+        }
+        chart.set_data(crate::widget::SeriesId::MAIN, bars);
+        chart.set_timeframe(Timeframe::Hour1);
+        chart.config_mut().show_ohlc_change = true;
+        chart.config_mut().show_last_day_change = false;
     };
     let mut saved = serde_json::to_value(&original_settings).unwrap();
     saved["status_line"] = legacy_status.clone();
     let settings: crate::widget::settings::ChartSettingsState =
         serde_json::from_value(saved).unwrap();
+    settings.apply_to_chart(&mut chart).unwrap();
+    check_legacy(&mut chart);
     // Templates use the settings representation, including its compatibility choices.
     let settings: crate::widget::settings::ChartSettingsState =
         serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
@@ -1121,6 +1154,16 @@ fn compact_legend_shows_the_close_and_day_change_unless_turned_off() {
             .count(),
         2
     );
+    // New compact charts already show the daily change; full OHLC keeps both requests.
+    chart.config_mut().show_ohlc_change = false;
+    let texts = read(&mut chart, 450.0);
+    assert!(texts.iter().any(|shown| shown == "+3.00%"));
+    assert!(!texts.iter().any(|shown| shown == "+3.00 (+3.00%)"));
+    chart.config_mut().compact_legend = false;
+    let texts = read(&mut chart, 450.0);
+    for text in ["+3.00%", "+3.00 (+3.00%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
     let mut saved = serde_json::to_value(crate::widget::settings::ChartSettingsState::from_chart(
         &chart,
     ))

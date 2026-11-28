@@ -513,7 +513,9 @@ impl<'a> Legend<'a> {
                 bounds.width(),
             );
         }
-        let shown = (compact && (self.show_change || self.show_change_percent))
+        let shown = (compact
+            && self.session_close.is_some()
+            && (self.show_change || self.show_change_percent))
             .then_some((reference, self.bar.close));
         if let Some((reference, last)) = self.day_change.filter(|pair| Some(*pair) != shown) {
             let (change, absolute, percent) = change_text(reference, last);
