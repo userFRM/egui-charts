@@ -889,14 +889,14 @@ mod tests {
                 report
                     .properties
                     .iter()
-                    .any(|(label, value)| label == "EMA seed" && value == "First value")
+                    .any(|(label, value)| label == "Input: EMA seed" && value == "First value")
             );
             if name == "Technical Ratings" {
                 assert!(
                     report
                         .properties
                         .iter()
-                        .any(|(label, value)| label == "Rule set"
+                        .any(|(label, value)| label == "Input: Rule set"
                             && value == "Rising ADX, EMA 50 trend, 26-bar cloud")
                 );
             }

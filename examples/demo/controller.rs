@@ -6792,18 +6792,18 @@ mod tests {
                 }
                 click(&mut app, "Style");
                 let nodes = draw(&ctx, &mut app, vec![]);
-                let pickers: Vec<_> = nodes
+                let mut pickers: Vec<_> = nodes
                     .iter()
                     .filter(|(_, node)| {
-                        node.role() == Role::ComboBox
-                            && node.labelled_by().iter().any(|label| {
-                                nodes.iter().any(|(id, node)| {
-                                    id == label
-                                        && node.label().or(node.value()) == Some("Plot type")
-                                })
-                            })
+                        node.role() == Role::ComboBox && node.label() == Some("Plot type")
                     })
                     .collect();
+                pickers.sort_by(|a, b| {
+                    a.1.bounds()
+                        .unwrap()
+                        .y0
+                        .total_cmp(&b.1.bounds().unwrap().y0)
+                });
                 assert_eq!(pickers.len(), 3);
                 assert_eq!(pickers[2].1.value(), Some("Crosses"));
                 click(&mut app, "Apply");
