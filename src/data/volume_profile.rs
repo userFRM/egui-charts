@@ -523,7 +523,7 @@ pub struct VolumeProfile {
     pub(crate) high: f64,
     pub(crate) row_height: f64,
     fixed_height: bool,
-    /// Original price of an all-flat equal-row span, before padding its grid.
+    /// Original price of an all-flat span, before padding its grid.
     flat_price: Option<f64>,
     /// Volume per row, lowest prices first.
     pub(crate) volume: Vec<f64>,
@@ -577,6 +577,7 @@ pub(crate) struct DevelopingVolume {
     density_total: f64,
     density_min: f64,
     unrepresentable: bool,
+    flat_high: Option<f64>,
 }
 
 #[cfg(feature = "studies")]
@@ -660,6 +661,7 @@ impl DevelopingVolume {
         for bar in bars.iter().filter(|bar| valid_bar(bar) && bar.volume > 0.0) {
             let origin = *self.origin.get_or_insert(bar.low);
             if bar.high == bar.low {
+                self.flat_high = Some(self.flat_high.map_or(bar.low, |high| high.max(bar.low)));
                 VolumeEdge::insert(&mut self.root, bar.low, [0.0, 0.0, bar.volume]);
             } else {
                 let density = bar.volume / (bar.high - bar.low);
@@ -711,6 +713,11 @@ impl DevelopingVolume {
             }
         }
         (sum, changes)
+    }
+
+    /// Highest price a bar without range traded volume at.
+    pub(crate) fn flat_high(&self) -> Option<f64> {
+        self.flat_high
     }
 
     /// Only total volume is needed for developing POC and value area. Continuous bars integrate
@@ -1025,20 +1032,33 @@ impl VolumeProfile {
     /// Spreads each bar's volume evenly over its high-low range across
     /// `rows` equal price rows (a bar without range puts it in the row of its
     /// price). A flat span uses one narrow row; `None` for an unrepresentable grid.
+    /// Fixed rows end at the span's top row edge; a price traded without range on that edge
+    /// keeps the row above it.
     pub(crate) fn of(bars: &[Bar], rows: usize, row_size: Option<f64>) -> Option<Self> {
         let (low, high) = price_span(bars)?;
-        let mut profile = Self::empty(low, high, rows, row_size)?;
+        let flat_high = bars
+            .iter()
+            .filter(|bar| valid_bar(bar) && bar.volume > 0.0 && bar.low == bar.high)
+            .map(|bar| bar.low)
+            .reduce(f64::max);
+        let mut profile = Self::empty(low, high, flat_high, rows, row_size)?;
         bars.iter().for_each(|bar| profile.add(bar));
         Some(profile)
     }
 
-    pub(crate) fn empty(low: f64, high: f64, rows: usize, row_size: Option<f64>) -> Option<Self> {
+    pub(crate) fn empty(
+        low: f64,
+        high: f64,
+        flat_high: Option<f64>,
+        rows: usize,
+        row_size: Option<f64>,
+    ) -> Option<Self> {
         if rows == 0 || rows > 10_000 {
             return None;
         }
-        let flat_price = (row_size.is_none() && low == high).then_some(low);
+        let flat_price = (low == high).then_some(low);
         let (low, high, row_height, rows) = if let Some(height) = row_size {
-            let (low, high, rows) = fixed_grid(low, high, height)?;
+            let (low, high, rows) = fixed_grid(low, high, flat_high, height)?;
             (low, high, height, rows)
         } else if low == high && low.is_finite() {
             let height = (low.abs() * 1e-6).max(1e-6);
@@ -1087,7 +1107,7 @@ impl VolumeProfile {
         let same_grid = if let Some(height) = row_size {
             self.fixed_height
                 && self.row_height == height
-                && fixed_grid(span.0, span.1, height)
+                && fixed_grid(span.0, span.1, source.flat_high(), height)
                     .is_some_and(|(low, high, _)| (low, high) == (self.low, self.high))
         } else {
             !self.fixed_height
@@ -1101,12 +1121,16 @@ impl VolumeProfile {
             bars.iter().for_each(|bar| self.add(bar));
             return Some(());
         }
-        let mut next = Self::empty(span.0, span.1, rows, row_size)?;
+        let mut next = Self::empty(span.0, span.1, source.flat_high(), rows, row_size)?;
         if (self.low, self.high, self.row_height, self.volume.len())
             != (next.low, next.high, next.row_height, next.volume.len())
         {
-            if self.fixed_height && next.fixed_height && self.row_height == next.row_height {
-                let offset = ((self.low - next.low) / self.row_height).round() as usize;
+            let offset = ((self.low - next.low) / self.row_height).round() as usize;
+            if self.fixed_height
+                && next.fixed_height
+                && self.row_height == next.row_height
+                && offset + self.volume.len() <= next.volume.len()
+            {
                 next.volume[offset..offset + self.volume.len()].copy_from_slice(&self.volume);
             } else {
                 source.fill(&mut next)?;
@@ -1160,22 +1184,55 @@ impl VolumeProfile {
     }
 
     /// Add one completed bar without redistributing earlier bars. Fixed-height grids grow
-    /// at the edges; equal-row grids return `None` when the bar moves a boundary.
+    /// at the edges while keeping their original row origin; a grid over one price, and
+    /// equal-row grids, return `None` when the bar moves a boundary.
     /// A changed forming bar must be added to the profile before that bar, not added twice.
     pub fn with_bar(&self, bar: &Bar) -> Option<Self> {
         let mut profile = self.clone();
         if !valid_bar(bar) {
             return Some(profile);
         }
+        if self
+            .flat_price
+            .is_some_and(|price| bar.low != price || bar.high != price)
+        {
+            return None;
+        }
         if self.fixed_height {
-            let (low, high, _) = fixed_grid(bar.low, bar.high, self.row_height)?;
-            let low = low.min(self.low);
-            let high = high.max(self.high);
-            let count = ((high - low) / self.row_height).round();
-            if count > 10_000.0 {
+            let origin = if self.executions.is_some() {
+                self.low
+            } else {
+                0.0
+            };
+            let row_of = |price| grid_row(origin, self.row_height, price);
+            let base = row_of(self.low).0;
+            let end = base + self.volume.len() as f64;
+            let first = row_of(bar.low).0.min(base);
+            let (last, edge) = row_of(bar.high);
+            let flat = bar.low == bar.high && bar.volume > 0.0;
+            let top = if edge && !flat { last } else { last + 1.0 };
+            let top = top.max(end);
+            let count = top - first;
+            if first.abs() >= 2_f64.powi(52)
+                || top.abs() >= 2_f64.powi(52)
+                || !(1.0..=10_000.0).contains(&count)
+            {
                 return None;
             }
-            let prepend = ((self.low - low) / self.row_height).round() as usize;
+            let low = if first < base {
+                origin + first * self.row_height
+            } else {
+                self.low
+            };
+            let high = if top > end {
+                origin + top * self.row_height
+            } else {
+                self.high
+            };
+            if !low.is_finite() || !high.is_finite() || !(high - low).is_finite() || high <= low {
+                return None;
+            }
+            let prepend = (base - first) as usize;
             for rows in [&mut profile.volume, &mut profile.up, &mut profile.down] {
                 let old_len = rows.len();
                 rows.resize(count as usize, 0.0);
@@ -1186,12 +1243,7 @@ impl VolumeProfile {
             }
             profile.low = low;
             profile.high = high;
-        } else if self
-            .flat_price
-            .is_some_and(|price| bar.low != price || bar.high != price)
-            || bar.low < self.low
-            || bar.high > self.high
-        {
+        } else if bar.low < self.low || bar.high > self.high {
             return None;
         }
         profile.add(bar);
@@ -1348,6 +1400,14 @@ fn grid_edge(value: f64, scale: f64) -> Option<f64> {
     ((value - nearest).abs() <= 4.0 * f64::EPSILON * scale).then_some(nearest)
 }
 
+/// First row and exclusive top edge of a span in unit rows. A high within rounding of an
+/// edge closes the grid there; a span on one edge keeps the row above it.
+fn grid_rows(low: f64, high: f64) -> (f64, f64) {
+    let first = grid_floor(low);
+    let top = grid_edge(high, high.abs()).unwrap_or_else(|| high.ceil());
+    (first, if top > first { top } else { first + 1.0 })
+}
+
 /// Whole ticks per row closest to the requested row count on a zero-aligned grid.
 /// Compares the span per row rounded down and up, taking the larger tick count on a tie.
 /// Rejects nonfinite, reversed or unrepresentable spans and zero rows.
@@ -1365,8 +1425,8 @@ pub(crate) fn whole_tick_rows(low: f64, high: f64, rows: usize) -> Option<u64> {
             if ticks >= 2_f64.powi(53) || lo.abs() >= 2_f64.powi(52) || hi.abs() >= 2_f64.powi(52) {
                 return None;
             }
-            let top = grid_edge(hi, hi.abs()).unwrap_or_else(|| hi.ceil());
-            let count = (top - grid_floor(lo)).max(1.0);
+            let (first, top) = grid_rows(lo, hi);
+            let count = top - first;
             Some((ticks as u64, (count - rows as f64).abs()))
         })
         .min_by(|(a, error_a), (b, error_b)| error_a.total_cmp(error_b).then_with(|| b.cmp(a)))
@@ -1384,23 +1444,31 @@ pub(crate) fn grid_row(low: f64, height: f64, price: f64) -> (f64, bool) {
         .map_or((row.floor(), false), |edge| (edge, true))
 }
 
-/// A zero-aligned grid, including the row of a zero-range bar on an edge.
-fn fixed_grid(low: f64, high: f64, height: f64) -> Option<(f64, f64, usize)> {
-    if !height.is_finite() || height <= 0.0 {
+/// Zero-aligned rows `height` high over `low` to `high`, ending at the span's top row edge.
+/// `flat_high` keeps the row holding the highest price traded without range. Rejects reversed,
+/// nonfinite or unrepresentable spans and grids exceeding 10,000 rows.
+fn fixed_grid(
+    low: f64,
+    high: f64,
+    flat_high: Option<f64>,
+    height: f64,
+) -> Option<(f64, f64, usize)> {
+    let span = high - low;
+    if !height.is_finite() || height <= 0.0 || !span.is_finite() || span < 0.0 {
         return None;
     }
-    let first = grid_floor(low / height);
-    let last = grid_floor(high / height);
-    let count = last - first + 1.0;
+    let (first, top) = grid_rows(low / height, high / height);
+    let top = flat_high.map_or(top, |price| top.max(grid_floor(price / height) + 1.0));
+    let count = top - first;
     if !first.is_finite()
-        || !last.is_finite()
+        || !top.is_finite()
         || first.abs() >= 2_f64.powi(52)
-        || last.abs() >= 2_f64.powi(52)
+        || top.abs() >= 2_f64.powi(52)
         || !(1.0..=10_000.0).contains(&count)
     {
         return None;
     }
-    let bounds = (first * height, (last + 1.0) * height);
+    let bounds = (first * height, top * height);
     (bounds.0.is_finite() && bounds.1.is_finite() && bounds.1 > bounds.0).then_some((
         bounds.0,
         bounds.1,
@@ -1699,19 +1767,29 @@ mod tests {
                 );
             }
         }
+        let flat = Bar::new(time, 2.0, 2.0, 2.0, 2.0, 0.0);
+        let next = Bar::new(time, 1.0, 2.0, 1.0, 2.0, 4.0);
+        let profile = VolumeProfile::of(std::slice::from_ref(&flat), 24, Some(1.0)).unwrap();
+        assert!(profile.with_bar(&next).is_none());
+        let rebuilt = VolumeProfile::of(&[flat, next], 24, Some(1.0)).unwrap();
+        assert_eq!((rebuilt.low(), rebuilt.high()), (1.0, 2.0));
+        assert_eq!(rebuilt.volume(), [4.0]);
     }
 
     /// Existing rows keep their prices and volume when a fixed grid grows at either edge.
     #[test]
     fn fixed_profile_grows_without_rebinning() {
+        use crate::data::Footprint;
+        use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+
         let time = chrono::DateTime::UNIX_EPOCH;
         let first = Bar::new(time, -0.5, 1.0, -1.0, 0.5, 20.0);
         let mut bars = vec![first];
         let mut profile = VolumeProfile::of(&bars, 24, Some(1.0)).unwrap();
-        assert_eq!(profile.volume, [10.0, 10.0, 0.0]);
+        assert_eq!(profile.volume, [10.0, 10.0]);
         for (low, high, volume, expected) in [
-            (-2.0, -1.0, 6.0, vec![6.0, 10.0, 10.0, 0.0]),
-            (1.0, 2.0, 8.0, vec![6.0, 10.0, 10.0, 8.0, 0.0]),
+            (-2.0, -1.0, 6.0, vec![6.0, 10.0, 10.0]),
+            (1.0, 2.0, 8.0, vec![6.0, 10.0, 10.0, 8.0]),
             (2.0, 2.0, 3.0, vec![6.0, 10.0, 10.0, 8.0, 3.0]),
         ] {
             let bar = Bar::new(time, low, high, low, high, volume);
@@ -1725,6 +1803,13 @@ mod tests {
             );
         }
         assert!(VolumeProfile::of(&bars, 24, Some(1e-12)).is_none());
+        let wide = [
+            Bar::new(time, -1e308, -5e307, -1e308, -5e307, 1.0),
+            Bar::new(time, 5e307, 1e308, 5e307, 1e308, 1.0),
+        ];
+        assert!(VolumeProfile::of(&wide, 24, Some(1e308)).is_none());
+        let wide_profile = VolumeProfile::of(&wide[..1], 24, Some(1e308)).unwrap();
+        assert!(wide_profile.with_bar(&wide[1]).is_none());
         let boundary = Bar::new(time, 0.3, 0.3, 0.3, 0.3, 7.0);
         let decimal = VolumeProfile::of(&[boundary], 24, Some(0.1)).unwrap();
         assert_close(decimal.low(), 0.3);
@@ -1733,6 +1818,115 @@ mod tests {
         let cents = [32.16, 32.18].map(|price| Bar::new(time, price, price, price, price, 1.0));
         let cents = VolumeProfile::of(&cents, 24, Some(0.01)).unwrap();
         assert_eq!(cents.volume(), [1.0, 0.0, 1.0]);
+        // Executed rows start half a tick below traded levels, including when extended by bars.
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (price, size) in [(99.0, 7.0), (102.0, 3.0)] {
+            flow.push(&Tick::new(time, price, size, Some(OrderSide::Buy)))
+                .unwrap();
+        }
+        let executed =
+            VolumeProfile::from_executions(flow.bar_at(time).unwrap(), 1.0, 1.0, true).unwrap();
+        assert_eq!((executed.low(), executed.high()), (98.5, 102.5));
+        assert_eq!(executed.volume(), [7.0, 0.0, 0.0, 3.0]);
+        for (low, high, volume, bounds, expected) in [
+            (100.0, 100.0, 0.0, (98.5, 102.5), vec![7.0, 0.0, 0.0, 3.0]),
+            (102.5, 102.5, 0.0, (98.5, 102.5), vec![7.0, 0.0, 0.0, 3.0]),
+            (
+                102.5,
+                102.5,
+                5.0,
+                (98.5, 103.5),
+                vec![7.0, 0.0, 0.0, 3.0, 5.0],
+            ),
+            (
+                102.5,
+                103.5,
+                5.0,
+                (98.5, 103.5),
+                vec![7.0, 0.0, 0.0, 3.0, 5.0],
+            ),
+            (
+                97.5,
+                98.5,
+                5.0,
+                (97.5, 102.5),
+                vec![5.0, 7.0, 0.0, 0.0, 3.0],
+            ),
+        ] {
+            let bar = Bar::new(
+                time + chrono::TimeDelta::minutes(1),
+                low,
+                high,
+                low,
+                high,
+                volume,
+            );
+            let appended = executed.with_bar(&bar).expect("extend executed grid");
+            assert_eq!((appended.low(), appended.high()), bounds);
+            assert_eq!(appended.volume(), expected);
+            assert_eq!(appended.up(), expected);
+            assert!(appended.down().iter().all(|&volume| volume == 0.0));
+        }
+        // A range ends at its upper edge; only volume traded at one price keeps the row above.
+        for (high, flat_volume, rows, top, last, total) in [
+            (11.0, None, 25, 11.0, 4.0, 100.0),
+            (11.0_f64.next_down(), None, 25, 11.0, 4.0, 100.0),
+            (11.0_f64.next_up(), None, 25, 11.0, 4.0, 100.0),
+            (11.01, None, 26, 11.04, 100.0 * 0.01 / 1.01, 100.0),
+            (11.0, Some(0.0), 25, 11.0, 4.0, 100.0),
+            (11.0, Some(5.0), 26, 11.04, 5.0, 105.0),
+        ] {
+            let mut bars = vec![Bar::new(time, 10.0, high, 10.0, high, 100.0)];
+            if let Some(volume) = flat_volume {
+                bars.push(Bar::new(time, 11.0, 11.0, 11.0, 11.0, volume));
+            }
+            let profile = VolumeProfile::of(&bars, 25, Some(0.04)).unwrap();
+            assert_eq!(
+                profile.volume().len(),
+                rows,
+                "high {high}, flat {flat_volume:?}"
+            );
+            assert_close(profile.low(), 10.0);
+            assert_close(profile.high(), top);
+            assert_close(profile.volume()[rows - 1], last);
+            assert_close(profile.volume().iter().sum(), total);
+            let streamed = bars[1..].iter().fold(
+                VolumeProfile::of(&bars[..1], 25, Some(0.04)).unwrap(),
+                |profile, bar| profile.with_bar(bar).expect("extend fixed grid"),
+            );
+            assert_eq!(streamed, profile);
+            #[cfg(feature = "studies")]
+            {
+                // Splitting the range in half gives the cumulative path the same density.
+                let middle = (10.0 + high) / 2.0;
+                let mut inputs = vec![
+                    Bar::new(time, 10.0, middle, 10.0, middle, 50.0),
+                    Bar::new(time, middle, high, middle, high, 50.0),
+                ];
+                inputs.extend_from_slice(&bars[1..]);
+                let mut source = DevelopingVolume::default();
+                source.add(&inputs[..1]);
+                let mut developed = VolumeProfile::of(&inputs[..1], 25, Some(0.04)).unwrap();
+                for end in 2..=inputs.len() {
+                    source.add(&inputs[end - 1..end]);
+                    developed
+                        .extend_developing(
+                            price_span(&inputs[..end]).unwrap(),
+                            25,
+                            Some(0.04),
+                            &inputs[end - 1..end],
+                            &source,
+                        )
+                        .unwrap();
+                }
+                assert_eq!(developed.volume().len(), rows);
+                assert_close(developed.high(), top);
+                source.fill(&mut developed).unwrap();
+                for (&got, &want) in developed.volume().iter().zip(profile.volume()) {
+                    assert_close(got, want);
+                }
+            }
+        }
     }
 
     /// Four-unit rows centered at 100, 104 and 108 collect [98,102), [102,106)

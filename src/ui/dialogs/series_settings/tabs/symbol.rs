@@ -1342,13 +1342,9 @@ impl SymbolTab {
                 ui.checkbox(&mut params.tpo_letters, "")
                     .labelled_by(label.id);
                 ui.end_row();
-                // Without letters, blocks are the only display.
                 let label = ui.label(l10n::text(ui.ctx(), "Blocks"));
-                ui.add_enabled(
-                    params.tpo_letters,
-                    egui::Checkbox::without_text(&mut params.tpo_blocks),
-                )
-                .labelled_by(label.id);
+                ui.checkbox(&mut params.tpo_blocks, "")
+                    .labelled_by(label.id);
                 ui.end_row();
                 ui.checkbox(
                     &mut params.tpo_colored_blocks,
