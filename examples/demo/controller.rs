@@ -6627,6 +6627,156 @@ mod tests {
         assert_eq!(app.alert_host.engine().triggers().len(), fired + 1);
     }
 
+    /// Interval anchors and both optional volume averages are reachable through study settings.
+    #[test]
+    fn volume_studies_offer_anchor_intervals_and_smoothed_averages() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.chart.set_feed_paused(true);
+        let click = |app: &mut DemoApp, label: &str| {
+            let nodes = draw(&ctx, app, vec![]);
+            draw(
+                &ctx,
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: control(&nodes, label).0,
+                    data: None,
+                })],
+            );
+        };
+        for (name, clicks, expected) in [
+            (
+                "Relative Volume at Time",
+                vec!["Anchor", "4h", "Apply"],
+                vec![("anchor", InputValue::Timeframe(Some(Timeframe::Hour4)))],
+            ),
+            (
+                "Volume",
+                vec!["MA type", "Weighted", "Smoothing", "SMA", "Apply"],
+                vec![
+                    ("average", InputValue::Choice(2)),
+                    ("smoothing", InputValue::Choice(1)),
+                    ("smoothing_length", InputValue::Length(9)),
+                ],
+            ),
+        ] {
+            let id = app
+                .chart
+                .add_indicator(IndicatorFactory::new().create(name).unwrap());
+            app.open_indicator_settings(id);
+            for _ in 0..3 {
+                draw(&ctx, &mut app, vec![]);
+            }
+            for label in clicks {
+                click(&mut app, label);
+            }
+            assert!(!app.indicator_settings.is_open());
+            let inputs = app.chart.indicator_mut(id).unwrap().inputs();
+            for (id, expected) in expected {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == id)
+                        .map(|input| &input.value),
+                    Some(&expected),
+                    "{name} {id}"
+                );
+            }
+        }
+    }
+
+    /// Footprint totals are named numeric sources without a study, and alert saves keep them
+    /// when the chart changes interval and type.
+    #[test]
+    fn footprint_metric_alerts_reach_the_demo_alert_dialog() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        use egui_charts::model::{AlertFrequency, FootprintMetric};
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
+        app.live.set_paused(true);
+        finish_feed(&app.live);
+        settle(&mut app, &ctx);
+        assert!(
+            !app.chart
+                .alert_sources()
+                .iter()
+                .any(|(source, _)| matches!(source, AlertSource::Footprint(_)))
+        );
+        app.chart.set_chart_type(ChartType::VolumeFootprint);
+        settle(&mut app, &ctx);
+        let names: Vec<_> = app
+            .chart
+            .alert_sources()
+            .into_iter()
+            .filter_map(|(source, name)| {
+                matches!(source, AlertSource::Footprint(_)).then(|| name.to_string())
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Footprint: Total buy volume",
+                "Footprint: Total sell volume",
+                "Footprint: Volume delta"
+            ]
+        );
+        app.open_alert(None);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        for label in [
+            "Source",
+            "Footprint: Volume delta",
+            "Frequency",
+            "Once per bar",
+            "Save alert",
+        ] {
+            let nodes = draw(&ctx, &mut app, vec![]);
+            draw(
+                &ctx,
+                &mut app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: control(&nodes, label).0,
+                    data: None,
+                })],
+            );
+        }
+        let saved = app.alert_host.engine().alerts();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            saved[0].source,
+            AlertSource::Footprint(FootprintMetric::Delta)
+        );
+        assert_eq!(saved[0].frequency, AlertFrequency::OncePerBar);
+        assert_eq!(saved[0].timeframe, app.chart.timeframe());
+        let traded = (0..app.chart.bars(SeriesId::MAIN).len()).find_map(|bar| {
+            let [buy, sell, delta] = FootprintMetric::ALL
+                .map(|metric| app.chart.alert_value(&AlertSource::Footprint(metric), bar));
+            Some((buy?, sell?, delta?)).filter(|(buy, sell, _)| buy + sell > 0.0)
+        });
+        let (buy, sell, delta) = traded.expect("a footprint bar with executions");
+        assert!((buy - sell - delta).abs() <= 1e-9 * (buy + sell));
+        app.switch_timeframe(Timeframe::Min5);
+        app.chart.set_chart_type(ChartType::Candles);
+        settle(&mut app, &ctx);
+        let after = app.alert_host.engine().alerts();
+        assert_eq!(after[0].source, saved[0].source);
+        assert_eq!(after[0].condition, saved[0].condition);
+        assert_eq!(after[0].frequency, saved[0].frequency);
+        assert_eq!(after[0].timeframe, saved[0].timeframe);
+    }
+
     /// Study settings use the own-data chart's zones and apply the edited session clock.
     #[test]
     fn study_settings_edit_session_time_and_offer_the_own_data_zone() {

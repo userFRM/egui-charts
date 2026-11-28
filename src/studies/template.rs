@@ -2720,7 +2720,8 @@ mod tests {
                 "{name} undone"
             );
             assert!(
-                (0..study.line_count()).all(|line| study.plot_style(line).visible),
+                (0..study.line_count())
+                    .all(|line| study.plot_style(line).visible == (name != "Volume" || line < 2)),
                 "{name}"
             );
         }
