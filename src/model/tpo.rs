@@ -107,8 +107,8 @@ pub struct TPOConfig {
     /// `instrument_tick` it rounds up to whole ticks. [`to_tpo_profiles`] widens it to bound the
     /// rows; see [`TPOProfile::tick_size`].
     pub tick_size: f64,
-    /// Duration of each period in minutes (typically 30), raised to the bar interval when
-    /// shorter so that every bar takes a period of its own
+    /// Duration of each period in minutes (typically 30). Each period is the block of the bars
+    /// that open in it; bars longer than a period give no profiles, see [`to_tpo_profiles`].
     pub period_minutes: u32,
     /// Duration of initial balance in minutes (typically 60)
     pub initial_balance_minutes: u32,
@@ -192,8 +192,8 @@ pub struct TPOConfig {
     /// its open, otherwise in the bearish colour.
     pub show_closing_price: bool,
     /// Draw row volumes beside each profile, right of it unless [`TPOVolumeProfile::left`], up
-    /// to 40 px for the busiest row. Each bar shares its volume equally among the rows its range
-    /// touches; nonpositive or nonfinite volume adds none.
+    /// to 40 px for the busiest row. Each period shares the volume of its bars equally among the
+    /// rows from its low to its high; nonpositive or nonfinite volume adds none.
     pub show_volume_profile: bool,
     /// Levels, values, colours and side of the volume profile; see [`TPOVolumeProfile`].
     pub volume_profile: TPOVolumeProfile,
@@ -605,6 +605,9 @@ pub enum TPODisplayMode {
     Blocks,
     /// Show both letters and blocks
     Both,
+    /// Neither letters nor blocks. The point of control stays underlined; value area, initial
+    /// balance, single prints, poor extremes, captions, volume and statistics follow their switches.
+    Hidden,
 }
 
 /// Color-mapping strategy for TPO letters/blocks.
@@ -724,18 +727,18 @@ impl TPOConfig {
         self.split_sessions && !self.joins_sessions()
     }
 
-    /// The length of the periods on bars of `interval`: `period_minutes`, at least one minute, or
-    /// the interval when that is longer.
-    pub(crate) fn period_length(
-        &self,
-        interval: Option<crate::model::Timeframe>,
-    ) -> crate::model::Timeframe {
-        let interval = interval.map_or(0, |t| t.duration_ms() / 60_000);
-        let minutes = i64::from(self.period_minutes.max(1)).max(interval);
+    /// The length of the periods: `period_minutes`, at least one minute.
+    pub(crate) fn period_length(&self) -> crate::model::Timeframe {
         crate::model::Timeframe::Custom(
-            std::num::NonZeroU64::new(minutes.unsigned_abs() * 60)
+            std::num::NonZeroU64::new(u64::from(self.period_minutes.max(1)) * 60)
                 .unwrap_or(std::num::NonZeroU64::MIN),
         )
+    }
+
+    /// Whether bars fit the periods, counting each in the period it opens in. Trade-based
+    /// intervals, which have no length, and an unknown interval fit.
+    pub(crate) fn fits_periods(&self, interval: Option<crate::model::Timeframe>) -> bool {
+        interval.is_none_or(|interval| interval.duration_ms() <= self.period_length().duration_ms())
     }
 
     /// The parts of `bars[range]` that custom hours profile, with their periods on the period
@@ -756,7 +759,7 @@ impl TPOConfig {
             interval.unwrap_or_default(),
             self.regular_hours.as_ref(),
             true,
-            Some(self.period_length(interval)),
+            Some(self.period_length()),
         )
     }
 }
@@ -1206,7 +1209,7 @@ pub(crate) fn profile_parts(
 /// regular, extended and overnight hours with `config.split_sessions` and combined over
 /// `config.composites`. `config.splits` divides a session into further profiles that keep its
 /// periods. A session's periods are whole multiples of
-/// `config.period_minutes`, or of the clock's interval when longer, since its
+/// `config.period_minutes` since its
 /// open: that of its trading day with intraday bars and trading hours, or of
 /// its stretch of regular, extended or overnight hours when split, whatever time its
 /// first bar has. Custom hours keep whole periods on their grid instead: whole
@@ -1216,7 +1219,8 @@ pub(crate) fn profile_parts(
 /// close. Calendar days, daily and longer bars and bars split off
 /// outside the hours count from their first bar, since their open is not
 /// known. A gap leaves empty periods, and each period places one letter on
-/// every row its bars touched. The initial balance covers the bars that open
+/// every row from the lowest low to the highest high of its bars, as one bar of the period
+/// would. The initial balance covers the bars that open
 /// within `config.initial_balance_minutes` of the same instant.
 ///
 /// Rows are `config.tick_size` widened so the bars cover at most about 1,000
@@ -1224,6 +1228,10 @@ pub(crate) fn profile_parts(
 /// whole ticks grouped from a multiple of the row, and each row's price is its
 /// lowest tick. Bars with a non-finite high or low or an inverted range are
 /// skipped.
+///
+/// Bars longer than `config.period_minutes`, such as hourly bars under 30-minute periods,
+/// give no profiles: they cannot be divided into the selected periods. The chart reports the
+/// shorter interval it needs in place of the profiles. Trade-based bars fit any period.
 ///
 /// # Arguments
 /// * `bars` - Source OHLCV bars
@@ -1243,7 +1251,7 @@ pub(crate) fn profile_parts(
 /// assert!(profiles.is_empty());
 /// ```
 pub fn to_tpo_profiles(bars: &[Bar], config: &TPOConfig, clock: &BarClock) -> Vec<TPOProfile> {
-    if bars.is_empty() {
+    if bars.is_empty() || !config.fits_periods(clock.timeframe()) {
         return Vec::new();
     }
 
@@ -1285,7 +1293,7 @@ fn profiles_for_parts(
     // The open period: its index, first bar time and row-range endpoints
     let mut period_idx = 0;
     let mut period_ts = bars[0].time;
-    let period_minutes = config.period_length(clock.timeframe()).duration_ms() / 60_000;
+    let period_minutes = config.period_length().duration_ms() / 60_000;
     let sessions = clock.sessions();
     let mut parts = parts.into_iter().peekable();
     let mut part_open = None;
@@ -1305,17 +1313,8 @@ fn profiles_for_parts(
         .fold(0.0_f64, |m, bar| m.max(bar.low.abs()).max(bar.high.abs()));
     let (tick, row_ticks) = row_ticks(grid, config.instrument_tick, extreme);
     let row = row_ticks as f64 * tick;
-    let keys = bars
-        .iter()
-        .filter_map(|bar| bar_level_keys(bar, tick, row_ticks));
-    let Some((first_key, last_key)) = keys.reduce(|(low, high), (l, h)| (low.min(l), high.max(h)))
-    else {
-        return Vec::new();
-    };
-    // One extra endpoint closes a range ending at the highest row, including i64::MAX.
-    let mut row_changes = vec![0isize; last_key.abs_diff(first_key) as usize + 2];
-
-    let mut touched = RangeInclusive::new(usize::MAX, 0);
+    let mut block: Option<(i64, i64)> = None;
+    let mut block_volume = 0.0;
     let mut previous = None;
 
     for (i, bar) in bars.iter().enumerate() {
@@ -1351,12 +1350,11 @@ fn profiles_for_parts(
         if is_new_session || bar_period != period_idx {
             if let Some(ref mut profile) = current_profile {
                 let letter = letters[period_idx % letters.len()];
-                let (lo, hi) = std::mem::replace(&mut touched, RangeInclusive::new(usize::MAX, 0))
-                    .into_inner();
                 add_tpo_letters(
                     profile,
-                    row_changes.get_mut(lo..=hi).unwrap_or_default(),
-                    first_key + lo as i64,
+                    block.take(),
+                    std::mem::take(&mut block_volume),
+                    config.show_volume_profile,
                     letter,
                     period_idx,
                     period_ts,
@@ -1383,23 +1381,14 @@ fn profiles_for_parts(
             });
         }
 
-        let (lo, hi) = (
-            low_key.abs_diff(first_key) as usize,
-            high_key.abs_diff(first_key) as usize + 1,
-        );
-        row_changes[lo] += 1;
-        row_changes[hi] -= 1;
-        touched = (*touched.start()).min(lo)..=(*touched.end()).max(hi);
+        block = Some(block.map_or((low_key, high_key), |(low, high)| {
+            (low.min(low_key), high.max(high_key))
+        }));
 
         if let Some(ref mut profile) = current_profile {
             if bar.volume.is_finite() && bar.volume > 0.0 {
                 profile.total_volume += bar.volume;
-                if config.show_volume_profile {
-                    let volume = bar.volume / (high_key.abs_diff(low_key) + 1) as f64;
-                    for key in low_key..=high_key {
-                        *profile.row_volume.entry(key).or_insert(0.0) += volume;
-                    }
-                }
+                block_volume += bar.volume;
             }
             profile.closing_price = bar.close;
             profile.last_time = bar.time;
@@ -1419,11 +1408,11 @@ fn profiles_for_parts(
     // Don't forget the last profile
     if let Some(mut profile) = current_profile.take() {
         let letter = letters[period_idx % letters.len()];
-        let (lo, hi) = touched.into_inner();
         add_tpo_letters(
             &mut profile,
-            row_changes.get_mut(lo..=hi).unwrap_or_default(),
-            first_key + lo as i64,
+            block.take(),
+            block_volume,
+            config.show_volume_profile,
             letter,
             period_idx,
             period_ts,
@@ -1468,23 +1457,21 @@ fn profiles_for_parts(
         .collect()
 }
 
-/// Emit the union of a period's ranges once per row, then clear its endpoints.
+/// Emit one letter on every row of a period's block and share its volume equally among them.
 fn add_tpo_letters(
     profile: &mut TPOProfile,
-    row_changes: &mut [isize],
-    first_key: i64,
+    block: Option<(i64, i64)>,
+    volume: f64,
+    show_volume: bool,
     letter: char,
     period_idx: usize,
     ts: DateTime<Utc>,
 ) {
-    let mut covering = 0;
-    for (offset, change) in row_changes.iter_mut().enumerate() {
-        covering += *change;
-        *change = 0;
-        if covering == 0 {
-            continue;
-        }
-        let key = first_key + offset as i64;
+    let Some((low, high)) = block else {
+        return;
+    };
+    let share = volume / (high.abs_diff(low) + 1) as f64;
+    for key in low..=high {
         let price = key_to_price(key, profile.tick_size);
         profile.letters.push(TPOLetter {
             price,
@@ -1493,6 +1480,9 @@ fn add_tpo_letters(
             ts,
         });
         *profile.price_tpo_count.entry(key).or_insert(0) += 1;
+        if show_volume && volume > 0.0 {
+            *profile.row_volume.entry(key).or_insert(0.0) += share;
+        }
     }
 }
 
@@ -1769,6 +1759,88 @@ mod tests {
         }
     }
 
+    /// Equal block OHLCV keeps the rows, volumes and levels across source resolutions.
+    #[test]
+    fn a_period_takes_the_block_ohlcv_of_its_bars() {
+        let start = Utc.with_ymd_and_hms(2024, 1, 2, 0, 0, 0).unwrap();
+        let config = TPOConfig {
+            tick_size: 1.0,
+            value_area_pct: 0.5,
+            show_volume_profile: true,
+            show_single_prints: true,
+            extend_single_prints: true,
+            extend_poc: true,
+            extend_value_area_high: true,
+            extend_value_area_low: true,
+            ..Default::default()
+        };
+        for (interval, bars) in [
+            (
+                Timeframe::Min1,
+                vec![
+                    (0, 103.0, 104.0, 103.0, 104.0, 30.0),
+                    (1, 101.0, 101.0, 100.0, 101.0, 30.0),
+                    (30, 101.0, 101.0, 101.0, 101.0, 10.0),
+                    (45, 102.0, 102.0, 102.0, 102.0, 10.0),
+                ],
+            ),
+            (
+                Timeframe::Min30,
+                vec![
+                    (0, 103.0, 104.0, 100.0, 101.0, 60.0),
+                    (30, 101.0, 102.0, 101.0, 102.0, 20.0),
+                ],
+            ),
+        ] {
+            let bars: Vec<_> = bars
+                .into_iter()
+                .map(|(minute, o, h, l, c, v)| {
+                    Bar::new(start + Duration::minutes(minute), o, h, l, c, v)
+                })
+                .collect();
+            let profiles = to_tpo_profiles(&bars, &config, &interval.into());
+            assert_eq!(profiles.len(), 1, "{interval:?}");
+            let profile = &profiles[0];
+            // A contributes 60 / 5 = 12 per row, B another 20 / 2 = 10 on 101 and 102.
+            for (price, count, volume) in [
+                (100.0, 1, 12.0),
+                (101.0, 2, 22.0),
+                (102.0, 2, 22.0),
+                (103.0, 1, 12.0),
+                (104.0, 1, 12.0),
+            ] {
+                assert_eq!(profile.volume_at(price), volume, "{interval:?} at {price}");
+                assert_eq!(
+                    profile.tpo_count_at(price),
+                    count,
+                    "{interval:?} at {price}"
+                );
+            }
+            assert_eq!(profile.total_volume, 80.0);
+            assert_eq!(
+                (
+                    profile.poc_price,
+                    profile.value_area_low,
+                    profile.value_area_high
+                ),
+                (101.0, 101.0, 102.0)
+            );
+            assert_eq!(profile.single_prints, [100.0, 103.0, 104.0]);
+            #[cfg(feature = "widget")]
+            assert_eq!(
+                profile.extensions(&config),
+                vec![
+                    (TPOLevel::PointOfControl, 101.0),
+                    (TPOLevel::ValueAreaHigh, 102.0),
+                    (TPOLevel::ValueAreaLow, 101.0),
+                    (TPOLevel::SinglePrints, 100.0),
+                    (TPOLevel::SinglePrints, 103.0),
+                    (TPOLevel::SinglePrints, 104.0),
+                ]
+            );
+        }
+    }
+
     #[test]
     fn each_period_counts_once_per_row() {
         // (bars as (minute, low, high), expected letters as (profile, period, letter, minute of ts, rows))
@@ -1779,15 +1851,15 @@ mod tests {
         let cases: [Case; 7] = [
             // One 30-minute bar: one TPO on each row it spans
             (&[(0, 100.0, 104.0)], &[(0, 0, 'A', 0, 100..=104)]),
-            // Two bars of one period: their union, one TPO per row, stamped with the first bar
+            // Two bars of one period: one block, one TPO per row, stamped with the first bar
             (
                 &[(0, 100.0, 102.0), (1, 101.0, 104.0)],
                 &[(0, 0, 'A', 0, 100..=104)],
             ),
-            // Rows between the bars of a period stay empty
+            // A period's block covers the rows between its bars
             (
                 &[(0, 103.0, 104.0), (1, 100.0, 101.0)],
-                &[(0, 0, 'A', 0, 100..=101), (0, 0, 'A', 0, 103..=104)],
+                &[(0, 0, 'A', 0, 100..=104)],
             ),
             // 95 minutes in is the fourth period, after two empty ones
             (
@@ -2112,14 +2184,14 @@ mod tests {
                 &[(300, "I")],
             ),
             (
-                "hourly bars take one period each",
+                "hourly bars longer than the periods give no profile",
                 BarClock::new(Timeframe::Hour1),
                 vec![0, 60, 120],
                 false,
                 vec![],
                 vec![],
                 (TPOProfilePeriod::Session, 1),
-                &[(0, "ABC")],
+                &[],
             ),
             (
                 "UTC days",
