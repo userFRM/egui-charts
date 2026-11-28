@@ -1704,6 +1704,7 @@ impl DemoApp {
                 let first = self.replay_start_bars().first().map(|bar| bar.time);
                 self.replay_start.open_for_chart(&self.chart, first);
             }
+            ReplayStartAction::Resume if self.synthetic_only("Replay") => {}
             ReplayStartAction::Resume => {
                 if let Some((session, interval)) = self.replay_session.clone() {
                     let cutoff = self.replay_session_cutoff;
