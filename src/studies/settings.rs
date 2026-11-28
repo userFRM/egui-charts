@@ -896,10 +896,10 @@ impl std::fmt::Debug for ConfiguredStudy {
 }
 
 impl ConfiguredStudy {
-    /// The study's schema before the wrapper adds chart controls and default overrides.
+    /// The study before the wrapper adds chart controls and default overrides.
     #[cfg(all(feature = "widget", feature = "studies"))]
-    pub(crate) fn declared_inputs(&self) -> Vec<super::StudyInput> {
-        self.study.inputs()
+    pub(crate) fn declared_study(&self) -> &(dyn Indicator + 'static) {
+        self.study.as_ref()
     }
 
     /// Only main-bar calculations can be regenerated from a trade checkpoint. In particular,

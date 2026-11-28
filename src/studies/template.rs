@@ -286,7 +286,7 @@ impl StudyTemplate {
             .as_ref()
             .map_or(self.name.as_str(), |study| study.name());
         let upgraded = if self.metric.is_none() {
-            self.upgraded(study_name, &own_inputs)
+            self.upgraded(study_name, &own_inputs, !factory.is_host(&self.name))
         } else {
             None
         };
@@ -449,7 +449,13 @@ impl StudyTemplate {
     /// the study being restored, which a host may register under another name. `own` holds the
     /// inputs of the study registered under the saved name, or the chart's study a stored pane is
     /// matched against; a saved input that study takes as saved is neither renamed nor converted.
-    pub(crate) fn upgraded(&self, study: &str, own: &[StudyInput]) -> Option<Self> {
+    /// `builtin_source` permits the default-source migration only for the built-in study.
+    pub(crate) fn upgraded(
+        &self,
+        study: &str,
+        own: &[StudyInput],
+        builtin_source: bool,
+    ) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
         let out_of_range = |id: &str| {
@@ -822,7 +828,7 @@ impl StudyTemplate {
                     .push(("smoothing".to_owned(), InputValue::Choice(0)));
             }
             // A Woodies CCI read the close before it opened on the typical price.
-            "Woodies CCI" if !has("source") && !declares("source") => {
+            "Woodies CCI" if !has("source") && builtin_source => {
                 template.inputs.push((
                     "source".to_owned(),
                     InputValue::Source(crate::studies::StudySource::Price(
@@ -3864,9 +3870,45 @@ mod tests {
             assert_eq!((restored.name(), restored.line_count()), (name, lines));
             #[cfg(feature = "widget")]
             if name == "Woodies CCI" {
+                #[derive(Clone, Default)]
+                struct SourceOnly(crate::studies::IndicatorValues);
+                impl Indicator for SourceOnly {
+                    fn name(&self) -> &str {
+                        "Woodies CCI"
+                    }
+                    fn source(&self) -> Option<crate::studies::StudySource> {
+                        Some(crate::studies::StudySource::Price(PriceSource::Open))
+                    }
+                    fn is_overlay(&self) -> bool {
+                        false
+                    }
+                    fn calculate(&mut self, _: &[crate::model::Bar]) {}
+                    fn values(&self) -> &crate::studies::IndicatorValues {
+                        &self.0
+                    }
+                    fn colors(&self) -> Vec<Color32> {
+                        vec![Color32::WHITE]
+                    }
+                    fn set_colors(&mut self, _: Vec<Color32>) {}
+                    fn set_visible(&mut self, _: bool) {}
+                    fn clone_box(&self) -> Box<dyn Indicator> {
+                        Box::new(self.clone())
+                    }
+                }
+                let mut host = IndicatorFactory::new();
+                host.register(name, || Box::<SourceOnly>::default());
+                let source_only = saved.create_with(&host).unwrap();
+                assert_eq!(
+                    source_only.source(),
+                    Some(crate::studies::StudySource::Price(PriceSource::Open))
+                );
                 let mut builtin = StudyTemplate::from_study(&crate::studies::WoodiesCCI::default());
                 builtin.inputs.retain(|(id, _)| id != "source");
-                for mut study in [restored.clone_box(), builtin.create().unwrap()] {
+                for (declaration, mut study) in [
+                    ("input", restored.clone_box()),
+                    ("source method", source_only),
+                    ("built-in", builtin.create().unwrap()),
+                ] {
                     // Missing sources mean the host's default or the older built-in's Close.
                     let source = study.source();
                     let legacy_inputs = study
@@ -3892,13 +3934,13 @@ mod tests {
                     assert_eq!(
                         older.linked_pane(old_pane, &current),
                         Some(current_pane),
-                        "{source:?}"
+                        "{declaration}: {source:?}"
                     );
                     #[cfg(feature = "drawings")]
                     assert_eq!(
                         current.stored_pane_owner(&older.stored_pane(old_pane).unwrap()),
                         Some(current_id.0),
-                        "{source:?}"
+                        "{declaration}: {source:?}"
                     );
                     current
                         .indicator_mut(current_id)
@@ -3910,7 +3952,17 @@ mod tests {
                             )),
                         )
                         .unwrap();
-                    assert_eq!(older.linked_pane(old_pane, &current), None, "{source:?}");
+                    assert_eq!(
+                        older.linked_pane(old_pane, &current),
+                        None,
+                        "{declaration}: {source:?}"
+                    );
+                    #[cfg(feature = "drawings")]
+                    assert_eq!(
+                        current.stored_pane_owner(&older.stored_pane(old_pane).unwrap()),
+                        None,
+                        "{declaration}: {source:?}"
+                    );
                 }
             }
             if name == "Echo" {
