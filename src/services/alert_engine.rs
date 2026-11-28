@@ -1001,9 +1001,11 @@ impl AlertEngine {
     }
 
     /// Delivers the live conditions drained by `OrderFlowDetectors::take_footprint_events` to
-    /// footprint alerts on their symbol and interval. `Once` and `OncePerBar` fire at the first
-    /// execution that meets the condition; `OncePerBarClose` fires on a closed bar that meets
-    /// it. Each alert fires at most once per bar, including duplicate events from other charts.
+    /// footprint alerts of their symbol, interval and footprint rule. `Once` and `OncePerBar`
+    /// fire at the first execution that meets the condition; `OncePerBarClose` fires on a
+    /// closed bar that meets it. Each alert fires at most once per bar, including duplicate
+    /// events from other charts. Restored alerts ignore every bar covered by their saved last
+    /// firing, using the bar's close boundary for closed events rather than their delivery time.
     /// Triggers carry the event's time and price, and its message when the alert has none;
     /// custom messages expand as for `strategy_fills`.
     pub fn footprint_events(&self, events: &[FootprintAlertEvent], now: DateTime<Utc>) {
@@ -1015,22 +1017,22 @@ impl AlertEngine {
                 now,
                 |alert| {
                     alert.condition == AlertCondition::Footprint(event.condition)
+                        && alert.timeframe == Some(event.timeframe)
+                        && alert.inputs.as_deref().and_then(|inputs| inputs.footprint) == event.rule
                         && (alert.frequency == AlertFrequency::OncePerBarClose) == event.closed
                 },
                 |_, seen, last| {
-                    // A restored run counts its saved firing only on its first delivery.
-                    if seen.fired.is_none()
+                    // Until a new bar fires, saved firings cover all older deliveries.
+                    if (seen.fired.is_none()
                         && last.is_some_and(|last| {
                             if event.closed {
-                                event.time <= last
+                                event.bar_end.is_some_and(|end| end <= last)
                             } else {
                                 event.bar <= last
                             }
-                        })
+                        }))
+                        || seen.fired.is_some_and(|bar| event.bar <= bar)
                     {
-                        seen.fired = Some(event.bar);
-                    }
-                    if seen.fired.is_some_and(|bar| event.bar <= bar) {
                         return Vec::new();
                     }
                     seen.fired = Some(event.bar);
@@ -2931,48 +2933,86 @@ mod tests {
     #[test]
     fn restored_footprint_alerts_count_each_symbols_last_firing() {
         use crate::model::FootprintCondition::{StackedBuyImbalance, StackedSellImbalance};
+        use crate::model::{Session, SessionWindow, TimezoneId};
         use AlertFrequency::{OncePerBar, OncePerBarClose};
+        use chrono::{NaiveTime, Weekday::*};
 
-        for (frequency, last, open, at, covered) in [
-            (OncePerBar, 65, 60, 70, true),
-            (OncePerBar, 65, 120, 125, false),
-            (OncePerBarClose, 120, 60, 120, true),
-            (OncePerBarClose, 120, 60, 121, false),
-            (OncePerBarClose, 120, 120, 180, false),
+        let minute = BarClock::new(Timeframe::Min1);
+        let session = Session::new([SessionWindow::new(
+            [Mon, Tue, Wed, Thu, Fri],
+            NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+            NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+        )]);
+        let hourly =
+            BarClock::new(Timeframe::Hour1).with_session(TimezoneId::utc(), session.clone(), false);
+        let daily = BarClock::new(Timeframe::Day1).with_session(TimezoneId::utc(), session, false);
+        let monthly = BarClock::new(Timeframe::Month1);
+        for (clock, frequency, last, open, at, covered) in [
+            (&minute, OncePerBar, 65, 60, 70, true),
+            (&minute, OncePerBar, 125, 60, 70, true),
+            (&minute, OncePerBar, 65, 120, 125, false),
+            (&minute, OncePerBarClose, 120, 60, 120, true),
+            (&minute, OncePerBarClose, 120, 60, 121, true),
+            (&minute, OncePerBarClose, 120, 120, 180, false),
+            // The shortened 15:30 hour and the trading date both close at 16:00.
+            (&hourly, OncePerBarClose, 57_600, 55_800, 57_660, true),
+            (&daily, OncePerBarClose, 57_600, 0, 57_660, true),
+            // February 1970 ends on March 1, after 28 days.
+            (
+                &monthly,
+                OncePerBarClose,
+                5_097_600,
+                2_678_400,
+                5_097_660,
+                true,
+            ),
         ] {
             for list in [false, true] {
                 for changed in [false, true] {
                     let mut saved =
                         alert(AlertCondition::Footprint(StackedBuyImbalance), frequency);
+                    saved.timeframe = clock.timeframe();
                     saved.id = Some(AlertId("1".into()));
                     saved.last_triggered_at = Some(time(last));
                     if list {
                         saved.symbol.clear();
                         saved.watchlist = Some("tech".into());
                         saved.member_triggered_at.insert("SYM".into(), time(last));
+                        saved
+                            .member_triggered_at
+                            .insert("SECOND".into(), time(last));
                         saved.last_triggered_at = Some(time(last + 60));
                     }
-                    let host = Host::new(vec![saved]);
+                    let serialized = serde_json::to_string(&saved).unwrap();
+                    let restored: Alert = serde_json::from_str(&serialized).unwrap();
+                    assert_eq!(restored, saved);
+                    let host = Host::new(vec![restored]);
                     host.engine
-                        .set_watchlist("tech", vec!["SYM".into(), "OTHER".into()]);
+                        .set_watchlist("tech", vec!["SYM".into(), "SECOND".into(), "OTHER".into()]);
                     if changed {
                         // A monitoring edit starts this session's alert with no restored guard.
                         let mut edited = host.engine.alerts().remove(0);
                         edited.condition = AlertCondition::Footprint(StackedSellImbalance);
                         assert_eq!(host.save(edited), Ok(()));
                     }
-                    let symbols: &[_] = if list { &["SYM", "OTHER"] } else { &["SYM"] };
+                    let symbols: &[_] = if list {
+                        &["SYM", "SECOND", "OTHER"]
+                    } else {
+                        &["SYM"]
+                    };
                     for symbol in symbols {
                         let mut event = FootprintAlertEvent {
                             symbol: (*symbol).into(),
                             exchange: None,
-                            timeframe: Timeframe::Min1,
+                            timeframe: clock.timeframe().unwrap(),
+                            rule: None,
                             condition: if changed {
                                 StackedSellImbalance
                             } else {
                                 StackedBuyImbalance
                             },
                             bar: time(open),
+                            bar_end: clock.bar_close(time(open)),
                             closed: frequency == OncePerBarClose,
                             time: time(at),
                             price: 100.0,
@@ -2991,13 +3031,122 @@ mod tests {
                         );
                         host.engine.footprint_events(&[event.clone()], time(at));
                         assert!(host.fired().is_empty(), "same bar stays silent");
-                        event.bar = time(open + 60);
-                        event.time = time(at + 60);
-                        host.engine.footprint_events(&[event], time(at + 60));
-                        assert_eq!(host.fired(), [100.0], "the next bar fires");
+                        let delay = event.time
+                            - if event.closed {
+                                event.bar_end.unwrap()
+                            } else {
+                                event.bar
+                            };
+                        for step in 1..=2 {
+                            event.bar = clock.next_open(event.bar).unwrap();
+                            event.bar_end = clock.bar_close(event.bar);
+                            event.time = if event.closed {
+                                event.bar_end.unwrap()
+                            } else {
+                                event.bar
+                            } + delay;
+                            host.engine.footprint_events(&[event.clone()], event.time);
+                            let still_covered = !changed
+                                && *symbol != "OTHER"
+                                && frequency == OncePerBar
+                                && last == 125
+                                && step == 1;
+                            assert_eq!(
+                                host.fired(),
+                                if still_covered { vec![] } else { vec![100.0] },
+                                "{frequency:?}, last {last}, open {open}, step {step}, list {list}, changed {changed}, {symbol}"
+                            );
+                        }
                     }
                 }
             }
+        }
+        #[cfg(feature = "detectors")]
+        {
+            use crate::data::MarketEvent;
+            use crate::model::{FootprintCondition::BuyImbalance, Instrument, OrderSide, Tick};
+            use crate::services::{DetectorSettings, OrderFlowDetectors};
+
+            let mut actual = Vec::new();
+            let mut expected = Vec::new();
+            for list in [false, true] {
+                let symbols: &[_] = if list { &["ES", "SECOND"] } else { &["ES"] };
+                let mut saved = alert(AlertCondition::Footprint(BuyImbalance), OncePerBarClose);
+                saved.id = Some(AlertId("1".into()));
+                saved.symbol = "ES".into();
+                saved.last_triggered_at = Some(time(60));
+                if list {
+                    saved.symbol.clear();
+                    saved.watchlist = Some("tech".into());
+                    for symbol in symbols {
+                        saved.member_triggered_at.insert((*symbol).into(), time(60));
+                    }
+                }
+                let serialized = serde_json::to_string(&saved).unwrap();
+                let restored: Alert = serde_json::from_str(&serialized).unwrap();
+                assert_eq!(restored, saved);
+                let host = Host::new(vec![restored]);
+                host.engine
+                    .set_watchlist("tech", symbols.iter().map(|s| (*s).into()).collect());
+                let detectors = OrderFlowDetectors::new();
+                let mut settings = DetectorSettings::default();
+                settings.footprint.rule.diagonal = false;
+                detectors.set_settings(settings);
+                detectors.watch_footprint_alerts(&host.engine.alerts());
+                for symbol in symbols {
+                    let mut instrument = Instrument::new(*symbol);
+                    instrument.tick_size = Some(0.25);
+                    detectors.track(&instrument).unwrap();
+                    let mut closed = Vec::new();
+                    for (feed, execution, side) in [
+                        (0, 0, Some(OrderSide::Buy)),
+                        (60, 60, Some(OrderSide::Buy)),
+                        (181, 181, None),
+                        (182, 125, Some(OrderSide::Buy)),
+                    ] {
+                        detectors.push(
+                            symbol,
+                            time(feed),
+                            &MarketEvent::Trade(Tick::new(time(execution), 100.0, 10.0, side)),
+                        );
+                        let events = detectors.take_footprint_events();
+                        closed.extend(
+                            events
+                                .iter()
+                                .filter(|e| e.closed && e.condition == BuyImbalance)
+                                .cloned(),
+                        );
+                        host.engine.footprint_events(&events, time(feed));
+                        host.engine.footprint_events(&events, time(feed));
+                    }
+                    assert_eq!(
+                        closed
+                            .iter()
+                            .map(|e| (e.bar, e.bar_end, e.time))
+                            .collect::<Vec<_>>(),
+                        [
+                            (time(60), Some(time(120)), time(181)),
+                            (time(120), Some(time(180)), time(182))
+                        ]
+                    );
+                    let times: Vec<_> = host
+                        .engine
+                        .triggers()
+                        .iter()
+                        .filter(|t| t.symbol == *symbol)
+                        .map(|t| t.time.timestamp())
+                        .collect();
+                    actual.push((list, *symbol, times));
+                    expected.push((list, *symbol, vec![181, 182]));
+                    host.fired();
+                    host.engine.footprint_events(&closed, time(183));
+                    assert!(host.fired().is_empty(), "both delivered bars stay silent");
+                }
+            }
+            assert_eq!(
+                actual, expected,
+                "delayed closes keep each newer bar eligible"
+            );
         }
     }
 
