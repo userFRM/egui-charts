@@ -9,7 +9,7 @@
 //! [`CumulativeVolumeDelta`] adds the bar deltas from the first bar of each anchor period, the
 //! session by default, and draws each bar from the total at its open to the total at its close.
 //! A bar without candles has no value and no candle, and the total carries over it.
-//! Cumulative Volume Delta also offers Ticks aggregation: supplied executions count by their
+//! Volume Delta and Cumulative Volume Delta also offer Ticks aggregation: supplied executions count by their
 //! aggressor side or, when missing, by the last price change. Until a price changes they count
 //! for neither side. This mode requests no lower-interval candles and uses the chart's trade
 //! history, including replay and retention. Both panes draw a dashed grey zero level.
@@ -57,7 +57,7 @@ struct DeltaCandles {
     anchor_minutes: usize,
     /// Data aggregation Ticks: the deltas come from executions, not candles.
     ticks: bool,
-    /// Executions of the chart, sided by the feed or the tick rule; CVD only.
+    /// Executions of the chart, sided by the feed or the tick rule.
     flow: Option<OrderFlowInput>,
     reset_revision: u64,
     candles: Vec<StudyCandle>,
@@ -76,13 +76,13 @@ impl DeltaCandles {
             anchor,
             anchor_minutes: 60,
             ticks: false,
-            flow: anchor.map(|_| {
+            flow: Some(
                 OrderFlowInput::new(OrderFlowKind::FilteredCvd {
                     min: 0.0,
                     max: f64::MAX,
                 })
-                .with_tick_rule()
-            }),
+                .with_tick_rule(),
+            ),
             reset_revision: 0,
             candles: Vec::new(),
             values: IndicatorValues::new(),
@@ -128,16 +128,16 @@ impl DeltaCandles {
                 .with_default(InputValue::Length(60))
                 .shown_when("anchor", [ANCHORS.len() - 1]),
             );
-            inputs.push(
-                StudyInput::new(
-                    "aggregation",
-                    "Data aggregation",
-                    InputValue::Choice(usize::from(self.ticks)),
-                    InputKind::Choice(vec!["Time".into(), "Ticks".into()]),
-                )
-                .with_default(InputValue::Choice(0)),
-            );
         }
+        inputs.push(
+            StudyInput::new(
+                "aggregation",
+                "Data aggregation",
+                InputValue::Choice(usize::from(self.ticks)),
+                InputKind::Choice(vec!["Time".into(), "Ticks".into()]),
+            )
+            .with_default(InputValue::Choice(0)),
+        );
         inputs
     }
 
@@ -152,9 +152,7 @@ impl DeltaCandles {
             {
                 self.anchor_minutes = n
             }
-            ("aggregation", InputValue::Choice(at @ 0..=1)) if self.anchor.is_some() => {
-                self.ticks = at == 1
-            }
+            ("aggregation", InputValue::Choice(at @ 0..=1)) => self.ticks = at == 1,
             _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         self.refresh(&[], 0, &[]);
@@ -456,8 +454,8 @@ macro_rules! delta_study {
 }
 
 delta_study!(
-    /// Each bar's volume delta from lower-interval candles, as a candle from zero, in a separate
-    /// pane.
+    /// Each bar's volume delta from lower-interval candles or the chart's executions with Ticks
+    /// aggregation, as a candle from zero in a separate pane.
     VolumeDelta,
     "Volume Delta",
     "Volume Delta - Up minus down volume of the lower-interval candles in each bar, as a candle from zero",
@@ -477,6 +475,99 @@ mod tests {
     use super::*;
     use crate::studies::IndicatorFactory;
     use chrono::{TimeZone, Utc};
+
+    /// Each execution candle starts from zero, keeps its running extremes, and an empty bar is
+    /// absent. Updating a live candle and rebuilding the execution history keep those rules.
+    #[test]
+    fn volume_delta_draws_each_bar_from_its_executions_with_ticks() {
+        use crate::model::{
+            FeedService,
+            OrderSide::{Buy, Sell},
+            Tick,
+        };
+        use crate::studies::StudyTemplate;
+        let clock = BarClock::new(Timeframe::Min1);
+        let mut study = VolumeDelta::new();
+        study.set_bar_clock(&clock);
+        study
+            .set_input("aggregation", InputValue::Choice(1))
+            .unwrap();
+        assert!(study.data_requests().is_empty());
+        assert!(study.needs_order_flow());
+        let input = study.order_flow_inputs()[0].clone();
+        assert_eq!(input.services(), &[FeedService::LiveTrades]);
+        let tick =
+            |s, price, size, side| Tick::new(Utc.timestamp_opt(s, 0).unwrap(), price, size, side);
+        for trade in [
+            tick(0, 10.0, 5.0, None),
+            tick(10, 11.0, 3.0, None),
+            tick(20, 11.0, 2.0, None),
+            tick(30, 10.5, 4.0, Some(Buy)),
+            tick(40, 10.5, 1.0, None),
+            tick(60, 10.5, 6.0, Some(Sell)),
+            tick(70, 10.5, 2.0, None),
+            tick(80, 12.0, 1.0, None),
+            tick(180, 12.0, 4.0, None),
+        ] {
+            input.push_trade(&clock, &trade);
+        }
+        let chart = [0, 60, 120, 180]
+            .map(|s| Bar::new(Utc.timestamp_opt(s, 0).unwrap(), 1.0, 1.0, 1.0, 1.0, 0.0));
+        let drawn = |study: &dyn Indicator| {
+            study
+                .candles()
+                .iter()
+                .map(|c| {
+                    (
+                        c.bars.start,
+                        c.plot,
+                        [c.bar.open, c.bar.high, c.bar.low, c.bar.close],
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        study.calculate(&chart);
+        // Running deltas: 3,5,9,8; -6,-8,-7; no trades; 4.
+        assert_eq!(
+            drawn(&study),
+            [
+                (0, 1, [0.0, 9.0, 0.0, 8.0]),
+                (1, 2, [0.0, 0.0, -8.0, -7.0]),
+                (3, 1, [0.0, 4.0, 0.0, 4.0]),
+            ]
+        );
+        assert_eq!(
+            (0..4)
+                .map(|i| study.values().value(0, i))
+                .collect::<Vec<_>>(),
+            [Some(8.0), Some(-7.0), None, Some(4.0)]
+        );
+        input.push_trade(&clock, &tick(190, 11.5, 2.0, None));
+        study.update(&chart, 3);
+        assert_eq!(drawn(&study)[2], (3, 1, [0.0, 4.0, 0.0, 2.0]));
+        let mut fresh = study.clone();
+        fresh.calculate(&chart);
+        assert_eq!(drawn(&study), drawn(&fresh));
+        input.clear();
+        input.push_trade(&clock, &tick(180, 12.0, 4.0, None));
+        study.update(&chart, 3);
+        assert_eq!(drawn(&study), [(3, 2, [0.0; 4])]);
+        let saved = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
+        let restored = serde_json::from_str::<StudyTemplate>(&saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(
+            restored
+                .inputs()
+                .iter()
+                .find(|i| i.id == "aggregation")
+                .unwrap()
+                .value,
+            InputValue::Choice(1)
+        );
+        assert_eq!(restored.order_flow_inputs().len(), 1);
+    }
 
     /// Tick rule hand totals: +3,+2,+4,-1 reaches 8 (high 9); -6,-2,+1 reaches
     /// -7 (low -8). A quiet bar is absent, and +4 then -2 ends the last bar at 3.

@@ -375,6 +375,7 @@ pub struct DemoApp {
     pub state: DemoAppState,
     pub bars: Vec<Bar>,
     loading_bars: bool,
+    study_events: Vec<marks::StudyEvents>,
     /// The preset and displayed interval, with its load and plot-fitting state.
     range_fit: Option<(DateRange, Timeframe, RangeFit)>,
     pub theme: Theme,
@@ -747,6 +748,7 @@ impl DemoApp {
             },
             bars: Vec::new(),
             loading_bars: false,
+            study_events: Vec::new(),
             range_fit: None,
             theme,
             theme_choice,
@@ -1388,6 +1390,7 @@ impl DemoApp {
         self.chart.set_data(SeriesId::MAIN, self.bars.clone());
         self.chart.set_quote(None);
         self.chart.set_events(Vec::new());
+        self.chart.set_time_scale_events(Vec::new());
         self.chart.set_mark_source(None);
         self.chart.set_signal_source(None);
         if !self.live.loading() {
@@ -4253,7 +4256,12 @@ impl DemoApp {
                 charts.insert(self.layout_slot, &mut self.chart);
                 // Only this symbol's feed prepares footprint rows, so its tape can wait for a reader
                 // and its first footprint page can hold only the bars on view.
-                for chart in &mut charts {
+                self.study_events
+                    .resize_with(charts.len(), Default::default);
+                for (chart, events) in charts.iter_mut().zip(&mut self.study_events) {
+                    if self.own_data.is_none() {
+                        events.refresh(chart);
+                    }
                     let prepared = chart.symbol() == live::PREPARED_FOOTPRINT_SYMBOL;
                     chart.set_trade_history_on_demand(prepared);
                     chart.set_footprint_history_by_view(prepared);
@@ -5432,6 +5440,7 @@ fn load_view(chart: &mut Chart, live: &LiveFeed, session: SessionType, adjusted:
     live.set_price_unit(cents);
     chart.set_conversion(replay::conversion(cents, adjusted));
     chart.reload_feed();
+    chart.set_time_scale_events(Vec::new());
     chart.set_instrument(Some(live.instrument()));
     chart.set_extended_hours(session != SessionType::RTH);
 }
@@ -6233,13 +6242,19 @@ mod tests {
         app: &mut DemoApp,
         events: Vec<egui::Event>,
     ) -> Vec<(egui::accesskit::NodeId, egui::accesskit::Node)> {
+        draw_sized(ctx, app, egui::vec2(1440.0, 900.0), events)
+    }
+
+    fn draw_sized(
+        ctx: &egui::Context,
+        app: &mut DemoApp,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> Vec<(egui::accesskit::NodeId, egui::accesskit::Node)> {
         ctx.enable_accesskit();
         let output = ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1440.0, 900.0),
-                )),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events,
                 ..Default::default()
             },
@@ -6697,15 +6712,17 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         app.chart.set_feed_paused(true);
-        let click = |app: &mut DemoApp, node: &egui::accesskit::Node| {
-            let b = node.bounds().unwrap();
-            ui_click(
+        let click = |app: &mut DemoApp, label: &str| {
+            let nodes = draw(&ctx, app, vec![]);
+            draw(
                 &ctx,
-                egui::vec2(1440.0, 900.0),
-                egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32),
-                |ui| {
-                    app.show_dialogs(ui.ctx());
-                },
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: control(&nodes, label).0,
+                    data: None,
+                })],
             );
         };
         let factory = IndicatorFactory::new();
@@ -6716,8 +6733,7 @@ mod tests {
         for _ in 0..3 {
             draw(&ctx, &mut app, vec![]);
         }
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Style").1);
+        click(&mut app, "Style");
         let nodes = draw(&ctx, &mut app, vec![]);
         let mut pickers: Vec<_> = nodes
             .iter()
@@ -6731,8 +6747,50 @@ mod tests {
         });
         assert_eq!(pickers.len(), 3);
         assert_eq!(pickers[2].1.value(), Some("Dashes"));
-        click(&mut app, &control(&nodes, "Apply").1);
+        click(&mut app, "Apply");
         assert!(!app.indicator_settings.is_open());
+        app.open_indicator_settings(up_down);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        click(&mut app, "Use custom timeframe");
+        click(&mut app, "Apply");
+        let study = app.chart.indicator_mut(up_down).unwrap();
+        for (id, want) in [
+            (
+                "lower_interval",
+                InputValue::Timeframe(Some(Timeframe::Min1)),
+            ),
+            ("custom_interval", InputValue::Toggle(true)),
+        ] {
+            assert_eq!(
+                study.inputs().iter().find(|i| i.id == id).map(|i| &i.value),
+                Some(&want),
+                "{id}"
+            );
+        }
+        let delta = app
+            .chart
+            .add_indicator(factory.create("Volume Delta").unwrap());
+        app.open_indicator_settings(delta);
+        for _ in 0..3 {
+            draw(&ctx, &mut app, vec![]);
+        }
+        click(&mut app, "Data aggregation");
+        click(&mut app, "Ticks");
+        click(&mut app, "Apply");
+        assert!(!app.indicator_settings.is_open());
+        let study = app.chart.indicator_mut(delta).unwrap();
+        assert_eq!(
+            study
+                .inputs()
+                .iter()
+                .find(|i| i.id == "aggregation")
+                .unwrap()
+                .value,
+            InputValue::Choice(1)
+        );
+        assert_eq!(study.order_flow_inputs().len(), 1);
         let cvd = app
             .chart
             .add_indicator(factory.create("Cumulative Volume Delta").unwrap());
@@ -6750,10 +6808,10 @@ mod tests {
                 .iter()
                 .any(|(_, n)| n.label() == Some("Lower interval"))
         );
-        click(&mut app, &control(&nodes, "Use custom timeframe").1);
+        click(&mut app, "Use custom timeframe");
         let nodes = draw(&ctx, &mut app, vec![]);
         control(&nodes, "Lower interval");
-        click(&mut app, &control(&nodes, "Anchor period").1);
+        click(&mut app, "Anchor period");
         let nodes = draw(&ctx, &mut app, vec![]);
         draw(
             &ctx,
@@ -6766,15 +6824,12 @@ mod tests {
             })],
         );
         draw(&ctx, &mut app, vec![]);
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Interval").1);
+        click(&mut app, "Interval");
         let nodes = draw(&ctx, &mut app, vec![]);
         control(&nodes, "Anchor interval (minutes)");
-        click(&mut app, &control(&nodes, "Data aggregation").1);
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Ticks").1);
-        let nodes = draw(&ctx, &mut app, vec![]);
-        click(&mut app, &control(&nodes, "Apply").1);
+        click(&mut app, "Data aggregation");
+        click(&mut app, "Ticks");
+        click(&mut app, "Apply");
         assert!(!app.indicator_settings.is_open());
         let study = app.chart.indicator_mut(cvd).unwrap();
         for (id, want) in [
@@ -6789,6 +6844,293 @@ mod tests {
             );
         }
         assert_eq!(study.order_flow_inputs().len(), 1);
+    }
+
+    /// The demo's generic settings bindings apply guides, precision and renamed inputs.
+    #[test]
+    fn study_enhancement_dialog_cases_apply_settings_and_readouts() {
+        use egui::accesskit::{Action, ActionData, ActionRequest, Toggled, TreeId};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+
+        enum Change {
+            Zero,
+            Precision,
+            Inputs(&'static [(&'static str, &'static str, f64)]),
+        }
+        let cases = [
+            ("BBTrend", Change::Zero),
+            ("Bull Bear Power", Change::Zero),
+            ("SMI", Change::Precision),
+            (
+                "Trend Strength Index",
+                Change::Inputs(&[("Length", "period", 7.0)]),
+            ),
+            (
+                "PSAR",
+                Change::Inputs(&[
+                    ("Start", "initial_af", 0.03),
+                    ("Increment", "af_step", 0.04),
+                    ("Max Value", "max_af", 0.3),
+                ]),
+            ),
+        ];
+        for size in [egui::vec2(1440.0, 900.0), egui::vec2(480.0, 640.0)] {
+            for (name, change) in &cases {
+                let ctx = egui::Context::default();
+                let mut app = DemoApp::new_at(
+                    &eframe::CreationContext::_new_kittest(ctx.clone()),
+                    "2026-11-03T15:00:00Z".parse().unwrap(),
+                    true,
+                );
+                app.chart.set_feed_paused(true);
+                settle(&mut app, &ctx);
+                let id = app
+                    .chart
+                    .add_indicator(IndicatorFactory::new().create(name).unwrap());
+                app.open_indicator_settings(id);
+                for _ in 0..3 {
+                    draw_sized(&ctx, &mut app, size, vec![]);
+                }
+                let act = |app: &mut DemoApp, label: &str, action, data| {
+                    let nodes = draw_sized(&ctx, app, size, vec![]);
+                    let target = control(&nodes, label).0;
+                    draw_sized(
+                        &ctx,
+                        app,
+                        size,
+                        vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                            action: Action::ScrollIntoView,
+                            target_tree: TreeId::ROOT,
+                            target_node: target,
+                            data: None,
+                        })],
+                    );
+                    draw_sized(&ctx, app, size, vec![]);
+                    let nodes = draw_sized(&ctx, app, size, vec![]);
+                    let node = control(&nodes, label);
+                    let bounds = node.1.bounds().unwrap();
+                    assert!(
+                        bounds.x0 >= 0.0
+                            && bounds.x1 <= f64::from(size.x)
+                            && bounds.y0 >= 0.0
+                            && bounds.y1 <= f64::from(size.y),
+                        "{name} {label} outside {size:?}: {bounds:?}"
+                    );
+                    draw_sized(
+                        &ctx,
+                        app,
+                        size,
+                        vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                            action,
+                            target_tree: TreeId::ROOT,
+                            target_node: node.0,
+                            data,
+                        })],
+                    );
+                };
+                match change {
+                    Change::Zero => {
+                        act(&mut app, "Style", Action::Click, None);
+                        let nodes = draw_sized(&ctx, &mut app, size, vec![]);
+                        assert_eq!(control(&nodes, "Zero").1.toggled(), Some(Toggled::True));
+                        act(&mut app, "Zero", Action::Click, None);
+                        act(
+                            &mut app,
+                            "Level value",
+                            Action::SetValue,
+                            Some(ActionData::NumericValue(1.5)),
+                        );
+                    }
+                    Change::Precision => {
+                        act(&mut app, "Style", Action::Click, None);
+                        act(&mut app, "Automatic", Action::Click, None);
+                        act(
+                            &mut app,
+                            "Precision",
+                            Action::SetValue,
+                            Some(ActionData::NumericValue(5.0)),
+                        );
+                    }
+                    Change::Inputs(inputs) => {
+                        for (label, _, value) in *inputs {
+                            act(
+                                &mut app,
+                                label,
+                                Action::SetValue,
+                                Some(ActionData::NumericValue(*value)),
+                            );
+                        }
+                    }
+                }
+                act(&mut app, "Apply", Action::Click, None);
+                assert!(!app.indicator_settings.is_open(), "{name} {size:?}");
+                settle(&mut app, &ctx);
+                let study = app.chart.indicator_mut(id).unwrap();
+                match change {
+                    Change::Zero => {
+                        assert!(!study.settings().levels[0].visible, "{name}");
+                        assert_eq!(study.settings().levels[0].value, Some(1.5), "{name}");
+                    }
+                    Change::Precision => {
+                        assert_eq!(study.settings().precision, Some(5));
+                        assert_eq!(study.format_value(12.34567), "12.34567");
+                    }
+                    Change::Inputs(inputs) => {
+                        for (_, id, value) in *inputs {
+                            let want = if *id == "period" {
+                                InputValue::Length(*value as usize)
+                            } else {
+                                InputValue::Number(*value)
+                            };
+                            assert_eq!(
+                                study.inputs().iter().find(|i| i.id == *id).unwrap().value,
+                                want,
+                                "{name} {id}"
+                            );
+                        }
+                    }
+                }
+                let title = study.name().to_owned();
+                let info = app.build_data_window();
+                let reading = info
+                    .studies
+                    .iter()
+                    .find(|row| row.study.starts_with(&title))
+                    .unwrap();
+                assert!(reading.value.is_some(), "{name} must have a reading");
+                let precision = if matches!(change, Change::Precision) {
+                    5
+                } else {
+                    2
+                };
+                assert_eq!(reading.precision, precision, "{name}");
+                let text = reading
+                    .formatted
+                    .as_ref()
+                    .expect("a formatted demo reading");
+                assert_eq!(
+                    text.rsplit_once('.').unwrap().1.len(),
+                    precision,
+                    "{name}: {text}"
+                );
+                if matches!(change, Change::Precision) {
+                    assert_eq!(reading.format, egui_charts::scales::StudyFormat::Price);
+                }
+            }
+        }
+    }
+
+    /// Every corporate anchor chosen through the dialog uses the loaded symbol's demo events.
+    #[test]
+    fn vwap_auto_anchored_starts_at_earnings_in_the_demo() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        use egui_charts::studies::{IndicatorFactory, InputValue};
+        let ctx = egui::Context::default();
+        let now = "2026-11-24T20:55:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.chart.set_feed_paused(true);
+        settle(&mut app, &ctx);
+        let click = |app: &mut DemoApp, target_node| {
+            draw(
+                &ctx,
+                app,
+                vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node,
+                    data: None,
+                })],
+            );
+        };
+        let id = app.chart.add_indicator(
+            IndicatorFactory::new()
+                .create("VWAP Auto Anchored")
+                .unwrap(),
+        );
+        // Latest normal demo events at the fixed clock, in earnings/dividend/split order.
+        for (symbol, timeframe, times) in [
+            (
+                "SAMPLE",
+                Timeframe::Min1,
+                [
+                    "2026-11-24T17:21:00Z",
+                    "2026-11-24T20:01:00Z",
+                    "2026-11-24T20:41:00Z",
+                ],
+            ),
+            (
+                "STOCKA",
+                Timeframe::Day1,
+                [
+                    "2026-10-07T00:00:00Z",
+                    "2025-11-21T00:00:00Z",
+                    "2026-08-28T00:00:00Z",
+                ],
+            ),
+        ] {
+            app.chart.set_symbol(symbol);
+            app.follow_chart_symbol(false);
+            app.switch_timeframe(timeframe);
+            settle(&mut app, &ctx);
+            for ((label, choice), time) in [("Earnings", 11), ("Dividends", 12), ("Splits", 13)]
+                .into_iter()
+                .zip(times)
+            {
+                app.open_indicator_settings(id);
+                for _ in 0..3 {
+                    draw(&ctx, &mut app, vec![]);
+                }
+                let nodes = draw(&ctx, &mut app, vec![]);
+                click(&mut app, control(&nodes, "Anchor Period").0);
+                let nodes = draw(&ctx, &mut app, vec![]);
+                draw(
+                    &ctx,
+                    &mut app,
+                    vec![egui::Event::AccessKitActionRequest(ActionRequest {
+                        action: Action::ScrollIntoView,
+                        target_tree: TreeId::ROOT,
+                        target_node: control(&nodes, label).0,
+                        data: None,
+                    })],
+                );
+                draw(&ctx, &mut app, vec![]);
+                let nodes = draw(&ctx, &mut app, vec![]);
+                click(&mut app, control(&nodes, label).0);
+                let nodes = draw(&ctx, &mut app, vec![]);
+                click(&mut app, control(&nodes, "Apply").0);
+                assert!(!app.indicator_settings.is_open());
+                settle(&mut app, &ctx);
+                let bars = app.chart.bars(SeriesId::MAIN);
+                let time: chrono::DateTime<chrono::Utc> = time.parse().unwrap();
+                let anchor = bars
+                    .binary_search_by_key(&time, |bar| bar.time)
+                    .expect("the known demo corporate event has a loaded bar");
+                assert!(anchor > 0, "{symbol} {label} needs a bar before the event");
+                let study = app.chart.indicator_mut(id).unwrap();
+                assert_eq!(
+                    study
+                        .inputs()
+                        .iter()
+                        .find(|input| input.id == "anchor")
+                        .unwrap()
+                        .value,
+                    InputValue::Choice(choice)
+                );
+                assert!(
+                    study.values().value(0, anchor).is_some(),
+                    "{symbol} {label}"
+                );
+                assert_eq!(
+                    study.values().value(0, anchor - 1),
+                    None,
+                    "{symbol} {label}"
+                );
+            }
+        }
     }
 
     /// The Style tab offers a plot the character its study declares, also for a plot saved as

@@ -401,6 +401,8 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             | "Advance/Decline Ratio (Bars)"
             | "Volume Delta"
             | "Cumulative Volume Delta"
+            | "BBTrend"
+            | "Bull Bear Power"
             | "PVO"
     ) && settings.levels.is_empty()
         && levels.len() == 1
@@ -4758,6 +4760,9 @@ mod tests {
         let restored = crate::studies::StudyTemplate::from_study(older.as_ref());
         let mut inputs = template.inputs.clone();
         inputs.push(("custom_interval".to_owned(), InputValue::Toggle(false)));
+        inputs.push(("aggregation".to_owned(), InputValue::Choice(0)));
+        assert!(older.order_flow_inputs().is_empty());
+        assert_eq!(older.data_requests()[0].timeframe, Some(Timeframe::Min1));
         assert_eq!(restored.inputs, inputs);
         let mut expected = template.settings.clone();
         expected.levels = vec![LevelStyle {
@@ -4995,7 +5000,7 @@ mod tests {
         let (gray, faint) = (palette::MUTED, palette::MUTED.gamma_multiply_u8(128));
         let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 26);
         let (dashed, solid) = (LineStyle::Dashed, LineStyle::Solid);
-        let rows: [Row; 9] = [
+        let rows: [Row; 11] = [
             (
                 "Aroon Oscillator",
                 vec![
@@ -5086,6 +5091,24 @@ mod tests {
             ),
             (
                 "Cumulative Volume Delta",
+                vec![(0.0, palette::GRAY, "Zero", dashed)],
+                false,
+                None,
+                None,
+                Color32::TRANSPARENT,
+                vec![],
+            ),
+            (
+                "BBTrend",
+                vec![(0.0, palette::GRAY, "Zero", dashed)],
+                false,
+                None,
+                None,
+                Color32::TRANSPARENT,
+                vec![],
+            ),
+            (
+                "Bull Bear Power",
                 vec![(0.0, palette::GRAY, "Zero", dashed)],
                 false,
                 None,
@@ -5286,6 +5309,10 @@ mod tests {
         }
         // Literal baseline saves keep their styles, with newly declared guides and fills hidden.
         for text in [
+            // Saved on origin/main 50da7fab2 before the two column studies had a zero guide.
+            r#"{"name":"BBTrend","inputs":[["short_length",{"Length":20}],["long_length",{"Length":50}],["multiplier",{"Number":2.0}],["source",{"Source":{"Price":"Close"}}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.BBTrend.html","plots":[{"color":[6,115,97,191],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[0,7,6,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[{"name":"Easing above zero","color":[4,77,65,128],"width":1.0},{"name":"Falling below zero","color":[181,40,52,191],"width":1.0},{"name":"Easing below zero","color":[121,27,35,128],"width":1.0}]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"Bull Bear Power","inputs":[["period",{"Length":13}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.BullBearPower.html","plots":[{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,10,8,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[{"name":"Below zero","color":[242,54,69,255],"width":1.0}]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"SMI","inputs":[["period",{"Length":10}],["smoothing",{"Length":3}],["signal_period",{"Length":3}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.StochasticMomentumIndex.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[255,152,0,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[60,62,67,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":true,"level_fill_color":[4,10,26,26],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[{"colors":[[38,88,40,128],[0,0,0,0]],"visible":true},{"colors":[[0,0,0,0],[121,27,35,128]],"visible":true}]},"visible":true,"scale":"Independent"}"#,
             // SuperTrend saved on origin/main 9544f5b34 before its background and body middle.
             r#"{"name":"SuperTrend","inputs":[["atr_period",{"Length":10}],["multiplier",{"Number":3.0}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.SuperTrend.html","plots":[{"color":[76,175,80,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"Line","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[5,11,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#,
             r#"{"name":"MFI","inputs":[["period",{"Length":14}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MoneyFlowIndex.html","plots":[{"color":[126,87,194,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":true,"level_fill_color":[13,9,20,26],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
@@ -5298,6 +5325,11 @@ mod tests {
             let older = saved.create().unwrap();
             let mut expected = saved.settings.clone();
             match saved.name.as_str() {
+                "BBTrend" | "Bull Bear Power" => expected.levels.push(hidden(
+                    ConfiguredStudy::new(factory.create(&saved.name).unwrap())
+                        .settings()
+                        .levels[0],
+                )),
                 "MFI" => expected.levels.push(LevelStyle {
                     color: faint,
                     visible: false,

@@ -545,6 +545,10 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
         ("KAMA", "period", "ER length", vec![]),
         ("KAMA", "fast_period", "Fast length", vec![]),
         ("KAMA", "slow_period", "Slow length", vec![]),
+        ("Trend Strength Index", "period", "Length", vec![]),
+        ("PSAR", "initial_af", "Start", vec![]),
+        ("PSAR", "af_step", "Increment", vec![]),
+        ("PSAR", "max_af", "Max Value", vec![]),
         ("RCI", "period", "RCI Length", vec![]),
         (
             "RCI",

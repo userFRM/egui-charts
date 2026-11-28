@@ -34,11 +34,12 @@ pub struct UpDownVolume {
 
 impl UpDownVolume {
     /// One-minute intrabars on a one-minute chart until the chart supplies its interval.
+    /// A new study keeps one minute as its Lower interval for when Use custom timeframe is on.
     /// Hosts answer [`Indicator::data_requests`] through the chart or `update_data`.
     pub fn new() -> Self {
         Self {
             clock: BarClock::new(Timeframe::Min1),
-            lower: lower_interval::Choice::default(),
+            lower: lower_interval::Choice::holding(Timeframe::Min1),
             values: IndicatorValues::new(),
             colors: [
                 palette::GREEN.gamma_multiply_u8(102),

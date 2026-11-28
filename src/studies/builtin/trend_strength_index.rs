@@ -74,7 +74,7 @@ impl Indicator for TrendStrengthIndex {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 2, usize::MAX),
+        period: length("Length", 2, usize::MAX),
         source: choice("Source", PriceSource::all())
     ; {});
 

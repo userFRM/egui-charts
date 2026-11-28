@@ -1789,7 +1789,7 @@ mod tests {
             );
             assert_eq!(defaults.fill_between_levels, oscillator);
             if oscillator {
-                assert_eq!(defaults.precision, Some(2));
+                assert_eq!(defaults.precision, (name != "SMI").then_some(2));
             }
             if !oscillator {
                 assert_eq!(
