@@ -11925,29 +11925,105 @@ mod tests {
 
         // With the replay bar shown its keys step and play, and the chart keeps its own: the jump
         // keys, which hold Alt beside the replay's Shift and arrow, and the list keys below.
+        app.switch_timeframe(Timeframe::Min1);
+        settle(&mut app, &ctx);
+        let bars = (0..40)
+            .map(|i| {
+                let time = chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap();
+                Bar::new(time, 100.0, 101.0, 99.0, 100.5, 1_000.0)
+            })
+            .collect();
+        app.chart.set_data(SeriesId::MAIN, bars);
         app.start_replay();
-        app.handle_replay_control(ReplayControlAction::Pause);
+        app.replay
+            .as_mut()
+            .unwrap()
+            .handle_action(ReplayAction::JumpToBar(5));
+        app.push_replay_window_to_chart();
         settle(&mut app, &ctx);
         let jump = Modifiers::ALT | Modifiers::SHIFT;
-        // The cursor's move, unchecked while the replay plays, and whether it plays afterwards.
-        for (key, modifiers, moved, playing) in [
-            (Key::ArrowRight, Modifiers::NONE, Some(1), false),
-            (Key::ArrowLeft, Modifiers::NONE, Some(-1), false),
-            (Key::ArrowDown, Modifiers::SHIFT, None, true),
-            (Key::ArrowDown, Modifiers::SHIFT, None, false),
-            (Key::ArrowRight, jump, Some(0), false),
-            (Key::ArrowLeft, jump, Some(0), false),
-            (Key::ArrowRight, Modifiers::SHIFT, Some(1), false),
-            (Key::ArrowLeft, Modifiers::SHIFT, Some(-1), false),
+        // Setup action, key, modifiers, cursor and revealed bars (unchecked during playback), play.
+        for (before, key, modifiers, position, playing) in [
+            (
+                ReplayAction::Play,
+                Key::ArrowRight,
+                Modifiers::SHIFT,
+                Some((6, 7)),
+                false,
+            ),
+            (
+                ReplayAction::Play,
+                Key::ArrowLeft,
+                Modifiers::SHIFT,
+                Some((5, 6)),
+                false,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowRight,
+                Modifiers::NONE,
+                Some((6, 7)),
+                false,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowLeft,
+                Modifiers::NONE,
+                Some((5, 6)),
+                false,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowDown,
+                Modifiers::SHIFT,
+                None,
+                true,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowDown,
+                Modifiers::SHIFT,
+                None,
+                false,
+            ),
+            (
+                ReplayAction::JumpToBar(5),
+                Key::ArrowRight,
+                jump,
+                Some((5, 6)),
+                false,
+            ),
+            (
+                ReplayAction::None,
+                Key::ArrowLeft,
+                jump,
+                Some((5, 6)),
+                false,
+            ),
+            (
+                ReplayAction::JumpToStart,
+                Key::ArrowLeft,
+                Modifiers::SHIFT,
+                Some((0, 1)),
+                false,
+            ),
+            (
+                ReplayAction::JumpToEnd,
+                Key::ArrowRight,
+                Modifiers::SHIFT,
+                Some((39, 40)),
+                false,
+            ),
         ] {
-            let before = app.replay.as_ref().unwrap().state.curr_bar;
+            app.replay.as_mut().unwrap().handle_action(before);
+            app.push_replay_window_to_chart();
             press(&mut app, key, modifiers);
             assert_eq!(app.chart.symbol(), "STOCKA");
             let replay = app.replay.as_ref().unwrap();
-            if let Some(moved) = moved {
+            if let Some(position) = position {
                 assert_eq!(
-                    replay.state.curr_bar as isize - before as isize,
-                    moved,
+                    (replay.state.curr_bar, app.chart.bars(SeriesId::MAIN).len()),
+                    position,
                     "{key:?} / {modifiers:?}"
                 );
             }
