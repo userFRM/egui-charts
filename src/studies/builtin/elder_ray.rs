@@ -22,6 +22,8 @@ pub struct ElderRay {
 
 impl ElderRay {
     /// Create with a lookback of `period` bars, clamped to at least 1.
+    ///
+    ///     let _ = egui_charts::studies::ElderRay::new(13);
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),

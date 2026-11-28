@@ -10,6 +10,8 @@ pub struct EMACross {
 
 impl EMACross {
     /// Create two exponential averages with lengths clamped to at least one.
+    ///
+    ///     let _ = egui_charts::studies::EMACross::new(9, 26);
     pub fn new(fast_period: usize, slow_period: usize) -> Self {
         let inner = MACombination::new(vec![
             AverageLine::new(AverageType::Exponential, fast_period, palette::ORANGE),

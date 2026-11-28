@@ -9,6 +9,8 @@ pub struct MixedMACross {
 }
 impl MixedMACross {
     /// Simple and exponential lengths, each at least one.
+    ///
+    ///     let _ = egui_charts::studies::MixedMACross::new(10, 10);
     pub fn new(simple: usize, exponential: usize) -> Self {
         Self {
             inner: MACombination::new(vec![
@@ -39,6 +41,8 @@ pub struct TripleMA {
 }
 impl TripleMA {
     /// Three lengths, each clamped to at least one. Marks no crossings until a pair is chosen.
+    ///
+    ///     let _ = egui_charts::studies::TripleMA::new(14, 21, 35);
     pub fn new(fast: usize, middle: usize, slow: usize) -> Self {
         let colors = [palette::ORANGE, palette::LIGHT_BLUE, palette::CYAN];
         Self {
@@ -99,6 +103,8 @@ pub struct MARibbon {
 impl MARibbon {
     /// Four simple averages of 20, 50, 100 and 200 bars from yellow to red,
     /// each with its own formula, source and length.
+    ///
+    ///     let _ = egui_charts::studies::MARibbon::new();
     pub fn new() -> Self {
         Self {
             inner: MACombination::new(
@@ -124,12 +130,16 @@ impl MARibbon {
     }
     /// Twelve exponential averages of lengths 5 through 60, coloured by their own direction,
     /// the slowest 3 px wide over a fading fill: the ribbon of the MA Exp Ribbon template.
+    ///
+    ///     let _ = egui_charts::studies::MARibbon::exponential();
     pub fn exponential() -> Self {
         Self {
             inner: MACombination::ribbon(),
         }
     }
     /// The twelve-average ribbon in dim magenta without a fill, each line 1 px wide.
+    ///
+    ///     let _ = egui_charts::studies::MARibbon::muted();
     pub fn muted() -> Self {
         Self {
             inner: MACombination::muted_ribbon(),

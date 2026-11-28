@@ -10,6 +10,8 @@ pub struct MACross {
 
 impl MACross {
     /// Create two simple averages with lengths clamped to at least one.
+    ///
+    ///     let _ = egui_charts::studies::MACross::new(9, 21);
     pub fn new(fast_period: usize, slow_period: usize) -> Self {
         let inner = MACombination::new(vec![
             AverageLine::new(AverageType::Simple, fast_period, palette::ORANGE),
