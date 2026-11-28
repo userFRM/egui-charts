@@ -410,7 +410,7 @@ impl StudyTemplate {
         // with, from the bottom of the range the input took then; only edits are bounded.
         // The former input kind and finite-number contract still apply to those saved values.
         use InputValue::{Integer, Length, Number};
-        const NARROWED: [(&str, &str, InputValue); 17] = [
+        const NARROWED: [(&str, &str, InputValue); 18] = [
             ("BB", "std_dev", Number(0.0)),
             ("BBTrend", "multiplier", Number(0.0)),
             ("LinReg Slope", "period", Length(1)),
@@ -428,6 +428,7 @@ impl StudyTemplate {
             ("Advance/Decline", "period", Length(1)),
             ("VWAP", "plot_offset", Integer(i32::MIN)),
             ("VWMA", "plot_offset", Integer(i32::MIN)),
+            ("Volume", "period", Length(1)),
         ];
         let saved = inputs
             .iter()
@@ -986,6 +987,13 @@ impl StudyTemplate {
                 let declared = crate::studies::SuperTrend::default();
                 template.settings.plots.push(declared.plot_style(2));
                 template.settings.fills = hidden_fills(&declared);
+            }
+            // Volume drew three plots before its smoothing line; shown once a type is chosen.
+            "Volume" if self.settings.plots.len() == 3 => {
+                template.settings.plots.push(crate::studies::PlotStyle {
+                    visible: true,
+                    ..crate::studies::Volume::default().plot_style(3)
+                });
             }
             // The unused navy plot colour in older saves still drew rising columns green.
             "Accelerator Oscillator"
@@ -2173,6 +2181,11 @@ mod tests {
         use InputValue::{Choice, Integer, Length, Number, Text, Toggle};
         let rows = [
             (
+                "Volume",
+                vec![("period", Length(5000))],
+                vec![("period", Length(5000))],
+            ),
+            (
                 "Relative Volume at Time",
                 vec![("anchor", Choice(0))],
                 vec![("anchor", InputValue::Timeframe(Some(Timeframe::Day1)))],
@@ -2670,6 +2683,7 @@ mod tests {
             }
             // Keeping a legacy value does not admit new values outside the declared range.
             let refused = match name {
+                "Volume" => Some(("period", Length(2001))),
                 "C2C Vol" => Some(("trading_days", Number(0.5))),
                 "Volatility Stop" => Some(("multiplier", Number(0.125))),
                 "ASI" => Some(("limit_move", Number(0.075))),
@@ -3067,6 +3081,37 @@ mod tests {
     /// with its two trend plots restores one, as the chart showed it.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        // Literal defaults saved on origin/main 834e0d769, before interval anchors and smoothing.
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Volume","inputs":[["period",{"Length":9}],["average",{"Choice":0}],["show_average",{"Toggle":false}],["color_rule",{"Choice":0}],["overlay",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Volume.html","plots":[{"color":[19,83,77,128],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[120,42,40,128],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[33,150,243,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[1,5,5,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(&restored.settings().plots[..3], saved.settings.plots);
+        assert_eq!(restored.settings().plots.len(), 4);
+        assert!(!restored.plot_style(3).visible);
+        for (id, expected) in [
+            ("period", InputValue::Length(9)),
+            ("smoothing", InputValue::Choice(0)),
+        ] {
+            assert_eq!(
+                restored
+                    .inputs()
+                    .iter()
+                    .find(|input| input.id == id)
+                    .map(|input| &input.value),
+                Some(&expected)
+            );
+        }
+        let saved: StudyTemplate = serde_json::from_str(r#"{"name":"Relative Volume at Time","inputs":[["anchor",{"Choice":0}],["length",{"Length":10}],["mode",{"Choice":0}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.RelativeVolumeAtTime.html","plots":[{"color":[23,53,24,77],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[60,62,67,128],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[1,3,2,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap();
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.settings(), saved.settings);
+        assert_eq!(
+            restored
+                .inputs()
+                .iter()
+                .find(|input| input.id == "anchor")
+                .map(|input| &input.value),
+            Some(&InputValue::Timeframe(Some(Timeframe::Day1)))
+        );
+
         // A metric descriptor saved before plot declarations and the Symbol input keeps its look.
         let saved: StudyTemplate = serde_json::from_str(
             r#"{"name":"Open interest","inputs":[],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedStepLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent","metric":{"id":"oi","name":"Open interest","unit":"","format":"Volume"}}"#,

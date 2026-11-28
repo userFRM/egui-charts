@@ -392,6 +392,8 @@ fn catalogue_studies_are_distinct_except_shared_formulas() {
 fn catalogue_studies_open_with_their_usual_lengths() {
     use crate::studies::InputValue::{Choice, Length, Number, Toggle};
     let rows = [
+        ("Volume", "period", Length(20)),
+        ("Volume", "smoothing_length", Length(9)),
         ("SMA", "period", Length(9)),
         ("EMA", "period", Length(9)),
         ("WMA", "period", Length(9)),
@@ -469,6 +471,26 @@ fn catalogue_inputs_take_their_usual_labels_and_ranges() {
         Vec<(InputValue, bool)>,
     );
     let rows: Vec<Row> = vec![
+        (
+            "Volume",
+            "period",
+            "MA length",
+            vec![
+                (Length(1), true),
+                (Length(2000), true),
+                (Length(2001), false),
+            ],
+        ),
+        (
+            "Volume",
+            "smoothing_length",
+            "Smoothing length",
+            vec![
+                (Length(1), true),
+                (Length(10000), true),
+                (Length(10001), false),
+            ],
+        ),
         (
             "BB",
             "std_dev",
@@ -1109,6 +1131,7 @@ fn catalogue_choices_read_in_words_and_restore() {
         ("Vol Profile Auto Anchored", "anchor", 3, "Highest volume"),
         ("BB", "basis", 4, "VWMA"),
         ("Volume", "color_rule", 1, "Previous close"),
+        ("Volume", "average", 2, "Weighted"),
         ("CVD", "mode", 0, "Close position"),
         ("CVD", "mode", 1, "Body ratio"),
         ("ZigZag", "mode", 0, "High/Low"),

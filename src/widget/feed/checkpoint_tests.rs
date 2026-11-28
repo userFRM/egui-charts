@@ -57,6 +57,30 @@ fn trade(id: u64, size: f64) -> Tick {
     .with_id(id)
 }
 
+#[cfg(feature = "studies")]
+#[test]
+fn chart_volume_without_an_average_keeps_checkpoints_at_any_length() {
+    let (mut chart, sink, mut frames) = ready(2048);
+    sink.push_tick(trade(1, 10.0));
+    frames.run(&mut chart);
+    let id = chart
+        .indicators()
+        .find(|(_, study)| study.is_volume())
+        .unwrap()
+        .0;
+    for length in [9, 20] {
+        chart
+            .indicator_mut(id)
+            .unwrap()
+            .set_input("period", crate::studies::InputValue::Length(length))
+            .unwrap();
+        assert!(
+            chart.plan_trade_replay_checkpoint().is_ok(),
+            "length {length}"
+        );
+    }
+}
+
 #[test]
 fn resume_inside_shared_timestamp_volume_split() {
     let (mut reference, source, mut frames) = ready(2048);

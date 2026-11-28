@@ -1,5 +1,6 @@
 //! Volume columns with an optional moving average on an independent scale.
 
+use super::smoothing::{SMOOTHING_COLORS, Smoothed, SmoothingType};
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
@@ -34,6 +35,8 @@ pub enum VolumeAverage {
     Simple,
     /// Alpha 2/(length+1), seeded by the first usable volume.
     Exponential,
+    /// Weights 1 to length over a complete window, the newest volume heaviest.
+    Weighted,
 }
 
 impl VolumeAverage {
@@ -42,13 +45,14 @@ impl VolumeAverage {
         match self {
             Self::Simple => "Simple",
             Self::Exponential => "Exponential",
+            Self::Weighted => "Weighted",
         }
     }
 }
 
 /// Volume columns and a moving average, in the price pane or a separate pane.
 ///
-/// Outputs are up volume, down volume and the average. Exactly one volume
+/// Outputs are up volume, down volume, the average and an optional Smoothed MA. Exactly one volume
 /// column is defined per usable bar. Equal prices count as up under both rules;
 /// a bar with non-finite volume, open or close leaves all outputs missing.
 #[derive(Clone, Debug)]
@@ -58,7 +62,9 @@ pub struct Volume {
     show_average: bool,
     color_rule: VolumeColorRule,
     overlay: bool,
-    colors: [Color32; 3],
+    smoothing: SmoothingType,
+    smoothing_length: usize,
+    colors: [Color32; 4],
     visible: bool,
     values: IndicatorValues,
     stepper: Stepper<State>,
@@ -69,9 +75,10 @@ struct State {
     previous: Option<f64>,
     window: VecDeque<f64>,
     ema: Option<f64>,
+    smoothed: Smoothed,
 }
 
-const DEFAULT_PERIOD: usize = 9;
+const DEFAULT_PERIOD: usize = 20;
 
 impl Default for Volume {
     fn default() -> Self {
@@ -84,7 +91,7 @@ impl Volume {
     #[cfg(feature = "widget")]
     pub(crate) fn default_replay_display(&self) -> bool {
         !self.show_average
-            && self.period == DEFAULT_PERIOD
+            && self.smoothing == SmoothingType::None
             && self.average == VolumeAverage::Simple
             && self.color_rule == VolumeColorRule::Open
     }
@@ -98,10 +105,13 @@ impl Volume {
             show_average: false,
             color_rule: VolumeColorRule::Open,
             overlay: true,
+            smoothing: SmoothingType::None,
+            smoothing_length: 9,
             colors: [
                 palette::HISTOGRAM_TEAL.gamma_multiply_u8(128),
                 Color32::from_rgba_unmultiplied(239, 83, 80, 128),
                 palette::LIGHT_BLUE,
+                SMOOTHING_COLORS[0],
             ],
             visible: true,
             values: IndicatorValues::new(),
@@ -115,7 +125,7 @@ impl Volume {
         self
     }
 
-    /// Choose SMA, EMA, or no moving average.
+    /// Choose SMA, EMA, WMA, or no moving average.
     pub fn with_average(mut self, average: Option<VolumeAverage>) -> Self {
         self.show_average = average.is_some();
         if let Some(average) = average {
@@ -133,18 +143,20 @@ impl Volume {
 
 impl Indicator for Volume {
     crate::studies::inputs::study_inputs!(self;
-        period: length("MA length", 1, usize::MAX),
-        average: choice("MA type", [VolumeAverage::Simple, VolumeAverage::Exponential]),
+        period: length("MA length", 1, 2000),
+        average: choice("MA type", [VolumeAverage::Simple, VolumeAverage::Exponential, VolumeAverage::Weighted]),
         show_average: toggle("Moving average"),
         color_rule: choice("Colour by", [VolumeColorRule::Open, VolumeColorRule::PreviousClose]),
-        overlay: toggle("Overlay price pane")
+        overlay: toggle("Overlay price pane"),
+        smoothing: choice("Smoothing", [SmoothingType::None, SmoothingType::Sma, SmoothingType::Ema, SmoothingType::Wma]),
+        smoothing_length: length("Smoothing length", 1, 10000) if smoothing in [1, 2, 3]
     ; {});
 
     fn name(&self) -> &str {
         "Volume"
     }
     fn desc(&self) -> &str {
-        "Volume with an optional SMA or EMA; unchanged prices count as up"
+        "Volume with optional SMA, EMA, WMA and smoothing; unchanged prices count as up"
     }
     fn calculate(&mut self, data: &[Bar]) {
         self.update(data, 0);
@@ -183,9 +195,30 @@ impl Indicator for Volume {
                         }
                         VolumeAverage::Simple => f64::NAN,
                         VolumeAverage::Exponential => ema,
+                        VolumeAverage::Weighted if state.window.len() == period => {
+                            let n = period as f64;
+                            state
+                                .window
+                                .iter()
+                                .enumerate()
+                                .map(|(i, v)| (i + 1) as f64 * v)
+                                .sum::<f64>()
+                                / (n * (n + 1.0) / 2.0)
+                        }
+                        VolumeAverage::Weighted => f64::NAN,
                     }
                 };
-                let mut outputs = vec![f64::NAN, f64::NAN, mean];
+                let smoothed = match state.smoothed.next(
+                    self.smoothing,
+                    self.smoothing_length,
+                    0.0,
+                    bar.volume,
+                    bar.volume,
+                ) {
+                    IndicatorValue::Multiple(values) => values[1],
+                    _ => f64::NAN,
+                };
+                let mut outputs = vec![f64::NAN, f64::NAN, mean, smoothed];
                 outputs[usize::from(bar.close < reference)] = bar.volume;
                 IndicatorValue::Multiple(outputs)
             });
@@ -214,7 +247,11 @@ impl Indicator for Volume {
             } else {
                 PlotType::Line
             },
-            visible: line < 2 || self.show_average,
+            visible: match line {
+                0 | 1 => true,
+                2 => self.show_average,
+                _ => self.smoothing != SmoothingType::None,
+            },
         }
     }
     fn is_overlay(&self) -> bool {
@@ -241,19 +278,20 @@ impl Indicator for Volume {
                 match self.average {
                     VolumeAverage::Simple => "SMA",
                     VolumeAverage::Exponential => "EMA",
+                    VolumeAverage::Weighted => "WMA",
                 },
                 self.period
             ),
+            "Smoothed MA".into(),
         ]
     }
 
-    // The average holds values only while it is shown.
+    // The optional averages hold values only while they are shown.
     fn alert_outputs(&self) -> Vec<(usize, String)> {
-        let outputs = if self.show_average { 3 } else { 2 };
         self.line_names()
             .into_iter()
-            .take(outputs)
             .enumerate()
+            .filter(|(line, _)| self.plot_style(*line).visible)
             .collect()
     }
 }
@@ -298,6 +336,10 @@ mod tests {
                         Some(230.0 / 9.0),
                         Some(950.0 / 27.0),
                     ],
+                ),
+                (
+                    Some(2),
+                    [None, Some(50.0 / 3.0), Some(80.0 / 3.0), Some(110.0 / 3.0)],
                 ),
                 (None, [None; 4]),
             ] {
@@ -346,12 +388,59 @@ mod tests {
                 study.update(&changed, 3);
                 let mut fresh = study.clone_box();
                 fresh.calculate(&changed);
-                for line in 0..3 {
+                for line in 0..4 {
                     for i in 0..4 {
                         assert_eq!(study.values().value(line, i), fresh.values().value(line, i));
                     }
                 }
             }
+        }
+        // SMA(3) averages the complete three-volume window; WMA(2) weighs the newest twice.
+        // EMA(3) seeds at 20 then adds half the step to 40.
+        for (kind, length, expected) in [
+            (0, 2, [None; 4]),
+            (1, 3, [None, None, Some(20.0), Some(30.0)]),
+            (2, 3, [None, None, Some(20.0), Some(30.0)]),
+            (
+                3,
+                2,
+                [None, Some(50.0 / 3.0), Some(80.0 / 3.0), Some(110.0 / 3.0)],
+            ),
+        ] {
+            let mut study = Volume::new(2);
+            study
+                .set_input("smoothing", crate::studies::InputValue::Choice(kind))
+                .unwrap();
+            study
+                .set_input(
+                    "smoothing_length",
+                    crate::studies::InputValue::Length(length),
+                )
+                .unwrap();
+            study.calculate(&bars[..3]);
+            study.update(&bars, 3);
+            for (at, expected) in expected.into_iter().enumerate() {
+                match expected {
+                    Some(value) => {
+                        assert!((study.plot_value(3, at).unwrap() - value).abs() < 1e-10)
+                    }
+                    None => assert_eq!(study.plot_value(3, at), None),
+                }
+            }
+            assert_eq!(
+                study
+                    .alert_outputs()
+                    .iter()
+                    .map(|(i, _)| *i)
+                    .collect::<Vec<_>>(),
+                if kind == 0 { vec![0, 1] } else { vec![0, 1, 3] }
+            );
+            let mut changed = bars.clone();
+            changed[3].volume = 60.0;
+            study.update(&changed, 3);
+            let mut fresh = study.clone();
+            fresh.calculate(&changed);
+            assert_eq!(study.plot_value(3, 3), fresh.plot_value(3, 3));
         }
         assert!(
             !Volume::default().plot_style(2).visible,
@@ -366,6 +455,17 @@ mod tests {
             study.calculate(&bars);
             assert_eq!(study.plot_style(2).visible, enabled);
             assert_eq!(study.values().value(2, 3), enabled.then_some(35.0));
+        }
+        study
+            .set_input("smoothing_length", crate::studies::InputValue::Length(2))
+            .unwrap();
+        for kind in [0, 1, 0, 1] {
+            study
+                .set_input("smoothing", crate::studies::InputValue::Choice(kind))
+                .unwrap();
+            study.calculate(&bars);
+            assert_eq!(study.plot_style(3).visible, kind != 0);
+            assert_eq!(study.plot_value(3, 3), (kind != 0).then_some(35.0));
         }
         let mut settings = study.settings();
         settings.plots[2].visible = false;
