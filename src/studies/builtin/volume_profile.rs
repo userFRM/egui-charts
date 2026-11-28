@@ -1293,8 +1293,10 @@ impl ProfileStudy {
         fine: &[Bar],
         config: VolumeProfileConfig,
         span: (f64, f64),
+        flat_high: Option<f64>,
     ) -> Option<VolumeProfile> {
-        let mut profile = VolumeProfile::empty(span.0, span.1, config.rows(), config.row_size())?;
+        let mut profile =
+            VolumeProfile::empty(span.0, span.1, flat_high, config.rows(), config.row_size())?;
         for i in range {
             let bar = &self.data[i];
             let end = self
@@ -1424,14 +1426,25 @@ impl ProfileStudy {
                     if state.profile.is_none() && previous_span.is_none() {
                         state.profile = VolumeProfile::from_bars(added, config);
                     } else if state.profile.is_none()
-                        && let Some(mut profile) =
-                            VolumeProfile::empty(span.0, span.1, config.rows(), config.row_size())
+                        && let Some(mut profile) = VolumeProfile::empty(
+                            span.0,
+                            span.1,
+                            state.source.flat_high(),
+                            config.rows(),
+                            config.row_size(),
+                        )
                     {
                         // Grid recovery uses the index; only unrepresentable arithmetic needs source bars.
                         state.profile = if state.source.fill(&mut profile).is_some() {
                             Some(profile)
                         } else {
-                            self.estimated_profile(range.start..i + 1, fine, config, span)
+                            self.estimated_profile(
+                                range.start..i + 1,
+                                fine,
+                                config,
+                                span,
+                                state.source.flat_high(),
+                            )
                         };
                     }
                 }
@@ -1482,6 +1495,7 @@ impl ProfileStudy {
                                 fine,
                                 config,
                                 state.input_span?,
+                                state.source.flat_high(),
                             );
                             opening.clone().map(|mut profile| {
                                 added.iter().for_each(|bar| profile.add(bar));
@@ -3095,17 +3109,9 @@ mod tests {
         study.set_instrument(Some(&Instrument::new("SYNTH").with_tick_size(0.25)));
         study.calculate(&bars);
         for (view, height, expected) in [
-            (
-                0..3,
-                2.5,
-                vec![vec![25.0, 25.0, 25.0, 25.0, 0.0], vec![80.0]],
-            ),
-            (1..3, 0.5, vec![vec![20.0, 20.0, 20.0, 20.0, 0.0]]),
-            (
-                0..3,
-                2.5,
-                vec![vec![25.0, 25.0, 25.0, 25.0, 0.0], vec![80.0]],
-            ),
+            (0..3, 2.5, vec![vec![25.0, 25.0, 25.0, 25.0], vec![80.0]]),
+            (1..3, 0.5, vec![vec![20.0, 20.0, 20.0, 20.0]]),
+            (0..3, 2.5, vec![vec![25.0, 25.0, 25.0, 25.0], vec![80.0]]),
         ] {
             let profiles = study.volume_profiles(view);
             assert_eq!(profiles.len(), expected.len());
@@ -3130,15 +3136,8 @@ mod tests {
         hd.set_instrument(Some(&Instrument::new("SYNTH").with_tick_size(0.25)));
         hd.calculate(&bars);
         for (view, height, expected) in [
-            (
-                0..3,
-                0.5,
-                vec![
-                    [vec![5.0; 20], vec![0.0]].concat(),
-                    vec![20.0, 20.0, 20.0, 20.0, 0.0],
-                ],
-            ),
-            (1..3, 0.25, vec![[vec![10.0; 8], vec![0.0]].concat()]),
+            (0..3, 0.5, vec![vec![5.0; 20], vec![20.0, 20.0, 20.0, 20.0]]),
+            (1..3, 0.25, vec![vec![10.0; 8]]),
         ] {
             let profiles = hd.volume_profiles(view);
             assert_eq!(profiles.len(), expected.len());
@@ -3159,7 +3158,7 @@ mod tests {
         study.update(&live, 3);
         let profiles = study.volume_profiles(1..4);
         assert_eq!(profiles[0].profile.row_height(), 0.5);
-        assert_eq!(profiles[0].profile.volume(), [25.0, 25.0, 25.0, 25.0, 0.0]);
+        assert_eq!(profiles[0].profile.volume(), [25.0, 25.0, 25.0, 25.0]);
         let mut fresh = study.clone_box();
         fresh.calculate(&live);
         assert_eq!(
@@ -3174,7 +3173,7 @@ mod tests {
                 1.25,
                 vec![50.0, 30.0],
             ),
-            (None, 1.0, vec![40.0, 40.0, 0.0]),
+            (None, 1.0, vec![40.0, 40.0]),
         ] {
             study.set_instrument(instrument.as_ref());
             study.calculate(&bars);
@@ -4510,7 +4509,7 @@ mod tests {
                 true,
                 Some(34),
             ),
-            // A high on the row edge opens an empty top row, as an explicit height does.
+            // A high on the row edge ends the top row, as an explicit height does.
             (
                 session(),
                 Some(0.01),
@@ -4519,7 +4518,7 @@ mod tests {
                 Some(0.04),
                 25,
                 true,
-                Some(26),
+                Some(25),
             ),
             (session(), Some(0.01), 0, 0.0, None, 30, false, Some(30)),
             (session(), None, 0, 0.0, None, 30, true, Some(30)),
