@@ -155,7 +155,7 @@ fn restated_studies_match_native_bar_for_bar() {
         for n in [1, 2, 14, 1e12 as usize] {
             for (name, expected) in [
                 ("sma", helpers::sma(&closes, n)),
-                ("ema", helpers::ema(&closes, n)),
+                ("ema", helpers::ema_sma(&closes, n)),
                 ("rma", helpers::rma(&closes, n)),
                 ("wma", helpers::wma(&closes, n)),
                 ("sum", helpers::sum(&closes, n)),

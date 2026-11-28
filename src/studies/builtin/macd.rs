@@ -27,9 +27,11 @@
 //!
 //! # Averages
 //!
-//! Each exponential average starts at its first value. With simple averages the MACD line starts
-//! once both have a full window; a simple signal is the mean of the last `signal_period` MACD
-//! values, and an exponential one starts at the first MACD value.
+//! Each exponential average starts from the simple average of its first values. The MACD line
+//! starts once both averages have a value, on bar `max(fast, slow) - 1`. The signal, simple or
+//! exponential, averages only MACD values, so it and the histogram start `signal - 1` bars later
+//! (bar 33 with 12, 26 and 9). A bar with a non-finite close has no value and is skipped by the
+//! averages.
 //!
 //! # Default colours
 //!
@@ -72,21 +74,9 @@ pub struct MACD {
     /// Formula of the signal line.
     signal_average: OscillatorAverage,
     values: IndicatorValues,
-    stepper: Stepper<State>,
+    stepper: Stepper<[Mean; 3]>,
     colors: Vec<Color32>,
     visible: bool,
-}
-
-#[derive(Clone, Debug, Default)]
-struct State {
-    usable: usize,
-    /// Bars with a MACD value.
-    defined: usize,
-    fast: f64,
-    slow: f64,
-    signal: f64,
-    /// The fast, slow and signal simple averages.
-    means: [Mean; 3],
 }
 
 impl MACD {
@@ -190,62 +180,21 @@ impl Indicator for MACD {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let threshold = self.slow_period.max(self.signal_period);
-        // Crossing the whole-series threshold reveals values on earlier bars too.
-        let from = if self.stepper.state().usable < threshold {
-            0
-        } else {
-            from
-        };
-        let fast_mult = 2.0 / (self.fast_period as f64 + 1.0);
-        let slow_mult = 2.0 / (self.slow_period as f64 + 1.0);
-        let signal_mult = 2.0 / (self.signal_period as f64 + 1.0);
         self.stepper
-            .run(data, from, &mut self.values, |state, bar| {
+            .run(data, from, &mut self.values, |means, bar| {
                 if !bar.close.is_finite() {
                     return IndicatorValue::None;
                 }
-                let (fast, slow) = match self.oscillator_average {
-                    OscillatorAverage::Exponential => {
-                        if state.usable == 0 {
-                            state.fast = bar.close;
-                            state.slow = bar.close;
-                        } else {
-                            state.fast = (bar.close - state.fast) * fast_mult + state.fast;
-                            state.slow = (bar.close - state.slow) * slow_mult + state.slow;
-                        }
-                        (state.fast, state.slow)
-                    }
-                    OscillatorAverage::Simple => (
-                        state.means[0].next(OscillatorAverage::Simple, bar.close, self.fast_period),
-                        state.means[1].next(OscillatorAverage::Simple, bar.close, self.slow_period),
-                    ),
-                };
-                state.usable += 1;
-                let macd = fast - slow;
-                // A simple average still filling its window.
+                let average = self.oscillator_average;
+                let macd = means[0].next(average, bar.close, self.fast_period)
+                    - means[1].next(average, bar.close, self.slow_period);
+                // Either average still filling its window.
                 if !macd.is_finite() {
                     return IndicatorValue::None;
                 }
-                let signal = match self.signal_average {
-                    OscillatorAverage::Exponential => {
-                        state.signal = if state.defined == 0 {
-                            macd
-                        } else {
-                            (macd - state.signal) * signal_mult + state.signal
-                        };
-                        state.signal
-                    }
-                    OscillatorAverage::Simple => {
-                        state.means[2].next(OscillatorAverage::Simple, macd, self.signal_period)
-                    }
-                };
-                state.defined += 1;
+                let signal = means[2].next(self.signal_average, macd, self.signal_period);
                 IndicatorValue::Multiple(vec![macd, signal, macd - signal])
             });
-        if self.stepper.state().usable < threshold {
-            self.values.fill(IndicatorValue::None);
-        }
     }
 
     fn is_incremental(&self) -> bool {
