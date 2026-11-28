@@ -332,6 +332,14 @@ impl StudyTemplate {
             .into_iter()
             .chain(template.inputs.iter().cloned())
             .collect();
+        // Templates carry saved plot styles, even when a host supplies only some inputs.
+        // Pane identities have no saved styles and infer the count from their complete inputs.
+        if study.name() == "Multi MA"
+            && !self.inputs.iter().any(|(id, _)| id == "average_count")
+            && let Some((_, count)) = inputs.iter_mut().find(|(id, _)| id == "average_count")
+        {
+            *count = InputValue::Length(self.settings.plots.len());
+        }
         // Resetting the inputs restores what a study created under the host's defaults starts
         // with. An input the template leaves out, such as one added after it was saved, keeps its
         // constructor's value and declared default, which a drawing stored with the study matches
@@ -1153,6 +1161,22 @@ impl StudyTemplate {
                 {
                     template.settings.help_url = declared.help_url;
                 }
+            }
+            // A legacy pane identity lists each average but has no saved plot styles. The
+            // candidate study's styles must not determine how many averages the record held.
+            "Multi MA" if declares("average_count") && !has("average_count") => {
+                template.inputs.insert(
+                    0,
+                    (
+                        "average_count".to_owned(),
+                        InputValue::Length(
+                            self.inputs
+                                .iter()
+                                .filter(|(id, _)| id.starts_with("period_"))
+                                .count(),
+                        ),
+                    ),
+                );
             }
             // A Parabolic SAR drew its uptrend and downtrend bars as two plots, Up Trend and Down
             // Trend, before it drew one. The plot carries over the one that was shown, or both

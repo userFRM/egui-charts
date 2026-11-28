@@ -2169,13 +2169,13 @@ mod tests {
             ("Moving Average Multiple", &["Multi MA"], &[]),
             (
                 "Double Moving Average",
-                &["MA Cross", "EMA Cross", "SMA/EMA Cross"],
-                &["DEMA"],
+                &["Double MA"],
+                &["DEMA", "MA Cross", "EMA Cross", "SMA/EMA Cross"],
             ),
             (
                 "Moving Average Double",
+                &["Double MA"],
                 &["MA Cross", "EMA Cross", "SMA/EMA Cross"],
-                &[],
             ),
             (
                 "MA with EMA Cross",
@@ -2347,7 +2347,7 @@ mod tests {
 
     /// Each study is added with the parameters the factory creates it with until the user
     /// changes them. Price Volume Trend and the Rank Correlation Index are listed under those
-    /// titles with their own readouts.
+    /// titles with their own readouts, and Double MA and Multi MA with their averages.
     #[test]
     fn each_study_is_added_with_its_own_defaults() {
         use crate::model::Bar;
@@ -2393,6 +2393,14 @@ mod tests {
         assert!(differ.is_empty(), "added with other parameters: {differ:?}");
         for (id, title, lines) in [
             ("PVT", "Price Volume Trend", vec!["PVT"]),
+            ("Double MA", "Double MA", vec!["SMA(14)", "SMA(21)"]),
+            (
+                "Multi MA",
+                "Multiple Moving Averages",
+                vec![
+                    "SMA(14)", "SMA(21)", "SMA(35)", "SMA(50)", "SMA(100)", "SMA(200)",
+                ],
+            ),
             (
                 "RCI",
                 "Rank Correlation Index",
