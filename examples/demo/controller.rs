@@ -1128,6 +1128,10 @@ impl DemoApp {
                     .error(format!("Could not restore detectors: {error}")),
             }
         }
+        app.trading.display = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "trading_display"))
+            .unwrap_or_default();
         app.trading.presets = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "order_presets"))
@@ -2030,6 +2034,7 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "alert_list_options", self.alerts.options());
         // The live account: a replay session trades an account of its own, which is not kept.
         eframe::set_value(storage, "paper_account", &self.paper.save());
+        eframe::set_value(storage, "trading_display", &self.trading.display);
         eframe::set_value(storage, "order_presets", &self.trading.presets);
         eframe::set_value(storage, "paper_connected", &self.trading.has_broker());
         eframe::set_value(storage, "account_panel_height", &self.account_panel_height);
@@ -15806,16 +15811,19 @@ mod tests {
             1.0,
             OrderType::Market,
         ));
-        let mut h = Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(egui::vec2(1440.0, 900.0))
-            .with_context_setup(egui_extras::install_image_loaders)
-            .build_ui_state(
-                |ui, app: &mut Box<DemoApp>| {
-                    eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
-                },
-                app,
-            );
+        let harness = |app| {
+            Harness::builder()
+                .with_accessibility_check(false)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, app: &mut Box<DemoApp>| {
+                        eframe::App::ui(&mut **app, ui, &mut eframe::Frame::_new_kittest());
+                    },
+                    app,
+                )
+        };
+        let mut h = harness(app);
         h.run_steps(3);
         let docked = h.state().chart.get_chart_mapping().rect.right();
         h.get_by_label("Undock ticket").click();
@@ -15831,11 +15839,61 @@ mod tests {
                         .is_some_and(|label| label.ends_with(&format!(" {symbol} MKT")))
                 })
         );
-        h.get_by_label("Dock ticket").click();
-        h.run_steps(3);
-        let display = serde_json::to_value(h.state().trading.display.clone()).unwrap();
-        assert_eq!(display["undocked_ticket"], false);
-        assert!((h.state().chart.get_chart_mapping().rect.right() - docked).abs() < 1.0);
+        h.state_mut().trading.display.bid_ask_labels = true;
+        for undocked in [true, false] {
+            if !undocked {
+                h.get_by_label("Dock ticket").click();
+                h.run_steps(3);
+                assert!(!h.state().trading.display.undocked_ticket);
+                assert!((h.state().chart.get_chart_mapping().rect.right() - docked).abs() < 1.0);
+            }
+            let expected = h.state().trading.display.clone();
+            let mut storage = AppStorage::default();
+            eframe::App::save(&mut **h.state_mut(), &mut storage);
+            let fresh = egui::Context::default();
+            let mut cc = eframe::CreationContext::_new_kittest(fresh.clone());
+            cc.storage = Some(&storage);
+            let mut restored = DemoApp::new_at(&cc, "2026-11-12T15:00:00Z".parse().unwrap(), true);
+            assert_eq!(
+                restored.trading.display.undocked_ticket, undocked,
+                "saved ticket presentation must survive restart"
+            );
+            assert_eq!(restored.trading.display, expected);
+            assert_eq!(restored.chart_settings_state().trading, expected);
+            restored.trading.open_ticket(OrderRequest::new(
+                &symbol,
+                OrderSide::Buy,
+                1.0,
+                OrderType::Market,
+            ));
+            settle(&mut restored, &fresh);
+            let mut restarted = harness(restored);
+            restarted.run_steps(3);
+            restarted.get_by_label(if undocked {
+                "Dock ticket"
+            } else {
+                "Undock ticket"
+            });
+            let right = restarted.state().chart.get_chart_mapping().rect.right();
+            if undocked {
+                assert!(right >= docked + 300.0);
+            } else {
+                assert!((right - docked).abs() < 1.0);
+            }
+        }
+
+        let older = AppStorage(std::collections::HashMap::from([
+            ("theme_choice".into(), "\"dark\"".into()),
+            ("paper_connected".into(), "true".into()),
+            ("account_panel_height".into(), "470.0".into()),
+        ]));
+        let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+        cc.storage = Some(&older);
+        let restored = DemoApp::new_at(&cc, "2026-11-12T15:00:00Z".parse().unwrap(), true);
+        assert!(!restored.trading.display.undocked_ticket);
+        assert_eq!(restored.theme_choice.as_deref(), Some("dark"));
+        assert!(restored.trading.has_broker());
+        assert_eq!(restored.account_panel_height, 470.0);
     }
 
     /// The paper account attaches exits to open positions, so a position line shows its TP and
