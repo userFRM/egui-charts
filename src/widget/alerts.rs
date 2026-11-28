@@ -121,6 +121,10 @@ impl Chart {
                         .collect(),
                 })
                 .collect(),
+            footprint: Some(crate::model::FootprintAlertRule::from_chart(
+                &self.chart_type_params,
+                self.footprint_row_ticks(),
+            )),
         }
     }
 
