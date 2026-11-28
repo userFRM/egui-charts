@@ -92,26 +92,46 @@ impl Chart {
         self.indicator_source_request.take()
     }
 
-    /// The bar the status line, tooltip and data window describe at a rendered index, with the
-    /// close of the bar with a value before it: the drawn candle on a Heikin Ashi chart, whose
-    /// change is measured between averaged closes, else the rendered bar.
-    pub(crate) fn readout_bar_at(&self, index: usize) -> Option<(crate::model::Bar, Option<f64>)> {
-        let readout = |bars: &[crate::model::Bar]| {
-            let bar = bars.get(index)?.clone();
-            Some((
-                bar,
-                crate::model::last_with_value(&bars[..index]).map(|bar| bar.close),
-            ))
-        };
+    /// Calls `read` with the bars the readouts describe: the drawn candles on a Heikin Ashi
+    /// chart, else the rendered bars.
+    fn with_readout_bars<R>(&self, read: impl FnOnce(&[crate::model::Bar]) -> R) -> R {
         if self.chart_type == crate::model::ChartType::Heikin && !self.state.data().is_empty() {
-            readout(
+            read(
                 &self
                     .heikin_ashi
                     .bars(&self.state.data().bars, self.state.revision()),
             )
         } else {
-            readout(self.state.shown())
+            read(self.state.shown())
         }
+    }
+
+    /// The bar the status line, tooltip and data window describe at a rendered index, with the
+    /// close of the bar with a value before it: the drawn candle on a Heikin Ashi chart, whose
+    /// change is measured between averaged closes, else the rendered bar.
+    pub(crate) fn readout_bar_at(&self, index: usize) -> Option<(crate::model::Bar, Option<f64>)> {
+        self.with_readout_bars(|bars| {
+            let bar = bars.get(index)?.clone();
+            Some((
+                bar,
+                crate::model::last_with_value(&bars[..index]).map(|bar| bar.close),
+            ))
+        })
+    }
+
+    /// The close of the last bar with a value before the trading date of the readout bar at
+    /// `index`, among the bars [`readout_bar_at`](Self::readout_bar_at) reads, or `None` when
+    /// that bar is missing or in the first session shown.
+    pub(crate) fn readout_session_close(
+        &self,
+        index: usize,
+        session: &crate::model::ExchangeSessionProvider,
+    ) -> Option<f64> {
+        self.with_readout_bars(|bars| {
+            let date = session.trading_date(bars.get(index)?.time);
+            let end = bars[..index].partition_point(|bar| session.trading_date(bar.time) < date);
+            crate::model::last_with_value(&bars[..end]).map(|bar| bar.close)
+        })
     }
 
     /// Whether `row` of the study `id` is a column of a volume study, whose value the data

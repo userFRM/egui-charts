@@ -12666,6 +12666,67 @@ mod tests {
         assert!(!config.shade_overnight && config.shade_postmarket);
     }
 
+    /// The Status line switches are reachable and Ok applies their choices to the demo chart.
+    #[test]
+    fn chart_settings_status_line_switches_reach_the_demo_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-18T15:30:00Z".parse().unwrap(),
+            true,
+        );
+        app.open_chart_settings_dialog();
+        let size = egui::vec2(1440.0, 900.0);
+        let click = |app: &mut DemoApp, text: &str, scroll: bool| {
+            let show = |app: &mut DemoApp, events| {
+                ui_frame(&ctx, size, events, |ui| app.show_dialogs(ui.ctx()))
+            };
+            for _ in 0..20 {
+                for _ in 0..5 {
+                    show(app, vec![]);
+                }
+                if let Some((_, rect)) = show(app, vec![]).into_iter().find(|(label, rect)| {
+                    label == text && (180.0..720.0).contains(&rect.center().y)
+                }) {
+                    ui_click(&ctx, size, rect.center(), |ui| app.show_dialogs(ui.ctx()));
+                    return;
+                }
+                assert!(scroll, "missing {text}");
+                show(
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(900.0, 450.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            source: egui::MouseWheelSource::Wheel,
+                            phase: egui::TouchPhase::Move,
+                            delta: egui::vec2(0.0, -100.0),
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            panic!("missing {text}");
+        };
+        click(&mut app, "Status line", false);
+        click(&mut app, "Volume", true);
+        click(&mut app, "Compact values on narrow charts", false);
+        click(&mut app, "Background", true);
+        let texts = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
+        let ok = texts
+            .iter()
+            .find(|(text, _)| text == "Ok")
+            .unwrap()
+            .1
+            .center();
+        ui_click(&ctx, size, ok, |ui| app.show_dialogs(ui.ctx()));
+        let config = app.chart.config();
+        assert!(config.show_legend_volume);
+        assert!(!config.compact_legend);
+        assert!(!config.show_indicator_backdrop);
+        assert_eq!(config.indicator_backdrop_opacity, 0.6);
+    }
+
     /// The demo exposes the Columns close switch and Range's independent colours and Thin bars.
     #[test]
     fn chart_settings_columns_and_range_rows_reach_the_demo_chart() {

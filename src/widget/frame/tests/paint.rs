@@ -888,6 +888,170 @@ fn status_line_background_switch_hides_row_backdrops_and_keeps_opacity() {
     assert!(backed(&painted, "SMA") && backed(&painted, "RSI"));
 }
 
+/// Narrow charts read the close against its previous trading session, with OHLC available.
+#[test]
+fn compact_legend_shows_the_close_and_day_change_unless_turned_off() {
+    use crate::model::{Bar, BarData, Instrument, Timeframe, TimezoneId};
+    use crate::widget::Chart;
+    let bars = [
+        ("2026-01-05T10:00:00Z", [100.0, 101.0, 99.0, 100.5]),
+        ("2026-01-05T11:00:00Z", [100.5, 101.5, 100.0, 101.0]),
+        ("2026-01-05T12:00:00Z", [101.0, 101.0, 99.5, 100.0]),
+        ("2026-01-06T10:00:00Z", [100.0, 102.0, 100.0, 102.0]),
+        ("2026-01-06T11:00:00Z", [102.0, 102.5, 101.5, 102.5]),
+        ("2026-01-06T12:00:00Z", [102.5, 103.5, 102.0, 103.0]),
+    ]
+    .into_iter()
+    .map(|(time, [open, high, low, close])| {
+        Bar::new(time.parse().unwrap(), open, high, low, close, 1.0)
+    })
+    .collect();
+    let mut chart = Chart::new(BarData::from_bars(bars));
+    chart.set_timeframe(Timeframe::Hour1);
+    chart.config_mut().show_volume = false;
+    chart.set_instrument(Some(
+        Instrument::new("ABC").with_time_zone(TimezoneId::named("UTC").unwrap()),
+    ));
+    let ctx = egui::Context::default();
+    let read = |chart: &mut Chart, width: f32| {
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 400.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
+                },
+            );
+            fn read_text(shape: &Shape, right: f32, texts: &mut Vec<String>) {
+                match shape {
+                    Shape::Vec(shapes) => shapes
+                        .iter()
+                        .for_each(|shape| read_text(shape, right, texts)),
+                    Shape::Text(text) if text.pos.x < right => {
+                        texts.push(text.galley.text().to_owned())
+                    }
+                    _ => {}
+                }
+            }
+            texts.clear();
+            for shape in &output.shapes {
+                read_text(
+                    &shape.shape,
+                    chart.last_rendered_price_rect.right(),
+                    &mut texts,
+                );
+            }
+            output.drop_without_applying_deltas();
+        }
+        texts
+    };
+    // Prior session closes at 100: 103 - 100 = 3, or 3%. The prior bar closes at 102.5.
+    let texts = read(&mut chart, 450.0);
+    for text in ["C 103.00", "+3.00 (+3.00%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    for text in ["O 102.50", "+0.50 (+0.49%)"] {
+        assert!(
+            !texts.iter().any(|shown| shown == text),
+            "{text}: {texts:?}"
+        );
+    }
+    // A historical readout uses that bar's session, rather than the last bar's close.
+    let selected = chart.bars(crate::widget::SeriesId::MAIN)[4].time;
+    chart.set_crosshair_position(Some((selected, 102.5)));
+    let texts = read(&mut chart, 450.0);
+    for text in ["C 102.50", "+2.50 (+2.50%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    chart.set_crosshair_position(None);
+    // Averaged closes are (101 + 101 + 99.5 + 100)/4 = 100.375 and
+    // (102.5 + 103.5 + 102 + 103)/4 = 102.75: +2.375, or +2.366625...%.
+    chart.set_chart_type(crate::model::ChartType::Heikin);
+    let texts = read(&mut chart, 450.0);
+    for text in ["C 102.75", "+2.38 (+2.37%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    chart.set_chart_type(crate::model::ChartType::Candles);
+    let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+    assert!(settings.status_line.compact_legend);
+    settings.status_line.compact_legend = false;
+    settings.apply_to_chart(&mut chart).unwrap();
+    assert_eq!(
+        crate::widget::settings::ChartSettingsState::from_chart(&chart).status_line,
+        settings.status_line
+    );
+    let texts = read(&mut chart, 450.0);
+    for text in [
+        "O 102.50",
+        "H 103.50",
+        "L 102.00",
+        "C 103.00",
+        "+0.50 (+0.49%)",
+    ] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    assert!(!texts.iter().any(|shown| shown == "+3.00 (+3.00%)"));
+    // Wide charts keep the bar change and the separately requested day change.
+    chart.config_mut().compact_legend = true;
+    chart.config_mut().show_last_day_change = true;
+    let texts = read(&mut chart, 800.0);
+    for text in ["O 102.50", "+0.50 (+0.49%)", "+3.00 (+3.00%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    let texts = read(&mut chart, 450.0);
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|shown| *shown == "+3.00 (+3.00%)")
+            .count(),
+        1
+    );
+    // With both ordinary change fields off, Last day change still shows once.
+    chart.config_mut().show_ohlc_change = false;
+    chart.config_mut().show_ohlc_change_percent = false;
+    let texts = read(&mut chart, 450.0);
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|shown| *shown == "+3.00 (+3.00%)")
+            .count(),
+        1
+    );
+
+    // On a wide daily chart the two requested changes may coincide; both remain visible.
+    let bars = chart.bars(crate::widget::SeriesId::MAIN);
+    let daily = vec![bars[2].clone(), bars[5].clone()];
+    chart.set_data(crate::widget::SeriesId::MAIN, daily);
+    chart.set_timeframe(Timeframe::Day1);
+    chart.config_mut().show_ohlc_change = true;
+    chart.config_mut().show_ohlc_change_percent = true;
+    let texts = read(&mut chart, 800.0);
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|shown| *shown == "+3.00 (+3.00%)")
+            .count(),
+        2
+    );
+    let mut saved = serde_json::to_value(crate::widget::settings::ChartSettingsState::from_chart(
+        &chart,
+    ))
+    .unwrap();
+    saved["status_line"]
+        .as_object_mut()
+        .unwrap()
+        .remove("compact_legend");
+    assert!(
+        serde_json::from_value::<crate::widget::settings::ChartSettingsState>(saved)
+            .unwrap()
+            .status_line
+            .compact_legend
+    );
+}
+
 #[cfg(feature = "studies")]
 #[test]
 fn status_visibility_reaches_the_chart_legend() {

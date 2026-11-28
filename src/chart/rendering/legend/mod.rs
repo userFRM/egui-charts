@@ -164,7 +164,7 @@ pub struct Legend<'a> {
     pub(crate) show_settings: bool,
     /// Prefer the host description over the ticker.
     pub title_as_description: bool,
-    /// Display OHLC fields, or the close alone in a compact plot.
+    /// Display OHLC fields, or the close alone in a compact legend.
     pub show_ohlc: bool,
     /// Display absolute bar change.
     pub show_change: bool,
@@ -179,6 +179,12 @@ pub struct Legend<'a> {
     /// The previous session's close and the last price, shown after the bar change as the
     /// change between them.
     pub day_change: Option<(f64, f64)>,
+    /// Below 600 points, show the close alone and measure the change from `session_close`.
+    /// The chart sets it from `ChartConfig::compact_legend`; on in a standalone legend.
+    pub(crate) compact: bool,
+    /// Close of the last bar with a value before `bar`'s trading date, which a compact legend
+    /// measures its change from; without it, the change is from `previous_close`. The chart sets it.
+    pub(crate) session_close: Option<f64>,
     /// Opacity from 0 to 1 of the chart background behind the volume and study rows.
     /// Text and controls retain opaque backing so profiles cannot interfere with them.
     pub study_backdrop: f32,
@@ -263,6 +269,8 @@ impl<'a> Legend<'a> {
             show_indicator_inputs: true,
             show_indicator_values: true,
             day_change: None,
+            compact: true,
+            session_close: None,
             study_backdrop: 0.6,
             quantity: None,
             presets: None,
@@ -452,8 +460,9 @@ impl<'a> Legend<'a> {
             }
         }
         let precision = self.price_precision(self.bar.close);
+        let compact = self.compact && plot.width() < 600.0;
         if self.show_ohlc {
-            if plot.width() < 600.0 {
+            if compact {
                 layout.field(
                     &format!("{} ", l10n::text(ui.ctx(), "C")),
                     self.formatters.price.map_or_else(
@@ -485,8 +494,12 @@ impl<'a> Legend<'a> {
                 value,
             )
         };
+        let reference = compact
+            .then_some(self.session_close)
+            .flatten()
+            .or(self.previous_close)
+            .unwrap_or(self.bar.open);
         if self.show_change || self.show_change_percent {
-            let reference = self.previous_close.unwrap_or(self.bar.open);
             let (change, absolute, percent) = change_text(reference, self.bar.close);
             let text = match (self.show_change, self.show_change_percent) {
                 (true, true) => format!("{absolute} ({percent})"),
@@ -500,7 +513,9 @@ impl<'a> Legend<'a> {
                 bounds.width(),
             );
         }
-        if let Some((reference, last)) = self.day_change {
+        let shown = (compact && (self.show_change || self.show_change_percent))
+            .then_some((reference, self.bar.close));
+        if let Some((reference, last)) = self.day_change.filter(|pair| Some(*pair) != shown) {
             let (change, absolute, percent) = change_text(reference, last);
             layout.text(
                 format!("{absolute} ({percent})"),

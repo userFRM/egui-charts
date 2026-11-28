@@ -536,6 +536,12 @@ impl SettingsDialog {
                 );
                 styled_checkbox(
                     ui,
+                    &mut self.settings.status_line.compact_legend,
+                    "Compact values on narrow charts",
+                    theme.ui.text,
+                );
+                styled_checkbox(
+                    ui,
                     &mut self.settings.status_line.show_change,
                     "Bar change values",
                     theme.ui.text,
