@@ -749,6 +749,18 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
             inputs: vec![("ema_seed", Choice(1))],
             expected: vec![(2, Buy, 12.), (43, Sell, 46.)],
         },
+        Case {
+            name: "Technical Ratings",
+            prices: points(&[10., 11., 12., 13., 14., 15., 16., 17.]),
+            inputs: vec![("ema_seed", Choice(1))],
+            expected: vec![(2, Buy, 12.)],
+        },
+        Case {
+            name: "Technical Ratings",
+            prices: points(&[10., 11., 12., 13., 14., 15., 16., 17.]),
+            inputs: vec![("ema_seed", Choice(1)), ("rules", Choice(1))],
+            expected: vec![(2, Buy, 12.)],
+        },
         // Momentum(1) = missing,-1,1,2,-1,-3,2,0. Its change agrees at 2,3,4,5,6.
         Case {
             name: "Momentum",

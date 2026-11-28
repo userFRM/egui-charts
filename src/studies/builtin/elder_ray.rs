@@ -12,6 +12,7 @@ use egui::Color32;
 pub struct ElderRay {
     /// EMA period (typically 13)
     period: usize,
+    first_seed: bool,
     values: IndicatorValues,
     stepper: Stepper<Smoothing>,
     /// Colors: [Bull Power (green), Bear Power (red)]
@@ -24,6 +25,7 @@ impl ElderRay {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            first_seed: false,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             colors: vec![
@@ -32,6 +34,11 @@ impl ElderRay {
             ],
             visible: true,
         }
+    }
+
+    pub(crate) fn seeded_from_first(mut self, first: bool) -> Self {
+        self.first_seed = first;
+        self
     }
 
     /// Set plot colors in the order returned by [`Indicator::line_names`].
@@ -89,7 +96,11 @@ impl Indicator for ElderRay {
                 if ![bar.high, bar.low, bar.close].iter().all(|x| x.is_finite()) {
                     return IndicatorValue::None;
                 }
-                let ema = state.next(bar.close, self.period, 2.0 / (self.period as f64 + 1.0));
+                let ema = state.next(
+                    bar.close,
+                    if self.first_seed { 1 } else { self.period },
+                    2.0 / (self.period as f64 + 1.0),
+                );
                 if ema.is_nan() {
                     IndicatorValue::None
                 } else {

@@ -53,6 +53,7 @@ use egui::Color32;
 #[derive(Clone, Debug)]
 pub struct EMA {
     period: usize,
+    first_seed: bool,
     values: IndicatorValues,
     /// The exponential average of the finite closes stepped so far.
     stepper: Stepper<(Smoothing, Smoothed)>,
@@ -77,6 +78,7 @@ impl EMA {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            first_seed: false,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: palette::BLUE, // Blue
@@ -86,6 +88,11 @@ impl EMA {
             smoothing_colors: SMOOTHING_COLORS,
             visible: true,
         }
+    }
+
+    pub(crate) fn seeded_from_first(mut self, first: bool) -> Self {
+        self.first_seed = first;
+        self
     }
 
     /// Set a custom line colour (builder pattern).
@@ -140,7 +147,7 @@ impl Indicator for EMA {
         let alpha = 2.0 / (period as f64 + 1.0);
         self.stepper
             .run(data, from, &mut self.values, |(ema, smoothed), bar| {
-                let value = ema.next(bar.close, period, alpha);
+                let value = ema.next(bar.close, if self.first_seed { 1 } else { period }, alpha);
                 if !value.is_finite() {
                     return IndicatorValue::None;
                 }
