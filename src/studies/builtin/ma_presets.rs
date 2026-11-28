@@ -67,7 +67,7 @@ pub struct DoubleMA {
     inner: MACombination,
 }
 impl DoubleMA {
-    /// Two simple averages of the given lengths, each at least one.
+    ///     let _ = egui_charts::studies::DoubleMA::new(14, 21);
     pub fn new(first: usize, second: usize) -> Self {
         Self {
             inner: MACombination::new(vec![
