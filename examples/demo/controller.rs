@@ -518,6 +518,8 @@ pub struct DemoApp {
     replay: Option<ReplayController>,
     replay_updated: Option<chrono::DateTime<chrono::Utc>>,
     replay_applied: Option<chrono::DateTime<chrono::Utc>>,
+    /// A shared cursor the active chart has no bar at, and the source bar the replay sits on.
+    replay_cursor: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
     replay_start: ReplayStartPicker,
     replay_selecting: bool,
     replay_interval: Timeframe,
@@ -971,6 +973,7 @@ impl DemoApp {
             replay: None,
             replay_updated: None,
             replay_applied: None,
+            replay_cursor: None,
             replay_start: ReplayStartPicker::default(),
             replay_selecting: false,
             replay_interval: Timeframe::Hour1,
