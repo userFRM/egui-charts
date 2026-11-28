@@ -2,8 +2,8 @@
 
 use super::{DemoApp, live::LiveFeed};
 use chrono::{DateTime, Utc};
-use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent};
-use egui_charts::model::{Bar, BarClock, Timeframe, TimezoneId};
+use egui_charts::data::{MarketEvent, OrderEvent, RecordingWriter, ReplayDriver, ReplayEvent};
+use egui_charts::model::{Bar, BarClock, Tick, Timeframe, TimezoneId};
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::replay::{
     ReplayAction, ReplayChart, ReplayController, ReplayScope, ReplayStartAction,
@@ -273,14 +273,7 @@ impl RecordingImport {
             return Err("Recording time is outside the playback range".into());
         }
         let instrument = self.instrument.instrument();
-        let trades: Vec<_> = self
-            .events
-            .iter()
-            .filter_map(|e| match &e.event {
-                MarketEvent::Trade(trade) => Some(trade.clone()),
-                _ => None,
-            })
-            .collect();
+        let trades: Vec<_> = self.events.iter().filter_map(execution).cloned().collect();
         if trades.is_empty() {
             return Err("Recording has no executions to replay".into());
         }
@@ -301,14 +294,26 @@ impl RecordingImport {
     }
 }
 
+/// The execution `event` carries, as the replay driver counts executions: a trade, or the trade
+/// of an order fill. Cursor positions are one-trade bars of these, so they stay on its stamps.
+fn execution(event: &ReplayEvent) -> Option<&Tick> {
+    match &event.event {
+        MarketEvent::Trade(trade)
+        | MarketEvent::Order {
+            event: OrderEvent::Execute {
+                trade: Some(trade), ..
+            },
+            ..
+        } => Some(trade),
+        _ => None,
+    }
+}
+
 fn recording_bytes(
     instrument: &egui_charts::model::Instrument,
     events: &[ReplayEvent],
 ) -> Result<Vec<u8>, String> {
-    if !events
-        .iter()
-        .any(|event| matches!(event.event, MarketEvent::Trade(_)))
-    {
+    if !events.iter().any(|event| execution(event).is_some()) {
         return Err("No captured executions yet; wait for the feed to load".into());
     }
     let metadata = RecordingInstrument {
@@ -1274,13 +1279,7 @@ impl DemoApp {
     fn recorded_trades(&self, clock: BarClock) -> (Vec<ReplayEvent>, Vec<Bar>) {
         let mut merged = Vec::new();
         self.live.read_recording(&mut merged);
-        let trades: Vec<_> = merged
-            .iter()
-            .filter_map(|event| match &event.event {
-                MarketEvent::Trade(trade) => Some(trade.clone()),
-                _ => None,
-            })
-            .collect();
+        let trades: Vec<_> = merged.iter().filter_map(execution).cloned().collect();
         let bars = egui_charts::data::aggregate_trades_with_tick_size(
             &trades,
             clock,
@@ -4063,6 +4062,111 @@ mod tests {
         assert!(!app.recording_files.opened);
         for chart in [&app.chart, &app.extra_charts[0].chart] {
             assert!(chart.replay_time().is_none() && chart.replay_driver().is_none());
+        }
+    }
+
+    /// Every execution the replay driver counts is a cursor position, order fills included: one
+    /// step visits a fill, a step back restores the execution before it, and a recording whose
+    /// executions are all fills exports and imports.
+    #[test]
+    fn recorded_order_fills_are_replay_positions() {
+        use super::super::tests::settle;
+        use egui_charts::data::RestingOrder;
+
+        let ctx = egui::Context::default();
+        let start: DateTime<Utc> = "2026-11-12T15:00:00Z".parse().unwrap();
+        let s = |n: i64| start + chrono::TimeDelta::seconds(n);
+        let ns = chrono::TimeDelta::nanoseconds(1);
+        let tick = |time, price, size| Tick::new(time, price, size, Some(OrderSide::Buy));
+        let trade = |time, price, size| (time, MarketEvent::Trade(tick(time, price, size)));
+        let fill = |sequence, id, time, price, size| {
+            let trade = Some(tick(time, price, size));
+            let event = OrderEvent::Execute { id, size, trade };
+            (time, MarketEvent::Order { sequence, event })
+        };
+        let orders = vec![
+            RestingOrder::new(1, OrderSide::Sell, 101.0, 1.0),
+            RestingOrder::new(2, OrderSide::Sell, 102.0, 2.0),
+        ];
+        // The executions after an order snapshot, and the cursor time, chart volume and close
+        // at each of them.
+        let rows = [
+            (
+                "mixed",
+                vec![
+                    trade(s(1), 101.0, 1.0),
+                    fill(1, 2, s(2), 102.0, 2.0),
+                    trade(s(3), 103.0, 4.0),
+                ],
+                vec![
+                    (s(1) + ns, 1.0, 101.0),
+                    (s(2) + ns, 3.0, 102.0),
+                    (s(3) + ns, 7.0, 103.0),
+                ],
+            ),
+            (
+                "equal time",
+                vec![
+                    trade(s(1), 101.0, 1.0),
+                    fill(1, 2, s(1), 102.0, 2.0),
+                    trade(s(1), 103.0, 4.0),
+                ],
+                vec![
+                    (s(1) + ns, 1.0, 101.0),
+                    (s(1) + ns * 2, 3.0, 102.0),
+                    (s(1) + ns * 3, 7.0, 103.0),
+                ],
+            ),
+            (
+                "fills only",
+                vec![fill(1, 1, s(1), 101.0, 1.0), fill(2, 2, s(2), 102.0, 2.0)],
+                vec![(s(1) + ns, 1.0, 101.0), (s(2) + ns, 3.0, 102.0)],
+            ),
+        ];
+        for (name, events, expected) in rows {
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                start,
+                true,
+            );
+            settle(&mut app, &ctx);
+            let symbol = app.state.symbol.clone();
+            let mut capture = Capture::new();
+            let snapshot = MarketEvent::OrderSnapshot {
+                sequence: 0,
+                orders: orders.clone(),
+            };
+            capture.push(&symbol, start, snapshot);
+            for (time, event) in events {
+                capture.push(&symbol, time, event);
+            }
+            let mut recorded = Vec::new();
+            capture.read_into(&mut recorded);
+            let bytes = recording_bytes(&app.live.instrument(), &recorded)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let mut import = RecordingImport::new(bytes).unwrap();
+            while !import.read_batch().unwrap() {}
+            let loaded = import.finish().unwrap_or_else(|e| panic!("{name}: {e}"));
+            app.open_recording(loaded).unwrap();
+            settle(&mut app, &ctx);
+            let position = |app: &DemoApp| {
+                let bar = app.chart.bars(SeriesId::MAIN).last().unwrap();
+                (app.chart.replay_time().unwrap(), bar.volume, bar.close)
+            };
+            app.handle_replay_control(ReplayControlAction::GoToStart);
+            settle(&mut app, &ctx);
+            let mut positions = vec![position(&app)];
+            let steps = expected.len() - 1;
+            for action in std::iter::repeat_n(ReplayControlAction::NextBar, steps)
+                .chain(std::iter::repeat_n(ReplayControlAction::PreviousBar, steps))
+            {
+                app.handle_replay_control(action);
+                settle(&mut app, &ctx);
+                positions.push(position(&app));
+            }
+            let mut want = expected.clone();
+            want.extend(expected.iter().rev().skip(1));
+            assert_eq!(positions, want, "{name}");
         }
     }
 }
