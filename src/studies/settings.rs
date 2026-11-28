@@ -832,6 +832,7 @@ pub struct ConfiguredStudy {
     /// The stable factory key, independent of the wrapped study's display name.
     registered: String,
     /// The factory's default-source migration decision when restored through a template.
+    #[cfg(all(feature = "widget", feature = "studies"))]
     pub(crate) builtin_source: Option<bool>,
     settings: StudySettings,
     timeframe: Option<Timeframe>,
@@ -941,6 +942,7 @@ impl ConfiguredStudy {
         Self {
             study,
             registered: self.registered.clone(),
+            #[cfg(all(feature = "widget", feature = "studies"))]
             builtin_source: self.builtin_source,
             settings: self.settings.clone(),
             timeframe: self.timeframe,
@@ -1008,12 +1010,14 @@ impl ConfiguredStudy {
         }
         match_declared_styles(study.as_ref(), &mut settings);
         let registered = study.registered_name().to_owned();
+        #[cfg(all(feature = "widget", feature = "studies"))]
         let builtin_source = study
             .concrete::<Self>()
             .and_then(|study| study.builtin_source);
         Self {
             study,
             registered,
+            #[cfg(all(feature = "widget", feature = "studies"))]
             builtin_source,
             settings,
             timeframe: None,

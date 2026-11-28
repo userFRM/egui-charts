@@ -350,6 +350,7 @@ impl StudyTemplate {
             Box::new(ConfiguredStudy::new(study))
         };
         study.set_registered_name(registered);
+        #[cfg(feature = "widget")]
         if let Some(configured) = study.concrete_mut::<ConfiguredStudy>() {
             configured.builtin_source = Some(builtin_source);
         }
