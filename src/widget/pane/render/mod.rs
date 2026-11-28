@@ -616,7 +616,7 @@ impl Chart {
                 config.height = height;
                 config.show_grid = self.config.show_grid && Some(entry) == first;
                 let mut panel = IndicatorPane::with_config(config);
-                panel.legend_backdrop = self.config.indicator_backdrop_opacity;
+                panel.legend_backdrop = self.config.indicator_backdrop();
                 panel.background = Some((
                     self.background_frame(panel_rect),
                     self.config.background_style,

@@ -763,6 +763,423 @@ fn main_series_legend_actions_preserve_studies_and_comparisons() {
     assert!(chart.series_scale(other).is_some());
 }
 
+/// New charts omit legend volume; saved choices and omissions keep their former display.
+#[test]
+fn new_charts_hide_the_legend_volume_and_saved_settings_keep_it() {
+    use crate::widget::settings::ChartSettingsState;
+    assert!(!ChartSettingsState::default().status_line.show_volume);
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0], &[110.0]);
+    let volume_shown = |painted: &[Shape], right: f32| {
+        painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+            if text.pos.x < right && (text.galley.text() == "Vol" || text.galley.text().starts_with("Vol "))))
+    };
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+    assert!(!volume_shown(
+        &painted,
+        chart.last_rendered_price_rect.right()
+    ));
+    let settings = ChartSettingsState::from_chart(&chart);
+    assert!(!settings.status_line.show_volume);
+    for (status_line, expected) in [
+        (r#"{"show_volume":true}"#, true),
+        (r#"{"show_volume":false}"#, false),
+        (r#"{}"#, true),
+    ] {
+        let status_line: serde_json::Value = serde_json::from_str(status_line).unwrap();
+        let mut saved = serde_json::to_value(&settings).unwrap();
+        saved["status_line"] = status_line.clone();
+        let restored: ChartSettingsState = serde_json::from_value(saved).unwrap();
+        // Templates store ChartSettingsState; saving again must retain the restored choice.
+        let restored: ChartSettingsState =
+            serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+        restored.apply_to_chart(&mut chart).unwrap();
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.3, vec![]);
+        assert_eq!(
+            volume_shown(&painted, chart.last_rendered_price_rect.right()),
+            expected,
+            "saved status line: {status_line}"
+        );
+        #[cfg(feature = "ui")]
+        {
+            let mut saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+            saved["config"] = serde_json::Value::Null;
+            saved["settings"]["status_line"] = status_line.clone();
+            let mut restored = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+            restored
+                .restore(&serde_json::from_value(saved).unwrap())
+                .unwrap();
+            frame(&ctx, &mut restored, 0.4, vec![]);
+            let painted = shapes(&ctx, &mut restored, 0.5, vec![]);
+            assert_eq!(
+                volume_shown(&painted, restored.last_rendered_price_rect.right()),
+                expected,
+                "legacy layout status line: {status_line}"
+            );
+        }
+    }
+}
+
+/// The Background switch reaches both legend sites and retains the saved opacity.
+#[cfg(feature = "studies")]
+#[test]
+fn status_line_background_switch_hides_row_backdrops_and_keeps_opacity() {
+    use crate::config::ChartConfig;
+    use crate::widget::settings::ChartSettingsState;
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0], &[110.0]);
+    chart.config_mut().show_volume = false;
+    chart.add_indicator(Box::new(crate::studies::SMA::new(1)));
+    chart.add_indicator(Box::new(crate::studies::RSI::new(2)));
+    let row = chart.config().background_color.gamma_multiply(0.6);
+    assert_eq!(row.a(), 153);
+    let backed = |painted: &[Shape], label: &str| {
+        let bounds = painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Text(text) if text.galley.text().starts_with(label) => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .expect("study legend text");
+        painted.iter().any(|shape| {
+            matches!(shape, Shape::Rect(rect)
+            if rect.fill == row && rect.rect.contains_rect(bounds))
+        })
+    };
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+    assert!(backed(&painted, "SMA") && backed(&painted, "RSI"));
+    let mut settings = ChartSettingsState::from_chart(&chart);
+    assert!(settings.status_line.show_indicator_background);
+    settings.status_line.show_indicator_background = false;
+    settings.apply_to_chart(&mut chart).unwrap();
+    frame(&ctx, &mut chart, 0.2, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.3, vec![]);
+    assert!(!backed(&painted, "SMA") && !backed(&painted, "RSI"));
+    assert!(
+        !painted
+            .iter()
+            .any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == row))
+    );
+    assert_eq!(
+        ChartSettingsState::from_chart(&chart).status_line,
+        settings.status_line
+    );
+    assert_eq!(settings.status_line.indicator_background_opacity, 60);
+    assert_eq!(chart.config().indicator_backdrop_opacity, 0.6);
+    // Chart settings templates store this same settings type.
+    let saved = serde_json::to_string(&settings).unwrap();
+    assert_eq!(
+        serde_json::from_str::<ChartSettingsState>(&saved).unwrap(),
+        settings
+    );
+    #[cfg(feature = "ui")]
+    {
+        let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+        let mut restored = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        restored
+            .restore(&serde_json::from_str(&saved).unwrap())
+            .unwrap();
+        assert_eq!(
+            ChartSettingsState::from_chart(&restored).status_line,
+            settings.status_line
+        );
+    }
+    let mut saved = serde_json::to_value(&settings).unwrap();
+    saved["status_line"]
+        .as_object_mut()
+        .unwrap()
+        .remove("show_indicator_background");
+    assert!(
+        serde_json::from_value::<ChartSettingsState>(saved)
+            .unwrap()
+            .status_line
+            .show_indicator_background
+    );
+    let mut saved = serde_json::to_value(chart.config()).unwrap();
+    saved
+        .as_object_mut()
+        .unwrap()
+        .remove("show_indicator_backdrop");
+    assert!(
+        serde_json::from_value::<ChartConfig>(saved)
+            .unwrap()
+            .show_indicator_backdrop
+    );
+    settings.status_line.show_indicator_background = true;
+    settings.apply_to_chart(&mut chart).unwrap();
+    frame(&ctx, &mut chart, 0.4, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.5, vec![]);
+    assert!(backed(&painted, "SMA") && backed(&painted, "RSI"));
+}
+
+/// Narrow charts read the close against its previous trading session, with OHLC available.
+#[test]
+fn compact_legend_shows_the_close_and_day_change_unless_turned_off() {
+    use crate::model::{Bar, BarData, Instrument, Timeframe, TimezoneId};
+    use crate::widget::Chart;
+    let bars = [
+        ("2026-01-05T10:00:00Z", [100.0, 101.0, 99.0, 100.5]),
+        ("2026-01-05T11:00:00Z", [100.5, 101.5, 100.0, 101.0]),
+        ("2026-01-05T12:00:00Z", [101.0, 101.0, 99.5, 100.0]),
+        ("2026-01-06T10:00:00Z", [100.0, 102.0, 100.0, 102.0]),
+        ("2026-01-06T11:00:00Z", [102.0, 102.5, 101.5, 102.5]),
+        ("2026-01-06T12:00:00Z", [102.5, 103.5, 102.0, 103.0]),
+    ]
+    .into_iter()
+    .map(|(time, [open, high, low, close])| {
+        Bar::new(time.parse().unwrap(), open, high, low, close, 1.0)
+    })
+    .collect();
+    let mut chart = Chart::new(BarData::from_bars(bars));
+    chart.set_timeframe(Timeframe::Hour1);
+    chart.config_mut().show_volume = false;
+    chart.set_instrument(Some(
+        Instrument::new("ABC").with_time_zone(TimezoneId::named("UTC").unwrap()),
+    ));
+    let ctx = egui::Context::default();
+    let read = |chart: &mut Chart, width: f32| {
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 400.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| chart.show(ui));
+                },
+            );
+            fn read_text(shape: &Shape, right: f32, texts: &mut Vec<String>) {
+                match shape {
+                    Shape::Vec(shapes) => shapes
+                        .iter()
+                        .for_each(|shape| read_text(shape, right, texts)),
+                    Shape::Text(text) if text.pos.x < right => {
+                        texts.push(text.galley.text().to_owned())
+                    }
+                    _ => {}
+                }
+            }
+            texts.clear();
+            for shape in &output.shapes {
+                read_text(
+                    &shape.shape,
+                    chart.last_rendered_price_rect.right(),
+                    &mut texts,
+                );
+            }
+            output.drop_without_applying_deltas();
+        }
+        texts
+    };
+    // Prior session closes at 100: 103 - 100 = 3, or 3%. The prior bar closes at 102.5.
+    let texts = read(&mut chart, 450.0);
+    for text in ["C 103.00", "+3.00 (+3.00%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    for text in ["O 102.50", "+0.50 (+0.49%)"] {
+        assert!(
+            !texts.iter().any(|shown| shown == text),
+            "{text}: {texts:?}"
+        );
+    }
+    // Older settings and layouts keep close alone with the bar change, including after resaving.
+    let original_settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+    #[cfg(feature = "ui")]
+    let original_layout = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+    let legacy_status: serde_json::Value = serde_json::from_str(
+        r#"{"show_ohlc":true,"show_change":true,"show_change_percent":true,"show_volume":false}"#,
+    )
+    .unwrap();
+    let check_legacy = |chart: &mut Chart| {
+        let texts = read(chart, 450.0);
+        for text in ["C 103.00", "+0.50 (+0.49%)"] {
+            assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+        }
+        for text in ["O 102.50", "H 103.50", "L 102.00", "+3.00 (+3.00%)"] {
+            assert!(
+                !texts.iter().any(|shown| shown == text),
+                "{text}: {texts:?}"
+            );
+        }
+        // Matching bar and day changes still keep the separately enabled absolute value.
+        let bars = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+        chart.config_mut().show_ohlc_change = false;
+        chart.config_mut().show_last_day_change = true;
+        for (timeframe, data, percent, day_change) in [
+            (
+                Timeframe::Day1,
+                vec![bars[2].clone(), bars[5].clone()],
+                "+3.00%",
+                "+3.00 (+3.00%)",
+            ),
+            (
+                Timeframe::Hour1,
+                bars[..4].to_vec(),
+                "+2.00%",
+                "+2.00 (+2.00%)",
+            ),
+        ] {
+            chart.set_data(crate::widget::SeriesId::MAIN, data);
+            chart.set_timeframe(timeframe);
+            for width in [450.0, 800.0] {
+                let texts = read(chart, width);
+                for text in [percent, day_change] {
+                    assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+                }
+            }
+        }
+        chart.set_data(crate::widget::SeriesId::MAIN, bars);
+        chart.set_timeframe(Timeframe::Hour1);
+        chart.config_mut().show_ohlc_change = true;
+        chart.config_mut().show_last_day_change = false;
+    };
+    let mut saved = serde_json::to_value(&original_settings).unwrap();
+    saved["status_line"] = legacy_status.clone();
+    let settings: crate::widget::settings::ChartSettingsState =
+        serde_json::from_value(saved).unwrap();
+    settings.apply_to_chart(&mut chart).unwrap();
+    check_legacy(&mut chart);
+    // Templates use the settings representation, including its compatibility choices.
+    let settings: crate::widget::settings::ChartSettingsState =
+        serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+    settings.apply_to_chart(&mut chart).unwrap();
+    assert_eq!(
+        crate::widget::settings::ChartSettingsState::from_chart(&chart).status_line,
+        settings.status_line
+    );
+    check_legacy(&mut chart);
+    #[cfg(feature = "ui")]
+    for with_config in [false, true] {
+        let mut saved = original_layout.clone();
+        saved["settings"]["status_line"] = legacy_status.clone();
+        for field in ["config", "palette"] {
+            let config = saved[field].as_object_mut().unwrap();
+            config.remove("compact_legend");
+            config.remove("compact_legend_day_change");
+        }
+        if !with_config {
+            saved["config"] = serde_json::Value::Null;
+        }
+        chart
+            .restore(&serde_json::from_value(saved).unwrap())
+            .unwrap();
+        check_legacy(&mut chart);
+        let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+        chart
+            .restore(&serde_json::from_str(&saved).unwrap())
+            .unwrap();
+        check_legacy(&mut chart);
+    }
+    original_settings.apply_to_chart(&mut chart).unwrap();
+    // A historical readout uses that bar's session, rather than the last bar's close.
+    let selected = chart.bars(crate::widget::SeriesId::MAIN)[4].time;
+    chart.set_crosshair_position(Some((selected, 102.5)));
+    let texts = read(&mut chart, 450.0);
+    for text in ["C 102.50", "+2.50 (+2.50%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    chart.set_crosshair_position(None);
+    // Averaged closes are (101 + 101 + 99.5 + 100)/4 = 100.375 and
+    // (102.5 + 103.5 + 102 + 103)/4 = 102.75: +2.375, or +2.366625...%.
+    chart.set_chart_type(crate::model::ChartType::Heikin);
+    let texts = read(&mut chart, 450.0);
+    for text in ["C 102.75", "+2.38 (+2.37%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    chart.set_chart_type(crate::model::ChartType::Candles);
+    let mut settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+    assert!(settings.status_line.compact_legend);
+    settings.status_line.compact_legend = false;
+    settings.apply_to_chart(&mut chart).unwrap();
+    assert_eq!(
+        crate::widget::settings::ChartSettingsState::from_chart(&chart).status_line,
+        settings.status_line
+    );
+    let texts = read(&mut chart, 450.0);
+    for text in [
+        "O 102.50",
+        "H 103.50",
+        "L 102.00",
+        "C 103.00",
+        "+0.50 (+0.49%)",
+    ] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    assert!(!texts.iter().any(|shown| shown == "+3.00 (+3.00%)"));
+    // Wide charts keep the bar change and the separately requested day change.
+    chart.config_mut().compact_legend = true;
+    chart.config_mut().show_last_day_change = true;
+    let texts = read(&mut chart, 800.0);
+    for text in ["O 102.50", "+0.50 (+0.49%)", "+3.00 (+3.00%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    let texts = read(&mut chart, 450.0);
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|shown| *shown == "+3.00 (+3.00%)")
+            .count(),
+        1
+    );
+    // With both ordinary change fields off, Last day change still shows once.
+    chart.config_mut().show_ohlc_change = false;
+    chart.config_mut().show_ohlc_change_percent = false;
+    let texts = read(&mut chart, 450.0);
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|shown| *shown == "+3.00 (+3.00%)")
+            .count(),
+        1
+    );
+
+    // On a wide daily chart the two requested changes may coincide; both remain visible.
+    let bars = chart.bars(crate::widget::SeriesId::MAIN);
+    let daily = vec![bars[2].clone(), bars[5].clone()];
+    chart.set_data(crate::widget::SeriesId::MAIN, daily);
+    chart.set_timeframe(Timeframe::Day1);
+    chart.config_mut().show_ohlc_change = true;
+    chart.config_mut().show_ohlc_change_percent = true;
+    let texts = read(&mut chart, 800.0);
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|shown| *shown == "+3.00 (+3.00%)")
+            .count(),
+        2
+    );
+    // New compact charts already show the daily change; full OHLC keeps both requests.
+    chart.config_mut().show_ohlc_change = false;
+    let texts = read(&mut chart, 450.0);
+    assert!(texts.iter().any(|shown| shown == "+3.00%"));
+    assert!(!texts.iter().any(|shown| shown == "+3.00 (+3.00%)"));
+    chart.config_mut().compact_legend = false;
+    let texts = read(&mut chart, 450.0);
+    for text in ["+3.00%", "+3.00 (+3.00%)"] {
+        assert!(texts.iter().any(|shown| shown == text), "{text}: {texts:?}");
+    }
+    let mut saved = serde_json::to_value(crate::widget::settings::ChartSettingsState::from_chart(
+        &chart,
+    ))
+    .unwrap();
+    saved["status_line"]
+        .as_object_mut()
+        .unwrap()
+        .remove("compact_legend");
+    assert!(
+        serde_json::from_value::<crate::widget::settings::ChartSettingsState>(saved)
+            .unwrap()
+            .status_line
+            .compact_legend
+    );
+}
+
 #[cfg(feature = "studies")]
 #[test]
 fn status_visibility_reaches_the_chart_legend() {

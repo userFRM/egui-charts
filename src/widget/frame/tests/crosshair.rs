@@ -1258,6 +1258,7 @@ fn volume_readouts_write_the_legend_text_without_volume_decimals() {
             chart.set_data(crate::widget::SeriesId::MAIN, bars);
             // With studies a volume study replaces the legend's volume field and the tag.
             chart.config.show_volume = cfg!(not(feature = "studies"));
+            chart.config.show_legend_volume = true;
             chart.chart_options.tooltip.mode = mode;
             frame(&ctx, &mut chart, 0.0, vec![]);
             let map = chart.get_chart_mapping();
