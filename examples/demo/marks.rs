@@ -315,7 +315,7 @@ impl Marks for DemoMarks {
 }
 
 impl DemoMarks {
-    pub(super) fn annotations(&self, request: &MarksRequest) -> MarksPage {
+    fn annotations(&self, request: &MarksRequest) -> MarksPage {
         let mut page = MarksPage::default();
         let Some(spec) = DemoSymbol::catalog()
             .iter()

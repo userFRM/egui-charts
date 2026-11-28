@@ -7021,11 +7021,14 @@ mod tests {
     #[test]
     fn vwap_auto_anchored_starts_at_earnings_in_the_demo() {
         use egui::accesskit::{Action, ActionRequest, TreeId};
-        use egui_charts::model::EventKind;
         use egui_charts::studies::{IndicatorFactory, InputValue};
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.live.set_paused(true);
+        let now = "2026-11-24T20:55:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
         app.chart.set_feed_paused(true);
         settle(&mut app, &ctx);
         let click = |app: &mut DemoApp, target_node| {
@@ -7045,16 +7048,35 @@ mod tests {
                 .create("VWAP Auto Anchored")
                 .unwrap(),
         );
-        for (symbol, timeframe) in [("SAMPLE", Timeframe::Min1), ("STOCKA", Timeframe::Day1)] {
+        // Latest normal demo events at the fixed clock, in earnings/dividend/split order.
+        for (symbol, timeframe, times) in [
+            (
+                "SAMPLE",
+                Timeframe::Min1,
+                [
+                    "2026-11-24T17:21:00Z",
+                    "2026-11-24T20:01:00Z",
+                    "2026-11-24T20:41:00Z",
+                ],
+            ),
+            (
+                "STOCKA",
+                Timeframe::Day1,
+                [
+                    "2026-10-07T00:00:00Z",
+                    "2025-11-21T00:00:00Z",
+                    "2026-08-28T00:00:00Z",
+                ],
+            ),
+        ] {
             app.chart.set_symbol(symbol);
             app.follow_chart_symbol(false);
             app.switch_timeframe(timeframe);
             settle(&mut app, &ctx);
-            for (label, choice, kind) in [
-                ("Earnings", 11, EventKind::Earnings),
-                ("Dividends", 12, EventKind::Dividend),
-                ("Splits", 13, EventKind::Split),
-            ] {
+            for ((label, choice), time) in [("Earnings", 11), ("Dividends", 12), ("Splits", 13)]
+                .into_iter()
+                .zip(times)
+            {
                 app.open_indicator_settings(id);
                 for _ in 0..3 {
                     draw(&ctx, &mut app, vec![]);
@@ -7080,29 +7102,11 @@ mod tests {
                 assert!(!app.indicator_settings.is_open());
                 settle(&mut app, &ctx);
                 let bars = app.chart.bars(SeriesId::MAIN);
-                let source = marks::DemoMarks {
-                    live: app.live.clone(),
-                    extended_hours: app.chart.extended_hours(),
-                    samples: false,
-                    notifications: None,
-                    times: Default::default(),
-                };
-                let events = source
-                    .annotations(&egui_charts::services::MarksRequest::new(
-                        symbol,
-                        timeframe,
-                        bars[0].time,
-                        bars.last().unwrap().time,
-                    ))
-                    .events;
-                let time = events
-                    .iter()
-                    .filter(|event| event.kind == kind)
-                    .map(|event| event.time)
-                    .max()
-                    .expect("a normal demo corporate event");
-                assert!(events.iter().all(|event| event.id.contains(symbol)));
-                let anchor = bars.partition_point(|bar| bar.time < time);
+                let time: chrono::DateTime<chrono::Utc> = time.parse().unwrap();
+                let anchor = bars
+                    .binary_search_by_key(&time, |bar| bar.time)
+                    .expect("the known demo corporate event has a loaded bar");
+                assert!(anchor > 0, "{symbol} {label} needs a bar before the event");
                 let study = app.chart.indicator_mut(id).unwrap();
                 assert_eq!(
                     study
@@ -7117,13 +7121,11 @@ mod tests {
                     study.values().value(0, anchor).is_some(),
                     "{symbol} {label}"
                 );
-                if anchor > 0 {
-                    assert_eq!(
-                        study.values().value(0, anchor - 1),
-                        None,
-                        "{symbol} {label}"
-                    );
-                }
+                assert_eq!(
+                    study.values().value(0, anchor - 1),
+                    None,
+                    "{symbol} {label}"
+                );
             }
         }
     }
