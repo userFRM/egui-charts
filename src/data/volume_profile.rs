@@ -1184,8 +1184,8 @@ impl VolumeProfile {
     }
 
     /// Add one completed bar without redistributing earlier bars. Fixed-height grids grow
-    /// at the edges; a grid over one price, and equal-row grids, return `None` when the bar
-    /// moves a boundary.
+    /// at the edges while keeping their original row origin; a grid over one price, and
+    /// equal-row grids, return `None` when the bar moves a boundary.
     /// A changed forming bar must be added to the profile before that bar, not added twice.
     pub fn with_bar(&self, bar: &Bar) -> Option<Self> {
         let mut profile = self.clone();
@@ -1199,20 +1199,40 @@ impl VolumeProfile {
             return None;
         }
         if self.fixed_height {
-            let flat = (bar.low == bar.high && bar.volume > 0.0).then_some(bar.low);
-            let (low, high, _) = fixed_grid(
-                self.low.min(bar.low),
-                self.high.max(bar.high),
-                flat,
-                self.row_height,
-            )?;
-            let low = low.min(self.low);
-            let high = high.max(self.high);
-            let count = ((high - low) / self.row_height).round();
-            if count > 10_000.0 {
+            let origin = if self.executions.is_some() {
+                self.low
+            } else {
+                0.0
+            };
+            let row_of = |price| grid_row(origin, self.row_height, price);
+            let base = row_of(self.low).0;
+            let end = base + self.volume.len() as f64;
+            let first = row_of(bar.low).0.min(base);
+            let (last, edge) = row_of(bar.high);
+            let flat = bar.low == bar.high && bar.volume > 0.0;
+            let top = if edge && !flat { last } else { last + 1.0 };
+            let top = top.max(end);
+            let count = top - first;
+            if first.abs() >= 2_f64.powi(52)
+                || top.abs() >= 2_f64.powi(52)
+                || !(1.0..=10_000.0).contains(&count)
+            {
                 return None;
             }
-            let prepend = ((self.low - low) / self.row_height).round() as usize;
+            let low = if first < base {
+                origin + first * self.row_height
+            } else {
+                self.low
+            };
+            let high = if top > end {
+                origin + top * self.row_height
+            } else {
+                self.high
+            };
+            if !low.is_finite() || !high.is_finite() || !(high - low).is_finite() || high <= low {
+                return None;
+            }
+            let prepend = (base - first) as usize;
             for rows in [&mut profile.volume, &mut profile.up, &mut profile.down] {
                 let old_len = rows.len();
                 rows.resize(count as usize, 0.0);
@@ -1759,6 +1779,9 @@ mod tests {
     /// Existing rows keep their prices and volume when a fixed grid grows at either edge.
     #[test]
     fn fixed_profile_grows_without_rebinning() {
+        use crate::data::Footprint;
+        use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+
         let time = chrono::DateTime::UNIX_EPOCH;
         let first = Bar::new(time, -0.5, 1.0, -1.0, 0.5, 20.0);
         let mut bars = vec![first];
@@ -1785,6 +1808,8 @@ mod tests {
             Bar::new(time, 5e307, 1e308, 5e307, 1e308, 1.0),
         ];
         assert!(VolumeProfile::of(&wide, 24, Some(1e308)).is_none());
+        let wide_profile = VolumeProfile::of(&wide[..1], 24, Some(1e308)).unwrap();
+        assert!(wide_profile.with_bar(&wide[1]).is_none());
         let boundary = Bar::new(time, 0.3, 0.3, 0.3, 0.3, 7.0);
         let decimal = VolumeProfile::of(&[boundary], 24, Some(0.1)).unwrap();
         assert_close(decimal.low(), 0.3);
@@ -1793,6 +1818,55 @@ mod tests {
         let cents = [32.16, 32.18].map(|price| Bar::new(time, price, price, price, price, 1.0));
         let cents = VolumeProfile::of(&cents, 24, Some(0.01)).unwrap();
         assert_eq!(cents.volume(), [1.0, 0.0, 1.0]);
+        // Executed rows start half a tick below traded levels, including when extended by bars.
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (price, size) in [(99.0, 7.0), (102.0, 3.0)] {
+            flow.push(&Tick::new(time, price, size, Some(OrderSide::Buy)))
+                .unwrap();
+        }
+        let executed =
+            VolumeProfile::from_executions(flow.bar_at(time).unwrap(), 1.0, 1.0, true).unwrap();
+        assert_eq!((executed.low(), executed.high()), (98.5, 102.5));
+        assert_eq!(executed.volume(), [7.0, 0.0, 0.0, 3.0]);
+        for (low, high, volume, bounds, expected) in [
+            (100.0, 100.0, 0.0, (98.5, 102.5), vec![7.0, 0.0, 0.0, 3.0]),
+            (102.5, 102.5, 0.0, (98.5, 102.5), vec![7.0, 0.0, 0.0, 3.0]),
+            (
+                102.5,
+                102.5,
+                5.0,
+                (98.5, 103.5),
+                vec![7.0, 0.0, 0.0, 3.0, 5.0],
+            ),
+            (
+                102.5,
+                103.5,
+                5.0,
+                (98.5, 103.5),
+                vec![7.0, 0.0, 0.0, 3.0, 5.0],
+            ),
+            (
+                97.5,
+                98.5,
+                5.0,
+                (97.5, 102.5),
+                vec![5.0, 7.0, 0.0, 0.0, 3.0],
+            ),
+        ] {
+            let bar = Bar::new(
+                time + chrono::TimeDelta::minutes(1),
+                low,
+                high,
+                low,
+                high,
+                volume,
+            );
+            let appended = executed.with_bar(&bar).expect("extend executed grid");
+            assert_eq!((appended.low(), appended.high()), bounds);
+            assert_eq!(appended.volume(), expected);
+            assert_eq!(appended.up(), expected);
+            assert!(appended.down().iter().all(|&volume| volume == 0.0));
+        }
         // A range ends at its upper edge; only volume traded at one price keeps the row above.
         for (high, flat_volume, rows, top, last, total) in [
             (11.0, None, 25, 11.0, 4.0, 100.0),
