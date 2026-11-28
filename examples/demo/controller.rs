@@ -5748,6 +5748,35 @@ mod tests {
         h.get_by_role_and_label(egui::Role::Button, "Next");
     }
 
+    #[test]
+    fn demo_opens_older_news_notification_and_keeps_reader_on_hourly_refresh() {
+        use egui_charts::services::{Notification, NotificationTarget};
+
+        let mut h = calendar_news_harness(SidePanel::Notifications);
+        h.run_steps(5);
+        let now = h.state().live.now();
+        let mut query = egui_charts::data::NewsQuery::new(1);
+        query.symbols = vec![h.state().chart.symbol().into()];
+        let story = feeds::news(&query, now - chrono::Duration::hours(1)).remove(0);
+        let mut entry = Notification::new(story.time, "Older publication");
+        entry.target = Some(NotificationTarget::Story(story.id));
+        h.state_mut().notifications.push(entry);
+        h.run_steps(5);
+        h.get_by_label("Open story").click();
+        h.run_steps(5);
+        assert!(h.state().open_panel == Some(SidePanel::News));
+        let publication = format!("{} UTC · Demo Wire", story.time.format("%b %-d, %H:%M"));
+        h.get_by_label(&publication);
+        h.get_by_label(&story.body);
+
+        h.state().live.set_paused(false);
+        h.state().live.advance(now + chrono::Duration::hours(1));
+        h.state().live.set_paused(true);
+        h.run_steps(8);
+        h.get_by_label(&publication);
+        h.get_by_label(&story.body);
+    }
+
     /// Guards the demo's chat author menu: Reply answers the message through the demo host, View
     /// profile opens the author's card, and its Message opens a direct chat with them.
     #[test]
