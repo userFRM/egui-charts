@@ -189,6 +189,8 @@ struct LoadedRecording {
     driver: Arc<ReplayDriver>,
     instrument: egui_charts::model::Instrument,
     bars: Vec<Bar>,
+    /// The events the driver plays, which a saved replay session keeps.
+    recording: Arc<ReplayRecording>,
 }
 
 impl RecordingImport {
@@ -302,11 +304,16 @@ impl RecordingImport {
             instrument.tick_size,
         )
         .map_err(|e| e.to_string())?;
-        let driver =
-            ReplayDriver::new(self.events, vec![instrument.clone()]).map_err(|e| e.to_string())?;
+        let driver = ReplayDriver::new(self.events.clone(), vec![instrument.clone()])
+            .map_err(|e| e.to_string())?;
         driver.set_checkpoint_budget(REPLAY_CHECKPOINT_BYTES);
         Ok(LoadedRecording {
             driver: Arc::new(driver),
+            recording: Arc::new(ReplayRecording {
+                events: self.events,
+                instruments: vec![instrument.clone()],
+                saved: std::sync::OnceLock::new(),
+            }),
             instrument,
             bars,
         })
@@ -620,6 +627,7 @@ impl DemoApp {
         self.open_replay_account();
         self.replay_interval = Timeframe::Ticks(NonZeroU64::MIN);
         self.recording_files.opened = true;
+        self.replay_recording = Some(loaded.recording);
         loaded.driver.seek_execution(loaded.bars[0].time);
         self.chart.set_conversion(None);
         self.chart.set_market_replay(Some(loaded.driver));
@@ -1177,9 +1185,6 @@ impl DemoApp {
     }
 
     pub(super) fn checkpoint_replay(&mut self) {
-        if self.recording_files.opened {
-            return;
-        }
         if let Some(mut session) = self.replay.as_ref().and_then(|replay| replay.session()) {
             // The chart the replay runs on first, then the other charts it covers in slot order.
             session.charts = vec![ReplayChart::new(
@@ -1203,6 +1208,7 @@ impl DemoApp {
             }
             self.replay_session = Some((session, self.replay_interval));
             self.replay_session_automatic = self.replay_control.uses_automatic_update_interval();
+            self.replay_session_imported = self.recording_files.opened;
             // Another symbol's preceding source bar can be earlier than the shared market cursor.
             self.replay_session_cutoff = self
                 .chart
@@ -1649,20 +1655,26 @@ impl DemoApp {
                         .replay_session_recording
                         .clone()
                         .filter(|_| interval.is_trade_based());
+                    let imported = self.replay_session_imported;
                     let bars = if let Some(recording) = &saved {
                         recording.bars(&self.state.symbol, clock)
+                    } else if imported {
+                        // The feed's capture holds other executions than the file did.
+                        Vec::new()
                     } else if interval.is_trade_based() {
                         self.market_recording().bars(&self.state.symbol, clock)
                     } else {
                         self.live
                             .snapshot(interval, clock, self.chart.extended_hours())
                     };
-                    let mut replay = ReplayController::new(bars, Vec::new())
+                    let mut replay = ReplayController::new(bars.clone(), Vec::new())
                         .with_symbol(self.state.symbol.clone());
                     if !replay.restore_session(&session) {
                         self.replay_session = Some((session, interval));
                         self.cancel_replay_selection();
-                        self.notify(if interval.is_trade_based() {
+                        self.notify(if imported {
+                            "Saved replay needs its recording file: open it again from Market recording > Open local recording"
+                        } else if interval.is_trade_based() {
                             "Saved replay needs its market recording, which is no longer available"
                         } else {
                             "Saved replay needs source history that is no longer available"
@@ -1670,6 +1682,32 @@ impl DemoApp {
                         return;
                     }
                     self.replay_scope = replay.state.scope;
+                    if imported && let Some(recording) = saved {
+                        let loaded = LoadedRecording {
+                            driver: recording.driver(),
+                            // The driver validated an instrument for each recorded symbol.
+                            instrument: (recording.instruments.iter())
+                                .find(|instrument| instrument.symbol == self.state.symbol)
+                                .cloned()
+                                .expect("a recorded instrument"),
+                            bars,
+                            recording,
+                        };
+                        if let Err(error) = self.open_recording(loaded) {
+                            self.cancel_replay_selection();
+                            self.notify(&error);
+                            return;
+                        }
+                        if self.recording_files.opened {
+                            self.replay = Some(replay);
+                            self.replay_control.set_automatic_update_interval(automatic);
+                            self.push_replay_window_to_chart();
+                            if let Some(cutoff) = cutoff {
+                                self.apply_replay_window(cutoff);
+                            }
+                        }
+                        return;
+                    }
                     self.start_replay();
                     self.replay = Some(replay);
                     self.replay_interval = interval;
@@ -3651,6 +3689,103 @@ mod tests {
         }
     }
 
+    /// An imported recording becomes the saved replay session, in place of an older one: after a
+    /// reload Resume opens it again at the saved execution, speed and update interval, with the
+    /// same bars and next step. Without its recording Resume keeps the session and says how to
+    /// recover it.
+    #[test]
+    fn resuming_reopens_an_imported_recording() {
+        use super::super::tests::{AppStorage, settle};
+        let ctx = egui::Context::default();
+        let start = "2026-11-12T15:00:00Z".parse().unwrap();
+        let until = start + chrono::TimeDelta::seconds(90);
+        let at = |app: &DemoApp| {
+            (
+                app.chart.replay_time(),
+                app.replay.as_ref().map(|replay| replay.state.curr_bar),
+                app.chart.bars(SeriesId::MAIN).to_vec(),
+            )
+        };
+        // (an ordinary replay saved before the import, its recording kept with the session)
+        for (previous, kept) in [(false, true), (true, true), (true, false)] {
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                start,
+                true,
+            );
+            settle(&mut app, &ctx);
+            app.switch_timeframe(Timeframe::Min1);
+            settle(&mut app, &ctx);
+            app.advance_sample_to(until);
+            settle(&mut app, &ctx);
+            let mut events = Vec::new();
+            app.live.read_recording(&mut events);
+            let bytes = recording_bytes(&app.live.instrument(), &events).unwrap();
+            if previous {
+                app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() / 2);
+                app.stop_replay();
+                assert_eq!(
+                    app.replay_session.as_ref().map(|(_, interval)| *interval),
+                    Some(Timeframe::Min1)
+                );
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.recording_files.selected = Some(rx);
+            tx.send(Ok(Some(bytes))).unwrap();
+            for _ in 0..16 {
+                settle(&mut app, &ctx);
+                if app.recording_files.opened {
+                    break;
+                }
+            }
+            assert!(app.recording_files.opened);
+            app.handle_replay_control(ReplayControlAction::GoToEnd);
+            app.handle_replay_control(ReplayControlAction::PreviousBar);
+            app.handle_replay_control(ReplayControlAction::SetSpeed(3.0));
+            settle(&mut app, &ctx);
+            let saved = at(&app);
+            app.handle_replay_control(ReplayControlAction::NextBar);
+            settle(&mut app, &ctx);
+            let next = at(&app);
+            app.handle_replay_control(ReplayControlAction::PreviousBar);
+            settle(&mut app, &ctx);
+            assert_eq!(at(&app), saved);
+            let mut storage = AppStorage::default();
+            eframe::App::save(&mut *app, &mut storage);
+            if !kept {
+                // The web build keeps recordings of at most 512 KiB with the session.
+                eframe::Storage::remove_string(&mut storage, "replay_session_recording");
+            }
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut restored = DemoApp::new_at(&cc, until + chrono::TimeDelta::hours(1), true);
+            settle(&mut restored, &ctx);
+            let paused = restored.live.paused();
+            restored.apply_replay_start(ReplayStartAction::Resume);
+            settle(&mut restored, &ctx);
+            if !kept {
+                assert!(restored.replay.is_none() && !restored.recording_files.opened);
+                assert!(restored.chart.replay_driver().is_none());
+                assert_eq!(restored.live.paused(), paused);
+                assert_eq!(restored.replay_session, app.replay_session);
+                assert!(frames(&mut restored, &ctx).iter().any(|text| {
+                    text == "Saved replay needs its recording file: open it again from Market recording > Open local recording"
+                }));
+                continue;
+            }
+            assert!(restored.recording_files.opened, "previous {previous}");
+            assert!(restored.chart.replay_driver().is_some());
+            assert_eq!(restored.replay_interval, Timeframe::Ticks(NonZeroU64::MIN));
+            let state = &restored.replay.as_ref().unwrap().state;
+            assert!(!state.is_playing());
+            assert_eq!(state.speed.multiplier(), 3.0);
+            assert_eq!(at(&restored), saved);
+            restored.handle_replay_control(ReplayControlAction::NextBar);
+            settle(&mut restored, &ctx);
+            assert_eq!(at(&restored), next);
+        }
+    }
+
     #[test]
     fn saved_recording_outside_the_playback_range_refuses_safely() {
         use super::super::tests::{AppStorage, settle};
@@ -4155,11 +4290,17 @@ mod tests {
             )
         }));
         let instrument = app.live.instrument();
+        let recording = Arc::new(ReplayRecording {
+            events: events.clone(),
+            instruments: vec![instrument.clone()],
+            saved: std::sync::OnceLock::new(),
+        });
         let driver = Arc::new(ReplayDriver::new(events, vec![instrument.clone()]).unwrap());
         app.open_recording(LoadedRecording {
             driver: driver.clone(),
             instrument,
             bars,
+            recording,
         })
         .unwrap();
         settle(&mut app, &ctx);
@@ -4320,11 +4461,17 @@ mod tests {
             )
         }));
         let instrument = app.live.instrument();
+        let recording = Arc::new(ReplayRecording {
+            events: events.clone(),
+            instruments: vec![instrument.clone()],
+            saved: std::sync::OnceLock::new(),
+        });
         let driver = Arc::new(ReplayDriver::new(events, vec![instrument.clone()]).unwrap());
         app.open_recording(LoadedRecording {
             driver: driver.clone(),
             instrument,
             bars,
+            recording,
         })
         .unwrap();
         // Hand values per execution: last bar (minute, volume, close) at one and five minutes.
