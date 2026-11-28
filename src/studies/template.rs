@@ -432,16 +432,31 @@ impl StudyTemplate {
         let saved = inputs
             .iter()
             .filter(|(id, value)| {
-                NARROWED.iter().any(|(name, input, bottom)| {
-                    *name == study.name()
-                        && *input == id
-                        && match (value, bottom) {
-                            (Length(value), Length(bottom)) => value >= bottom,
-                            (Number(value), Number(bottom)) => value.is_finite() && value >= bottom,
-                            (Integer(value), Integer(bottom)) => value >= bottom,
-                            _ => false,
-                        }
-                })
+                // These presets bounded lengths after older studies were saved.
+                (matches!(
+                    study.name(),
+                    "MA Cross"
+                        | "EMA Cross"
+                        | "SMA/EMA Cross"
+                        | "Double MA"
+                        | "Triple MA"
+                        | "Multi MA"
+                ) && id
+                    .strip_prefix("period_")
+                    .is_some_and(|index| index.parse::<usize>().is_ok())
+                    && matches!(value, Length(v) if *v >= 1))
+                    || NARROWED.iter().any(|(name, input, bottom)| {
+                        *name == study.name()
+                            && *input == id
+                            && match (value, bottom) {
+                                (Length(value), Length(bottom)) => value >= bottom,
+                                (Number(value), Number(bottom)) => {
+                                    value.is_finite() && value >= bottom
+                                }
+                                (Integer(value), Integer(bottom)) => value >= bottom,
+                                _ => false,
+                            }
+                    })
             })
             .cloned()
             .collect();
@@ -1205,6 +1220,26 @@ impl StudyTemplate {
                 template.name = now.to_owned();
             }
             _ => changed = false,
+        }
+        // Crossing marks used to follow the visibility of the two average plots.
+        if matches!(study, "MA Cross" | "EMA Cross" | "SMA/EMA Cross")
+            && declares("touch_crosses")
+            && template.settings.plots.len() == 2
+        {
+            let visible = template.settings.plots.iter().any(|plot| plot.visible);
+            template.settings.plots.push(crate::studies::PlotStyle {
+                color: if study == "MA Cross" {
+                    crate::studies::palette::BLUE
+                } else {
+                    crate::studies::palette::LIGHT_BLUE
+                },
+                width: 4.0,
+                pattern: crate::model::LineStyle::Solid,
+                plot_type: crate::studies::PlotType::Crosses,
+                visible,
+            });
+            template.settings.untagged_plots.push(2);
+            changed = true;
         }
         // Hours saved as minute counts and zones saved as text, before inputs had a time of day
         // and a time zone, and whole numbers saved for inputs that now take decimals, in the
@@ -2053,6 +2088,17 @@ mod tests {
                 expected.plots.truncate(1);
                 expected.plot_variants.truncate(1);
             }
+            if saved.name == "MA Cross" {
+                expected.plots.push(crate::studies::PlotStyle {
+                    color: crate::studies::palette::BLUE,
+                    width: 4.0,
+                    pattern: crate::model::LineStyle::Solid,
+                    plot_type: crate::studies::PlotType::Crosses,
+                    visible: true,
+                });
+                expected.untagged_plots.push(2);
+                expected.plot_variants.push(Vec::new());
+            }
             assert_eq!(restored.settings(), expected, "{}", saved.name);
             assert_eq!(restored.is_visible(), saved.visible, "{}", saved.name);
             assert_eq!(Some(restored.scale()), saved.scale, "{}", saved.name);
@@ -2157,6 +2203,11 @@ mod tests {
     fn templates_saved_before_split_lengths_restore_their_values() {
         use InputValue::{Choice, Integer, Length, Number, Text, Toggle};
         let rows = [
+            (
+                "MA Cross",
+                vec![("period_0", Length(5000))],
+                vec![("period_0", Length(5000))],
+            ),
             (
                 "CCI",
                 vec![("period", Length(20))],
@@ -2640,6 +2691,7 @@ mod tests {
             }
             // Keeping a legacy value does not admit new values outside the declared range.
             let refused = match name {
+                "MA Cross" => Some(("period_0", Length(2001))),
                 "C2C Vol" => Some(("trading_days", Number(0.5))),
                 "Volatility Stop" => Some(("multiplier", Number(0.125))),
                 "ASI" => Some(("limit_move", Number(0.075))),

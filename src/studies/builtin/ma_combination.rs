@@ -5,7 +5,7 @@ use crate::model::{Bar, PriceSource};
 use crate::studies::stepper::Stepper;
 use crate::studies::{
     CrossDirection, Indicator, IndicatorFill, IndicatorLineStyle, IndicatorMarker, IndicatorValue,
-    IndicatorValues, InputKind, StudyInput,
+    IndicatorValues, InputKind, PlotStyle, PlotType, StudyInput,
 };
 use egui::Color32;
 
@@ -101,9 +101,11 @@ fn average_slot(id: &str) -> Option<usize> {
 /// combination; longer configurations form a ribbon. Each line keeps its
 /// standalone study's seed and warm-up. A missing line is NaN.
 ///
-/// Crossings of lines 0 and 1 are marked by default. A touch does not cross:
-/// the marker appears only when the last nonzero difference changes sign.
-/// A missing value breaks that comparison, so a gap cannot create a signal.
+/// Crossings of lines 0 and 1 are marked by default. A touch does not cross: a mark appears
+/// only when the last nonzero difference changes sign. With Mark touches, a mark appears on
+/// every bar whose difference sign (below, equal, above) differs from the previous bar's, so a
+/// touch is marked where it starts and where it ends. A missing value breaks the comparison
+/// in both modes.
 ///
 /// Its inputs hold the number of averages, the crossing pair and the colouring by direction,
 /// then the length, formula and price of each average, so that a template recreates it.
@@ -119,6 +121,9 @@ pub struct MACombination {
     /// The two averages whose crossings are marked, numbered from 1; 0 picks none.
     cross: [usize; 2],
     default_cross: [usize; 2],
+    touch_crosses: bool,
+    crosses: Option<Color32>,
+    max_period: usize,
     /// Whether each line is coloured by its own direction, the slowest wide and filled.
     directional: bool,
     default_directional: bool,
@@ -135,6 +140,9 @@ impl std::fmt::Debug for MACombination {
             .field("markers", &self.markers)
             .field("cross", &self.cross)
             .field("default_cross", &self.default_cross)
+            .field("touch_crosses", &self.touch_crosses)
+            .field("crosses", &self.crosses)
+            .field("max_period", &self.max_period)
             .field("directional", &self.directional)
             .field("default_directional", &self.default_directional)
             .field("visible", &self.visible)
@@ -167,6 +175,9 @@ impl MACombination {
             markers: Vec::new(),
             cross: [1, 2],
             default_cross: [1, 2],
+            touch_crosses: false,
+            crosses: None,
+            max_period: usize::MAX,
             directional: false,
             default_directional: false,
             visible: true,
@@ -203,6 +214,16 @@ impl MACombination {
     pub(super) fn without_crossings(mut self) -> Self {
         self.cross = [0, 0];
         self.default_cross = [0, 0];
+        self
+    }
+
+    pub(super) fn with_crosses(mut self, color: Color32) -> Self {
+        self.crosses = Some(color);
+        self
+    }
+
+    pub(super) fn with_max_period(mut self, max: usize) -> Self {
+        self.max_period = max;
         self
     }
 
@@ -315,21 +336,30 @@ impl Indicator for MACombination {
                 InputKind::Choice(picks),
             )
             .with_default(InputValue::Choice(self.default_cross[1])),
+            StudyInput::new(
+                "touch_crosses",
+                "Mark touches",
+                InputValue::Toggle(self.touch_crosses),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
         ];
         inputs.extend(self.lines.iter().enumerate().flat_map(|(index, line)| {
             // An average added after construction has no construction default; it is its own.
             let default = self.defaults.get(index).unwrap_or(line);
             [
-                StudyInput::new(
-                    format!("period_{index}"),
-                    format!("Length {}", index + 1),
-                    InputValue::Length(line.period),
-                    InputKind::Length(
-                        if line.kind == AverageType::Hull { 2 } else { 1 },
-                        usize::MAX,
-                    ),
-                )
-                .with_default(InputValue::Length(default.period)),
+                crate::studies::inputs::holding(
+                    StudyInput::new(
+                        format!("period_{index}"),
+                        format!("Length {}", index + 1),
+                        InputValue::Length(line.period),
+                        InputKind::Length(
+                            if line.kind == AverageType::Hull { 2 } else { 1 },
+                            self.max_period,
+                        ),
+                    )
+                    .with_default(InputValue::Length(default.period)),
+                ),
                 StudyInput::new(
                     format!("kind_{index}"),
                     format!("Average {}", index + 1),
@@ -384,7 +414,10 @@ impl Indicator for MACombination {
             .into_iter()
             .find(|input| input.id == id)
             .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
-        if !schema.accepts(&value) {
+        if value != schema.value
+            && !schema.accepts(&value)
+            && !crate::studies::inputs::restores(id, &value)
+        {
             return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
@@ -403,6 +436,7 @@ impl Indicator for MACombination {
             ("directional", InputValue::Toggle(directional)) => self.directional = directional,
             ("cross_first", InputValue::Choice(pick)) => self.cross[0] = pick,
             ("cross_second", InputValue::Choice(pick)) => self.cross[1] = pick,
+            ("touch_crosses", InputValue::Toggle(touches)) => self.touch_crosses = touches,
             (id, value) => {
                 let (field, index) = id
                     .rsplit_once('_')
@@ -489,7 +523,7 @@ impl Indicator for MACombination {
             .run(data, start, &mut self.values, |state, _bar| {
                 let i = state.0;
                 state.0 += 1;
-                let lines: Vec<_> = self
+                let mut lines: Vec<_> = self
                     .averages
                     .iter()
                     .map(|average| average.values().value(0, i).unwrap_or(f64::NAN))
@@ -498,26 +532,33 @@ impl Indicator for MACombination {
                     state.1 = None;
                     return IndicatorValue::None;
                 }
+                let mut cross = f64::NAN;
                 if let Some((first, second)) = pair {
                     if lines[first].is_finite() && lines[second].is_finite() {
                         let direction = lines[first].partial_cmp(&lines[second]).unwrap();
-                        if direction != std::cmp::Ordering::Equal {
-                            if state.1.is_some_and(|p| p != direction) {
-                                self.markers.push(IndicatorMarker {
-                                    bar: i,
-                                    value: lines[first],
-                                    direction: if direction == std::cmp::Ordering::Greater {
-                                        CrossDirection::Up
-                                    } else {
-                                        CrossDirection::Down
-                                    },
-                                });
+                        if self.touch_crosses || direction != std::cmp::Ordering::Equal {
+                            if let Some(previous) = state.1.filter(|p| *p != direction) {
+                                cross = lines[first];
+                                if self.crosses.is_none() {
+                                    self.markers.push(IndicatorMarker {
+                                        bar: i,
+                                        value: cross,
+                                        direction: if direction > previous {
+                                            CrossDirection::Up
+                                        } else {
+                                            CrossDirection::Down
+                                        },
+                                    });
+                                }
                             }
                             state.1 = Some(direction);
                         }
                     } else {
                         state.1 = None;
                     }
+                }
+                if self.crosses.is_some() {
+                    lines.push(cross);
                 }
                 IndicatorValue::Multiple(lines)
             });
@@ -529,15 +570,25 @@ impl Indicator for MACombination {
         &self.values
     }
     fn colors(&self) -> Vec<Color32> {
-        self.lines.iter().map(|line| line.color).collect()
+        self.lines
+            .iter()
+            .map(|line| line.color)
+            .chain(self.crosses)
+            .collect()
     }
     fn set_colors(&mut self, colors: Vec<Color32>) {
+        if let Some(color) = colors.get(self.lines.len())
+            && self.crosses.is_some()
+        {
+            self.crosses = Some(*color);
+        }
         for (line, color) in self.lines.iter_mut().zip(colors) {
             line.color = color;
         }
     }
     fn line_names(&self) -> Vec<String> {
-        self.lines
+        let mut names: Vec<_> = self
+            .lines
             .iter()
             .map(|line| {
                 format!(
@@ -547,7 +598,37 @@ impl Indicator for MACombination {
                         .max(if line.kind == AverageType::Hull { 2 } else { 1 })
                 )
             })
-            .collect()
+            .collect();
+        if self.crosses.is_some() {
+            names.push("Crosses".to_owned());
+        }
+        names
+    }
+    fn plot_style(&self, line: usize) -> PlotStyle {
+        if line == self.lines.len()
+            && let Some(color) = self.crosses
+        {
+            return PlotStyle {
+                color,
+                width: 4.0,
+                pattern: crate::model::LineStyle::Solid,
+                plot_type: PlotType::Crosses,
+                visible: true,
+            };
+        }
+        PlotStyle {
+            color: self
+                .lines
+                .get(line)
+                .map_or(Color32::WHITE, |average| average.color),
+            width: self.line_style(line).width,
+            pattern: crate::model::LineStyle::Solid,
+            plot_type: PlotType::Line,
+            visible: true,
+        }
+    }
+    fn plot_tagged(&self, line: usize) -> bool {
+        line < self.lines.len() && self.line_count() <= 4
     }
     fn markers(&self) -> &[IndicatorMarker] {
         &self.markers
@@ -584,10 +665,11 @@ impl Indicator for MACombination {
 
 // Preserve the existing public preset types and their constructors while sharing all calculation.
 macro_rules! impl_ma_preset {
-    ($ty:ident, $name:literal, $description:literal $(, $marker:expr)?) => {
+    ($ty:ident, $name:literal, $description:literal) => {
         impl crate::studies::Indicator for $ty {
             fn inputs(&self) -> Vec<crate::studies::StudyInput> {
-                self.inner.preset_inputs(matches!($name, "MA Ribbon"), matches!($name, "Multi MA"))
+                self.inner
+                    .preset_inputs(matches!($name, "MA Ribbon"), matches!($name, "Multi MA"))
             }
             fn set_input(
                 &mut self,
@@ -599,7 +681,10 @@ macro_rules! impl_ma_preset {
                     .into_iter()
                     .find(|input| input.id == id)
                     .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
-                if !schema.accepts(&value) {
+                if value != schema.value
+                    && !schema.accepts(&value)
+                    && !crate::studies::inputs::restores(id, &value)
+                {
                     return Err(crate::studies::StudyError::invalid_input(id));
                 }
                 self.inner.set_input(id, value)
@@ -638,13 +723,12 @@ macro_rules! impl_ma_preset {
                 }
                 names
             }
-            $(fn marker_style(&self) -> Option<crate::studies::PlotStyle> {
-                Some(crate::studies::PlotStyle {
-                    color: $marker, width: 4.0,
-                    pattern: crate::model::LineStyle::Solid,
-                    plot_type: crate::studies::PlotType::Crosses, visible: true,
-                })
-            })?
+            fn plot_style(&self, line: usize) -> crate::studies::PlotStyle {
+                self.inner.plot_style(line)
+            }
+            fn plot_tagged(&self, line: usize) -> bool {
+                self.inner.plot_tagged(line)
+            }
             fn markers(&self) -> &[crate::studies::IndicatorMarker] {
                 self.inner.markers()
             }
@@ -694,20 +778,20 @@ mod tests {
         for (name, names, colors, marked) in [
             (
                 "MA Cross",
-                vec!["Fast SMA(9)", "Slow SMA(21)"],
-                vec![orange, green],
+                vec!["Fast SMA(9)", "Slow SMA(21)", "Crosses"],
+                vec![orange, green, crate::studies::palette::BLUE],
                 true,
             ),
             (
                 "EMA Cross",
-                vec!["Fast EMA(9)", "Slow EMA(26)"],
-                vec![orange, green],
+                vec!["Fast EMA(9)", "Slow EMA(26)", "Crosses"],
+                vec![orange, green, crate::studies::palette::LIGHT_BLUE],
                 true,
             ),
             (
                 "SMA/EMA Cross",
-                vec!["SMA(10)", "EMA(10)"],
-                vec![orange, green],
+                vec!["SMA(10)", "EMA(10)", "Crosses"],
+                vec![orange, green, crate::studies::palette::LIGHT_BLUE],
                 true,
             ),
             (
@@ -747,7 +831,15 @@ mod tests {
                 false,
             ),
         ] {
-            let averages = names.len();
+            let crossed = matches!(name, "MA Cross" | "EMA Cross" | "SMA/EMA Cross");
+            let averages = names.len() - usize::from(crossed);
+            let has_marks = |study: &dyn Indicator| {
+                if crossed {
+                    (0..study.values().len()).any(|i| study.values().value(2, i).is_some())
+                } else {
+                    !study.markers().is_empty()
+                }
+            };
             let mut study = IndicatorFactory::new().create(name).unwrap();
             assert_eq!(study.name(), name);
             assert_eq!(study.line_names(), names, "{name}");
@@ -779,14 +871,14 @@ mod tests {
                 );
             }
             study.calculate(&bars);
-            assert_eq!(!study.markers().is_empty(), marked, "{name} by default");
+            assert_eq!(has_marks(study.as_ref()), marked, "{name} by default");
             study.set_input("cross_first", Choice(1)).unwrap();
             study.set_input("cross_second", Choice(2)).unwrap();
             study.calculate(&bars);
-            assert!(!study.markers().is_empty(), "{name} with its first two");
+            assert!(has_marks(study.as_ref()), "{name} with its first two");
             study.set_input("cross_first", Choice(0)).unwrap();
             study.calculate(&bars);
-            assert!(study.markers().is_empty(), "{name} with None");
+            assert!(!has_marks(study.as_ref()), "{name} with None");
             assert!(
                 study
                     .set_input("cross_first", Choice(averages + 1))
@@ -799,7 +891,7 @@ mod tests {
             }
             study.calculate(&bars);
             assert_eq!(study.line_names(), names, "{name} reset");
-            assert_eq!(!study.markers().is_empty(), marked, "{name} reset");
+            assert_eq!(has_marks(study.as_ref()), marked, "{name} reset");
             let mut configured = ConfiguredStudy::new(study);
             let mut edited = colors;
             *edited.last_mut().unwrap() = Color32::from_rgb(1, 2, 3);
@@ -894,9 +986,12 @@ mod tests {
                 }
             }
             let actual: Vec<_> = study
-                .markers()
+                .values()
+                .line(2)
                 .iter()
-                .map(|marker| (marker.bar, marker.direction, marker.value))
+                .enumerate()
+                .filter(|(_, v)| v.is_finite())
+                .map(|(bar, value)| (bar, CrossDirection::Down, *value))
                 .collect();
             assert_eq!(actual, markers, "{name}");
         }
@@ -907,7 +1002,7 @@ mod tests {
     /// the slow one until bar 8, where 339/32 exceeds 149/16.
     #[test]
     fn ema_cross_starts_each_average_from_its_simple_seed() {
-        use crate::studies::{CrossDirection, EMACross, Indicator};
+        use crate::studies::{EMACross, Indicator};
         let bars: Vec<_> = [7., 5., 12., 10., 4., 13., 5., 7., 14.]
             .into_iter()
             .map(make_bar)
@@ -949,11 +1044,125 @@ mod tests {
                 );
             }
         }
-        let markers: Vec<_> = study
-            .markers()
-            .iter()
-            .map(|marker| (marker.bar, marker.direction, marker.value))
-            .collect();
-        assert_eq!(markers, [(8, CrossDirection::Up, 339. / 32.)]);
+        assert_eq!(study.values().value(2, 8), Some(339. / 32.));
+        assert!(study.markers().is_empty());
+    }
+    /// A touch marks both its entry and exit; a return to the same side is not a strict cross.
+    #[test]
+    fn cross_presets_mark_touches_and_draw_their_own_crosses() {
+        use crate::studies::{ConfiguredStudy, Indicator, PlotType, StudyTemplate};
+        use InputValue::{Length, Toggle};
+        type Row<'a> = (&'a str, &'a [f64], &'a [(usize, f64)], &'a [(usize, f64)]);
+        let rows: &[Row<'_>] = &[
+            (
+                "EMA Cross",
+                &[1., 2., 3., 4., 3.5, 2.],
+                &[(5, 2.)],
+                &[(4, 3.5), (5, 2.)],
+            ),
+            (
+                "MA Cross",
+                &[1., 2., 3., 4., 4., 2.],
+                &[(5, 2.)],
+                &[(4, 4.), (5, 2.)],
+            ),
+            (
+                "MA Cross",
+                &[1., 2., 3., 4., 4., 5.],
+                &[],
+                &[(4, 4.), (5, 5.)],
+            ),
+            (
+                "SMA/EMA Cross",
+                &[1., 2., 3., 4., 3.5, 2.],
+                &[(5, 2.)],
+                &[(4, 3.5), (5, 2.)],
+            ),
+        ];
+        for &(name, closes, strict, touches) in rows {
+            let bars: Vec<_> = closes.iter().copied().map(make_bar).collect();
+            for (touch, expected) in [(false, strict), (true, touches)] {
+                let mut study = IndicatorFactory::new().create(name).unwrap();
+                for (id, value) in [
+                    ("period_0", Length(1)),
+                    ("period_1", Length(2)),
+                    ("touch_crosses", Toggle(touch)),
+                ] {
+                    study.set_input(id, value).unwrap();
+                }
+                study.calculate(&bars);
+                for bar in 0..bars.len() {
+                    assert_eq!(
+                        study.values().value(2, bar),
+                        expected.iter().find(|(i, _)| *i == bar).map(|(_, v)| *v),
+                        "{name} {touch} bar {bar}"
+                    );
+                }
+                assert!(study.markers().is_empty());
+                assert_eq!(study.line_names()[2], "Crosses");
+                assert_eq!(study.plot_style(2).plot_type, PlotType::Crosses);
+                assert_eq!(study.plot_style(2).width, 4.);
+                assert!(!study.plot_tagged(2));
+                let mut resumed = study.clone_box();
+                resumed.calculate(&bars[..5]);
+                resumed.update(&bars, 4);
+                assert_eq!(
+                    format!("{:?}", resumed.values()),
+                    format!("{:?}", study.values())
+                );
+            }
+            let mut study = ConfiguredStudy::new(IndicatorFactory::new().create(name).unwrap());
+            for length in [1, 2000] {
+                study.set_input("period_0", Length(length)).unwrap();
+            }
+            for length in [0, 2001] {
+                assert!(study.set_input("period_0", Length(length)).is_err());
+            }
+            study.set_input("touch_crosses", Toggle(true)).unwrap();
+            let mut settings = study.settings();
+            settings.plots[0].visible = false;
+            settings.plots[1].visible = false;
+            settings.plots[2].color = egui::Color32::from_rgb(1, 2, 3);
+            settings.plots[2].width = 2.;
+            settings.plots[2].plot_type = PlotType::Circles;
+            study.apply_settings(&[], settings).unwrap();
+            let mut saved = StudyTemplate::from_study(&study);
+            let restored = saved.create().unwrap();
+            assert_eq!(
+                format!("{:?}", restored.inputs()),
+                format!("{:?}", study.inputs())
+            );
+            assert_eq!(restored.settings(), study.settings());
+            saved.settings.plots.truncate(2);
+            saved.settings.untagged_plots.retain(|i| *i != 2);
+            assert!(!saved.create().unwrap().plot_style(2).visible);
+            saved.settings.plots[0].visible = true;
+            assert!(saved.create().unwrap().plot_style(2).visible);
+        }
+        for (last, direction) in [
+            (2., crate::studies::CrossDirection::Down),
+            (5., crate::studies::CrossDirection::Up),
+        ] {
+            let mut study = IndicatorFactory::new().create("Double MA").unwrap();
+            for (id, value) in [
+                ("period_0", Length(1)),
+                ("period_1", Length(2)),
+                ("cross_first", InputValue::Choice(1)),
+                ("cross_second", InputValue::Choice(2)),
+                ("touch_crosses", Toggle(true)),
+            ] {
+                study.set_input(id, value).unwrap();
+            }
+            study.calculate(&[1., 2., 3., 4., 4., last].map(make_bar));
+            let actual: Vec<_> = study
+                .markers()
+                .iter()
+                .map(|m| (m.bar, m.direction))
+                .collect();
+            assert_eq!(
+                actual,
+                [(4, crate::studies::CrossDirection::Down), (5, direction)]
+            );
+        }
     }
 }

@@ -15,7 +15,9 @@ impl MACross {
             AverageLine::new(AverageType::Simple, fast_period, palette::ORANGE),
             AverageLine::new(AverageType::Simple, slow_period, palette::DARK_GREEN),
         ])
-        .unwrap();
+        .unwrap()
+        .with_crosses(palette::BLUE)
+        .with_max_period(2000);
         Self { inner }
     }
 }
@@ -29,6 +31,5 @@ impl Default for MACross {
 impl_ma_preset!(
     MACross,
     "MA Cross",
-    "MA Cross - Two simple averages with crossing markers",
-    palette::BLUE
+    "MA Cross - Two simple averages with crossing markers"
 );

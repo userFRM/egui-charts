@@ -15,7 +15,9 @@ impl MixedMACross {
                 AverageLine::new(AverageType::Simple, simple, palette::ORANGE),
                 AverageLine::new(AverageType::Exponential, exponential, palette::DARK_GREEN),
             ])
-            .unwrap(),
+            .unwrap()
+            .with_crosses(palette::LIGHT_BLUE)
+            .with_max_period(2000),
         }
     }
 }
@@ -27,8 +29,7 @@ impl Default for MixedMACross {
 impl_ma_preset!(
     MixedMACross,
     "SMA/EMA Cross",
-    "Simple and exponential moving averages with crossing markers",
-    palette::LIGHT_BLUE
+    "Simple and exponential moving averages with crossing markers"
 );
 
 /// Three simple averages with independently chosen lengths.

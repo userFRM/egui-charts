@@ -15,7 +15,9 @@ impl EMACross {
             AverageLine::new(AverageType::Exponential, fast_period, palette::ORANGE),
             AverageLine::new(AverageType::Exponential, slow_period, palette::DARK_GREEN),
         ])
-        .unwrap();
+        .unwrap()
+        .with_crosses(palette::LIGHT_BLUE)
+        .with_max_period(2000);
         Self { inner }
     }
 }
@@ -29,6 +31,5 @@ impl Default for EMACross {
 impl_ma_preset!(
     EMACross,
     "EMA Cross",
-    "EMA Cross - Two exponential averages with crossing markers",
-    palette::LIGHT_BLUE
+    "EMA Cross - Two exponential averages with crossing markers"
 );

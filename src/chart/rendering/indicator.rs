@@ -2179,6 +2179,49 @@ mod tests {
                 }
             }
         }
+        // Crossing plots stay visible when both averages are hidden, in either theme.
+        for name in ["EMA Cross", "MA Cross", "SMA/EMA Cross"] {
+            let mut study = crate::studies::ConfiguredStudy::new(
+                crate::studies::IndicatorFactory::new()
+                    .create(name)
+                    .unwrap(),
+            );
+            study.set_input("period_0", InputValue::Length(1)).unwrap();
+            study.set_input("period_1", InputValue::Length(2)).unwrap();
+            let mut settings = study.settings();
+            settings.plots[0].visible = false;
+            settings.plots[1].visible = false;
+            study.apply_settings(&[], settings).unwrap();
+            let color = if name == "MA Cross" {
+                crate::studies::palette::BLUE
+            } else {
+                crate::studies::palette::LIGHT_BLUE
+            };
+            for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+                let mut chart = chart(&[0.0], &[1.0, 2.0]);
+                chart.add_indicator(Box::new(study.clone()));
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+                assert!(
+                    painted
+                        .iter()
+                        .any(|s| matches!(s,Shape::LineSegment {stroke,..} if stroke.color==color)),
+                    "{name}"
+                );
+                for color in &study.colors()[..2] {
+                    assert!(
+                        !painted.iter().any(|s| match s {
+                            Shape::LineSegment { stroke, .. } => stroke.color == *color,
+                            Shape::Path(path) =>
+                                path.stroke.color == egui::epaint::ColorMode::Solid(*color),
+                            _ => false,
+                        }),
+                        "{name} hidden {color:?}"
+                    );
+                }
+            }
+        }
     }
     #[cfg(feature = "drawings")]
     fn pattern_bars(anchors: &[f64]) -> Vec<Bar> {
