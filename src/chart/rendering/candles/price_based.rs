@@ -870,7 +870,7 @@ mod tests {
     /// rising body colour at full opacity.
     #[test]
     fn range_and_renko_styles_reach_the_painter() {
-        use crate::model::BarData;
+        use crate::model::{BarData, PriceLineSource};
         use crate::widget::{
             Chart,
             test_frames::{frame, shapes},
@@ -1037,10 +1037,12 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         for (thin_bars, closes, side) in [
-            (false, [100.0, 102.0, 103.0], 0),
-            (false, [100.0, 102.0, 101.0], 1),
-            (true, [100.0, 102.0, 103.0], 0),
-            (true, [100.0, 102.0, 101.0], 1),
+            (false, &[100.0, 102.0, 103.0][..], 0),
+            (false, &[100.0, 102.0, 101.0][..], 1),
+            (true, &[100.0, 102.0, 103.0][..], 0),
+            (true, &[100.0, 102.0, 101.0][..], 1),
+            (false, &[100.0, 102.0, 103.0, 102.0][..], 1),
+            (true, &[100.0, 102.0, 103.0, 102.0][..], 1),
         ] {
             let mut params = ChartTypeParams {
                 range_size: 2.0,
@@ -1049,13 +1051,40 @@ mod tests {
             let style = &mut params.styles.range;
             style.thin_bars = thin_bars;
             [style.forming_up, style.forming_down] = forming;
-            let (painted, mut chart) = paint(ChartType::Range, params, bars(0, &closes, None));
+            let (painted, mut chart) = paint(ChartType::Range, params, bars(0, closes, None));
             let up = chart.chart_type_params().styles.range.up_color;
             assert_eq!(
                 slots(&painted, &chart),
                 [vec![up], vec![forming[side]]],
                 "thin bars {thin_bars}, closes {closes:?}"
             );
+            for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+                assert_eq!(
+                    chart
+                        .series_last_value(crate::widget::SeriesId::MAIN, source)
+                        .unwrap()
+                        .color,
+                    forming[side],
+                    "{source:?}, thin bars {thin_bars}, closes {closes:?}"
+                );
+                chart
+                    .series_style_mut(crate::widget::SeriesId::MAIN)
+                    .unwrap()
+                    .price_line_source = source;
+                let painted = shapes(&egui::Context::default(), &mut chart, 0.3, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let style = &chart.chart_type_params().styles.range;
+                let known = [style.up_color, style.down_color, forming[0], forming[1]];
+                let tag = painted.iter().find_map(|shape| match shape {
+                    Shape::Rect(r)
+                        if !plot.contains(r.rect.center()) && known.contains(&r.fill) =>
+                    {
+                        Some(r.fill)
+                    }
+                    _ => None,
+                });
+                assert_eq!(tag, Some(forming[side]), "price tag, {source:?}");
+            }
             if thin_bars || side != 0 {
                 continue;
             }
@@ -1066,6 +1095,19 @@ mod tests {
             chart.apply_synced_time_scale(spacing, -1.6);
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             assert_eq!(slots(&painted, &chart), [vec![up], vec![]], "scrolled back");
+            for (source, expected) in [
+                (PriceLineSource::LastBar, forming[0]),
+                (PriceLineSource::LastVisible, up),
+            ] {
+                assert_eq!(
+                    chart
+                        .series_last_value(crate::widget::SeriesId::MAIN, source)
+                        .unwrap()
+                        .color,
+                    expected,
+                    "scrolled back, {source:?}"
+                );
+            }
         }
 
         let (border, wick) = (

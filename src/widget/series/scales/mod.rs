@@ -685,6 +685,45 @@ impl Chart {
             .unwrap_or(if bar.close >= reference { up } else { down })
     }
 
+    /// The colour of the Range element labelled by `source`, in forming colours while it is
+    /// in progress. A flat element falls, as painted; an explicit price line colour wins.
+    /// Other chart types and selections without a displayed valued element return `None`.
+    pub(in crate::widget) fn range_value_color(&self, source: PriceLineSource) -> Option<Color32> {
+        if self.chart_type != ChartType::Range || !self.state.shows_elements() {
+            return None;
+        }
+        let elements = self.state.shown();
+        let (from, to) = match source {
+            PriceLineSource::LastBar => (0, elements.len()),
+            PriceLineSource::LastVisible => self.state.visible_range(),
+        };
+        let at = from
+            + elements[from..to]
+                .iter()
+                .rposition(|bar| !bar.is_whitespace())?;
+        let (mut up, mut down) = self.main_body_colors();
+        if at + 1 == elements.len()
+            && crate::chart::rendering::candles::price_based::range_forming(
+                &self.execution_ranges,
+                &self.state.data().bars,
+                self.state.revision(),
+                &self.chart_type_params,
+            )
+        {
+            let style = &self.chart_type_params.styles.range;
+            (up, down) = (
+                crate::model::or_candle(style.forming_up, up),
+                crate::model::or_candle(style.forming_down, down),
+            );
+        }
+        let bar = &elements[at];
+        Some(
+            self.main_series_style
+                .price_line_color
+                .unwrap_or(if bar.close > bar.open { up } else { down }),
+        )
+    }
+
     /// The latest loaded or latest visible valued bar of a main or added bar series.
     /// Trailing whitespace is skipped; `source` is independent of the price-line setting.
     /// Hidden series and hidden value labels remain queryable.
@@ -692,6 +731,7 @@ impl Chart {
     /// Uses the series' price scale, pane and formatter, as last drawn. Visible selection
     /// includes bars cut by a plot edge, as rendering does. On price-based main charts,
     /// loaded selection uses stored bars and visible selection uses displayed elements.
+    /// Range colours follow the displayed bar, using forming colours while it is in progress.
     /// Returns `None` for absent series, studies, a selection without values, or before the
     /// pane is drawn. A close the scale cannot place, such as zero or a negative price on a
     /// logarithmic scale, also returns `None`.
@@ -715,7 +755,12 @@ impl Chart {
                 PriceLineSource::LastBar => self.time_to_index(bar.time)?,
                 PriceLineSource::LastVisible => at as f64,
             };
-            (bar, self.main_value_color(bars, at), index)
+            (
+                bar,
+                self.range_value_color(source)
+                    .unwrap_or_else(|| self.main_value_color(bars, at)),
+                index,
+            )
         } else {
             let item = self.price_series.iter().find(|item| item.id == id)?;
             let bar = self.series_bar_from(item, source)?;
