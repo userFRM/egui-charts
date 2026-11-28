@@ -362,8 +362,7 @@ fn recording_bytes(
 }
 
 /// The download limit on desktop; the web leaves room for other settings in local storage.
-/// Tests save with the web budget, the only one that leaves recordings out.
-const SAVED_RECORDING_BYTES: usize = if cfg!(any(target_arch = "wasm32", test)) {
+const SAVED_RECORDING_BYTES: usize = if cfg!(target_arch = "wasm32") {
     512 * 1024
 } else {
     MAX_RECORDING_BYTES
@@ -3971,8 +3970,9 @@ mod tests {
                 app.chart.bars(SeriesId::MAIN).to_vec(),
             )
         };
-        // (an ordinary replay saved before the import, its recording kept with the session)
-        for (previous, kept) in [(false, true), (true, true), (true, false)] {
+        // (an ordinary replay saved before the import, a file above the browser saving budget)
+        for (previous, large) in [(false, false), (true, false), (true, true)] {
+            let kept = !large || !cfg!(target_arch = "wasm32");
             let mut app = DemoApp::new_at(
                 &eframe::CreationContext::_new_kittest(ctx.clone()),
                 start,
@@ -3985,7 +3985,7 @@ mod tests {
             settle(&mut app, &ctx);
             let mut events = Vec::new();
             app.live.read_recording(&mut events);
-            if !kept {
+            if large {
                 // Ten thousand executions encode to more than the web saving budget.
                 let symbol = app.state.symbol.clone();
                 let book = egui_charts::model::OrderBook {
@@ -4031,11 +4031,24 @@ mod tests {
                 }
             }
             assert!(app.recording_files.opened);
+            app.set_replay_scope(ReplayScope::AllCharts);
             app.handle_replay_control(ReplayControlAction::GoToEnd);
             app.handle_replay_control(ReplayControlAction::PreviousBar);
             app.handle_replay_control(ReplayControlAction::SetSpeed(3.0));
             settle(&mut app, &ctx);
             let saved = at(&app);
+            if large {
+                assert_eq!(
+                    saved.0,
+                    Some(
+                        start
+                            + chrono::TimeDelta::milliseconds(9998)
+                            + chrono::TimeDelta::nanoseconds(1)
+                    )
+                );
+                assert_eq!(saved.1, Some(9998));
+                assert_eq!(saved.2.last().unwrap().volume, 9999.0);
+            }
             app.handle_replay_control(ReplayControlAction::NextBar);
             settle(&mut app, &ctx);
             let next = at(&app);
@@ -4044,7 +4057,7 @@ mod tests {
             assert_eq!(at(&app), saved);
             let mut storage = AppStorage::default();
             eframe::App::save(&mut *app, &mut storage);
-            // Tests save with the web budget, which leaves the larger recording out.
+            // The production browser save omits the large file; desktop retains it.
             assert_eq!(
                 eframe::Storage::get_string(&storage, "replay_session_recording").is_some(),
                 kept
@@ -4064,6 +4077,58 @@ mod tests {
                 assert!(frames(&mut restored, &ctx).iter().any(|text| {
                     text == "Saved replay needs its recording file: open it again from Market recording > Open local recording"
                 }));
+                // A file selected before connecting visitor data can arrive afterwards.
+                use super::super::owndata::profile::{History, Interval, Profile};
+                let own = Profile {
+                    name: "Visitor".into(),
+                    symbols: vec!["VISITOR".into(), app.state.symbol.clone()],
+                    intervals: vec![Interval {
+                        chart: Timeframe::Min5,
+                        service: "5m".into(),
+                    }],
+                    history: Some(History {
+                        url: "http://127.0.0.1:9/bars".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                let (tx, rx) = std::sync::mpsc::channel();
+                restored.recording_files.selected = Some(rx);
+                restored.connect_own_data(own, super::super::owndata::Secrets::new());
+                let shown = (restored.state.symbol.clone(), restored.state.timeframe);
+                assert_eq!(shown, ("VISITOR".into(), Timeframe::Min5));
+                let pending = restored.replay_session.clone();
+                let cutoff = restored.replay_session_cutoff;
+                let automatic = restored.replay_session_automatic;
+                let paused = (
+                    restored.live.paused(),
+                    restored.own_data.as_ref().unwrap().paused,
+                );
+                tx.send(Ok(Some(bytes.clone()))).unwrap();
+                for _ in 0..64 {
+                    restored.poll_recording(&ctx);
+                }
+                assert_eq!(
+                    (restored.state.symbol.clone(), restored.state.timeframe),
+                    shown,
+                    "a refused replay file must preserve the displayed source"
+                );
+                assert!(restored.replay.is_none());
+                assert!(!restored.recording_files.opened);
+                assert!(restored.chart.replay_driver().is_none());
+                assert!(restored.replay_session_recording.is_none());
+                assert!(restored.replay_session_imported);
+                assert_eq!(restored.replay_session, pending);
+                assert_eq!(restored.replay_session_cutoff, cutoff);
+                assert_eq!(restored.replay_session_automatic, automatic);
+                assert_eq!(
+                    (
+                        restored.live.paused(),
+                        restored.own_data.as_ref().unwrap().paused,
+                    ),
+                    paused
+                );
+                restored.leave_own_data();
                 // Opening the identical file it asks for resumes the saved session.
                 let (tx, rx) = std::sync::mpsc::channel();
                 restored.recording_files.selected = Some(rx);
@@ -4083,7 +4148,11 @@ mod tests {
             let state = &restored.replay.as_ref().unwrap().state;
             assert!(!state.is_playing());
             assert_eq!(state.speed.multiplier(), 3.0);
+            assert_eq!(state.scope, ReplayScope::AllCharts);
             assert_eq!(at(&restored), saved);
+            assert_eq!(restored.replay_scope, app.replay_scope);
+            assert_eq!(restored.state.symbol, app.state.symbol);
+            assert_eq!(restored.state.timeframe, app.state.timeframe);
             assert_eq!(restored.replay_session, app.replay_session);
             assert_eq!(restored.replay_session_cutoff, app.replay_session_cutoff);
             assert_eq!(
