@@ -2,6 +2,7 @@
 
 use super::core::Direction;
 use super::layout::Region;
+use super::studies::study_input_summary;
 use super::{Action, Terminal};
 use egui_charts::localization as l10n;
 use egui_charts::model::{ChartType, SeriesScale, SymbolType};
@@ -82,6 +83,10 @@ impl Terminal {
             .keys()
             .map(|name| (name.clone(), name.clone()))
             .collect();
+        self.top_toolbar.builtin_indicator_templates = StudyTemplateSet::builtin()
+            .into_iter()
+            .map(|(name, _)| (name.to_string(), name.to_string()))
+            .collect();
     }
 
     pub(super) fn compare_perform(&mut self, action: Action) -> Option<Action> {
@@ -117,6 +122,11 @@ impl Terminal {
                     .cloned()
                 {
                     self.load_study_template(&template);
+                }
+            }
+            Action::TopToolbar(TopToolbarAction::ApplyBuiltinIndicatorTemplate(name)) => {
+                if let Some(template) = StudyTemplateSet::builtin_named(&name) {
+                    self.load_builtin_study_template(&template);
                 }
             }
             action => return Some(action),
@@ -248,13 +258,49 @@ impl Terminal {
         self.studies.settings.adjust_for_dividends = adjusted;
     }
 
-    pub(super) fn load_study_template(&mut self, template: &StudyTemplateSet) {
+    fn load_study_template(&mut self, template: &StudyTemplateSet) {
         let applied = self.user_action(|terminal| {
             let chart = &mut terminal.charts[terminal.active];
             chart.apply_study_template_set_with(template, terminal.studies.indicators.factory())?;
-            let ids: Vec<_> = chart.indicators().map(|(id, _)| id).collect();
-            for id in ids {
-                chart.set_indicator_inputs(id, "");
+            let captions: Vec<_> = chart
+                .indicators()
+                .map(|(id, study)| (id, study_input_summary(study)))
+                .collect();
+            for (id, caption) in captions {
+                chart.set_indicator_inputs(id, caption);
+            }
+            Ok::<_, String>(())
+        });
+        if let Err(error) = applied {
+            self.toasts.error(error);
+        }
+    }
+
+    /// Applies a built-in set as the user's choice, as [`Self::load_study_template`]
+    /// applies a saved one, except the set's studies are chosen through
+    /// [`Chart::apply_chosen_study_template_set_with`](egui_charts::widget::Chart::apply_chosen_study_template_set_with),
+    /// so studies the user may not edit stay in place. The chosen variant already
+    /// records the change as one undoable step; nesting it in
+    /// [`Self::user_action`] only deepens that step (see
+    /// `Chart::begin_user_action`), it does not add another undo entry.
+    fn load_builtin_study_template(&mut self, template: &StudyTemplateSet) {
+        let applied = self.user_action(|terminal| {
+            let chart = &mut terminal.charts[terminal.active];
+            let ids = chart.apply_chosen_study_template_set_with(
+                template,
+                terminal.studies.indicators.factory(),
+            )?;
+            let captions: Vec<_> = ids
+                .iter()
+                .filter_map(|id| {
+                    chart
+                        .indicators()
+                        .find(|(candidate, _)| candidate == id)
+                        .map(|(candidate, study)| (candidate, study_input_summary(study)))
+                })
+                .collect();
+            for (id, caption) in captions {
+                chart.set_indicator_inputs(id, caption);
             }
             Ok::<_, String>(())
         });
@@ -626,5 +672,61 @@ mod tests {
                 "Study limit reached"
             );
         }
+    }
+
+    /// Built-in sets are listed in the template menu even with nothing saved,
+    /// and applying one replaces the studies as one undoable edit.
+    #[test]
+    fn builtin_templates_apply_from_the_menu() {
+        let storage = Arc::new(MemoryStorage::default());
+        let mut terminal = Terminal::new(Arc::new(TestFeed))
+            .with_symbol("AAPL")
+            .with_storage(storage);
+        for _ in 0..4 {
+            frame(&mut terminal, SIZE, vec![]);
+        }
+        assert_eq!(
+            terminal.top_toolbar.builtin_indicator_templates,
+            [
+                (
+                    "Bill Williams' 3 Lines".to_string(),
+                    "Bill Williams' 3 Lines".to_string()
+                ),
+                ("Displaced EMA".into(), "Displaced EMA".into()),
+                ("MA Exp Ribbon".into(), "MA Exp Ribbon".into()),
+                ("Oscillators".into(), "Oscillators".into()),
+                ("Swing Trading".into(), "Swing Trading".into()),
+                ("Volume Based".into(), "Volume Based".into()),
+            ]
+        );
+        let before = terminal.chart().study_template_set();
+        let apply = || {
+            Action::TopToolbar(TopToolbarAction::ApplyBuiltinIndicatorTemplate(
+                "Swing Trading".into(),
+            ))
+        };
+        assert!(terminal.run(apply()).is_none());
+        let expected = StudyTemplateSet::builtin_named("Swing Trading").unwrap();
+        assert_eq!(
+            serde_json::to_value(terminal.chart().study_template_set()).unwrap(),
+            serde_json::to_value(expected).unwrap(),
+        );
+        assert!(terminal.chart_mut().undo());
+        assert_eq!(
+            serde_json::to_value(terminal.chart().study_template_set()).unwrap(),
+            serde_json::to_value(&before).unwrap(),
+        );
+        // An unknown built-in id is ignored, like an unknown saved name.
+        assert!(
+            terminal
+                .run(Action::TopToolbar(
+                    TopToolbarAction::ApplyBuiltinIndicatorTemplate("No such set".into())
+                ))
+                .is_none()
+        );
+        assert_eq!(
+            serde_json::to_value(terminal.chart().study_template_set()).unwrap(),
+            serde_json::to_value(&before).unwrap(),
+        );
     }
 }
