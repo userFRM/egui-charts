@@ -1306,13 +1306,14 @@ impl DemoApp {
                 self.notify("No recorded market events available yet");
                 return;
             };
-            bars.retain(|bar| bar.time >= from && bar.time <= to);
             if bars.is_empty() {
                 self.notify("No recorded executions available yet");
                 return;
             }
             let after = chrono::TimeDelta::nanoseconds(1);
-            cutoff = cutoff.map(|time| time.clamp(bars[0].time + after, to + after));
+            // Equal-time executions can be stamped after their recorded time.
+            let last = bars[bars.len() - 1].time.max(to);
+            cutoff = cutoff.map(|time| time.clamp(bars[0].time + after, last + after));
             if self.chart.replay_driver().is_none() {
                 self.notify(format!(
                     "Recorded market replay: {} to {} UTC",

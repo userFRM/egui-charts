@@ -3617,25 +3617,17 @@ mod tests {
         assert_eq!(panel.quote("INDEXA"), live.quote(next_minute).as_ref());
     }
 
-    /// Trade-by-trade updates of a live capture step through an order fill as the replay
-    /// driver counts it, and a step back restores the execution before it.
+    /// Trade-by-trade updates of a live capture step through every execution as the replay
+    /// driver counts it, order fills, executions that share the capture's last timestamp and a
+    /// repeated trade id included, and a step back restores the execution before it.
     #[test]
-    fn live_capture_order_fills_are_trade_replay_positions() {
+    fn live_capture_executions_are_trade_replay_positions() {
         use super::super::tests::settle;
         use egui_charts::data::{MarketEvent, OrderEvent, RestingOrder};
         use egui_charts::ui::floating_replay_control::ReplayControlAction;
 
         let ctx = egui::Context::default();
         let start: DateTime<Utc> = "2026-11-12T15:00:00Z".parse().unwrap();
-        let mut app = super::super::DemoApp::new_at(
-            &eframe::CreationContext::_new_kittest(ctx.clone()),
-            start,
-            true,
-        );
-        settle(&mut app, &ctx);
-        app.switch_timeframe(Timeframe::Min1);
-        app.advance_sample_to(start + TimeDelta::seconds(90));
-        settle(&mut app, &ctx);
         // Executions in a minute of their own after the captured stream, behind an order snapshot.
         let minute = start + TimeDelta::minutes(2);
         let s = |n: i64| minute + TimeDelta::seconds(n);
@@ -3645,63 +3637,113 @@ mod tests {
             size: 2.0,
             trade: Some(tick(s(2), 102.0, 2.0)),
         };
-        let events = [
+        let ns = TimeDelta::nanoseconds(1);
+        let trade = |time, price, size| (time, MarketEvent::Trade(tick(time, price, size)));
+        let traded = |id, price, size| {
             (
+                minute,
+                MarketEvent::Trade(tick(minute, price, size).with_id(id)),
+            )
+        };
+        for (name, events, expected) in [
+            (
+                "equal time",
+                vec![
+                    trade(minute, 101.0, 1.0),
+                    trade(minute, 102.0, 2.0),
+                    trade(minute, 103.0, 4.0),
+                ],
+                vec![
+                    (minute + ns * 3, 7.0, 103.0, true),
+                    (minute + ns * 2, 3.0, 102.0, false),
+                    (minute + ns, 1.0, 101.0, false),
+                ],
+            ),
+            (
+                "repeated id",
+                vec![
+                    traded(1 << 40, 101.0, 1.0),
+                    traded(1 << 40, 101.0, 1.0),
+                    traded((1 << 40) + 1, 103.0, 2.0),
+                ],
+                vec![
+                    (minute + ns * 2, 3.0, 103.0, true),
+                    (minute + ns, 1.0, 101.0, false),
+                ],
+            ),
+            (
+                "order fill",
+                vec![
+                    trade(s(1), 101.0, 1.0),
+                    (
+                        s(2),
+                        MarketEvent::Order {
+                            sequence: 1,
+                            event: execute,
+                        },
+                    ),
+                    trade(s(3), 103.0, 4.0),
+                ],
+                vec![
+                    (s(3) + ns, 7.0, 103.0, true),
+                    (s(2) + ns, 3.0, 102.0, false),
+                    (s(1) + ns, 1.0, 101.0, false),
+                ],
+            ),
+        ] {
+            let mut app = super::super::DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                start,
+                true,
+            );
+            settle(&mut app, &ctx);
+            app.switch_timeframe(Timeframe::Min1);
+            app.advance_sample_to(start + TimeDelta::seconds(90));
+            settle(&mut app, &ctx);
+            let snapshot = (
                 minute,
                 MarketEvent::OrderSnapshot {
                     sequence: 0,
                     orders: vec![RestingOrder::new(1, OrderSide::Sell, 102.0, 2.0)],
                 },
-            ),
-            (s(1), MarketEvent::Trade(tick(s(1), 101.0, 1.0))),
-            (
-                s(2),
-                MarketEvent::Order {
-                    sequence: 1,
-                    event: execute,
-                },
-            ),
-            (s(3), MarketEvent::Trade(tick(s(3), 103.0, 4.0))),
-        ];
-        {
-            // The capture `read_recording` reads.
-            let mut sim = app.live.state();
-            let symbol = sim.symbol.clone();
-            let (cents, adjusted) = (sim.cents, sim.adjusted);
-            let stream = sim.streams.iter().position(|feed| {
-                let feed = feed.state();
-                feed.symbol == symbol && feed.cents == cents && feed.adjusted == adjusted
-            });
-            for (time, event) in events {
-                match stream {
-                    Some(at) => sim.streams[at].state().capture.push(&symbol, time, event),
-                    None => sim.capture.push(&symbol, time, event),
+            );
+            {
+                // The capture `read_recording` reads.
+                let mut sim = app.live.state();
+                let symbol = sim.symbol.clone();
+                let (cents, adjusted) = (sim.cents, sim.adjusted);
+                let stream = sim.streams.iter().position(|feed| {
+                    let feed = feed.state();
+                    feed.symbol == symbol && feed.cents == cents && feed.adjusted == adjusted
+                });
+                for (time, event) in std::iter::once(snapshot).chain(events) {
+                    match stream {
+                        Some(at) => sim.streams[at].state().capture.push(&symbol, time, event),
+                        None => sim.capture.push(&symbol, time, event),
+                    }
                 }
             }
-        }
-        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 1);
-        app.set_replay_interval(Timeframe::Ticks(std::num::NonZeroU64::MIN));
-        settle(&mut app, &ctx);
-        let position = |app: &super::super::DemoApp| {
-            let bar = app.chart.bars(SeriesId::MAIN).last().unwrap();
-            (app.chart.replay_time().unwrap(), bar.volume, bar.close)
-        };
-        app.handle_replay_control(ReplayControlAction::GoToEnd);
-        settle(&mut app, &ctx);
-        let mut positions = vec![position(&app)];
-        for _ in 0..2 {
-            app.handle_replay_control(ReplayControlAction::PreviousBar);
+            app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 1);
+            app.set_replay_interval(Timeframe::Ticks(std::num::NonZeroU64::MIN));
             settle(&mut app, &ctx);
-            positions.push(position(&app));
+            let position = |app: &super::super::DemoApp| {
+                let bar = app.chart.bars(SeriesId::MAIN).last().unwrap();
+                (
+                    app.chart.replay_time().unwrap(),
+                    bar.volume,
+                    bar.close,
+                    app.chart.replay_driver().unwrap().is_finished(),
+                )
+            };
+            app.handle_replay_control(ReplayControlAction::GoToEnd);
+            settle(&mut app, &ctx);
+            let mut positions = vec![position(&app)];
+            for _ in 1..expected.len() {
+                app.handle_replay_control(ReplayControlAction::PreviousBar);
+                settle(&mut app, &ctx);
+                positions.push(position(&app));
+            }
+            assert_eq!(positions, expected, "{name}");
         }
-        let ns = TimeDelta::nanoseconds(1);
-        assert_eq!(
-            positions,
-            [
-                (s(3) + ns, 7.0, 103.0),
-                (s(2) + ns, 3.0, 102.0),
-                (s(1) + ns, 1.0, 101.0)
-            ]
-        );
     }
 }
