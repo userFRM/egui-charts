@@ -11825,6 +11825,7 @@ mod tests {
             (Key::ArrowRight, jump, Some(0), false),
             (Key::ArrowLeft, jump, Some(0), false),
             (Key::ArrowRight, Modifiers::SHIFT, Some(1), false),
+            (Key::ArrowLeft, Modifiers::SHIFT, Some(-1), false),
         ] {
             let before = app.replay.as_ref().unwrap().state.curr_bar;
             press(&mut app, key, modifiers);

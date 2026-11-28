@@ -457,7 +457,8 @@ impl<'a> CompactReplayControls<'a> {
 pub struct ReplayKeyboardHandler;
 
 impl ReplayKeyboardHandler {
-    /// Handle keyboard input for replay controls
+    /// The replay action of a key pressed this frame. Left and Right step one bar back or
+    /// forward, with or without Shift, as the keyboard help lists them.
     pub fn handle(ui: &Ui, state: &ReplayState) -> ReplayAction {
         if !state.is_active() {
             return ReplayAction::None;
@@ -474,19 +475,13 @@ impl ReplayKeyboardHandler {
                 return ReplayAction::TogglePlayPause;
             }
 
-            // Left arrow - step backward
+            // Left arrow, with or without Shift - step backward one bar
             if i.key_pressed(egui::Key::ArrowLeft) {
-                if i.modifiers.shift {
-                    return ReplayAction::StepBackwardN(10);
-                }
                 return ReplayAction::StepBackward;
             }
 
-            // Right arrow - step forward
+            // Right arrow, with or without Shift - step forward one bar
             if i.key_pressed(egui::Key::ArrowRight) {
-                if i.modifiers.shift {
-                    return ReplayAction::StepForwardN(10);
-                }
                 return ReplayAction::StepForward;
             }
 
@@ -530,5 +525,73 @@ impl ReplayKeyboardHandler {
 
             ReplayAction::None
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::ReplayController;
+    use super::*;
+    use crate::Chart;
+    use crate::model::{Bar, BarClock, BarData, Timeframe};
+    use crate::widget::SeriesId;
+    use egui::{Event, Key, Modifiers};
+
+    /// Shift+Right and Shift+Left step one bar, as the keyboard help lists them beside the plain
+    /// arrows: playback pauses, the chart reveals one bar more or less, and both ends hold.
+    #[test]
+    fn shift_arrows_step_one_bar_as_the_keyboard_help_lists() {
+        let bars: Vec<Bar> = (0..40)
+            .map(|i| {
+                let time = chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap();
+                Bar::new(time, 100.0, 101.0, 99.0, 100.5, 1_000.0)
+            })
+            .collect();
+        let clock = BarClock::new(Timeframe::Min1);
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.set_timeframe(Timeframe::Min1);
+        let mut replay = ReplayController::new(bars, Vec::new());
+        replay.handle_action(ReplayAction::JumpToBar(5));
+        let ctx = egui::Context::default();
+        // (action before the key, arrow pressed with Shift, cursor after, bars the chart reveals)
+        for (before, key, cursor, revealed) in [
+            (ReplayAction::Play, Key::ArrowRight, 6, 7),
+            (ReplayAction::None, Key::ArrowLeft, 5, 6),
+            (ReplayAction::JumpToStart, Key::ArrowLeft, 0, 1),
+            (ReplayAction::JumpToEnd, Key::ArrowRight, 39, 40),
+        ] {
+            replay.handle_action(before.clone());
+            // egui reads held modifiers from ModifiersChanged, not from the key event.
+            let events = vec![
+                Event::ModifiersChanged(Modifiers::SHIFT),
+                Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::SHIFT,
+                },
+            ];
+            let mut action = ReplayAction::None;
+            ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| action = ReplayKeyboardHandler::handle(ui, &replay.state),
+            )
+            .drop_without_applying_deltas();
+            replay.handle_action(action);
+            chart.set_replay_time(replay.cutoff(&clock));
+            assert_eq!(
+                (
+                    replay.state.curr_bar,
+                    chart.bars(SeriesId::MAIN).len(),
+                    replay.state.is_playing(),
+                ),
+                (cursor, revealed, false),
+                "Shift+{key:?} after {before:?}"
+            );
+        }
     }
 }
