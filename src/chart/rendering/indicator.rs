@@ -506,29 +506,41 @@ impl IndicatorRenderer {
             .start_idx
             .min(coords.x_to_idx(context.rect.left()).saturating_sub(1));
         let display_end = coords.x_to_idx(context.rect.right()).saturating_add(2);
-        if layer == PlotLayer::Foreground {
-            let visible = crate::chart::rendering::volume_profile::profile_range(coords);
-            for plot in indicator.volume_profiles(visible.clone()) {
-                crate::painting::volume_profile::paint_profile(
-                    &context.painter.with_clip_rect(context.rect),
-                    &plot.profile,
-                    plot.config,
-                    plot.color,
-                    crate::chart::rendering::volume_profile::profile_span(&plot, coords),
-                    crate::painting::volume_profile::ProfileStyle::Study {
-                        right_aligned: plot.right_aligned,
-                        strip: plot.strip.is_some(),
-                        walls_visible: if plot.profile.walls.is_some() {
-                            [3, 4].map(|line| indicator.plot_style(line).visible)
-                        } else {
-                            [true; 2]
-                        },
-                        width: plot.width,
-                        volume_decimals: plot.volume_decimals,
-                    },
-                    &|price| price_scale.price_to_y(price),
-                );
+        let visible = crate::chart::rendering::volume_profile::profile_range(coords);
+        for mut plot in indicator.volume_profiles(visible.clone()) {
+            if layer == PlotLayer::Backgrounds {
+                if !plot.config.exact_row_opacity {
+                    continue;
+                }
+                plot.config.show_poc = false;
+                plot.config.show_value_area_lines = false;
+                plot.config.show_value_area_high = false;
+                plot.config.show_value_area_low = false;
+                plot.config.show_values = false;
+            } else if plot.config.exact_row_opacity {
+                plot.config.show_rows = false;
             }
+            crate::painting::volume_profile::paint_profile(
+                &context.painter.with_clip_rect(context.rect),
+                &plot.profile,
+                plot.config,
+                plot.color,
+                crate::chart::rendering::volume_profile::profile_span(&plot, coords),
+                crate::painting::volume_profile::ProfileStyle::Study {
+                    right_aligned: plot.right_aligned,
+                    strip: plot.strip.is_some(),
+                    walls_visible: if plot.profile.walls.is_some() {
+                        [3, 4].map(|line| indicator.plot_style(line).visible)
+                    } else {
+                        [true; 2]
+                    },
+                    width: plot.width,
+                    volume_decimals: plot.volume_decimals,
+                },
+                &|price| price_scale.price_to_y(price),
+            );
+        }
+        if layer == PlotLayer::Foreground {
             // Levels lie over every profile they cross.
             for level in indicator.profile_levels(visible) {
                 crate::painting::volume_profile::paint_level(
@@ -2808,5 +2820,74 @@ mod tests {
             })
             .collect();
         assert_eq!(widths, [4.0, 4.0], "falling bar widths {widths:?}");
+    }
+    /// Exact opacity moves only profile rows behind candles, retaining foreground levels.
+    #[test]
+    fn exact_row_opacity_paints_rows_beneath_the_bars() {
+        use crate::studies::{InputValue, StudyTemplate, VolProfileVisible};
+        let bars = [Bar::new(
+            Utc.timestamp_opt(0, 0).unwrap(),
+            10.0,
+            12.0,
+            10.0,
+            12.0,
+            10.0,
+        )];
+        for exact in [false, true] {
+            let mut study = VolProfileVisible::new(2);
+            study
+                .set_input("exact_opacity", InputValue::Toggle(exact))
+                .unwrap();
+            study.set_colors(vec![Color32::RED; 8]);
+            let template = StudyTemplate::from_study(&study);
+            let mut study = template.create().unwrap();
+            study.calculate(&bars);
+            study.set_visible_range(0..1);
+            assert_eq!(
+                study.volume_profiles(0..1)[0].config.exact_row_opacity,
+                exact
+            );
+            let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 120.0));
+            let price = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(9.0, 13.0),
+                0.0,
+                120.0,
+                false,
+            );
+            let coords = ChartMapping::new(rect, 30.0, 0, 0, 0.0, price);
+            for layer in [PlotLayer::Backgrounds, PlotLayer::Foreground] {
+                let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+                    IndicatorRenderer::render_study_layer(
+                        &RenderContext::new(ui.painter(), rect),
+                        study.as_ref(),
+                        &bars,
+                        0,
+                        &price,
+                        &coords,
+                        layer,
+                    );
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                let rows: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Rect(r) if r.fill.r() > 0 && r.fill.g() == 0 => Some(r.fill.a()),
+                        _ => None,
+                    })
+                    .collect();
+                if (layer == PlotLayer::Backgrounds) == exact {
+                    assert!(!rows.is_empty(), "{exact}, {layer:?}");
+                    assert!(
+                        rows.iter()
+                            .all(|&alpha| alpha == if exact { 255 } else { 163 })
+                    );
+                } else {
+                    assert!(rows.is_empty());
+                }
+                assert_eq!(shapes.iter().any(|s| matches!(&s.shape, Shape::LineSegment { stroke, .. } if stroke.color == Color32::RED)), layer == PlotLayer::Foreground);
+            }
+        }
     }
 }

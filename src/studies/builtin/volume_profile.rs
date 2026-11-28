@@ -20,7 +20,8 @@
 //! partial; one without them, or whose bars do not each hold their own executions, keeps the bars.
 //!
 //! Row fills stay translucent so price bars remain readable: the painter limits saved opaque colours
-//! to the opacity of the default value area rows. The point of control is a 2 px line in the theme's
+//! to the opacity of the default value area rows, unless Exact row opacity paints them beneath
+//! the price bars. The point of control is a 2 px line in the theme's
 //! foreground colour until a line colour is chosen.
 //! Colours list the three developing plots before POC and the four row colours. Setting five
 //! colours edits the profile colours; other lengths start with the developing plots.
@@ -114,6 +115,8 @@ struct ProfileStudy {
     feed_source: bool,
     /// Count executions by candle direction instead of their aggressor side.
     candle_sides: bool,
+    /// Paint row colours at their selected opacity beneath price bars.
+    exact_opacity: bool,
     adaptive: bool,
     /// The Sessions choice: 0 for the exchange trading day, 1 for regular hours, 2 for regular
     /// and extended hours, 3 for `custom`, 4 for the pre-market, 5 for the post-market and 6 for
@@ -406,6 +409,7 @@ impl ProfileStudy {
             source: None,
             feed_source: true,
             candle_sides: false,
+            exact_opacity: false,
             adaptive: false,
             sessions: 0,
             custom: std::array::from_fn(|i| {
@@ -510,6 +514,12 @@ impl ProfileStudy {
                 "candle_sides",
                 "Executions by candle direction",
                 InputValue::Toggle(self.candle_sides),
+                InputKind::Toggle,
+            ),
+            StudyInput::new(
+                "exact_opacity",
+                "Exact row opacity",
+                InputValue::Toggle(self.exact_opacity),
                 InputKind::Toggle,
             ),
         ];
@@ -897,6 +907,7 @@ impl ProfileStudy {
             ("source_interval", InputValue::Timeframe(v)) => self.source = v,
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
             ("candle_sides", InputValue::Toggle(v)) => self.candle_sides = v,
+            ("exact_opacity", InputValue::Toggle(v)) => self.exact_opacity = v,
             ("adaptive_rows", InputValue::Toggle(v)) => self.adaptive = v,
             ("sessions", InputValue::Choice(v)) => self.sessions = v,
             ("hours_only", InputValue::Toggle(v)) => self.hours_only = v,
@@ -1878,6 +1889,7 @@ impl ProfileStudy {
             config = config.with_row_size(Some(height)).unwrap_or(config);
         }
         config.show_rows = self.show_rows;
+        config.exact_row_opacity = self.exact_opacity;
         config.show_values = self.show_values;
         config.show_poc = self.lines[0];
         config.show_value_area_high = self.lines[1];
@@ -5834,8 +5846,11 @@ mod rendering_tests {
             (vec![Timeframe::Hour1, Timeframe::Day1], None),
             (vec![], None),
             (
-                vec![Timeframe::Custom(60), Timeframe::Min1],
-                Some(Timeframe::Custom(60)),
+                vec![
+                    Timeframe::Custom(NonZeroU64::new(60).unwrap()),
+                    Timeframe::Min1,
+                ],
+                Some(Timeframe::Custom(NonZeroU64::new(60).unwrap())),
             ),
         ] {
             study.advertised = advertised;
