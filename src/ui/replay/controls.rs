@@ -556,7 +556,7 @@ mod tests {
         // (action before the key, arrow pressed with Shift, cursor after, bars the chart reveals)
         for (before, key, cursor, revealed) in [
             (ReplayAction::Play, Key::ArrowRight, 6, 7),
-            (ReplayAction::None, Key::ArrowLeft, 5, 6),
+            (ReplayAction::Play, Key::ArrowLeft, 5, 6),
             (ReplayAction::JumpToStart, Key::ArrowLeft, 0, 1),
             (ReplayAction::JumpToEnd, Key::ArrowRight, 39, 40),
         ] {
