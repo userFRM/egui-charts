@@ -821,20 +821,26 @@ mod tests {
         chart.config_mut().show_legend_badge = false;
         let single_print = crate::tokens::DESIGN_TOKENS.semantic.tpo.single_print;
         let mut draw = |params: ChartTypeParams| {
+            let width = if params.tpo_period_minutes == 15 {
+                300.0
+            } else {
+                600.0
+            };
             chart.set_chart_type_params(ChartTypeParams {
                 tpo_row_ticks: 1,
                 ..params
             });
             let ctx = Context::default();
-            let output = ctx.run_ui(
+            let mut output = ctx.run_ui(
                 RawInput {
-                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0))),
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 400.0))),
                     ..Default::default()
                 },
                 |ui| {
                     chart.show(ui);
                 },
             );
+            output.textures_delta.clear();
             let letters: BTreeSet<String> = output
                 .shapes
                 .iter()
@@ -852,7 +858,14 @@ mod tests {
                 .shapes
                 .iter()
                 .filter_map(|s| match &s.shape {
-                    Shape::Text(t) if ["POC", "VAH", "VAL", "Mid"].contains(&t.galley.text()) => {
+                    Shape::Text(t)
+                        if ["POC", "VAH", "VAL", "Mid", "Use 15 min bars or shorter"]
+                            .contains(&t.galley.text()) =>
+                    {
+                        assert!(
+                            s.clip_rect
+                                .contains_rect(Rect::from_min_size(t.pos, t.galley.size()))
+                        );
                         Some(t.galley.text().to_owned())
                     }
                     _ => None,
@@ -927,6 +940,18 @@ mod tests {
             ..saved
         });
         assert_eq!(statistics.3, (1, 1));
+        assert_eq!(
+            draw(ChartTypeParams {
+                tpo_period_minutes: 15,
+                ..Default::default()
+            }),
+            (
+                String::new(),
+                vec!["Use 15 min bars or shorter".to_owned()],
+                0,
+                (0, 0)
+            )
+        );
     }
 
     /// Segments start at x 0, 10, 40 and 50. A gradient leaves the bar of its own colour as it
