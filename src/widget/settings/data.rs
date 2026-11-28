@@ -136,7 +136,7 @@ pub struct StatusLineOptions {
     pub show_change: bool,
     /// Whether the legend shows the percentage price change.
     pub show_change_percent: bool,
-    /// Whether the legend shows volume.
+    /// Whether the legend shows volume. Off by default.
     pub show_volume: bool,
     /// Whether the legend shows the change of the last price from the previous session's close.
     pub show_last_day_change: bool,
@@ -159,7 +159,7 @@ impl Default for StatusLineOptions {
             show_ohlc: true,
             show_change: true,
             show_change_percent: true,
-            show_volume: true,
+            show_volume: false,
             show_last_day_change: false,
             indicator_background_opacity: 60,
         }

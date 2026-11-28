@@ -421,7 +421,8 @@ pub struct ChartConfig {
     pub show_ohlc_change: bool,
     /// Show percentage bar change in the legend.
     pub show_ohlc_change_percent: bool,
-    /// Show volume in the legend independently of the histogram.
+    /// Show volume in the legend independently of the histogram. Off by default; configurations
+    /// saved with this field keep theirs.
     pub show_legend_volume: bool,
     /// Show study inputs after their names in the legend: the host's caption, else one built
     /// from the study's inputs.
@@ -729,7 +730,7 @@ impl Default for ChartConfig {
             quote_panel: false,
             show_ohlc_change: true,
             show_ohlc_change_percent: true,
-            show_legend_volume: true,
+            show_legend_volume: false,
             show_indicator_inputs: true,
             show_legend_badge: true,
             show_market_status: true,

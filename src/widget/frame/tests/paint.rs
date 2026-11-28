@@ -763,6 +763,36 @@ fn main_series_legend_actions_preserve_studies_and_comparisons() {
     assert!(chart.series_scale(other).is_some());
 }
 
+/// A new chart omits legend volume; an explicit saved choice still restores it.
+#[test]
+fn new_charts_hide_the_legend_volume_and_saved_settings_keep_it() {
+    use crate::widget::settings::ChartSettingsState;
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0], &[110.0]);
+    let volume_shown = |painted: &[Shape], right: f32| {
+        painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+            if text.pos.x < right && (text.galley.text() == "Vol" || text.galley.text().starts_with("Vol "))))
+    };
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+    assert!(!volume_shown(
+        &painted,
+        chart.last_rendered_price_rect.right()
+    ));
+    let settings = ChartSettingsState::from_chart(&chart);
+    assert!(!settings.status_line.show_volume);
+    let mut saved = serde_json::to_value(settings).unwrap();
+    saved["status_line"]["show_volume"] = true.into();
+    let restored: ChartSettingsState = serde_json::from_value(saved).unwrap();
+    restored.apply_to_chart(&mut chart).unwrap();
+    frame(&ctx, &mut chart, 0.2, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.3, vec![]);
+    assert!(volume_shown(
+        &painted,
+        chart.last_rendered_price_rect.right()
+    ));
+}
+
 #[cfg(feature = "studies")]
 #[test]
 fn status_visibility_reaches_the_chart_legend() {
