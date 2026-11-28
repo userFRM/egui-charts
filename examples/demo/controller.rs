@@ -522,6 +522,7 @@ pub struct DemoApp {
     replay_interval: Timeframe,
     replay_scope: ReplayScope,
     replay_session: Option<(ReplaySession, Timeframe)>,
+    replay_session_cutoff: Option<chrono::DateTime<chrono::Utc>>,
     replay_slots: Vec<usize>,
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
@@ -976,6 +977,10 @@ impl DemoApp {
                 }
                 Some((session, interval))
             }),
+            replay_session_cutoff: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "replay_session_cutoff"))
+                .flatten(),
             replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -2035,6 +2040,11 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "account_panel_height", &self.account_panel_height);
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
+        eframe::set_value(
+            storage,
+            "replay_session_cutoff",
+            &self.replay_session_cutoff,
+        );
         self.checkpoint_workspace();
         self.storage.persist(storage);
         eframe::set_value(

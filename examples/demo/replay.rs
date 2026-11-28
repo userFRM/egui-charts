@@ -1061,6 +1061,11 @@ impl DemoApp {
                 }
             }
             self.replay_session = Some((session, self.replay_interval));
+            // Another symbol's preceding source bar can be earlier than the shared market cursor.
+            self.replay_session_cutoff = self
+                .chart
+                .replay_time()
+                .filter(|_| self.chart.replay_driver().is_some());
         }
     }
 
@@ -1446,6 +1451,7 @@ impl DemoApp {
             }
             ReplayStartAction::Resume => {
                 if let Some((session, interval)) = self.replay_session.clone() {
+                    let cutoff = self.replay_session_cutoff;
                     self.replay_selecting = false;
                     self.restore_replayed_charts(&session.charts);
                     if session.symbol != self.state.symbol {
@@ -1478,6 +1484,12 @@ impl DemoApp {
                     self.replay_interval = interval;
                     self.push_replay_window_to_chart();
                     self.set_replay_interval(interval);
+                    if interval.is_trade_based()
+                        && self.chart.replay_driver().is_some()
+                        && let Some(cutoff) = cutoff
+                    {
+                        self.apply_replay_window(cutoff);
+                    }
                 }
             }
             choice => {
@@ -3366,6 +3378,8 @@ mod tests {
         let session = app.replay_session.clone();
         let mut storage = AppStorage::default();
         eframe::App::save(&mut *app, &mut storage);
+        // Older trade sessions carry only the source timestamp.
+        storage.0.remove("replay_session_cutoff");
         for recorded in [true, false] {
             let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
             cc.storage = Some(&storage);
@@ -3404,6 +3418,123 @@ mod tests {
                     text == "Saved replay needs its market recording, which is no longer available"
                 }));
             }
+        }
+    }
+
+    #[test]
+    fn resuming_after_symbol_activation_keeps_execution_positions() {
+        use super::super::tests::{AppStorage, settle};
+
+        let ctx = egui::Context::default();
+        let start = "2026-11-12T15:00:00Z".parse().unwrap();
+        let until = start + chrono::TimeDelta::seconds(90);
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            start,
+            true,
+        );
+        let record = |app: &mut DemoApp| {
+            settle(app, &ctx);
+            app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+            app.layout.sync.sync_symbol = false;
+            app.activate_chart_slot(1);
+            app.switch_symbol("STOCKA");
+            app.switch_timeframe(Timeframe::Min5);
+            settle(app, &ctx);
+            app.advance_sample_to(until);
+            settle(app, &ctx);
+            app.activate_chart_slot(0);
+            app.switch_symbol("SAMPLE");
+            app.switch_timeframe(Timeframe::Min1);
+            settle(app, &ctx);
+            app.advance_sample_to(until);
+            settle(app, &ctx);
+        };
+        record(&mut app);
+        assert_eq!(app.replay_scope, ReplayScope::AllCharts);
+        let interval = Timeframe::Ticks(NonZeroU64::MIN);
+        let extra = &app.extra_charts[0];
+        assert_eq!(extra.chart.symbol(), "STOCKA");
+        let other_bars = {
+            let mut events = Vec::new();
+            extra.live.read_recording(&mut events);
+            let ticks: Vec<_> = events
+                .iter()
+                .filter_map(|event| match &event.event {
+                    MarketEvent::Trade(tick) => Some(tick.clone()),
+                    _ => None,
+                })
+                .collect();
+            egui_charts::data::aggregate_trades_with_tick_size(
+                &ticks,
+                source_clock(&extra.chart, interval),
+                extra.live.instrument().tick_size,
+            )
+            .unwrap()
+        };
+        assert!(other_bars.len() > 10);
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 1);
+        app.set_replay_interval(interval);
+        let source = app.replay.as_ref().unwrap().visible_bars();
+        let index = source
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, bar)| {
+                (bar.time > other_bars[0].time
+                    && bar.time < other_bars.last().unwrap().time
+                    && other_bars
+                        .binary_search_by_key(&bar.time, |bar| bar.time)
+                        .is_err())
+                .then_some(index)
+            })
+            .expect("the symbols have distinct executions within their shared recording window");
+        app.replay
+            .as_mut()
+            .unwrap()
+            .handle_action(ReplayAction::JumpToBar(index));
+        app.push_replay_window_to_chart();
+        let cutoff = app.chart.replay_time().unwrap();
+        app.layout.set_active(1);
+        ctx.run_ui(egui::RawInput::default(), |ui| demo(&mut app, ui))
+            .drop_without_applying_deltas();
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.symbol(), "STOCKA");
+        assert_eq!(app.chart.replay_time(), Some(cutoff));
+        assert!(app.chart.replay_driver().is_some());
+        let prefix = (
+            app.chart.bars(SeriesId::MAIN).to_vec(),
+            app.extra_charts[0].chart.bars(SeriesId::MAIN).to_vec(),
+        );
+        app.stop_replay();
+        let mut storage = AppStorage::default();
+        eframe::App::save(&mut *app, &mut storage);
+        for reload in [false, true] {
+            if reload {
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                app = DemoApp::new_at(&cc, start, true);
+                record(&mut app);
+            }
+            app.apply_replay_start(ReplayStartAction::Resume);
+            settle(&mut app, &ctx);
+            assert_eq!(app.chart.symbol(), "STOCKA");
+            assert!(app.chart.replay_driver().is_some());
+            assert_eq!(app.chart.replay_time(), Some(cutoff), "reload: {reload}");
+            assert_eq!(
+                (
+                    app.chart.bars(SeriesId::MAIN).to_vec(),
+                    app.extra_charts[0].chart.bars(SeriesId::MAIN).to_vec(),
+                ),
+                prefix,
+                "reload: {reload}"
+            );
+            app.handle_replay_control(ReplayControlAction::NextBar);
+            let next = other_bars.partition_point(|bar| bar.time < cutoff);
+            assert_eq!(
+                app.chart.replay_time(),
+                Some(other_bars[next].time + chrono::TimeDelta::nanoseconds(1))
+            );
         }
     }
 
