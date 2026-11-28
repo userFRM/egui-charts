@@ -51,7 +51,12 @@ impl ReplayWindow {
                 // Source bars that join no chart bar before the first date kept leave too.
                 Some(runs) => (runs.iter().find(|(slot, _)| *slot > through))
                     .map_or(source.len(), |(_, run)| run.start),
-                None => source.partition_point(|bar| clock.bar_open(bar.time) <= through),
+                None => match trade_instants(source, source_clock, clock) {
+                    Some(instants) => {
+                        instants.partition_point(|instant| clock.bar_open(*instant) <= through)
+                    }
+                    None => source.partition_point(|bar| clock.bar_open(bar.time) <= through),
+                },
             };
             source.drain(..end);
             super::series::shrink_bars(source);
@@ -342,8 +347,12 @@ impl Chart {
     /// them. A trade is an instant: it falls in the chart bar that holds it and is complete once
     /// the cutoff passes it, so a `ReplayController` over the same bars advances the unfinished bar
     /// trade by trade. `aggregate_trades` stamps trades that share a timestamp one nanosecond
-    /// apart, keeping each a step of its own; bars at one time would replace each other. Bars of
-    /// more than one trade are refused, since each is stamped at its first trade.
+    /// apart, keeping each a step of its own; bars at one time would replace each other. Such a
+    /// trade still joins the chart bar of its timestamp: a bar stamped exactly one nanosecond
+    /// after the bar before it falls with that bar, also across a chart bar boundary. A trade
+    /// genuinely recorded one nanosecond after the previous stamp also falls with that bar,
+    /// since the source bars cannot distinguish it. Bars of more than one trade are refused,
+    /// since each is stamped at its first trade.
     ///
     /// Returns `false` without changes outside replay, without a chart timeframe, for invalid
     /// bars, or when the source intervals do not nest in the chart interval. Input is cleaned
@@ -580,8 +589,8 @@ pub(super) fn completed<'a>(bars: &'a [Bar], clock: &BarClock, time: DateTime<Ut
 /// The chart bars that `bars` of the `source` clock build under `chart`, or `None` when they do
 /// not nest in them. On a daily or longer chart with a session, intraday bars and trades build
 /// the bars of their trading dates, as `trading_dates` places them. Elsewhere a bar of one
-/// trade is an instant and falls in the chart bar that holds it; other sources go through
-/// `data::resample`, which refuses the other trade-based intervals, whose bars are stamped at
+/// trade is an instant and falls in the chart bar that holds the instant `trade_instants`
+/// gives it; other sources go through `data::resample`, which refuses the other trade-based intervals, whose bars are stamped at
 /// their first trade. Replay folds the completed trades on every step, so they are folded per
 /// chart bar, bisecting for its last trade, instead of a clock lookup per trade: a session
 /// clock's lookup is not cheap. `bar_open` is ordered, as `completed` assumes.
@@ -603,37 +612,63 @@ fn fold_source(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<
         }
         return Some(folded);
     }
-    let instants = matches!(source.timeframe(), Some(Timeframe::Ticks(count)) if count.get() == 1)
-        && chart
-            .timeframe()
-            .is_some_and(|timeframe| !timeframe.is_trade_based());
-    if !instants {
+    let Some(instants) = trade_instants(bars, source, chart) else {
         return crate::data::resample(bars, source.clone(), chart.clone());
-    }
+    };
     let mut folded = Vec::new();
-    let mut rest = bars;
-    while let Some(first) = rest.first() {
-        let slot = chart.bar_open(first.time);
+    let mut start = 0;
+    while let Some(&first) = instants.get(start) {
+        let slot = chart.bar_open(first);
         // The first trade is in its own slot, so every pass takes at least one.
-        let end = rest
-            .partition_point(|bar| chart.bar_open(bar.time) <= slot)
-            .max(1);
+        let end = start
+            + instants[start..]
+                .partition_point(|instant| chart.bar_open(*instant) <= slot)
+                .max(1);
         // As in `resample`: a source bar's colours and payload are not the chart bar's.
         let mut bar = Bar {
             time: slot,
             colors: None,
             payload: None,
-            ..first.clone()
+            ..bars[start].clone()
         };
-        for trade in &rest[1..end] {
+        for trade in &bars[start + 1..end] {
             bar = fold(&bar, trade)?;
         }
         folded.push(bar);
-        rest = &rest[end..];
+        start = end;
     }
     // shortcut: every step refolds all trades before the cutoff; keep the folded complete chart
     // bars if long trade sources make playback slow.
     Some(folded)
+}
+
+/// Where one-trade source bars fall on a time-based chart. Consecutive stamps one nanosecond
+/// apart share the first trade's instant, as `aggregate_trades` separates equal-time trades.
+/// Other sources and charts use their bars' own times.
+fn trade_instants(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<DateTime<Utc>>> {
+    let one_trade = matches!(source.timeframe(), Some(Timeframe::Ticks(count)) if count.get() == 1);
+    if !one_trade
+        || !chart
+            .timeframe()
+            .is_some_and(|timeframe| !timeframe.is_trade_based())
+    {
+        return None;
+    }
+    let mut instants: Vec<DateTime<Utc>> = Vec::with_capacity(bars.len());
+    for (at, bar) in bars.iter().enumerate() {
+        // shortcut: a trade genuinely one nanosecond after the previous stamp also joins its
+        // instant; a source carrying original trade times is needed to distinguish them.
+        let bumped = at > 0
+            && bars[at - 1]
+                .time
+                .checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                == Some(bar.time);
+        instants.push(match instants.last() {
+            Some(&instant) if bumped => instant,
+            _ => bar.time,
+        });
+    }
+    Some(instants)
 }
 
 /// The opens of the first and last chart bars that `bars` of the `source` clock join under
@@ -645,18 +680,21 @@ fn covered(
 ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     match trading_dates(bars, source, chart) {
         Some(runs) => Some((runs.first()?.0, runs.last()?.0)),
-        None => Some((
-            chart.bar_open(bars.first()?.time),
-            chart.bar_open(bars.last()?.time),
-        )),
+        None => {
+            let last = match trade_instants(bars, source, chart) {
+                Some(instants) => *instants.last()?,
+                None => bars.last()?.time,
+            };
+            Some((chart.bar_open(bars.first()?.time), chart.bar_open(last)))
+        }
     }
 }
 
 /// The chart bars that intraday bars or trades of the `source` clock join on a daily or longer
 /// `chart` with a session, by trading date as `data::resample_with_session` dates them. A bar
 /// joins the selected window that holds its first instant inside the selected hours, which for
-/// a bar that opens before a window and ends inside it is the window's open, and the chart bar
-/// of that window's trading date, which starts at the date's earliest window. Bars that reach
+/// a bar that opens before a window and ends inside it is the window's open, or for a one-trade
+/// bar the instant `trade_instants` gives it, and the chart bar of that window's trading date, which starts at the date's earliest window. Bars that reach
 /// no window join no chart bar. Returns one entry per window holding bars, with the chart bar's
 /// open and the range of those bars, in order, and `None` for other charts and sources, which
 /// `bar_open` places. The lookups follow the windows, not the bars.
@@ -675,15 +713,17 @@ fn trading_dates(
     if !(intraday && daily && chart.has_session()) {
         return None;
     }
+    let times = trade_instants(bars, source, chart)
+        .unwrap_or_else(|| bars.iter().map(|bar| bar.time).collect());
     // On an intraday interval an instant takes the date of the last session open at or before it.
     let sessions = chart.sessions().with_timeframe(Timeframe::Min1);
     // Zero for a trade, which is an instant.
     let span = timeframe.duration();
     let mut runs = Vec::new();
     let mut at = 0;
-    while let Some(bar) = bars.get(at) {
+    while let Some(&time) = times.get(at) {
         // The window holding the bar's open or the next one; none within a year ends the walk.
-        let Some(open) = sessions.open_at_or_after(bar.time) else {
+        let Some(open) = sessions.open_at_or_after(time) else {
             break;
         };
         let Some(close) = sessions.session_close(open, true) else {
@@ -691,11 +731,10 @@ fn trading_dates(
         };
         // Bars that end by the window's open hold none of its trades.
         let start = at
-            + bars[at..].partition_point(|bar| {
-                bar.time < open
-                    && (bar.time.checked_add_signed(span)).is_some_and(|end| end <= open)
+            + times[at..].partition_point(|time| {
+                *time < open && (time.checked_add_signed(span)).is_some_and(|end| end <= open)
             });
-        let end = start + bars[start..].partition_point(|bar| bar.time < close);
+        let end = start + times[start..].partition_point(|time| *time < close);
         if start < end
             && let Some(slot) = chart.open_on_date(sessions.trading_date(open))
         {
@@ -1200,9 +1239,9 @@ mod tests {
     }
 
     /// Bar replay over recorded trades: one-trade bars build the unfinished chart bar from the
-    /// trades before each cursor position, two trades of one timestamp are two steps, a trade in
-    /// the next minute starts that bar, and seeking back shows the earlier bar again. The
-    /// chart's own minute 1, with its high of 14, never shows. Bars of two trades are refused: the
+    /// trades before each cursor position. Two trades of one timestamp are two steps, also when
+    /// the second is stamped into the next minute: both count in minute 2, and seeking back
+    /// restores the earlier prefix without opening minute 3. The chart's own minute 1, with its high of 14, never shows. Bars of two trades are refused: the
     /// second opens at 00:01:00.5 and holds the trade of 00:02:00.25.
     #[cfg(feature = "ui")]
     #[test]
@@ -1223,6 +1262,8 @@ mod tests {
             Tick::new(at(0), 13.0, 2.0, None),
             Tick::new(at(500), 10.0, 1.0, None),
             Tick::new(at(60_250), 12.0, 3.0, None),
+            Tick::new(time(3) - TimeDelta::nanoseconds(1), 14.0, 1.0, None),
+            Tick::new(time(3) - TimeDelta::nanoseconds(1), 15.0, 2.0, None),
         ];
         let one_trade = BarClock::new("1t".parse().unwrap());
         let source = crate::data::aggregate_trades(&trades, one_trade.clone()).unwrap();
@@ -1253,6 +1294,27 @@ mod tests {
                 ],
             ),
             (
+                ReplayAction::StepForward,
+                vec![
+                    bar(1, [11.0, 13.0, 10.0, 10.0, 4.0]),
+                    bar(2, [12.0, 14.0, 12.0, 14.0, 4.0]),
+                ],
+            ),
+            (
+                ReplayAction::StepForward,
+                vec![
+                    bar(1, [11.0, 13.0, 10.0, 10.0, 4.0]),
+                    bar(2, [12.0, 15.0, 12.0, 15.0, 6.0]),
+                ],
+            ),
+            (
+                ReplayAction::StepBackward,
+                vec![
+                    bar(1, [11.0, 13.0, 10.0, 10.0, 4.0]),
+                    bar(2, [12.0, 14.0, 12.0, 14.0, 4.0]),
+                ],
+            ),
+            (
                 ReplayAction::JumpToBar(1),
                 vec![bar(1, [11.0, 13.0, 11.0, 13.0, 3.0])],
             ),
@@ -1280,11 +1342,13 @@ mod tests {
     /// all of its bars. Bar replay completes the bar of 5 February when its last window closes,
     /// at 01:00 UTC on 6 February in New York and at 22:00 UTC on 5 February in Chicago, and a
     /// replay controller over the daily bars on the chart's clock seeks and cuts off there too.
-    /// Daily bars carry volume 100 and source bars volume 1.
+    /// Two equal-time trades in the last nanosecond of the New York post-market both count in
+    /// 5 February. Daily bars carry volume 100 and source bars volume 1.
     #[cfg(all(feature = "timezones", feature = "ui"))]
     #[test]
     fn replay_folds_post_market_bars_into_their_trading_date() {
-        use crate::model::{Instrument, Session, SessionWindow, TimezoneId};
+        use crate::data::aggregate_trades;
+        use crate::model::{Instrument, Session, SessionWindow, Tick, TimezoneId};
         use crate::scales::TimezoneMode;
         use crate::ui::replay::ReplayController;
         use chrono::Weekday::{Fri, Mon, Thu, Tue, Wed};
@@ -1302,6 +1366,7 @@ mod tests {
         };
         let four_hours =
             |zone: &TimezoneId| BarClock::new(Timeframe::Hour4).with_timezone(zone.clone());
+        let one_trade = BarClock::new("1t".parse().unwrap());
         let weekdays = [Mon, Tue, Wed, Thu, Fri];
         let new_york = TimezoneId::named("America/New_York").unwrap();
         let chicago = TimezoneId::named("America/Chicago").unwrap();
@@ -1340,6 +1405,19 @@ mod tests {
                         bars(at(5, 9), 4, 4),
                         four_hours(&new_york),
                         vec![(1, 100.0), (2, 100.0), (5, 4.0)],
+                    ),
+                    // Both trades precede the post-market close; the second stamp reaches it.
+                    (
+                        aggregate_trades(
+                            &[
+                                Tick::new(at(6, 1) - Duration::nanoseconds(1), 101.0, 1.0, None),
+                                Tick::new(at(6, 1) - Duration::nanoseconds(1), 103.0, 1.0, None),
+                            ],
+                            one_trade.clone(),
+                        )
+                        .unwrap(),
+                        one_trade.clone(),
+                        vec![(1, 100.0), (2, 100.0), (5, 2.0)],
                     ),
                 ],
                 2,
