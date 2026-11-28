@@ -20,7 +20,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- Opening a demo news or Highlights notification preserves its original publication after the feed clock advances. ([#4387](https://github.com/userFRM/egui-charts/issues/4387))
+- `NotificationsAction::OpenStory { id, time }` carries the publication time so hosts can open the original notification story with a stable feed ID. The demo uses it for News and Highlights. ([#4387](https://github.com/userFRM/egui-charts/issues/4387))
 
 - Trade Rate no longer reports a partial time candle's retained executions as its total. Its rolling rates use their own windows' coverage. ([#4202](https://github.com/userFRM/egui-charts/issues/4202))
 

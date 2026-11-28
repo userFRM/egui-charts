@@ -324,21 +324,24 @@ pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
 }
 
 /// Rebuild the publication named by the notification, regardless of the feed clock.
-pub(super) fn story(id: &str) -> Option<(bool, NewsStory)> {
-    let (template, seconds) = id.rsplit_once('@')?;
-    let seconds = seconds.parse::<i64>().ok()?;
-    if seconds % 3600 != 0 {
-        return None;
-    }
-    let time = DateTime::from_timestamp(seconds, 0)?;
-    let (symbol, index) = template.rsplit_once('-')?;
+pub(super) fn story(
+    id: &str,
+    time: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<(bool, NewsStory)> {
+    let (symbol, index) = id.rsplit_once('-')?;
     let highlight_symbol = symbol.strip_suffix("-highlight");
     let highlights = highlight_symbol.is_some();
     let symbol = highlight_symbol.unwrap_or(symbol);
     let spec = DemoSymbol::catalog()
         .iter()
         .find(|spec| spec.symbol == symbol)?;
-    let story = published_story(spec, highlights, index.parse().ok()?, time)?;
+    let index = index.parse::<usize>().ok()?;
+    let story = published_story(spec, highlights, index, time)?;
+    let feed_hour = time.checked_add_signed(publication_age(index))?;
+    if feed_hour > now || feed_hour.duration_trunc(TimeDelta::hours(1)).ok()? != feed_hour {
+        return None;
+    }
     (story.id == id).then_some((highlights, story))
 }
 
@@ -359,16 +362,16 @@ fn published_story(
     } else {
         format!("{}-{index}", spec.symbol)
     };
-    let mut story = NewsStory::new(
-        format!("{template}@{}", time.timestamp()),
-        time,
-        fill(headline),
-    );
+    let mut story = NewsStory::new(template.clone(), time, fill(headline));
     story.source = "Demo Wire".into();
     story.body = fill(body);
     story.symbols = vec![spec.symbol.into()];
     story.url = Some(format!("https://example.com/news/{template}"));
     Some(story)
+}
+
+fn publication_age(index: usize) -> TimeDelta {
+    TimeDelta::hours(index as i64 * 7)
 }
 
 /// The synthetic headlines, or highlights, of `symbols`, or of every catalog symbol when it is
@@ -387,12 +390,14 @@ fn stories(symbols: &[String], highlights: bool, now: DateTime<Utc>) -> Vec<News
             .collect()
     };
     let templates = if highlights { HIGHLIGHTS } else { HEADLINES };
-    let hour = now.duration_trunc(TimeDelta::hours(1)).unwrap_or(now);
+    let Ok(hour) = now.duration_trunc(TimeDelta::hours(1)) else {
+        return Vec::new();
+    };
     specs
         .iter()
         .flat_map(|spec| {
             templates.iter().enumerate().filter_map(move |(i, _)| {
-                let age = TimeDelta::hours(i as i64 * 7);
+                let age = publication_age(i);
                 published_story(spec, highlights, i, hour.checked_sub_signed(age)?)
             })
         })
@@ -1484,14 +1489,15 @@ mod tests {
             let newer = stories(&symbols, highlights, after);
             let original = &older[1];
             let latest = &newer[1];
-            assert_ne!(original.id, latest.id);
+            assert_eq!(original.id, latest.id);
             assert_eq!(original.url, latest.url);
-            let (is_highlight, opened) = story(&original.id).unwrap();
+            let (is_highlight, opened) = story(&original.id, original.time, after).unwrap();
             assert_eq!(is_highlight, highlights);
             assert_eq!(opened.id, original.id);
             assert_eq!(opened.time, original.time);
             assert_ne!(opened.time, latest.time);
-            assert_eq!(opened.headline, original.headline);
+            assert!(story(&original.id, latest.time, before).is_none());
+            assert!(story(&original.id, original.time + TimeDelta::seconds(1), after).is_none());
         }
     }
 

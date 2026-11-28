@@ -35,7 +35,12 @@ pub enum NotificationsAction {
     OpenPost(String),
     /// Show the news story an entry is about, by the feed's identifier: find the story and pass
     /// it to [`NewsPanel::open_story`](crate::ui::widget_bar::NewsPanel::open_story).
-    OpenStory(String),
+    OpenStory {
+        /// The stable identifier assigned by the feed.
+        id: String,
+        /// The publication time of the story that triggered this notification.
+        time: chrono::DateTime<chrono::Utc>,
+    },
 }
 
 /// The log pushed by the host's [`Notifications`] service.
@@ -183,7 +188,10 @@ impl NotificationsPanel {
                                         }
                                         NotificationTarget::Story(id) => (
                                             "Open story",
-                                            NotificationsAction::OpenStory(id.clone()),
+                                            NotificationsAction::OpenStory {
+                                                id: id.clone(),
+                                                time: entry.time,
+                                            },
                                         ),
                                     };
                                     if Button::new(l10n::text(ui.ctx(), label))
@@ -257,7 +265,10 @@ mod tests {
                 Some("AAPL"),
                 Some(NotificationTarget::Story("story-7".into())),
                 "Open story",
-                NotificationsAction::OpenStory("story-7".into()),
+                NotificationsAction::OpenStory {
+                    id: "story-7".into(),
+                    time: chrono::DateTime::from_timestamp(1, 0).unwrap(),
+                },
             ),
         ] {
             let mut panel = NotificationsPanel::new();
