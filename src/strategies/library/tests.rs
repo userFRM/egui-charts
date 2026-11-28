@@ -405,6 +405,18 @@ fn price_action_entries_match_hand_worked_bars_without_lookahead() {
             tick_size: case.slippage,
         };
         let mut strategy = configured(case.name, &case.inputs);
+        for (id, value) in &case.inputs {
+            assert_eq!(
+                strategy
+                    .study_inputs()
+                    .iter()
+                    .find(|i| i.id == *id)
+                    .map(|i| &i.value),
+                Some(value),
+                "{} {id}",
+                case.name
+            );
+        }
         let report = backtest.run(strategy.as_mut(), &bars, &[]);
         assert_eq!(entries(&report), case.expected, "{}", case.name);
         for (trade, bar, price) in case.exits {
@@ -695,6 +707,47 @@ fn study_entries_match_hand_placed_crossings_without_lookahead() {
                 ("signal_period", Length(2)),
             ],
             expected: vec![(4, Buy, 40.), (5, Sell, 50.)],
+        },
+        // First-value seeds give histogram 0 then positive on the eight-bar rise.
+        Case {
+            name: "MACD",
+            prices: points(&[10., 11., 12., 13., 14., 15., 16., 17.]),
+            inputs: vec![("ema_seed", Choice(1))],
+            expected: vec![(2, Buy, 12.)],
+        },
+        // Histogram 0,10/3,-20/9,70/27,-470/81,340/243; mode edits preserve lengths.
+        Case {
+            name: "MACD",
+            prices: points(&[30., 60., 50., 80., 40., 50.]),
+            inputs: vec![
+                ("ema_seed", Choice(1)),
+                ("fast_period", Length(1)),
+                ("slow_period", Length(2)),
+                ("signal_period", Length(2)),
+            ],
+            expected: vec![(2, Buy, 50.), (3, Sell, 80.), (4, Buy, 40.), (5, Sell, 50.)],
+        },
+        Case {
+            name: "MACD",
+            prices: points(&[30., 60., 50., 80., 40., 50.]),
+            inputs: vec![
+                ("fast_period", Length(1)),
+                ("slow_period", Length(2)),
+                ("signal_period", Length(2)),
+                ("ema_seed", Choice(1)),
+            ],
+            expected: vec![(2, Buy, 50.), (3, Sell, 80.), (4, Buy, 40.), (5, Sell, 50.)],
+        },
+        Case {
+            name: "MACD",
+            prices: points(
+                &(10..50)
+                    .chain((10..50).rev())
+                    .map(f64::from)
+                    .collect::<Vec<_>>(),
+            ),
+            inputs: vec![("ema_seed", Choice(1))],
+            expected: vec![(2, Buy, 12.), (43, Sell, 46.)],
         },
         // Momentum(1) = missing,-1,1,2,-1,-3,2,0. Its change agrees at 2,3,4,5,6.
         Case {

@@ -37,10 +37,20 @@ pub(super) struct Mean {
 
 impl Mean {
     pub(super) fn next(&mut self, kind: OscillatorAverage, input: f64, length: usize) -> f64 {
+        self.next_seeded(kind, input, length, length)
+    }
+
+    pub(super) fn next_seeded(
+        &mut self,
+        kind: OscillatorAverage,
+        input: f64,
+        length: usize,
+        seed: usize,
+    ) -> f64 {
         match kind {
             OscillatorAverage::Exponential => {
                 self.exponential
-                    .next(input, length, 2.0 / (length as f64 + 1.0))
+                    .next(input, seed, 2.0 / (length as f64 + 1.0))
             }
             OscillatorAverage::Simple => {
                 if !input.is_finite() {
