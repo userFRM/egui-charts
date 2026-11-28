@@ -4758,6 +4758,9 @@ mod tests {
         let restored = crate::studies::StudyTemplate::from_study(older.as_ref());
         let mut inputs = template.inputs.clone();
         inputs.push(("custom_interval".to_owned(), InputValue::Toggle(false)));
+        inputs.push(("aggregation".to_owned(), InputValue::Choice(0)));
+        assert!(older.order_flow_inputs().is_empty());
+        assert_eq!(older.data_requests()[0].timeframe, Some(Timeframe::Min1));
         assert_eq!(restored.inputs, inputs);
         let mut expected = template.settings.clone();
         expected.levels = vec![LevelStyle {
