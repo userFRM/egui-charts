@@ -1698,6 +1698,9 @@ mod tests {
                     config.with_row_size(Some(0.25))
                 }
                 .unwrap();
+                config.placement = crate::data::ProfilePlacement::Right;
+                config.histogram_width = 45;
+                config.show_rows = false;
                 config.display = display;
                 config.up_color = [1, 2, 3, 240];
                 config.down_color = [4, 5, 6, 200];
@@ -1903,6 +1906,10 @@ mod tests {
                 // These literal older saves have no tick layout and keep their row count, draw no
                 // developing lines and no values, and keep the point of control and box as before.
                 if let Some(config) = restored.volume_profile {
+                    assert_eq!(
+                        (config.placement, config.histogram_width, config.show_rows),
+                        (crate::data::ProfilePlacement::Left, 30, true)
+                    );
                     assert_eq!(config.row_ticks(), None);
                     assert_eq!((config.rows(), config.value_area()), (50, 0.68));
                     assert_eq!(config.row_size(), None);

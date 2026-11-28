@@ -14157,13 +14157,23 @@ mod tests {
                 tool,
                 Tool::FixedRangeVolumeProfile | Tool::AnchoredVolumeProfile
             ) {
+                for label in ["Histogram", "Width (%)"] {
+                    assert!(
+                        texts.iter().any(|(text, _)| text == label),
+                        "{tool:?}: {label}"
+                    );
+                }
+                assert_eq!(
+                    texts.iter().any(|(text, _)| text == "Placement"),
+                    tool == Tool::FixedRangeVolumeProfile
+                );
                 let point = texts
                     .iter()
-                    .find(|(text, _)| text == "VAH")
+                    .find(|(text, _)| text == "Histogram")
                     .unwrap()
                     .1
                     .center();
-                texts = scroll(&mut app, &ctx, point, -160.0);
+                texts = scroll(&mut app, &ctx, point, -240.0);
                 Some(point)
             } else {
                 None

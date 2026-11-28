@@ -133,8 +133,8 @@ pub use study::{StudyChart, StudyData, StudyDataRequest};
 pub use targets::PriceTargets;
 pub use trades::{CombinedTrade, ConsumedOrder, SizeBasis, combine_trades};
 pub use volume_profile::{
-    ProfileDisplay, ProfileLevel, ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile,
-    VolumeProfileConfig,
+    ProfileDisplay, ProfileLevel, ProfileLevelKind, ProfilePlacement, ProfileSource, StudyProfile,
+    VolumeProfile, VolumeProfileConfig,
 };
 
 /// `Send + Sync` on native targets. No bound on wasm32, where feeds hold JavaScript handles.

@@ -7,7 +7,7 @@ use crate::drawings::{
     VwapBand, VwapBandLine, VwapBandMode, VwapFill, VwapPlotType,
 };
 
-use crate::data::{ProfileDisplay, VolumeProfileConfig};
+use crate::data::{ProfileDisplay, ProfilePlacement, VolumeProfileConfig};
 use crate::localization as l10n;
 use crate::model::{LineStyle, PriceSource};
 use crate::theme::ThemeExt;
@@ -491,6 +491,28 @@ impl InputsTab {
                         );
                         ui.end_row();
                     }
+                    ui.label("");
+                    ui.checkbox(&mut config.show_rows, l10n::text(ui.ctx(), "Histogram"));
+                    ui.end_row();
+                    if drawing.tool_type == Tool::FixedRangeVolumeProfile {
+                        let label = ui.label(l10n::text(ui.ctx(), "Placement"));
+                        ui.label_inputs_by(label.id, |ui| {
+                            ui.combo_select(
+                                "profile_placement",
+                                &mut config.placement,
+                                [ProfilePlacement::Left, ProfilePlacement::Right],
+                                |placement| match placement {
+                                    ProfilePlacement::Left => "Left".into(),
+                                    ProfilePlacement::Right => "Right".into(),
+                                },
+                            );
+                        });
+                        ui.end_row();
+                    }
+                    let label = ui.label(l10n::text(ui.ctx(), "Width (%)"));
+                    ui.add(egui::DragValue::new(&mut config.histogram_width).range(1..=100))
+                        .labelled_by(label.id);
+                    ui.end_row();
                     let [
                         up_picker,
                         down_picker,
@@ -3346,6 +3368,8 @@ mod tests {
         config.developing_poc_color = [9, 8, 7, 255];
         config.developing_value_area_colors = [[4, 5, 6, 255], [6, 5, 4, 255]];
         let mut edited = config.with_row_ticks(Some(24)).unwrap();
+        edited.show_rows = true;
+        edited.histogram_width = 45;
         edited.show_developing_poc = true;
         edited.show_poc = true;
         edited.show_value_area_high = false;
@@ -3364,6 +3388,10 @@ mod tests {
         // A palette swatch keeps the box's opacity.
         edited.box_color = Some(translucent(12, 50, 153).to_srgba_unmultiplied());
         for tool in [Tool::FixedRangeVolumeProfile, Tool::AnchoredVolumeProfile] {
+            let mut edited = edited;
+            if tool == Tool::FixedRangeVolumeProfile {
+                edited.placement = ProfilePlacement::Right;
+            }
             let mut chart = crate::widget::test_frames::chart(&[90.0; 20], &[210.0; 20]);
             chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(0.25)));
             let mut drawing = Drawing::new(7, tool);
@@ -3405,9 +3433,33 @@ mod tests {
                 click(&mut h, Role::ComboBox, "Row layout");
                 h.get_by_label("Ticks per row").click();
                 h.run();
-                for switch in ["Developing POC", "POC", "VAH", "VAL", "Values", "Box"] {
+                for switch in [
+                    "Histogram",
+                    "Developing POC",
+                    "POC",
+                    "VAH",
+                    "VAL",
+                    "Values",
+                    "Box",
+                ] {
                     click(&mut h, Role::CheckBox, switch);
                 }
+                if tool == Tool::FixedRangeVolumeProfile {
+                    click(&mut h, Role::ComboBox, "Placement");
+                    h.get_by_label("Right").click();
+                    h.run();
+                } else {
+                    assert!(
+                        h.query_by_role_and_label(Role::ComboBox, "Placement")
+                            .is_none()
+                    );
+                }
+                h.get_by_role_and_label(Role::SpinButton, "Width (%)")
+                    .scroll_to_me();
+                h.run();
+                h.get_by_role_and_label(Role::SpinButton, "Width (%)")
+                    .set_value_accesskit(45.0);
+                h.run();
                 for (well, swatch) in [
                     ("#0B0C0D", "#801922"),
                     ("#0E0F10", "#E65100"),

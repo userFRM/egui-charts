@@ -46,7 +46,12 @@ pub(crate) enum ProfileStyle {
     },
     #[cfg(feature = "drawings")]
     Drawing {
+        /// Rows at the pane's right edge, scaling with the pane, wherever the anchor is.
         anchored: bool,
+        /// Rows grow left from the span's right end, or the pane's when anchored.
+        right_aligned: bool,
+        /// Share of the span, or of the pane when anchored, that the widest row takes.
+        width: f32,
         /// Width of the point of control line, the drawing's line width.
         poc_width: f32,
         /// Decimals of the row values, two without.
@@ -117,38 +122,50 @@ pub(crate) fn paint_profile(
         return;
     }
     let options = profile.source() == ProfileSource::Options;
-    let (drawing, right_aligned, strip, share, poc_width, walls_visible, volume_decimals) =
-        match style {
-            ProfileStyle::Study {
-                right_aligned,
-                strip,
-                width,
-                walls_visible,
-                volume_decimals,
-            } => (
-                false,
-                right_aligned,
-                strip,
-                width,
-                stroke::THICK,
-                walls_visible,
-                volume_decimals,
-            ),
-            #[cfg(feature = "drawings")]
-            ProfileStyle::Drawing {
-                anchored,
-                poc_width,
-                volume_decimals,
-            } => (
-                true,
-                anchored,
-                false,
-                0.3,
-                poc_width,
-                [true; 2],
-                volume_decimals,
-            ),
-        };
+    let (
+        drawing,
+        right_aligned,
+        strip,
+        share,
+        poc_width,
+        walls_visible,
+        volume_decimals,
+        pane_edge,
+    ) = match style {
+        ProfileStyle::Study {
+            right_aligned,
+            strip,
+            width,
+            walls_visible,
+            volume_decimals,
+        } => (
+            false,
+            right_aligned,
+            strip,
+            width,
+            stroke::THICK,
+            walls_visible,
+            volume_decimals,
+            false,
+        ),
+        #[cfg(feature = "drawings")]
+        ProfileStyle::Drawing {
+            anchored,
+            right_aligned,
+            width,
+            poc_width,
+            volume_decimals,
+        } => (
+            true,
+            right_aligned,
+            false,
+            width,
+            poc_width,
+            [true; 2],
+            volume_decimals,
+            anchored,
+        ),
+    };
     if profile.exposure.is_some() {
         paint_exposure(painter, profile, config, span.clone(), share, price_to_y);
         // The tags clear the bars and the zero line the bars grow from.
@@ -206,7 +223,7 @@ pub(crate) fn paint_profile(
                 .unwrap_or([color[0], color[1], color[2], 15]);
             painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(r, g, b, a));
         }
-        if right_aligned {
+        if pane_edge {
             row_right = painter.clip_rect().right();
             // Rows at the pane's edge scale with the pane, wherever the anchor is.
             width = painter.clip_rect().width();
@@ -242,7 +259,7 @@ pub(crate) fn paint_profile(
             poc_y,
             // An anchored drawing marks the price for the whole pane, its rows being far from
             // the bars they measure.
-            if spans_view || (drawing && right_aligned) {
+            if spans_view || pane_edge {
                 painter.clip_rect().x_range()
             } else {
                 line_rect.x_range()
@@ -973,6 +990,8 @@ mod tests {
                     if drawing {
                         ProfileStyle::Drawing {
                             anchored: false,
+                            right_aligned: false,
+                            width: 0.3,
                             poc_width: crate::styles::stroke::THICK,
                             volume_decimals: None,
                         }
