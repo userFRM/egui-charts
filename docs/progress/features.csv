@@ -859,7 +859,7 @@ Studies,Strategy tester,Built-in Consecutive Up/Down strategy,verified,library,s
 Studies,Strategy tester,Built-in Keltner Channels strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/keltner.rs,1155;3493;3528;3700;3796
 Studies,Strategy tester,Built-in MACD strategy,incomplete,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/macd.rs;src/studies/builtin/price_oscillator.rs,1155;3568
 Studies,Strategy tester,Built-in Momentum strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/momentum.rs,1155
-Studies,Strategy tester,Built-in Parabolic SAR strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/parabolic_sar.rs,1155;3568
+Studies,Strategy tester,Built-in Parabolic SAR strategy,incomplete,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/parabolic_sar.rs,1155;3568;4532
 Studies,Strategy tester,Built-in Pivot Extension strategy,verified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154
 Studies,Strategy tester,Built-in Pivot Reversal strategy,verified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154
 Studies,Strategy tester,Built-in Price Channel strategy,verified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,1154
