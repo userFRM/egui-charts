@@ -527,6 +527,9 @@ pub struct DemoApp {
     replay_session_automatic: bool,
     /// The market recording the saved replay session played, when it ran on one.
     replay_session_recording: Option<Arc<replay::ReplayRecording>>,
+    /// Whether the saved replay session played a recording opened from a local file, which
+    /// Resume opens again. Sessions saved without it played the feed's history or capture.
+    replay_session_imported: bool,
     replay_slots: Vec<usize>,
     /// The recording the market replay plays while one runs.
     replay_recording: Option<Arc<replay::ReplayRecording>>,
@@ -996,6 +999,10 @@ impl DemoApp {
                 .and_then(|storage| eframe::get_value(storage, "replay_session_recording"))
                 .and_then(replay::ReplayRecording::from_saved)
                 .map(Arc::new),
+            replay_session_imported: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "replay_session_imported"))
+                .unwrap_or(false),
             replay_slots: Vec::new(),
             replay_recording: None,
             live_was_paused: false,
@@ -2080,6 +2087,11 @@ impl eframe::App for DemoApp {
             storage,
             "replay_session_automatic",
             &self.replay_session_automatic,
+        );
+        eframe::set_value(
+            storage,
+            "replay_session_imported",
+            &self.replay_session_imported,
         );
         self.checkpoint_workspace();
         self.storage.persist(storage);
