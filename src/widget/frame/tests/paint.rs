@@ -793,6 +793,101 @@ fn new_charts_hide_the_legend_volume_and_saved_settings_keep_it() {
     ));
 }
 
+/// The Background switch reaches both legend sites and retains the saved opacity.
+#[cfg(feature = "studies")]
+#[test]
+fn status_line_background_switch_hides_row_backdrops_and_keeps_opacity() {
+    use crate::config::ChartConfig;
+    use crate::widget::settings::ChartSettingsState;
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0], &[110.0]);
+    chart.config_mut().show_volume = false;
+    chart.add_indicator(Box::new(crate::studies::SMA::new(1)));
+    chart.add_indicator(Box::new(crate::studies::RSI::new(2)));
+    let row = chart.config().background_color.gamma_multiply(0.6);
+    assert_eq!(row.a(), 153);
+    let backed = |painted: &[Shape], label: &str| {
+        let bounds = painted
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Text(text) if text.galley.text().starts_with(label) => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .expect("study legend text");
+        painted.iter().any(|shape| {
+            matches!(shape, Shape::Rect(rect)
+            if rect.fill == row && rect.rect.contains_rect(bounds))
+        })
+    };
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+    assert!(backed(&painted, "SMA") && backed(&painted, "RSI"));
+    let mut settings = ChartSettingsState::from_chart(&chart);
+    assert!(settings.status_line.show_indicator_background);
+    settings.status_line.show_indicator_background = false;
+    settings.apply_to_chart(&mut chart).unwrap();
+    frame(&ctx, &mut chart, 0.2, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.3, vec![]);
+    assert!(!backed(&painted, "SMA") && !backed(&painted, "RSI"));
+    assert!(
+        !painted
+            .iter()
+            .any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == row))
+    );
+    assert_eq!(
+        ChartSettingsState::from_chart(&chart).status_line,
+        settings.status_line
+    );
+    assert_eq!(settings.status_line.indicator_background_opacity, 60);
+    assert_eq!(chart.config().indicator_backdrop_opacity, 0.6);
+    // Chart settings templates store this same settings type.
+    let saved = serde_json::to_string(&settings).unwrap();
+    assert_eq!(
+        serde_json::from_str::<ChartSettingsState>(&saved).unwrap(),
+        settings
+    );
+    #[cfg(feature = "ui")]
+    {
+        let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+        let mut restored = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        restored
+            .restore(&serde_json::from_str(&saved).unwrap())
+            .unwrap();
+        assert_eq!(
+            ChartSettingsState::from_chart(&restored).status_line,
+            settings.status_line
+        );
+    }
+    let mut saved = serde_json::to_value(&settings).unwrap();
+    saved["status_line"]
+        .as_object_mut()
+        .unwrap()
+        .remove("show_indicator_background");
+    assert!(
+        serde_json::from_value::<ChartSettingsState>(saved)
+            .unwrap()
+            .status_line
+            .show_indicator_background
+    );
+    let mut saved = serde_json::to_value(chart.config()).unwrap();
+    saved
+        .as_object_mut()
+        .unwrap()
+        .remove("show_indicator_backdrop");
+    assert!(
+        serde_json::from_value::<ChartConfig>(saved)
+            .unwrap()
+            .show_indicator_backdrop
+    );
+    settings.status_line.show_indicator_background = true;
+    settings.apply_to_chart(&mut chart).unwrap();
+    frame(&ctx, &mut chart, 0.4, vec![]);
+    let painted = shapes(&ctx, &mut chart, 0.5, vec![]);
+    assert!(backed(&painted, "SMA") && backed(&painted, "RSI"));
+}
+
 #[cfg(feature = "studies")]
 #[test]
 fn status_visibility_reaches_the_chart_legend() {

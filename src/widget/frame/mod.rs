@@ -3931,7 +3931,7 @@ impl Chart {
                 legend.show_indicator_values = self.config.show_indicator_last_val;
                 legend.day_change =
                     session_closes.filter(|_| values && self.config.show_last_day_change);
-                legend.study_backdrop = self.config.indicator_backdrop_opacity;
+                legend.study_backdrop = self.config.indicator_backdrop();
                 legend.extended_hours = &extended_hours;
                 let background = |pos: Pos2| self.background_at(rect, pos);
                 legend.background = Some(&background);

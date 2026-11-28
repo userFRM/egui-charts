@@ -140,6 +140,8 @@ pub struct StatusLineOptions {
     pub show_volume: bool,
     /// Whether the legend shows the change of the last price from the previous session's close.
     pub show_last_day_change: bool,
+    /// Whether the study rows' backdrop is shown; off keeps its opacity.
+    pub show_indicator_background: bool,
     /// Opacity of the study rows' backdrop, from 0 to 100 percent.
     pub indicator_background_opacity: u8,
 }
@@ -161,6 +163,7 @@ impl Default for StatusLineOptions {
             show_change_percent: true,
             show_volume: false,
             show_last_day_change: false,
+            show_indicator_background: true,
             indicator_background_opacity: 60,
         }
     }

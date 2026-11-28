@@ -584,16 +584,38 @@ impl SettingsDialog {
                     "Values",
                     theme.ui.text,
                 );
-                self.draw_setting_row_with_controls(ui, "Background", theme, |ui, dialog| {
-                    ui.visuals_mut().widgets.inactive.bg_fill = theme.ui.border_control;
-                    ui.add(
-                        egui::Slider::new(
-                            &mut dialog.settings.status_line.indicator_background_opacity,
-                            0..=100,
+                let label_width = Self::label_width(ui, theme);
+                ui.horizontal(|ui| {
+                    let label = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(label_width, 42.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(label_width);
+                                ui.set_max_width(label_width);
+                                checkbox(
+                                    ui,
+                                    &mut self.settings.status_line.show_indicator_background,
+                                    RichText::new(l10n::text(ui.ctx(), "Background"))
+                                        .size(theme.text.title)
+                                        .color(theme.ui.text),
+                                )
+                            },
                         )
-                        .suffix("%"),
-                    )
-                    .accessible_name(l10n::text(ui.ctx(), "Background opacity"));
+                        .inner;
+                    ui.add_enabled_ui(self.settings.status_line.show_indicator_background, |ui| {
+                        ui.label_inputs_by(label.id, |ui| {
+                            ui.visuals_mut().widgets.inactive.bg_fill = theme.ui.border_control;
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut self.settings.status_line.indicator_background_opacity,
+                                    0..=100,
+                                )
+                                .suffix("%"),
+                            )
+                            .accessible_name(l10n::text(ui.ctx(), "Background opacity"));
+                        });
+                    });
                 });
             });
         });

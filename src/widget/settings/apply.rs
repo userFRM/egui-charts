@@ -297,6 +297,7 @@ impl ChartSettingsState {
         settings.status_line.show_indicator_inputs = config.show_indicator_inputs;
         settings.status_line.show_indicator_values = config.show_indicator_last_val;
         settings.status_line.show_last_day_change = config.show_last_day_change;
+        settings.status_line.show_indicator_background = config.show_indicator_backdrop;
         settings.status_line.indicator_background_opacity =
             (config.indicator_backdrop_opacity.clamp(0.0, 1.0) * 100.0).round() as u8;
         settings.scales_and_lines.axis_layout = chart
@@ -694,6 +695,7 @@ impl ChartSettingsState {
         config.show_legend_badge = self.status_line.show_logo;
         config.show_market_status = self.status_line.show_market_status;
         config.show_last_day_change = self.status_line.show_last_day_change;
+        config.show_indicator_backdrop = self.status_line.show_indicator_background;
         config.indicator_backdrop_opacity =
             f32::from(self.status_line.indicator_background_opacity.min(100)) / 100.0;
         config.show_symbol_labels = self.status_line.show_symbol;
