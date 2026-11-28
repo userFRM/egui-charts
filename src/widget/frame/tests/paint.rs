@@ -884,7 +884,7 @@ fn status_visibility_reaches_the_chart_legend() {
         for (text, visible) in [
             ("Vol 1", hidden == 10),
             ("Vol", !matches!(hidden, 5 | 6 | 10 | 11)),
-            ("SMA 9", !matches!(hidden, 5 | 7 | 10 | 11)),
+            ("SMA 20", !matches!(hidden, 5 | 7 | 10 | 11)),
             ("1", !matches!(hidden, 5 | 8 | 10 | 11)),
         ] {
             assert_eq!(texts.contains(&text), visible, "{text}: hidden={hidden}");
