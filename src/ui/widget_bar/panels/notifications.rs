@@ -33,7 +33,7 @@ pub enum NotificationsAction {
     /// Show the idea or post an entry is about, by the host's identifier, as the ideas panel's
     /// [`IdeasAction::Open`](crate::ui::ideas::IdeasAction::Open) does.
     OpenPost(String),
-    /// Show the news story an entry is about, by the feed's identifier: find the story and pass
+    /// Resolve the news story by its feed identifier and publication time, then pass it
     /// it to [`NewsPanel::open_story`](crate::ui::widget_bar::NewsPanel::open_story).
     OpenStory {
         /// The stable identifier assigned by the feed.

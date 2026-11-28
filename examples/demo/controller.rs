@@ -5760,16 +5760,15 @@ mod tests {
         h.get_by_label("Open story").click();
         h.run_steps(5);
         assert!(h.state().open_panel == Some(SidePanel::News));
-        h.get_by_label(&format!(
-            "{} UTC · Demo Wire",
-            story.time.format("%b %-d, %H:%M")
-        ));
+        let publication = format!("{} UTC · Demo Wire", story.time.format("%b %-d, %H:%M"));
+        h.get_by_label(&publication);
         h.get_by_label(&story.body);
 
         h.state().live.set_paused(false);
         h.state().live.advance(now + chrono::Duration::hours(1));
         h.state().live.set_paused(true);
         h.run_steps(8);
+        h.get_by_label(&publication);
         h.get_by_label(&story.body);
     }
 

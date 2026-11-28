@@ -170,8 +170,8 @@ pub struct NewsPanel {
     notifications: Vec<Notification>,
     /// The stories each alert reported, oldest first and at most [`REPORTED`].
     alert_stories: BTreeMap<String, Vec<NewsStory>>,
-    /// The alert and the story read among the stories it reported, shown in place of the list.
-    reading: Option<(String, NewsStory)>,
+    /// The opened publication and its alert, if any, held apart from the refreshed list.
+    reading: Option<(Option<String>, NewsStory)>,
     /// Whether `show` ran since the last poll.
     shown: bool,
 }
@@ -351,35 +351,20 @@ impl NewsPanel {
     ///
     /// A story that an alert of this panel reported opens apart from the list, among the newest
     /// 100 stories of that alert: Previous and Next, or the Left and Right keys, move to the
-    /// story it reported before or after. It is found by its identifier, at its publication time
-    /// or else its newest publication with that identifier, and the given story takes the
-    /// reported one's place; of several alerts that reported it, the first by name is read. Any
-    /// other story joins the list, which the next refresh replaces.
+    /// story it reported before or after. It is matched by identifier and publication time.
+    /// If several alerts reported it, the first by name is read. The opened publication stays
+    /// visible across refreshes until the reader goes back to the list.
     pub fn open_story(&mut self, story: NewsStory) {
         self.focus_back = false;
-        for (alert, stories) in &mut self.alert_stories {
-            let at = stories
-                .iter()
-                .rposition(|held| held.id == story.id && held.time == story.time)
-                .or_else(|| stories.iter().rposition(|held| held.id == story.id));
-            if let Some(at) = at {
-                stories[at] = story.clone();
-                self.open = None;
-                self.reading = Some((alert.clone(), story));
-                return;
-            }
-        }
-        self.reading = None;
-        self.open = Some(story.id.clone());
-        if let Some(existing) = self
-            .stories
-            .iter_mut()
-            .find(|existing| existing.id == story.id)
-        {
-            *existing = story;
-        } else {
-            self.stories.insert(0, story);
-        }
+        self.open = None;
+        let alert = self.alert_stories.iter_mut().find_map(|(alert, stories)| {
+            let held = stories
+                .iter_mut()
+                .find(|held| held.id == story.id && held.time == story.time)?;
+            *held = story.clone();
+            Some(alert.clone())
+        });
+        self.reading = Some((alert, story));
     }
 
     /// Ask the feed again, such as when the host learns of new stories.
@@ -666,11 +651,10 @@ impl NewsPanel {
         } else {
             "News"
         };
-        // A story read for an alert is held apart from the list, with that alert's stories and
-        // its place among them.
+        // A host-opened publication is held apart from the list, with alert navigation if available.
         let reading = self.reading.take();
         let walk = reading.as_ref().and_then(|(alert, story)| {
-            let stories = self.alert_stories.get(alert)?;
+            let stories = self.alert_stories.get(alert.as_ref()?)?;
             Some((stories, stories.iter().position(|held| held == story)?))
         });
         let story = match &reading {
@@ -1156,9 +1140,9 @@ impl NewsPanel {
                     self.alert_stories.insert(name.clone(), reported);
                 }
                 if let Some((reading, _)) = &mut self.reading
-                    && *reading == old
+                    && reading.as_ref() == Some(&old)
                 {
-                    reading.clone_from(&name);
+                    *reading = Some(name.clone());
                 }
                 let error = self.alert_errors.remove(&old);
                 self.alert_errors.remove(&name);
