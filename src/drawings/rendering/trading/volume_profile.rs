@@ -2860,8 +2860,8 @@ mod tests {
     /// multiples of that height, from executions, finer bars and chart bars, and the row count on an
     /// instrument without a tick size. A row count draws the whole ticks per row whose row total
     /// lies closest to it where the instrument has a tick size, as the volume profile studies do,
-    /// and equal rows without one. A price height saved before rows could be set in ticks draws the
-    /// rows it drew then.
+    /// and equal rows without one. A price height saved before rows could be set in ticks keeps
+    /// its fixed height and zero-aligned grid.
     #[test]
     fn profile_rows_follow_ticks_of_the_instrument() {
         use crate::data::{Footprint, ProfileSource};
@@ -3011,9 +3011,9 @@ mod tests {
                 (
                     10.0,
                     0.5,
-                    vec![10.0, 20.0, 10.0, 10.0, 10.0, 0.0],
-                    vec![10.0, 20.0, 10.0, 0.0, 0.0, 0.0],
-                    vec![0.0, 0.0, 0.0, 10.0, 10.0, 0.0],
+                    vec![10.0, 20.0, 10.0, 10.0, 10.0],
+                    vec![10.0, 20.0, 10.0, 0.0, 0.0],
+                    vec![0.0, 0.0, 0.0, 10.0, 10.0],
                 ),
                 (
                     9.875,
@@ -3158,15 +3158,15 @@ mod tests {
                 ),
             ),
             // Over 24 rows they are 4.17 a row: 4 ticks take 25 rows and 5 take 20, so 4, from
-            // 10.00. The high of 11.00 lies on a row edge, which opens an empty row above it.
+            // 10.00 to the high of 11.00 on a row edge.
             (
                 24,
                 (
                     10.0,
                     0.04,
-                    [vec![4.0; 25], vec![0.0]].concat(),
-                    [vec![4.0; 15], vec![0.0; 11]].concat(),
-                    [vec![0.0; 15], vec![4.0; 10], vec![0.0]].concat(),
+                    vec![4.0; 25],
+                    [vec![4.0; 15], vec![0.0; 10]].concat(),
+                    [vec![0.0; 15], vec![4.0; 10]].concat(),
                 ),
                 (
                     9.995,
@@ -3235,12 +3235,110 @@ mod tests {
                         "{at}: {:?}",
                         profile.volume()
                     );
+                    assert!(
+                        close(
+                            &[profile.high()],
+                            &[*low + volume.len() as f64 * *height],
+                            1.0
+                        ),
+                        "{at}: top {}",
+                        profile.high()
+                    );
                     assert!(close(profile.up(), up, scale), "{at}: {:?}", profile.up());
                     assert!(
                         close(profile.down(), down, scale),
                         "{at}: {:?}",
                         profile.down()
                     );
+                }
+            }
+        }
+        // An execution at the upper edge retains its own row and its full volume.
+        flow.push(&Tick::new(bars[1].time, 11.0, 4.0, Some(OrderSide::Buy)))
+            .unwrap();
+        let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+        drawing.chart_points = vec![ChartPoint::new(0.0, 10.0), ChartPoint::new(1.0, 10.0)];
+        drawing.volume_profile = VolumeProfileConfig::new(24, 0.7);
+        let view = ChartView {
+            price_formatter: None,
+            thousands_sep: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            instrument: Some(&instrument),
+            bars: &bars,
+            revision: 0,
+            bar_to_x: &|x| x,
+            bar_spacing: 1.0,
+            price_to_y: &|price| price as f32,
+            y_to_price: &f64::from,
+            time_axis: true,
+            executions: Some((&flow).into()),
+            timeframe: Some(Timeframe::Min1),
+            finer: &[],
+        };
+        let profile = drawing.volume_profile_of(&view).unwrap();
+        assert!((profile.low() - 9.995).abs() < 1e-9);
+        assert!((profile.row_height() - 0.04).abs() < 1e-9);
+        assert_eq!(
+            profile.volume(),
+            sparse(26, &[(0, 1.0), (7, 2.0), (24, 3.0), (25, 4.0)])
+        );
+        for (high, flat_volume, count, total) in [
+            (11.0, None, 25, 100.0),
+            (11.0_f64.next_down(), None, 25, 100.0),
+            (11.0_f64.next_up(), None, 25, 100.0),
+            (11.0, Some(0.0), 25, 100.0),
+            (11.0, Some(5.0), 26, 105.0),
+        ] {
+            let mut bars = vec![Bar::new(bars[0].time, 10.0, high, 10.0, high, 100.0)];
+            if let Some(volume) = flat_volume {
+                bars.push(Bar::new(
+                    bars[0].time + chrono::TimeDelta::minutes(1),
+                    11.0,
+                    11.0,
+                    11.0,
+                    11.0,
+                    volume,
+                ));
+            }
+            let finer_bars: Vec<_> = bars
+                .iter()
+                .cloned()
+                .map(|mut bar| {
+                    bar.volume *= 2.0;
+                    bar
+                })
+                .collect();
+            let history = [StudyData {
+                request: history[0].request.clone(),
+                bars: &finer_bars,
+                clock: BarClock::new(Timeframe::Sec1),
+                instrument: None,
+                timeframe: Timeframe::Sec1,
+                chart: None,
+            }];
+            for tool in [
+                DrawingToolType::FixedRangeVolumeProfile,
+                DrawingToolType::AnchoredVolumeProfile,
+            ] {
+                drawing.tool_type = tool;
+                drawing.volume_profile = VolumeProfileConfig::new(25, 0.7);
+                for finer in [false, true] {
+                    let view = ChartView {
+                        bars: &bars,
+                        executions: None,
+                        finer: if finer { &history } else { &[] },
+                        ..view
+                    };
+                    let profile = drawing.volume_profile_of(&view).unwrap();
+                    assert_eq!(
+                        profile.volume().len(),
+                        count,
+                        "{tool:?}, high {high}, flat {flat_volume:?}, finer {finer}"
+                    );
+                    assert!((profile.high() - (10.0 + count as f64 * 0.04)).abs() < 1e-9);
+                    let scale = if finer { 2.0 } else { 1.0 };
+                    assert!((profile.volume().iter().sum::<f64>() - total * scale).abs() < 1e-9);
                 }
             }
         }

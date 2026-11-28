@@ -522,6 +522,7 @@ pub struct DemoApp {
     replay_interval: Timeframe,
     replay_scope: ReplayScope,
     replay_session: Option<(ReplaySession, Timeframe)>,
+    replay_session_cutoff: Option<chrono::DateTime<chrono::Utc>>,
     replay_slots: Vec<usize>,
     live_was_paused: bool,
     replay_control: FloatingReplayControl,
@@ -976,6 +977,10 @@ impl DemoApp {
                 }
                 Some((session, interval))
             }),
+            replay_session_cutoff: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "replay_session_cutoff"))
+                .flatten(),
             replay_slots: Vec::new(),
             live_was_paused: false,
             replay_control: FloatingReplayControl::new(),
@@ -2035,6 +2040,11 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "account_panel_height", &self.account_panel_height);
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
+        eframe::set_value(
+            storage,
+            "replay_session_cutoff",
+            &self.replay_session_cutoff,
+        );
         self.checkpoint_workspace();
         self.storage.persist(storage);
         eframe::set_value(
@@ -4330,7 +4340,10 @@ impl DemoApp {
                 points,
                 self.theme.ui.border,
             )));
-        if !self.replay_selecting && self.replay.is_none() {
+        // An all charts replay moves to the chart activated; another waits for its end.
+        if !self.replay_selecting
+            && (self.replay.is_none() || self.replay_slots.contains(&self.layout.active()))
+        {
             self.activate_chart_slot(self.layout.active());
         }
         self.drain_chart_events(ui.ctx());
@@ -4863,11 +4876,6 @@ impl DemoApp {
             return;
         }
         let play = matches!(action, ReplayControlAction::Play);
-        let endpoint = match action {
-            ReplayControlAction::GoToStart => Some(false),
-            ReplayControlAction::GoToEnd => Some(true),
-            _ => None,
-        };
         let transport = matches!(
             action,
             ReplayControlAction::Play
@@ -4904,13 +4912,7 @@ impl DemoApp {
             ReplayControlAction::None => return,
             _ => {}
         }
-        if let Some(end) = endpoint
-            && let Some(driver) = self.chart.replay_driver().cloned()
-            && let Some((first, last)) = driver.time_range()
-        {
-            driver.seek(if end { last } else { first });
-            self.push_market_replay_window();
-        } else if !transport {
+        if !transport {
             self.push_replay_window_to_chart();
         }
         self.sync_replay_driver(play);
@@ -6192,14 +6194,16 @@ mod tests {
             .unwrap_or_else(|| panic!("missing control: {label}"))
     }
 
-    /// The demo's series settings reach the TPO chart type's statistics rows, hours, blocks,
+    /// The demo's series settings reach the TPO chart type's statistics rows, hours, Letters and Blocks,
     /// volume profile settings, profile length and price line, and the study settings the Time
     /// Price Opportunity study's statistics rows, profile period, value area edges and volume
-    /// profile levels.
+    /// profile levels and display.
     #[test]
     fn tpo_settings_reach_the_demo_chart() {
         use egui::accesskit::{Action, ActionData, ActionRequest, TreeId};
-        use egui_charts::model::{ChartType, PriceSource, ProfileSession, TPOProfilePeriod};
+        use egui_charts::model::{
+            ChartType, PriceSource, ProfileSession, TPODisplayMode, TPOProfilePeriod,
+        };
         use egui_charts::studies::{IndicatorFactory, InputValue};
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
@@ -6263,6 +6267,7 @@ mod tests {
         }
         for label in [
             "Blocks",
+            "Letters",
             "Volume profile",
             "Volume point of control",
             "Volume placement",
@@ -6279,7 +6284,8 @@ mod tests {
         click(&mut app, "Ok");
         assert!(!app.series_settings.is_open);
         let params = app.chart.chart_type_params();
-        assert!(!params.tpo_blocks && params.tpo_volume_profile);
+        assert!(!params.tpo_letters && !params.tpo_blocks && params.tpo_volume_profile);
+        assert_eq!(params.tpo_config(None).display_mode, TPODisplayMode::Hidden);
         assert!(params.tpo_volume.poc && params.tpo_volume.left);
         assert_eq!(
             (params.tpo_profile_period, params.tpo_profile_periods),
@@ -6304,6 +6310,8 @@ mod tests {
             "Value area high",
             "Volume profile",
             "Volume point of control",
+            "Display",
+            "Hidden",
             "Apply",
         ] {
             click(&mut app, label);
@@ -6311,6 +6319,7 @@ mod tests {
         assert!(!app.indicator_settings.is_open());
         let inputs = app.chart.indicator_mut(id).unwrap().inputs();
         for (input, expected) in [
+            ("display", InputValue::Choice(3)),
             ("statistics", InputValue::Toggle(true)),
             ("statistics_total_volume", InputValue::Toggle(true)),
             ("profile_period", InputValue::Choice(1)),
