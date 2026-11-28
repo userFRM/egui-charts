@@ -89,6 +89,8 @@ impl StudyStrategy {
                 InputValue::Timeframe(None),
                 InputKind::Timeframe,
             )],
+            // Held here, not in the study, so that setting one never moves another.
+            Rule::Sar => ParabolicSAR::default().inputs(),
             Rule::Rsi | Rule::Stochastic => {
                 let (low, high) = if matches!(rule, Rule::Rsi) {
                     (30., 70.)
@@ -203,6 +205,9 @@ fn crosses(a: &[f64], b: &[f64], at: usize) -> bool {
 
 impl Strategy for StudyStrategy {
     fn study_inputs(&self) -> Vec<StudyInput> {
+        if matches!(self.rule, Rule::Sar) {
+            return self.inputs.clone();
+        }
         let mut inputs = Vec::new();
         for (index, study) in self.studies.iter().enumerate() {
             for mut input in study.inputs() {
@@ -290,6 +295,11 @@ impl Strategy for StudyStrategy {
         {
             return Err("oversold must be below overbought");
         }
+        if matches!(self.rule, Rule::Sar)
+            && number(&self.inputs, "initial_af") > number(&self.inputs, "max_af")
+        {
+            return Err("start must not be above max value");
+        }
         if matches!(self.rule, Rule::Rating)
             && let (Some(chart), Some(interval)) =
                 (self.timeframe, timeframe(&self.inputs, "timeframe"))
@@ -329,6 +339,14 @@ impl Strategy for StudyStrategy {
     }
 
     fn prepare(&mut self, bars: &[Bar]) {
+        if matches!(self.rule, Rule::Sar) {
+            let input = |id: &str| number(&self.inputs, id);
+            self.studies[0] = Box::new(ParabolicSAR::new(
+                input("initial_af"),
+                input("af_step"),
+                input("max_af"),
+            ));
+        }
         let calculation = self.calculation_timeframe().is_some();
         for study in &mut self.studies {
             study.calculate(if calculation {
