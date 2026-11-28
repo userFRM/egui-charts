@@ -2997,7 +2997,7 @@ mod tests {
             assert_eq!(study.settings().untagged_plots, untagged, "{lines} plots");
         }
 
-        let mut ribbon = ConfiguredStudy::new(Box::new(MARibbon::new()));
+        let mut ribbon = ConfiguredStudy::new(Box::new(MARibbon::exponential()));
         assert_eq!(
             ribbon.settings().untagged_plots,
             (0..12).collect::<Vec<_>>()

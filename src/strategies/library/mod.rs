@@ -39,6 +39,11 @@ type StrategyConstructor = Box<dyn Fn() -> Box<dyn Strategy> + Send + Sync>;
 /// or Short only, where a signal on the other side closes the position without reversing it.
 /// Both Bollinger Bands strategies enter at the next price after the close crosses back inside
 /// a band, also when that price is beyond the band.
+/// MACD and Technical Ratings offer an EMA seed input: Simple average, the default, or First
+/// value, which starts every exponential average at its first finite input. Technical Ratings
+/// also offers a Rule set: falling ADX sells, EMA 13 direction for the Stochastic RSI and Bull
+/// Bear Power gates and a 25-bar cloud offset by default, or rising ADX sells, close against
+/// EMA 50 and a 26-bar offset.
 /// Built-ins ignore fill callbacks and decide
 /// at bar close, or on forming-bar updates when tick recalculation is enabled.
 ///

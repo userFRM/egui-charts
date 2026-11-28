@@ -69,6 +69,7 @@ pub struct MACD {
     fast_period: usize,
     slow_period: usize,
     signal_period: usize,
+    first_seed: bool,
     /// Formula of the fast and slow averages.
     oscillator_average: OscillatorAverage,
     /// Formula of the signal line.
@@ -91,6 +92,7 @@ impl MACD {
             fast_period: fast_period.max(1),
             slow_period: slow_period.max(1),
             signal_period: signal_period.max(1),
+            first_seed: false,
             oscillator_average: OscillatorAverage::Exponential,
             signal_average: OscillatorAverage::Exponential,
             values: IndicatorValues::new(),
@@ -105,6 +107,11 @@ impl MACD {
             ],
             visible: true,
         }
+    }
+
+    pub(crate) fn seeded_from_first(mut self, first: bool) -> Self {
+        self.first_seed = first;
+        self
     }
 
     /// Choose the formula of the fast and slow averages and of the signal line; both exponential
@@ -180,19 +187,34 @@ impl Indicator for MACD {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
+        let seed = |length| if self.first_seed { 1 } else { length };
         self.stepper
             .run(data, from, &mut self.values, |means, bar| {
                 if !bar.close.is_finite() {
                     return IndicatorValue::None;
                 }
                 let average = self.oscillator_average;
-                let macd = means[0].next(average, bar.close, self.fast_period)
-                    - means[1].next(average, bar.close, self.slow_period);
+                let macd = means[0].next_seeded(
+                    average,
+                    bar.close,
+                    self.fast_period,
+                    seed(self.fast_period),
+                ) - means[1].next_seeded(
+                    average,
+                    bar.close,
+                    self.slow_period,
+                    seed(self.slow_period),
+                );
                 // Either average still filling its window.
                 if !macd.is_finite() {
                     return IndicatorValue::None;
                 }
-                let signal = means[2].next(self.signal_average, macd, self.signal_period);
+                let signal = means[2].next_seeded(
+                    self.signal_average,
+                    macd,
+                    self.signal_period,
+                    seed(self.signal_period),
+                );
                 IndicatorValue::Multiple(vec![macd, signal, macd - signal])
             });
     }

@@ -75,7 +75,7 @@ impl StudyStrategy {
         if matches!(rule, Rule::TwoAverages) {
             studies.push(Box::new(SMA::new(26)));
         }
-        let inputs = match rule {
+        let mut inputs = match rule {
             // Indices 0 and 1 keep their meaning for strategies saved with Long or Short.
             Rule::DirectedBollinger => vec![StudyInput::new(
                 "direction",
@@ -104,6 +104,25 @@ impl StudyStrategy {
             }
             _ => Vec::new(),
         };
+        if matches!(rule, Rule::Macd | Rule::Rating) {
+            inputs.push(StudyInput::new(
+                "ema_seed",
+                "EMA seed",
+                InputValue::Choice(0),
+                InputKind::Choice(vec!["Simple average".into(), "First value".into()]),
+            ));
+        }
+        if matches!(rule, Rule::Rating) {
+            inputs.push(StudyInput::new(
+                "rules",
+                "Rule set",
+                InputValue::Choice(0),
+                InputKind::Choice(vec![
+                    "Falling ADX, EMA 13 trend, 25-bar cloud".into(),
+                    "Rising ADX, EMA 50 trend, 26-bar cloud".into(),
+                ]),
+            ));
+        }
         Self {
             rule,
             studies,
@@ -201,6 +220,12 @@ impl Strategy for StudyStrategy {
                 if matches!(self.rule, Rule::Rsi) && input.id != "period" {
                     continue;
                 }
+                // Average signals read the base line only; keep presentation smoothing out.
+                if matches!(self.rule, Rule::Average | Rule::TwoAverages)
+                    && input.id.starts_with("smoothing")
+                {
+                    continue;
+                }
                 if matches!(self.rule, Rule::TwoAverages) {
                     let prefix = if index == 0 { "fast" } else { "slow" };
                     input.id = format!("{prefix}.{}", input.id);
@@ -222,6 +247,29 @@ impl Strategy for StudyStrategy {
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
         if self.inputs.iter().any(|input| input.id == id) {
             set_input(&mut self.inputs, id, value)?;
+            if matches!(id, "ema_seed" | "rules") {
+                let first = self
+                    .inputs
+                    .iter()
+                    .any(|input| input.id == "ema_seed" && input.value == InputValue::Choice(1));
+                let alternative = self
+                    .inputs
+                    .iter()
+                    .any(|input| input.id == "rules" && input.value == InputValue::Choice(1));
+                let mut fresh: Box<dyn Indicator> = match self.rule {
+                    Rule::Macd => Box::new(MACD::default().seeded_from_first(first)),
+                    Rule::Rating => {
+                        Box::new(TechnicalRatings::default().with_calculation(first, alternative))
+                    }
+                    _ => unreachable!("calculation modes belong to MACD and Technical Ratings"),
+                };
+                for input in self.studies[0].inputs() {
+                    fresh
+                        .set_input(&input.id, input.value)
+                        .map_err(|_| "invalid strategy study input")?;
+                }
+                self.studies[0] = fresh;
+            }
         } else if matches!(self.rule, Rule::TwoAverages) {
             let (prefix, id) = id.split_once('.').ok_or("unknown strategy input")?;
             let index = match prefix {

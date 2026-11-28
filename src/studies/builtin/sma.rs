@@ -34,10 +34,13 @@
 //! assert!(matches!(sma.values().to_rows()[19], IndicatorValue::Single(_)));
 //! ```
 
+use super::smoothing::{SMOOTHING_COLORS, Smoothed, SmoothingType};
 use crate::model::Bar;
 use crate::studies::palette;
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
+use std::collections::VecDeque;
 
 /// Simple Moving Average indicator.
 ///
@@ -47,7 +50,12 @@ use egui::Color32;
 pub struct SMA {
     period: usize,
     values: IndicatorValues,
+    stepper: Stepper<(VecDeque<f64>, Smoothed)>,
     color: Color32,
+    smoothing: SmoothingType,
+    smoothing_length: usize,
+    smoothing_deviation: f64,
+    smoothing_colors: [Color32; 3],
     visible: bool,
 }
 
@@ -60,7 +68,12 @@ impl SMA {
         Self {
             period: period.max(1),
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::BLUE,
+            smoothing: SmoothingType::None,
+            smoothing_length: 14,
+            smoothing_deviation: 2.0,
+            smoothing_colors: SMOOTHING_COLORS,
             visible: true,
         }
     }
@@ -87,7 +100,12 @@ impl Indicator for SMA {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        smoothing: choice("Smoothing", SmoothingType::ALL),
+        smoothing_length: length("Smoothing length", 1, usize::MAX)
+            if smoothing in SmoothingType::WITH_LENGTH,
+        smoothing_deviation: number("Band deviation", 0.0, f64::MAX)
+            if smoothing in SmoothingType::WITH_BANDS
     ; {});
 
     fn name(&self) -> &str {
@@ -103,17 +121,28 @@ impl Indicator for SMA {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let period = self.period;
-        self.values.truncate(from.min(data.len()));
-        for i in self.values.len()..data.len() {
-            self.values.push(if i + 1 < period {
-                IndicatorValue::None
-            } else {
-                // Summed afresh each bar so long series do not accumulate rounding drift.
-                let window = &data[i + 1 - period..=i];
-                IndicatorValue::Single(window.iter().map(|b| b.close).sum::<f64>() / period as f64)
+        let (period, kind, length, deviation) = (
+            self.period,
+            self.smoothing,
+            self.smoothing_length,
+            self.smoothing_deviation,
+        );
+        self.stepper
+            .run(data, from, &mut self.values, |(window, smoothed), bar| {
+                window.push_back(bar.close);
+                if window.len() > period {
+                    window.pop_front();
+                }
+                if window.len() < period {
+                    return IndicatorValue::None;
+                }
+                // Sum each window in source order to avoid accumulated rounding drift.
+                let mean = window.iter().sum::<f64>() / period as f64;
+                if !mean.is_finite() {
+                    return IndicatorValue::None;
+                }
+                smoothed.next(kind, length, deviation, mean, bar.volume)
             });
-        }
     }
 
     fn is_incremental(&self) -> bool {
@@ -125,12 +154,20 @@ impl Indicator for SMA {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        let [average, upper, lower] = self.smoothing_colors;
+        vec![self.color, average, upper, lower]
+    }
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        self.smoothing.fills()
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+            for (slot, color) in self.smoothing_colors.iter_mut().zip(&colors[1..]) {
+                *slot = *color;
+            }
         }
     }
 
@@ -151,7 +188,9 @@ impl Indicator for SMA {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!("SMA({})", self.period)]
+        let mut names = vec![format!("SMA({})", self.period)];
+        names.extend(self.smoothing.line_names("MA-based MA"));
+        names
     }
 }
 

@@ -12,6 +12,8 @@ pub struct MultipleMA {
 
 impl MultipleMA {
     /// Create the six-average preset.
+    ///
+    ///     let _ = egui_charts::studies::MultipleMA::new();
     pub fn new() -> Self {
         let colors = [
             Color32::from_rgb(156, 39, 176),
@@ -30,7 +32,9 @@ impl MultipleMA {
                     .collect(),
             )
             .unwrap()
-            .without_crossings(),
+            .without_crossings()
+            .with_shared_method()
+            .with_max_period(10_000),
         }
     }
 }

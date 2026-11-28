@@ -2104,6 +2104,85 @@ mod tests {
         }
     }
 
+    /// Literal two-plot saves keep their 4 px crossing strokes and 12 px segments.
+    #[test]
+    fn saved_crossing_segments_keep_their_geometry() {
+        use crate::model::BarData;
+        use crate::studies::StudyTemplate;
+        use crate::widget::Chart;
+        let bars: Vec<_> = (0..320)
+            .map(|i| {
+                let close = 100. + (i as f64 * 0.37).sin() * 10. + i as f64 * 0.01;
+                Bar::new(
+                    Utc.timestamp_opt(1_700_000_000 + i * 60, 0).unwrap(),
+                    close - 0.1,
+                    close + 0.5,
+                    close - 0.5,
+                    close,
+                    10.,
+                )
+            })
+            .collect();
+        for literal in [
+            r#"{"inputs":[["cross_first",{"Choice":1}],["cross_second",{"Choice":2}],["period_0",{"Length":9}],["kind_0",{"Choice":1}],["source_0",{"Choice":3}],["period_1",{"Length":26}],["kind_1",{"Choice":1}],["source_1",{"Choice":3}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"name":"EMA Cross","scale":"Main","settings":{"background":null,"background_visible":true,"fill_between_levels":false,"fills":[],"gradients":[],"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.EMACross.html","hidden_intervals":[],"level_fill_color":[16,7,0,16],"levels":[],"plot_variants":[[],[]],"plots":[{"color":[255,109,0,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[67,160,71,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0}],"precision":null,"price_line_plots":[],"show_legend_values":true,"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"untagged_plots":[],"user_edit_enabled":true},"visible":true}"#,
+            r#"{"inputs":[["cross_first",{"Choice":1}],["cross_second",{"Choice":2}],["period_0",{"Length":9}],["kind_0",{"Choice":0}],["source_0",{"Choice":3}],["period_1",{"Length":21}],["kind_1",{"Choice":0}],["source_1",{"Choice":3}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"name":"MA Cross","scale":"Main","settings":{"background":null,"background_visible":true,"fill_between_levels":false,"fills":[],"gradients":[],"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MACross.html","hidden_intervals":[],"level_fill_color":[16,7,0,16],"levels":[],"plot_variants":[[],[]],"plots":[{"color":[255,109,0,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[67,160,71,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0}],"precision":null,"price_line_plots":[],"show_legend_values":true,"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"untagged_plots":[],"user_edit_enabled":true},"visible":true}"#,
+            r#"{"inputs":[["cross_first",{"Choice":1}],["cross_second",{"Choice":2}],["period_0",{"Length":10}],["kind_0",{"Choice":0}],["source_0",{"Choice":3}],["period_1",{"Length":10}],["kind_1",{"Choice":1}],["source_1",{"Choice":3}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"name":"SMA/EMA Cross","scale":"Main","settings":{"background":null,"background_visible":true,"fill_between_levels":false,"fills":[],"gradients":[],"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MixedMACross.html","hidden_intervals":[],"level_fill_color":[16,7,0,16],"levels":[],"plot_variants":[[],[]],"plots":[{"color":[255,109,0,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0},{"color":[67,160,71,255],"pattern":"Solid","plot_type":"JoinedLine","visible":true,"width":1.0}],"precision":null,"price_line_plots":[],"show_legend_values":true,"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"untagged_plots":[],"user_edit_enabled":true},"visible":true}"#,
+        ] {
+            let original: StudyTemplate = serde_json::from_str(literal).unwrap();
+            let color = if original.name == "MA Cross" {
+                crate::studies::palette::BLUE
+            } else {
+                crate::studies::palette::LIGHT_BLUE
+            };
+            for visible in [[true, true], [true, false], [false, true], [false, false]] {
+                let mut saved = original.clone();
+                for (plot, visible) in saved.settings.plots.iter_mut().zip(visible) {
+                    plot.visible = visible;
+                }
+                for round_trip in [false, true] {
+                    let restored = saved.create().unwrap();
+                    let study = if round_trip {
+                        StudyTemplate::from_study(restored.as_ref())
+                            .create()
+                            .unwrap()
+                    } else {
+                        restored
+                    };
+                    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+                        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+                        chart.add_indicator(study.clone_box());
+                        let ctx = Context::default();
+                        crate::theme::apply_to_egui(&ctx, &theme);
+                        let segments: Vec<_> = shapes(&ctx, &mut chart, 0., Vec::new())
+                            .into_iter()
+                            .filter_map(|shape| match shape {
+                                Shape::LineSegment { points, stroke } if stroke.color == color => {
+                                    Some((
+                                        stroke.width,
+                                        points[0].distance(points[1]),
+                                        stroke.color,
+                                    ))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let count = if visible.into_iter().any(|shown| shown) {
+                            28
+                        } else {
+                            0
+                        };
+                        assert_eq!(
+                            segments,
+                            vec![(4., 12., color); count],
+                            "{} {visible:?} round_trip={round_trip}",
+                            saved.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Rendering paints every preset line, ribbon widths/fades and only chosen crossings.
     /// Alternating closes 1 and 2 keep SMA(14) at 1.5 while SMA(21) alternates around it.
     #[test]
@@ -2123,7 +2202,7 @@ mod tests {
         .unwrap();
         for (study, filled, marked, lines) in [
             (
-                Box::new(MARibbon::new()) as Box<dyn Indicator>,
+                Box::new(MARibbon::exponential()) as Box<dyn Indicator>,
                 true,
                 false,
                 12,
@@ -2176,6 +2255,49 @@ mod tests {
                 ] {
                     let triangle = shapes.iter().any(|shape| matches!(shape,Shape::Path(path) if path.points.len()==3 && path.fill==color));
                     assert_eq!(triangle, marked, "crossing direction {color:?}");
+                }
+            }
+        }
+        // Crossing plots stay visible when both averages are hidden, in either theme.
+        for name in ["EMA Cross", "MA Cross", "SMA/EMA Cross"] {
+            let mut study = crate::studies::ConfiguredStudy::new(
+                crate::studies::IndicatorFactory::new()
+                    .create(name)
+                    .unwrap(),
+            );
+            study.set_input("period_0", InputValue::Length(1)).unwrap();
+            study.set_input("period_1", InputValue::Length(2)).unwrap();
+            let mut settings = study.settings();
+            settings.plots[0].visible = false;
+            settings.plots[1].visible = false;
+            study.apply_settings(&[], settings).unwrap();
+            let color = if name == "MA Cross" {
+                crate::studies::palette::BLUE
+            } else {
+                crate::studies::palette::LIGHT_BLUE
+            };
+            for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+                let mut chart = chart(&[0.0], &[1.0, 2.0]);
+                chart.add_indicator(Box::new(study.clone()));
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let painted = shapes(&ctx, &mut chart, 0.0, Vec::new());
+                assert!(
+                    painted
+                        .iter()
+                        .any(|s| matches!(s,Shape::LineSegment {stroke,..} if stroke.color==color)),
+                    "{name}"
+                );
+                for color in &study.colors()[..2] {
+                    assert!(
+                        !painted.iter().any(|s| match s {
+                            Shape::LineSegment { stroke, .. } => stroke.color == *color,
+                            Shape::Path(path) =>
+                                path.stroke.color == egui::epaint::ColorMode::Solid(*color),
+                            _ => false,
+                        }),
+                        "{name} hidden {color:?}"
+                    );
                 }
             }
         }

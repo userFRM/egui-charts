@@ -873,6 +873,12 @@ mod tests {
             study.set_overlay(false);
             Box::new(study)
         };
+        let double: Study = || {
+            let mut study = ConfiguredStudy::new(Box::new(crate::studies::DoubleMA::default()));
+            study.set_input("method", InputValue::Choice(1)).unwrap();
+            study.set_overlay(false);
+            Box::new(study)
+        };
         let smi: Study = || Box::new(StochasticMomentumIndex::new(10, 3, 3, 10));
         let adx: Study = || Box::new(ADX::new(20));
         let knoxville: Study = || {
@@ -1025,6 +1031,7 @@ mod tests {
         let (last, inner) = (without("wait_for_close"), without("smoothing_deviation"));
         let no_smoothing = without("adx_smoothing");
         let no_count = without("average_count");
+        let no_method = without("method");
         let (no_average, sma, ema) = (without("smoothing"), earlier(1), earlier(2));
         let (equal, unequal) = (split(3), split(4));
         let wait = |on| Some(("wait_for_close", InputValue::Toggle(on)));
@@ -1037,7 +1044,7 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 18] = [
+        let cases: [Case<'_>; 19] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
@@ -1066,6 +1073,7 @@ mod tests {
             // From before session hours were times of day and zones were time zones.
             (sessions, &minute_counts, None, true),
             (four, &no_count, None, true),
+            (double, &no_method, None, true),
         ];
         for (at, (study, edit, input, shown)) in cases.into_iter().enumerate() {
             let text = copied(study);
@@ -1114,7 +1122,12 @@ mod tests {
                 .declared_study()
                 .inputs()
                 .into_iter()
-                .filter(|input| input.id != "average_count")
+                .filter(|input| {
+                    !matches!(
+                        input.id.as_str(),
+                        "average_count" | "touch_crosses" | "method" | "weighted_delay"
+                    )
+                })
                 .collect();
             let mut legacy = CustomIndicator::new("Multi MA", |_| Vec::new())
                 .with_inputs(schema, |_, _, _, _| Vec::new())

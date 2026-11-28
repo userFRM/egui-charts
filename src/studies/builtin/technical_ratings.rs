@@ -118,6 +118,12 @@ impl RatingBasis {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RatingRules {
+    Documented,
+    Alternative,
+}
+
 /// Group of a component, in the order of the score outputs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Group {
@@ -151,6 +157,7 @@ impl Rule {
         at: usize,
         close: f64,
         trend: Option<Ordering>,
+        rules: RatingRules,
     ) -> Option<f64> {
         let now = |line| values.value(line, at);
         let back = |line, bars| values.value(line, at.checked_sub(bars)?);
@@ -179,7 +186,24 @@ impl Rule {
             }
             Self::Ichimoku => {
                 let (tenkan, kijun) = (now(0)?, now(1)?);
-                let (a, b) = (back(2, CLOUD_SHIFT)?, back(3, CLOUD_SHIFT)?);
+                let (a, b) = (
+                    back(
+                        2,
+                        if rules == RatingRules::Alternative {
+                            26
+                        } else {
+                            CLOUD_SHIFT
+                        },
+                    )?,
+                    back(
+                        3,
+                        if rules == RatingRules::Alternative {
+                            26
+                        } else {
+                            CLOUD_SHIFT
+                        },
+                    )?,
+                );
                 Some(side(
                     close > tenkan && tenkan > kijun && kijun > a && a > b,
                     close < tenkan && tenkan < kijun && kijun < a && a < b,
@@ -206,7 +230,13 @@ impl Rule {
                 let (adx, plus, minus, previous) = (now(0)?, now(1)?, now(2)?, back(0, 1)?);
                 Some(side(
                     plus > minus && adx > 20.0 && adx > previous,
-                    plus < minus && adx > 20.0 && adx < previous,
+                    plus < minus
+                        && adx > 20.0
+                        && if rules == RatingRules::Alternative {
+                            adx > previous
+                        } else {
+                            adx < previous
+                        },
                 ))
             }
             Self::Awesome => {
@@ -260,6 +290,9 @@ impl std::fmt::Debug for Component {
 #[derive(Clone, Debug)]
 pub struct TechnicalRatings {
     basis: RatingBasis,
+    first_seed: bool,
+    rules: RatingRules,
+    trend_average: Option<EMA>,
     table_intervals: bool,
     /// The intervals the table rates besides the rating's own, `None` for none.
     table_timeframes: [Option<Timeframe>; 5],
@@ -302,6 +335,9 @@ impl TechnicalRatings {
     pub fn new() -> Self {
         Self {
             basis: RatingBasis::All,
+            first_seed: false,
+            rules: RatingRules::Documented,
+            trend_average: None,
             table_intervals: false,
             table_timeframes: TABLE_TIMEFRAMES,
             table_position: TablePosition::BottomRight,
@@ -355,8 +391,20 @@ impl TechnicalRatings {
         self
     }
 
+    #[cfg(any(feature = "strategies", test))]
+    pub(crate) fn with_calculation(mut self, first_seed: bool, alternative: bool) -> Self {
+        self.first_seed = first_seed;
+        self.rules = if alternative {
+            RatingRules::Alternative
+        } else {
+            RatingRules::Documented
+        };
+        self.components = None;
+        self
+    }
+
     /// The components in rating order: the moving averages, then the oscillators.
-    fn build() -> Vec<Component> {
+    fn build(first_seed: bool) -> Vec<Component> {
         let component = |group, rule, study: Box<dyn Indicator>| Component { group, rule, study };
         let (average, oscillator) = (Group::MovingAverage, Group::Oscillator);
         let mut components = Vec::with_capacity(26);
@@ -369,7 +417,7 @@ impl TechnicalRatings {
             components.push(component(
                 average,
                 Rule::Average,
-                Box::new(EMA::new(length)),
+                Box::new(EMA::new(length).seeded_from_first(first_seed)),
             ));
         }
         components.extend([
@@ -394,14 +442,22 @@ impl TechnicalRatings {
                 Box::new(AwesomeOscillator::new(5, 34)),
             ),
             component(oscillator, Rule::Momentum, Box::new(Momentum::new(10))),
-            component(oscillator, Rule::Macd, Box::new(MACD::new(12, 26, 9))),
+            component(
+                oscillator,
+                Rule::Macd,
+                Box::new(MACD::new(12, 26, 9).seeded_from_first(first_seed)),
+            ),
             component(
                 oscillator,
                 Rule::StochasticRsi,
                 Box::new(StochasticRSI::new(14, 14, 3, 3)),
             ),
             component(oscillator, Rule::WilliamsR, Box::new(WilliamsR::new(14))),
-            component(oscillator, Rule::BullBearPower, Box::new(ElderRay::new(13))),
+            component(
+                oscillator,
+                Rule::BullBearPower,
+                Box::new(ElderRay::new(13).seeded_from_first(first_seed)),
+            ),
             component(
                 oscillator,
                 Rule::Ultimate,
@@ -416,24 +472,34 @@ impl TechnicalRatings {
         components: &'a [Component],
         bars: &'a [Bar],
         at: usize,
+        rules: RatingRules,
+        ema50: Option<&'a IndicatorValues>,
     ) -> impl Iterator<Item = (Group, Option<f64>)> + 'a {
         let trend = components
             .iter()
             .find(|component| matches!(component.rule, Rule::BullBearPower))
-            .and_then(|component| trend(component.study.values(), bars, at));
+            .and_then(|component| trend(component.study.values(), bars, at, rules, ema50));
         components.iter().map(move |component| {
-            let vote = component
-                .rule
-                .vote(component.study.values(), at, bars[at].close, trend);
+            let vote =
+                component
+                    .rule
+                    .vote(component.study.values(), at, bars[at].close, trend, rules);
             (component.group, vote)
         })
     }
 
     /// The scores and coverages on clean bar `at` of `bars`, the summary of the groups `basis`
     /// chooses.
-    fn row(components: &[Component], bars: &[Bar], at: usize, basis: RatingBasis) -> [f64; 6] {
+    fn row(
+        components: &[Component],
+        bars: &[Bar],
+        at: usize,
+        basis: RatingBasis,
+        rules: RatingRules,
+        ema50: Option<&IndicatorValues>,
+    ) -> [f64; 6] {
         let (mut sum, mut votes, mut enabled) = ([0.0; 2], [0usize; 2], [0usize; 2]);
-        for (group, vote) in Self::votes(components, bars, at) {
+        for (group, vote) in Self::votes(components, bars, at, rules, ema50) {
             let group = usize::from(group == Group::Oscillator);
             enabled[group] += 1;
             if let Some(vote) = vote {
@@ -499,11 +565,23 @@ impl TechnicalRatings {
         bars.last().filter(|bar| usable(bar))?;
         let bars: Vec<_> = bars.iter().filter(|bar| usable(bar)).cloned().collect();
         let at = bars.len().checked_sub(1)?;
-        let mut components = Self::build();
+        let mut components = Self::build(self.first_seed);
         for component in &mut components {
             component.study.calculate(&bars);
         }
-        Some(Self::row(&components, &bars, at, self.basis))
+        let mut ema50 = (self.rules == RatingRules::Alternative)
+            .then(|| EMA::new(50).seeded_from_first(self.first_seed));
+        if let Some(average) = &mut ema50 {
+            average.calculate(&bars);
+        }
+        Some(Self::row(
+            &components,
+            &bars,
+            at,
+            self.basis,
+            self.rules,
+            ema50.as_ref().map(Indicator::values),
+        ))
     }
 
     /// The table rows of the rating's interval and of the table intervals: each group's rating the
@@ -573,9 +651,18 @@ impl TechnicalRatings {
     }
 }
 
-/// Whether the market rises, falls or is flat on clean bar `at` of `bars`: the direction of the
-/// EMA under the Elder Ray's `power`, given back as the high less Bull Power.
-fn trend(power: &IndicatorValues, bars: &[Bar], at: usize) -> Option<Ordering> {
+/// Trend for the gates: EMA 13 direction, recovered as high less Bull Power, or close against
+/// EMA 50 under the alternative rules.
+fn trend(
+    power: &IndicatorValues,
+    bars: &[Bar],
+    at: usize,
+    rules: RatingRules,
+    ema50: Option<&IndicatorValues>,
+) -> Option<Ordering> {
+    if rules == RatingRules::Alternative {
+        return bars[at].close.partial_cmp(&ema50?.value(0, at)?);
+    }
     let average = |at: usize| Some(bars[at].high - power.value(0, at)?);
     average(at)?.partial_cmp(&average(at.checked_sub(1)?)?)
 }
@@ -717,7 +804,9 @@ impl Indicator for TechnicalRatings {
         }
         let mut from = from.min(self.values.len()).min(data.len());
         if self.components.is_none() {
-            self.components = Some(Self::build());
+            self.components = Some(Self::build(self.first_seed));
+            self.trend_average = (self.rules == RatingRules::Alternative)
+                .then(|| EMA::new(50).seeded_from_first(self.first_seed));
             from = 0;
         }
         let components = self.components.as_mut().expect("components built");
@@ -733,12 +822,21 @@ impl Indicator for TechnicalRatings {
         for component in components.iter_mut() {
             component.study.update(&self.bars, kept);
         }
+        if let Some(average) = &mut self.trend_average {
+            average.update(&self.bars, kept);
+        }
         self.values.truncate(from);
         let mut at = kept;
         for bar in &data[from..] {
             if usable(bar) {
-                self.values
-                    .push_lines(&Self::row(components, &self.bars, at, self.basis));
+                self.values.push_lines(&Self::row(
+                    components,
+                    &self.bars,
+                    at,
+                    self.basis,
+                    self.rules,
+                    self.trend_average.as_ref().map(Indicator::values),
+                ));
                 at += 1;
             } else {
                 self.values.push(IndicatorValue::None);
@@ -1136,13 +1234,48 @@ mod tests {
             (Ultimate, vec![vec![25.0]], n, None, Some(-1.0)),
             (Ultimate, vec![vec![70.0]], n, None, Some(0.0)),
         ];
-        for (rule, rows, close, trend, expected) in rows {
+        let alternate = [
+            (
+                Adx,
+                vec![vec![25., n, n], vec![26., 20., 30.]],
+                n,
+                None,
+                Some(-1.),
+            ),
+            (
+                Adx,
+                vec![vec![26., n, n], vec![25., 20., 30.]],
+                n,
+                None,
+                Some(0.),
+            ),
+            (
+                Adx,
+                vec![vec![25., n, n], vec![26., 30., 20.]],
+                n,
+                None,
+                Some(1.),
+            ),
+        ];
+        for (rule, rows, close, trend, expected, rules) in rows
+            .into_iter()
+            .map(|(rule, rows, close, trend, expected)| {
+                (rule, rows, close, trend, expected, RatingRules::Documented)
+            })
+            .chain(
+                alternate
+                    .into_iter()
+                    .map(|(rule, rows, close, trend, expected)| {
+                        (rule, rows, close, trend, expected, RatingRules::Alternative)
+                    }),
+            )
+        {
             let mut values = IndicatorValues::new();
             for row in &rows {
                 values.push_lines(row);
             }
             assert_eq!(
-                rule.vote(&values, rows.len() - 1, close, trend),
+                rule.vote(&values, rows.len() - 1, close, trend, rules),
                 expected,
                 "{rule:?}: {rows:?}, {trend:?}"
             );
@@ -1153,22 +1286,74 @@ mod tests {
             ([5.0, 6.0], [3.0, 4.0, n, n, n], 2.0, Some(-1.0)),
             ([3.0, 4.0], [6.0, 5.0, 4.0, 3.0, n], 7.0, Some(0.0)),
         ] {
-            let mut values = IndicatorValues::new();
-            values.push_lines(&[n, n, spans[0], spans[1], n]);
-            for _ in 1..25 {
-                values.push_lines(&[n; 5]);
+            for (rules, shift) in [
+                (RatingRules::Documented, 25),
+                (RatingRules::Alternative, 26),
+            ] {
+                let mut values = IndicatorValues::new();
+                values.push_lines(&[n, n, spans[0], spans[1], n]);
+                for _ in 1..shift {
+                    values.push_lines(&[n; 5]);
+                }
+                values.push_lines(&lines);
+                assert_eq!(
+                    Rule::Ichimoku.vote(&values, shift, close, None, rules),
+                    expected
+                );
+                assert_eq!(
+                    Rule::Ichimoku.vote(&values, shift - 1, close, None, rules),
+                    None
+                );
+                let other = if rules == RatingRules::Documented {
+                    RatingRules::Alternative
+                } else {
+                    RatingRules::Documented
+                };
+                assert_eq!(
+                    Rule::Ichimoku.vote(&values, shift, close, None, other),
+                    None
+                );
             }
-            values.push_lines(&lines);
-            assert_eq!(Rule::Ichimoku.vote(&values, 25, close, None), expected);
-            assert_eq!(Rule::Ichimoku.vote(&values, 24, close, None), None);
         }
         let bars = bars(&[10.0, 11.0]);
         for (power, expected) in [(1.5, Greater), (2.0, Equal), (3.0, Less)] {
             let mut values = IndicatorValues::new();
             values.push_lines(&[1.0]);
             values.push_lines(&[power]);
-            assert_eq!(trend(&values, &bars, 1), Some(expected));
-            assert_eq!(trend(&values, &bars, 0), None);
+            assert_eq!(
+                trend(&values, &bars, 1, RatingRules::Documented, None),
+                Some(expected)
+            );
+            assert_eq!(
+                trend(&values, &bars, 0, RatingRules::Documented, None),
+                None
+            );
+        }
+        // The strategy's alternate trend reads close versus EMA50, independent of EMA13's slope.
+        for (close, power, documented, alternative) in [
+            (11., 3., Less, Greater),
+            (9., -1., Greater, Less),
+            (10., 1., Equal, Equal),
+        ] {
+            let bars = self::bars(&[10., close]);
+            let mut values = IndicatorValues::new();
+            values.push_lines(&[1.]);
+            values.push_lines(&[power]);
+            let mut ema50 = IndicatorValues::new();
+            ema50.push_lines(&[10.]);
+            ema50.push_lines(&[10.]);
+            assert_eq!(
+                trend(&values, &bars, 1, RatingRules::Documented, Some(&ema50)),
+                Some(documented)
+            );
+            assert_eq!(
+                trend(&values, &bars, 1, RatingRules::Alternative, Some(&ema50)),
+                Some(alternative)
+            );
+            assert_eq!(
+                trend(&values, &bars, 1, RatingRules::Alternative, None),
+                None
+            );
         }
     }
 
@@ -1241,10 +1426,15 @@ mod tests {
                     .map(Some)
                     .chain(last_votes)
                     .collect();
-                let got: Vec<_> =
-                    TechnicalRatings::votes(study.components.as_ref().unwrap(), &study.bars, 259)
-                        .map(|(_, vote)| vote)
-                        .collect();
+                let got: Vec<_> = TechnicalRatings::votes(
+                    study.components.as_ref().unwrap(),
+                    &study.bars,
+                    259,
+                    study.rules,
+                    study.trend_average.as_ref().map(Indicator::values),
+                )
+                .map(|(_, vote)| vote)
+                .collect();
                 assert_eq!(got, expected, "direction {direction}, {basis:?}");
                 let summary = match basis {
                     RatingBasis::All => (direction + oscillator) / 2.0,
@@ -1361,14 +1551,24 @@ mod tests {
             missing_volume[259].volume = volume;
             let mut study = TechnicalRatings::new();
             study.calculate(&missing_volume);
-            let votes: Vec<_> =
-                TechnicalRatings::votes(study.components.as_ref().unwrap(), &study.bars, 259)
-                    .map(|(_, vote)| vote)
-                    .collect();
-            let mut expected: Vec<_> =
-                TechnicalRatings::votes(full.components.as_ref().unwrap(), &full.bars, 259)
-                    .map(|(_, vote)| vote)
-                    .collect();
+            let votes: Vec<_> = TechnicalRatings::votes(
+                study.components.as_ref().unwrap(),
+                &study.bars,
+                259,
+                study.rules,
+                study.trend_average.as_ref().map(Indicator::values),
+            )
+            .map(|(_, vote)| vote)
+            .collect();
+            let mut expected: Vec<_> = TechnicalRatings::votes(
+                full.components.as_ref().unwrap(),
+                &full.bars,
+                259,
+                full.rules,
+                full.trend_average.as_ref().map(Indicator::values),
+            )
+            .map(|(_, vote)| vote)
+            .collect();
             expected[13] = None;
             assert_eq!(votes, expected);
             for (line, value) in [
@@ -1573,5 +1773,52 @@ mod tests {
         let mut missing = rising.clone();
         missing[10].close = f64::NAN;
         assert!(study.latest(&missing).is_none());
+    }
+    /// Six EMA votes and MACD exist on bar zero; Elder Ray's trend needs a previous value.
+    #[test]
+    fn first_value_seeds_rate_from_the_first_bar() {
+        let bars = bars(&[10., 11., 12., 13., 14., 15., 16., 17.]);
+        let mut ordinary = TechnicalRatings::new();
+        ordinary.calculate(&bars);
+        assert!((0..bars.len()).all(|at| ordinary.values().value(2, at).is_none()));
+        for alternative in [false, true] {
+            let mut study = TechnicalRatings::new().with_calculation(true, alternative);
+            study.calculate(&bars);
+            for at in 0..bars.len() {
+                let expected = if at == 0 {
+                    [0., 0., 0., 0.4, 1. / 11., 7. / 26.]
+                } else {
+                    [1., 0.5, 0.75, 0.4, 2. / 11., 8. / 26.]
+                };
+                for (line, want) in expected.into_iter().enumerate() {
+                    assert_eq!(
+                        study.values().value(line, at),
+                        Some(want),
+                        "{alternative} bar {at} line {line}"
+                    );
+                }
+            }
+            let mut streamed = study.clone();
+            streamed.calculate(&bars[..1]);
+            for end in 2..=bars.len() {
+                streamed.update(&bars[..end], end - 1);
+            }
+            assert_eq!(
+                format!("{:?}", streamed.values()),
+                format!("{:?}", study.values())
+            );
+            let mut corrected = bars.clone();
+            corrected[3].close = 12.5;
+            streamed.update(&corrected, 3);
+            study.calculate(&corrected);
+            assert_eq!(
+                format!("{:?}", streamed.values()),
+                format!("{:?}", study.values())
+            );
+            let latest = study.latest(&corrected).unwrap();
+            for (line, want) in latest.into_iter().enumerate() {
+                assert_eq!(study.values().value(line, 7), Some(want));
+            }
+        }
     }
 }

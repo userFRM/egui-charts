@@ -15,7 +15,7 @@
 //! # First value
 //!
 //! The first value is on the bar of the `period`-th finite close and equals the simple average
-//! of the first `period` finite closes; earlier bars have no value. Smoothing starts on the
+//! of the first `period` finite closes; earlier bars have no value. Recursive updates begin on the
 //! next bar. [`MACD`] seeds its averages the same way, so the standalone indicator and the
 //! composite agree bar for bar.
 //!
@@ -39,7 +39,7 @@
 //! ema.calculate(&bars);
 //! ```
 
-use super::smoothing::Smoothing;
+use super::smoothing::{SMOOTHING_COLORS, Smoothed, Smoothing, SmoothingType};
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
@@ -53,10 +53,15 @@ use egui::Color32;
 #[derive(Clone, Debug)]
 pub struct EMA {
     period: usize,
+    first_seed: bool,
     values: IndicatorValues,
     /// The exponential average of the finite closes stepped so far.
-    stepper: Stepper<Smoothing>,
+    stepper: Stepper<(Smoothing, Smoothed)>,
     color: Color32,
+    smoothing: SmoothingType,
+    smoothing_length: usize,
+    smoothing_deviation: f64,
+    smoothing_colors: [Color32; 3],
     visible: bool,
 }
 
@@ -73,11 +78,21 @@ impl EMA {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            first_seed: false,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: palette::BLUE, // Blue
+            smoothing: SmoothingType::None,
+            smoothing_length: 14,
+            smoothing_deviation: 2.0,
+            smoothing_colors: SMOOTHING_COLORS,
             visible: true,
         }
+    }
+
+    pub(crate) fn seeded_from_first(mut self, first: bool) -> Self {
+        self.first_seed = first;
+        self
     }
 
     /// Set a custom line colour (builder pattern).
@@ -102,7 +117,12 @@ impl Indicator for EMA {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        smoothing: choice("Smoothing", SmoothingType::ALL),
+        smoothing_length: length("Smoothing length", 1, usize::MAX)
+            if smoothing in SmoothingType::WITH_LENGTH,
+        smoothing_deviation: number("Band deviation", 0.0, f64::MAX)
+            if smoothing in SmoothingType::WITH_BANDS
     ; {});
 
     fn name(&self) -> &str {
@@ -118,11 +138,21 @@ impl Indicator for EMA {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let (period, alpha) = (self.period, 2.0 / (self.period as f64 + 1.0));
-        // A bar without a finite close has no value and leaves the average as it was.
-        self.stepper.run(data, from, &mut self.values, |ema, bar| {
-            IndicatorValue::Single(ema.next(bar.close, period, alpha))
-        });
+        let (period, kind, length, deviation) = (
+            self.period,
+            self.smoothing,
+            self.smoothing_length,
+            self.smoothing_deviation,
+        );
+        let alpha = 2.0 / (period as f64 + 1.0);
+        self.stepper
+            .run(data, from, &mut self.values, |(ema, smoothed), bar| {
+                let value = ema.next(bar.close, if self.first_seed { 1 } else { period }, alpha);
+                if !value.is_finite() {
+                    return IndicatorValue::None;
+                }
+                smoothed.next(kind, length, deviation, value, bar.volume)
+            });
     }
 
     fn is_incremental(&self) -> bool {
@@ -134,12 +164,20 @@ impl Indicator for EMA {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        let [average, upper, lower] = self.smoothing_colors;
+        vec![self.color, average, upper, lower]
+    }
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        self.smoothing.fills()
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+            for (slot, color) in self.smoothing_colors.iter_mut().zip(&colors[1..]) {
+                *slot = *color;
+            }
         }
     }
 
@@ -160,7 +198,9 @@ impl Indicator for EMA {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!("EMA({})", self.period)]
+        let mut names = vec![format!("EMA({})", self.period)];
+        names.extend(self.smoothing.line_names("MA-based MA"));
+        names
     }
 }
 
