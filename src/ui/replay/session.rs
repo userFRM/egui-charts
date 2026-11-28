@@ -1,6 +1,6 @@
 //! Host-owned replay checkpoints. No bars or wall-clock timer are persisted.
 
-use super::{ReplayAction, ReplayController};
+use super::{ReplayAction, ReplayController, ReplaySpeed};
 use crate::model::ReplaySession;
 use chrono::{DateTime, Utc};
 
@@ -48,9 +48,10 @@ impl ReplayController {
         })
     }
 
-    /// Restores an exact source timestamp, paused, or returns `false` without changes when
-    /// history, symbol or speed is incompatible. Missing history must be fetched by the host;
-    /// a missing timestamp is never silently replaced with a different session position. Restores
+    /// Restores an exact source timestamp and the saved speed multiplier, paused, or returns
+    /// `false` without changes when history, symbol or speed is incompatible. Missing history must
+    /// be fetched by the host; a missing timestamp is never silently replaced with a different
+    /// session position. Restores
     /// [`ReplayState::scope`](super::ReplayState::scope) for the host's
     /// `ChartLayout::set_replay_time`. It does not touch the charts: the host puts each of
     /// [`ReplaySession::charts`] back on its symbol and interval, and fetches their history, first.
@@ -66,7 +67,15 @@ impl ReplayController {
         };
         self.state.scope = session.scope;
         self.handle_action(ReplayAction::EnterReplayMode);
-        self.handle_action(ReplayAction::SetSpeed(session.speed));
+        // The saved multiplier is the controller's own, so it skips the preset snapping of
+        // `ReplaySpeed::from`; only an exact preset multiplier comes back as that preset.
+        self.state.set_speed(
+            ReplaySpeed::presets()
+                .iter()
+                .copied()
+                .find(|preset| preset.multiplier() == session.speed)
+                .unwrap_or(ReplaySpeed::Custom(session.speed)),
+        );
         self.handle_action(ReplayAction::JumpToBar(index));
         self.handle_action(ReplayAction::Pause);
         true
@@ -173,6 +182,30 @@ mod tests {
             assert_eq!((old.scope, old.charts.len()), (scope, 0));
             assert!(replay.restore_session(&old));
             assert_eq!((replay.state.curr_bar, replay.state.scope), (4, scope));
+        }
+        // A restore keeps the saved multiplier exactly, near a preset too, paused at the saved
+        // cursor; only an exact preset multiplier comes back as that preset.
+        for (speed, restored) in [
+            (0.995, ReplaySpeed::Custom(0.995)),
+            (1.005, ReplaySpeed::Custom(1.005)),
+            (1.0, ReplaySpeed::Normal),
+            (3.0, ReplaySpeed::Custom(3.0)),
+        ] {
+            replay.handle_action(ReplayAction::JumpToBar(7));
+            replay.handle_action(ReplayAction::Play);
+            assert!(replay.restore_session(&ReplaySession {
+                speed,
+                ..saved.clone()
+            }));
+            assert_eq!(
+                (
+                    replay.state.curr_bar,
+                    replay.state.is_playing(),
+                    replay.state.speed
+                ),
+                (4, false, restored),
+                "{speed}"
+            );
         }
         assert!(!replay.seek_cutoff(bars[0].time, &clock));
         assert!(replay.seek_cutoff(bars[8].time, &clock));
