@@ -17,7 +17,7 @@ use egui_charts::ui::timeframe_toolbar::TimeframeToolbarAction;
 use egui_charts::ui::top_toolbar::{LayoutAction, TopToolbarAction};
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBarAction};
 use egui_charts::ui_kit::command_palette::{Command, CommandPaletteHandler};
-use egui_charts::widget::{ChartElementId, ImageExportOptions, ShortcutRequest};
+use egui_charts::widget::{ChartElementId, DataExportOptions, ImageExportOptions, ShortcutRequest};
 use std::path::PathBuf;
 
 const STUDY_CLIPBOARD: &str = "egui-charts-study\n";
@@ -221,7 +221,7 @@ impl Terminal {
                 self.commands.data_table.open();
             }
             Action::ChartMenu(ChartContextAction::Chart(ContextMenuAction::ExportCsv)) => {
-                self.export_csv(None)
+                self.export_csv(None, &DataExportOptions::default())
             }
             Action::Export(ExportResponse::Export { config, save_path }) => match config.format {
                 ExportFormat::Png if self.services.save.is_some() => {
@@ -231,7 +231,7 @@ impl Terminal {
                 ExportFormat::Png | ExportFormat::Clipboard => {
                     self.export_image(ImageTarget::Clipboard, &config.image, None);
                 }
-                ExportFormat::Csv => self.export_csv(save_path),
+                ExportFormat::Csv => self.export_csv(save_path, &config.data),
                 ExportFormat::Svg => match self.chart().export_svg(&self.ctx(), &config.image) {
                     Ok(svg) => {
                         let name = format!("{}_export.svg", self.chart().symbol());
@@ -457,8 +457,8 @@ impl Terminal {
     }
 
     /// Exports loaded bars and visible study plots to the host, or the clipboard without one.
-    fn export_csv(&mut self, path: Option<PathBuf>) {
-        match self.chart().export_csv() {
+    fn export_csv(&mut self, path: Option<PathBuf>, options: &DataExportOptions) {
+        match self.chart().export_csv_with(options) {
             Ok(csv) => {
                 self.deliver_text(format!("{}_export.csv", self.chart().symbol()), path, csv)
             }
@@ -526,7 +526,7 @@ mod tests {
     use super::*;
     use egui::{Event, Key, Modifiers, RawInput};
     use egui_charts::drawings::{ChartPoint, Drawing};
-    use egui_charts::studies::IndicatorFactory;
+    use egui_charts::studies::{IndicatorFactory, SMA};
     use egui_charts::ui::dialogs::DrawingContextMenuAction;
     use egui_charts::ui::export::ExportConfig;
     use std::cell::RefCell;
@@ -986,6 +986,66 @@ mod tests {
         frame(&mut terminal, SIZE, vec![key(Key::Enter, Modifiers::NONE)]);
         assert_eq!(terminal.chart().symbol(), "BTCUSD");
         assert!(!terminal.keyboard_dialog_open());
+    }
+
+    #[test]
+    fn csv_export_respects_dialog_data_options() {
+        let sink = Rc::new(RefCell::new(Vec::new()));
+        let mut terminal = terminal_with_files(sink.clone());
+        terminal.chart_mut().add_indicator(Box::new(SMA::new(7)));
+        frame(&mut terminal, SIZE, vec![]);
+
+        let export = |data: DataExportOptions| {
+            Action::Export(ExportResponse::Export {
+                config: ExportConfig {
+                    format: ExportFormat::Csv,
+                    data,
+                    ..ExportConfig::default()
+                },
+                save_path: Some("options.csv".into()),
+            })
+        };
+
+        assert!(terminal.run(export(DataExportOptions::default())).is_none());
+        let default_csv = match &sink.borrow().last().unwrap().contents {
+            ExportContents::Text(text) => text.clone(),
+            _ => panic!("CSV export should hand over text"),
+        };
+        assert!(default_csv.starts_with("time,"));
+        assert!(default_csv.contains("open,"));
+        let first_time = default_csv
+            .lines()
+            .nth(1)
+            .expect("default CSV has rows")
+            .split(',')
+            .next()
+            .unwrap();
+        assert!(!first_time.is_empty());
+
+        let mut options = DataExportOptions::default();
+        options.include_time = false;
+        options.include_main_series = false;
+        assert!(terminal.run(export(options)).is_none());
+        let custom_csv = match &sink.borrow().last().unwrap().contents {
+            ExportContents::Text(text) => text.clone(),
+            _ => panic!("CSV export should hand over text"),
+        };
+        assert!(!custom_csv.starts_with("time,"));
+        assert!(!custom_csv.contains("open,"));
+        assert!(!custom_csv.contains(first_time));
+        assert!(custom_csv.lines().count() > 1);
+
+        sink.borrow_mut().clear();
+        let context_menu =
+            Action::ChartMenu(ChartContextAction::Chart(ContextMenuAction::ExportCsv));
+        assert!(terminal.run(context_menu).is_none());
+        let menu_csv = match &sink.borrow().last().unwrap().contents {
+            ExportContents::Text(text) => text.clone(),
+            _ => panic!("CSV export should hand over text"),
+        };
+        assert!(menu_csv.starts_with("time,"));
+        assert!(menu_csv.contains("open,"));
+        assert!(menu_csv.contains(first_time));
     }
 
     fn terminal_with_files(sink: Rc<RefCell<Vec<ExportFile>>>) -> Terminal {
