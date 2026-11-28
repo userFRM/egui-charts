@@ -398,7 +398,9 @@ impl Indicator for VwapAutoAnchored {
                 for bar in self.shown_start..start {
                     self.values.set(bar, IndicatorValue::None);
                 }
-            } else if start < self.shown_start {
+            } else if start < self.shown_start
+                && (events.is_none() || self.stepper.state().events > 0)
+            {
                 // Withdrawing a new anchor period restores the previously visible line.
                 let mut sums = Sums::default();
                 for (i, bar) in data.iter().enumerate().take(self.shown_start).skip(start) {
@@ -635,6 +637,41 @@ mod tests {
             ["Century", "Earnings", "Dividends", "Splits"]
         );
         assert!(study.set_input("anchor", InputValue::Choice(14)).is_err());
+
+        for (choice, kind) in [
+            (11, EventKind::Earnings),
+            (12, EventKind::Dividend),
+            (13, EventKind::Split),
+        ] {
+            for earlier in [false, true] {
+                let mut bars = bars[..2].to_vec();
+                let mut events = vec![event("latest", 3, 0, kind)];
+                if earlier {
+                    events.push(event("earlier", 1, 0, kind));
+                }
+                study.set_input("anchor", InputValue::Choice(choice)).unwrap();
+                study.set_time_scale_events(&events);
+                study.calculate(&bars);
+                for (close, want) in [
+                    (f64::NAN, [earlier.then_some(10.0), None]),
+                    (11.0, [None, Some(11.0)]),
+                ] {
+                    bars[1].close = close;
+                    study.update(&bars, 1);
+                    assert_eq!(
+                        readings(&study, 2), want,
+                        "{kind:?}, earlier event: {earlier}, close: {close}"
+                    );
+                    let mut fresh = study.clone();
+                    fresh.calculate(&bars);
+                    for line in 0..7 {
+                        for bar in 0..2 {
+                            assert_eq!(study.values().value(line, bar), fresh.values().value(line, bar));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// One session of hourly bars with typical prices 100 to 103 and volumes 0, 0, 1000 and 0:
