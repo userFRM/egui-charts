@@ -4864,10 +4864,8 @@ impl DemoApp {
             return;
         }
         self.replay_control.set_selecting(self.replay_selecting);
-        self.replay_control.set_scope(
-            (self.layout.mode.chart_count() > 1 && !self.recording_files.opened)
-                .then_some(self.replay_scope),
-        );
+        self.replay_control
+            .set_scope((self.layout.mode.chart_count() > 1).then_some(self.replay_scope));
         self.replay_control
             .set_can_resume(self.replay.is_none() && self.replay_session.is_some());
         match self.replay.as_ref() {
