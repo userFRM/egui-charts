@@ -648,9 +648,9 @@ fn fold_source(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<
 fn trade_instants(bars: &[Bar], source: &BarClock, chart: &BarClock) -> Option<Vec<DateTime<Utc>>> {
     let one_trade = matches!(source.timeframe(), Some(Timeframe::Ticks(count)) if count.get() == 1);
     if !one_trade
-        || !chart
+        || chart
             .timeframe()
-            .is_some_and(|timeframe| !timeframe.is_trade_based())
+            .is_none_or(|timeframe| timeframe.is_trade_based())
     {
         return None;
     }
