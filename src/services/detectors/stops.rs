@@ -364,6 +364,7 @@ impl StopSweeps {
                     self.met.push(footprint::Met {
                         condition: FootprintCondition::ALL[i],
                         bar: open,
+                        bar_end: clock.bar_close(open),
                         closed: false,
                         time: fill.ts,
                         price: fill.price,
@@ -444,6 +445,7 @@ impl StopSweeps {
                         self.met.push(footprint::Met {
                             condition,
                             bar: at,
+                            bar_end: clock.bar_close(at),
                             closed: true,
                             time,
                             price: prices.close,

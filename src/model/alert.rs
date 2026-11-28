@@ -1691,6 +1691,9 @@ pub struct FootprintAlertEvent {
     pub condition: FootprintCondition,
     /// Open time of the bar.
     pub bar: DateTime<Utc>,
+    /// When this bar closes on its detector's session and calendar, independent of delivery
+    /// time. `None` when its close is outside the representable date range.
+    pub bar_end: Option<DateTime<Utc>>,
     /// Whether the closed bar meets the condition; otherwise the forming bar first met it at
     /// the execution at `time` and `price`.
     pub closed: bool,

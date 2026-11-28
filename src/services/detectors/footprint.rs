@@ -155,6 +155,7 @@ const ZONES: usize = 1_000;
 pub(super) struct Met {
     pub(super) condition: FootprintCondition,
     pub(super) bar: DateTime<Utc>,
+    pub(super) bar_end: Option<DateTime<Utc>>,
     pub(super) closed: bool,
     pub(super) time: DateTime<Utc>,
     pub(super) price: f64,

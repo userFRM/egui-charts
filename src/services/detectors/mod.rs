@@ -604,6 +604,7 @@ impl OrderFlowDetectors {
                     rule: watch.rule,
                     condition: met.condition,
                     bar: met.bar,
+                    bar_end: met.bar_end,
                     closed: met.closed,
                     time: met.time,
                     price: met.price,
