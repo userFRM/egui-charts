@@ -12686,7 +12686,7 @@ mod tests {
                     show(app, vec![]);
                 }
                 if let Some((_, rect)) = show(app, vec![]).into_iter().find(|(label, rect)| {
-                    label == text && (180.0..720.0).contains(&rect.center().y)
+                    label == text && (130.0..790.0).contains(&rect.center().y)
                 }) {
                     ui_click(&ctx, size, rect.center(), |ui| app.show_dialogs(ui.ctx()));
                     return;

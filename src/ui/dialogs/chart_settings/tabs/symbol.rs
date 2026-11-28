@@ -610,6 +610,8 @@ impl SettingsDialog {
                         )
                         .inner;
                     ui.add_enabled_ui(self.settings.status_line.show_indicator_background, |ui| {
+                        ui.spacing_mut().interact_size.y =
+                            DESIGN_TOKENS.sizing.settings_dialog.button_height;
                         ui.label_inputs_by(label.id, |ui| {
                             ui.visuals_mut().widgets.inactive.bg_fill = theme.ui.border_control;
                             ui.add(
