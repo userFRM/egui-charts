@@ -1610,17 +1610,15 @@ impl DemoApp {
             return;
         }
         let clock = source_clock(&self.chart, self.replay_interval);
-        let (Some(driver), Some(replay), Some(first)) = (
+        let (Some(driver), Some(replay), Some(first), Some(last)) = (
             self.chart.replay_driver().cloned(),
             self.replay.as_mut(),
             self.bars.first(),
+            self.bars.last(),
         ) else {
             return;
         };
-        let Some((_, last)) = driver.time_range() else {
-            return;
-        };
-        let time = time.clamp(first.time, last);
+        let time = time.clamp(first.time, last.time);
         driver.seek_execution(time);
         replay.handle_action(ReplayAction::Pause);
         replay.seek_cutoff(time + chrono::TimeDelta::nanoseconds(1), &clock);
@@ -3599,6 +3597,92 @@ mod tests {
             clicked < cutoff && cutoff <= clicked + chrono::TimeDelta::minutes(1),
             "clicked the bar at {clicked}, the replay cutoff is {cutoff}"
         );
+    }
+
+    #[test]
+    fn recording_transport_keeps_equal_time_execution_positions() {
+        use super::super::tests::settle;
+        use egui_charts::model::{OrderBook, Tick};
+
+        let ctx = egui::Context::default();
+        let time = "2026-11-12T15:00:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            time,
+            true,
+        );
+        settle(&mut app, &ctx);
+        let ticks: Vec<_> = (1..=3)
+            .map(|i| Tick::new(time, 100.0 + i as f64, i as f64, Some(OrderSide::Buy)).with_id(i))
+            .collect();
+        let bars = egui_charts::data::aggregate_trades(
+            &ticks,
+            BarClock::new(Timeframe::Ticks(NonZeroU64::MIN)),
+        )
+        .unwrap();
+        let mut events = vec![ReplayEvent::new(
+            &app.state.symbol,
+            time,
+            0,
+            MarketEvent::DepthSnapshot {
+                sequence: 0,
+                book: OrderBook {
+                    ts: time,
+                    symbol: app.state.symbol.clone(),
+                    bids: Vec::new(),
+                    asks: Vec::new(),
+                },
+            },
+        )];
+        events.extend(ticks.into_iter().enumerate().map(|(i, tick)| {
+            ReplayEvent::new(
+                &app.state.symbol,
+                time,
+                i as u64 + 1,
+                MarketEvent::Trade(tick),
+            )
+        }));
+        let instrument = app.live.instrument();
+        let driver = Arc::new(ReplayDriver::new(events, vec![instrument.clone()]).unwrap());
+        app.open_recording(LoadedRecording {
+            driver: driver.clone(),
+            instrument,
+            bars,
+        })
+        .unwrap();
+        settle(&mut app, &ctx);
+        app.handle_replay_control(ReplayControlAction::NextBar);
+        settle(&mut app, &ctx);
+        let position = |app: &DemoApp| {
+            (
+                app.chart.replay_time().unwrap(),
+                app.chart.bars(SeriesId::MAIN).last().unwrap().volume,
+            )
+        };
+        let after = chrono::TimeDelta::nanoseconds(1);
+        assert_eq!(position(&app), (time + after * 2, 3.0));
+        let mut positions = Vec::new();
+        app.handle_replay_control(ReplayControlAction::GoToStart);
+        settle(&mut app, &ctx);
+        positions.push(position(&app));
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        settle(&mut app, &ctx);
+        positions.push(position(&app));
+        app.start_replay_at(2);
+        settle(&mut app, &ctx);
+        positions.push(position(&app));
+        assert_eq!(
+            positions,
+            [
+                (time + after, 1.0),
+                (time + after * 3, 6.0),
+                (time + after * 3, 6.0)
+            ]
+        );
+        assert_eq!(driver.time_range(), Some((time, time)));
+        driver.seek(time);
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.bars(SeriesId::MAIN).last().unwrap().volume, 6.0);
     }
 
     /// Starts chosen on the replay bar while an imported recording replays stay in that recording

@@ -4866,11 +4866,6 @@ impl DemoApp {
             return;
         }
         let play = matches!(action, ReplayControlAction::Play);
-        let endpoint = match action {
-            ReplayControlAction::GoToStart => Some(false),
-            ReplayControlAction::GoToEnd => Some(true),
-            _ => None,
-        };
         let transport = matches!(
             action,
             ReplayControlAction::Play
@@ -4907,13 +4902,7 @@ impl DemoApp {
             ReplayControlAction::None => return,
             _ => {}
         }
-        if let Some(end) = endpoint
-            && let Some(driver) = self.chart.replay_driver().cloned()
-            && let Some((first, last)) = driver.time_range()
-        {
-            driver.seek(if end { last } else { first });
-            self.push_market_replay_window();
-        } else if !transport {
+        if !transport {
             self.push_replay_window_to_chart();
         }
         self.sync_replay_driver(play);
