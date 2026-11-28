@@ -416,8 +416,8 @@ pub(crate) const HELPERS: &[Helper] = &[
         name: "ema",
         group: Group::Streaming,
         signature: "ema(x, n)",
-        summary: "The exponential average of x with weight 2 / (n + 1), from its first finite \
-                  value; na on a bar where x is missing.",
+        summary: "The exponential average of x with weight 2 / (n + 1), seeded by the mean of \
+                  its first n finite values; na until then and on a bar where x is missing.",
         register: |engine, name| {
             streaming!(engine, name);
         },

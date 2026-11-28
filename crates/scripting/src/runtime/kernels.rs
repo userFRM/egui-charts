@@ -1,5 +1,6 @@
 //! Streaming helpers: one value per bar, equal bit for bit to the function of the same name in
-//! `egui_charts::studies::helpers` over the whole series up to that bar.
+//! `egui_charts::studies::helpers` over the whole series up to that bar, with `ema` matching
+//! `helpers::ema_sma`.
 
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -79,7 +80,7 @@ impl Kernel {
             "sum" => window(WindowKind::Sum),
             "wma" => window(WindowKind::Wma),
             "stdev" => window(WindowKind::Stdev),
-            "ema" => average(1, 2.0 / (period as f64 + 1.0)),
+            "ema" => average(period, 2.0 / (period as f64 + 1.0)),
             "rma" => average(period, 1.0 / period as f64),
             "highest" => rolling(true),
             "lowest" => rolling(false),

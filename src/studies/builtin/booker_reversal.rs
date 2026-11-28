@@ -6,7 +6,8 @@
 //! # Rule
 //!
 //! The MACD line is the exponential average of the close over the fast period less the one over
-//! the slow period, as [`MACD`] computes it. %K is the [`Stochastic`] of `k_period` bars
+//! the slow period, as [`MACD`] computes it. It has no value before bar `max(fast, slow) - 1`.
+//! %K is the [`Stochastic`] of `k_period` bars
 //! smoothed by a simple average over `slowing` bars; a slowing of 0 or 1 leaves it unsmoothed.
 //!
 //! ```text
@@ -51,8 +52,6 @@ pub struct BookerReversal {
 struct State {
     /// The index of the next bar.
     bar: usize,
-    /// Bars with a finite close; the MACD has no value before `slow_period` of them.
-    closes: usize,
     /// The sign of the latest nonzero MACD value since the last bar without one.
     side: Option<Ordering>,
 }
@@ -125,12 +124,6 @@ impl Indicator for BookerReversal {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        // The MACD reveals all its values once it has `slow_period` closes, as `MACD` does.
-        let from = if self.stepper.state().closes < self.slow_period {
-            0
-        } else {
-            from
-        };
         self.macd.update(data, from);
         self.stochastic.update(data, from);
         let (macd, stochastic) = (self.macd.values(), self.stochastic.values());
@@ -139,9 +132,6 @@ impl Indicator for BookerReversal {
             .run(data, from, &mut self.values, |state, bar| {
                 let at = state.bar;
                 state.bar += 1;
-                if bar.close.is_finite() {
-                    state.closes += 1;
-                }
                 let Some(line) = macd.value(0, at) else {
                     state.side = None;
                     return IndicatorValue::None;
@@ -161,10 +151,6 @@ impl Indicator for BookerReversal {
                 state.side = side.or(state.side);
                 IndicatorValue::Multiple(row.to_vec())
             });
-        // Removing the bar that completed the slow average hides every MACD value again.
-        if self.stepper.state().closes < self.slow_period {
-            self.values.fill(IndicatorValue::None);
-        }
     }
 
     fn is_incremental(&self) -> bool {
@@ -239,16 +225,17 @@ mod tests {
     use super::*;
 
     /// MACD of 1 and 2 bars and an unslowed 3-bar %K, levels 70 and 30. With fast 1 the MACD line
-    /// is close - EMA2, and EMA2[t] = (2 close[t] + EMA2[t - 1]) / 3 from EMA2[0] = close[0], so
-    /// MACD[t] = (close[t] - EMA2[t - 1]) / 3. Closes 10, 13, 11 give MACD 0, 1, -1/3: a cross
-    /// below zero on bar 2. Closes 10, 7, 9 give 0, -1, 1/3: a cross above. %K on bar 2 is
+    /// is close - EMA2, and EMA2 starts on bar 1 at the mean of the first two closes, so
+    /// MACD[1] = (close[1] - close[0]) / 2 and MACD[2] = (close[2] - EMA2[1]) / 3.
+    /// Closes 10, 13, 11 give 3/2, -1/6: a cross below zero on bar 2. Closes 10, 7, 9 give
+    /// -3/2, 1/6: a cross above. %K on bar 2 is
     /// 100 (close - lowest low) / (highest high - lowest low) over bars 0 to 2, and only the first
     /// bar's high or low moves it: (11 - 3) / (13 - 3) = 80 and (11 - 8) / (13 - 8) = 60 on the
     /// way down, (9 - 7) / (17 - 7) = 20 and (9 - 7) / (12 - 7) = 40 on the way up.
     ///
     /// The levels take decimals. With an upper level of 72.5 and the first bar's low at 3, a
     /// last bar of high 12 and low 10 leaves the range at 3 to 13: a close of 10.26 gives a MACD
-    /// of (10.26 - 12) / 3 and a %K of 100 (10.26 - 3) / 10 = 72.6, a sell, and a close of 10.24
+    /// of (10.26 - 11.5) / 3 and a %K of 100 (10.26 - 3) / 10 = 72.6, a sell, and a close of 10.24
     /// a %K of 72.4, no sell. A level cut to 72 would mark both and one rounded to 73 neither.
     #[test]
     fn marks_need_a_macd_zero_cross_at_a_stochastic_extreme() {
@@ -256,13 +243,13 @@ mod tests {
         type Row = (
             &'static str,
             [(f64, f64, f64); 3],
-            [f64; 3],
+            [Option<f64>; 3],
             f64,
             [f64; 2],
             [Option<f64>; 2],
         );
-        let down = [0.0, 1.0, -1.0 / 3.0];
-        let up = [0.0, -1.0, 1.0 / 3.0];
+        let down = [None, Some(1.5), Some(-1.0 / 6.0)];
+        let up = [None, Some(-1.5), Some(1.0 / 6.0)];
         let rows: [Row; 6] = [
             (
                 "sell",
@@ -299,7 +286,7 @@ mod tests {
             (
                 "sell over a decimal level",
                 [(10.0, 3.0, 10.0), (13.0, 12.0, 13.0), (12.0, 10.0, 10.26)],
-                [0.0, 1.0, (10.26 - 12.0) / 3.0],
+                [None, Some(1.5), Some((10.26 - 11.5) / 3.0)],
                 72.6,
                 [72.5, 30.0],
                 [None, Some(12.0)],
@@ -307,7 +294,7 @@ mod tests {
             (
                 "sell under a decimal level",
                 [(10.0, 3.0, 10.0), (13.0, 12.0, 13.0), (12.0, 10.0, 10.24)],
-                [0.0, 1.0, (10.24 - 12.0) / 3.0],
+                [None, Some(1.5), Some((10.24 - 11.5) / 3.0)],
                 72.4,
                 [72.5, 30.0],
                 [None, None],
@@ -320,8 +307,13 @@ mod tests {
             let mut stochastic = Stochastic::new(3, 0, 1);
             stochastic.calculate(&bars);
             for (at, want) in macd.into_iter().enumerate() {
-                let got = line.values().value(0, at).unwrap();
-                assert!((got - want).abs() < 1e-12, "{label}: MACD {at} {got}");
+                let got = line.values().value(0, at);
+                match (got, want) {
+                    (Some(got), Some(want)) => {
+                        assert!((got - want).abs() < 1e-12, "{label}: MACD {at} {got}")
+                    }
+                    _ => assert_eq!(got, want, "{label}: MACD {at}"),
+                }
             }
             let got = stochastic.values().value(0, 2).unwrap();
             assert!((got - k).abs() < 1e-12, "{label}: %K {got}");

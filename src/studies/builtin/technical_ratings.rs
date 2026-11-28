@@ -27,7 +27,7 @@
 //!
 //! A group's score is its mean vote. The summary averages the chosen groups' scores,
 //! ignoring groups without a vote. A component missing any value its rule reads has no
-//! vote; MACD votes from bar 25. A bar without finite high, low and close has no values.
+//! vote; MACD votes from bar 33. A bar without finite high, low and close has no values.
 //! Coverage is votes divided by components, across the chosen groups for the summary.
 //! A score without a vote has no value. Categories use these thresholds:
 //!
@@ -244,8 +244,6 @@ impl Rule {
 struct Component {
     group: Group,
     rule: Rule,
-    /// Usable bars before the first vote.
-    warmup: usize,
     study: Box<dyn Indicator>,
 }
 
@@ -254,7 +252,6 @@ impl std::fmt::Debug for Component {
         f.debug_struct("Component")
             .field("group", &self.group)
             .field("rule", &self.rule)
-            .field("warmup", &self.warmup)
             .finish_non_exhaustive()
     }
 }
@@ -360,73 +357,54 @@ impl TechnicalRatings {
 
     /// The components in rating order: the moving averages, then the oscillators.
     fn build() -> Vec<Component> {
-        let component = |group, rule, warmup, study: Box<dyn Indicator>| Component {
-            group,
-            rule,
-            warmup,
-            study,
-        };
+        let component = |group, rule, study: Box<dyn Indicator>| Component { group, rule, study };
         let (average, oscillator) = (Group::MovingAverage, Group::Oscillator);
         let mut components = Vec::with_capacity(26);
         for length in [10, 20, 30, 50, 100, 200] {
             components.push(component(
                 average,
                 Rule::Average,
-                0,
                 Box::new(SMA::new(length)),
             ));
             components.push(component(
                 average,
                 Rule::Average,
-                0,
                 Box::new(EMA::new(length)),
             ));
         }
         components.extend([
-            component(average, Rule::Average, 0, Box::new(HMA::new(9))),
-            component(average, Rule::Average, 0, Box::new(VWMA::new(20))),
+            component(average, Rule::Average, Box::new(HMA::new(9))),
+            component(average, Rule::Average, Box::new(VWMA::new(20))),
             component(
                 average,
                 Rule::Ichimoku,
-                0,
                 Box::new(IchimokuCloud::new(9, 26, 52)),
             ),
-            component(oscillator, Rule::Rsi, 0, Box::new(RSI::new(14))),
+            component(oscillator, Rule::Rsi, Box::new(RSI::new(14))),
             component(
                 oscillator,
                 Rule::Stochastic,
-                0,
                 Box::new(Stochastic::new(14, 3, 3)),
             ),
-            component(oscillator, Rule::Cci, 0, Box::new(CCI::new(20))),
-            component(oscillator, Rule::Adx, 0, Box::new(ADX::new(14))),
+            component(oscillator, Rule::Cci, Box::new(CCI::new(20))),
+            component(oscillator, Rule::Adx, Box::new(ADX::new(14))),
             component(
                 oscillator,
                 Rule::Awesome,
-                0,
                 Box::new(AwesomeOscillator::new(5, 34)),
             ),
-            component(oscillator, Rule::Momentum, 0, Box::new(Momentum::new(10))),
-            // The MACD shows no value before its slow and signal averages are seeded, then shows
-            // all of its history; the vote starts at that bar so that it never changes.
-            component(oscillator, Rule::Macd, 25, Box::new(MACD::new(12, 26, 9))),
+            component(oscillator, Rule::Momentum, Box::new(Momentum::new(10))),
+            component(oscillator, Rule::Macd, Box::new(MACD::new(12, 26, 9))),
             component(
                 oscillator,
                 Rule::StochasticRsi,
-                0,
                 Box::new(StochasticRSI::new(14, 14, 3, 3)),
             ),
-            component(oscillator, Rule::WilliamsR, 0, Box::new(WilliamsR::new(14))),
-            component(
-                oscillator,
-                Rule::BullBearPower,
-                0,
-                Box::new(ElderRay::new(13)),
-            ),
+            component(oscillator, Rule::WilliamsR, Box::new(WilliamsR::new(14))),
+            component(oscillator, Rule::BullBearPower, Box::new(ElderRay::new(13))),
             component(
                 oscillator,
                 Rule::Ultimate,
-                0,
                 Box::new(UltimateOscillator::new(7, 14, 28)),
             ),
         ]);
@@ -444,13 +422,9 @@ impl TechnicalRatings {
             .find(|component| matches!(component.rule, Rule::BullBearPower))
             .and_then(|component| trend(component.study.values(), bars, at));
         components.iter().map(move |component| {
-            let vote = (at >= component.warmup)
-                .then(|| {
-                    component
-                        .rule
-                        .vote(component.study.values(), at, bars[at].close, trend)
-                })
-                .flatten();
+            let vote = component
+                .rule
+                .vote(component.study.values(), at, bars[at].close, trend);
             (component.group, vote)
         })
     }
@@ -1330,12 +1304,12 @@ mod tests {
         full.calculate(&bars);
         // Stochastic RSI waits for an RSI window with a range, which this rise never has.
         for (at, expected) in [
-            (0, [6. / 15., 0., 6. / 26.]),
-            (34, [11. / 15., 8. / 11., 19. / 26.]),
-            (35, [11. / 15., 9. / 11., 20. / 26.]),
-            (75, [12. / 15., 10. / 11., 22. / 26.]),
-            (76, [13. / 15., 10. / 11., 23. / 26.]),
-            (198, [14. / 15., 10. / 11., 24. / 26.]),
+            (0, [0.; 3]),
+            (34, [8. / 15., 8. / 11., 16. / 26.]),
+            (35, [8. / 15., 9. / 11., 17. / 26.]),
+            (75, [10. / 15., 10. / 11., 20. / 26.]),
+            (76, [11. / 15., 10. / 11., 21. / 26.]),
+            (198, [13. / 15., 10. / 11., 23. / 26.]),
             (199, [1., 10. / 11., 25. / 26.]),
         ] {
             for (i, value) in expected.into_iter().enumerate() {
@@ -1347,7 +1321,7 @@ mod tests {
             }
         }
         assert_eq!(full.values.value(1, 0), None);
-        assert_eq!(full.values.value(2, 0), Some(0.0));
+        assert_eq!(full.values.value(2, 0), None);
         let mut stream = TechnicalRatings::new();
         stream.calculate(&bars[..1]);
         for n in 2..=bars.len() {
@@ -1466,8 +1440,9 @@ mod tests {
         }
     }
 
-    /// Table slots choose unique intervals by label, including shorter ones. Two closes
-    /// 10 and 12 put all six seeded EMAs below the last close: 6/15 averages, 6/26 overall.
+    /// Table slots choose unique intervals by label, including shorter ones. Ten closes of 10
+    /// and a last close of 12 (8) put SMA(10), EMA(10) and HMA(9) below (above) it:
+    /// 3/15 averages, 3/26 overall.
     #[test]
     fn table_rates_the_chosen_intervals() {
         use InputValue::{Choice, Color, Timeframe as Interval, Toggle};
@@ -1500,7 +1475,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(study.data_requests(), requests);
-        let (rising, falling) = (bars(&[10., 12.]), bars(&[10., 8.]));
+        let (rising, falling) = (
+            bars(&[vec![10.; 10], vec![12.]].concat()),
+            bars(&[vec![10.; 10], vec![8.]].concat()),
+        );
         let source = |request: &StudyDataRequest, bars| StudyData {
             request: request.clone(),
             bars,
@@ -1540,11 +1518,11 @@ mod tests {
             table(&study),
             vec![
                 row(
-                    &["1h", "Strong Buy", "N/A", "Strong Buy", "23%"],
+                    &["1h", "Strong Buy", "N/A", "Strong Buy", "12%"],
                     &[h, b, n, b]
                 ),
                 row(
-                    &["4h", "Strong Sell", "N/A", "Strong Sell", "23%"],
+                    &["4h", "Strong Sell", "N/A", "Strong Sell", "12%"],
                     &[h, Color32::GOLD, n, Color32::GOLD]
                 ),
                 row(&["5min", "N/A", "N/A", "N/A", "N/A"], &[h, n, n, n]),
@@ -1552,15 +1530,15 @@ mod tests {
         );
         assert_eq!(
             study.data_start(&requests[0]),
-            Some(rising[1].time - TimeDelta::hours(8000))
+            Some(rising[10].time - TimeDelta::hours(8000))
         );
         assert_eq!(
             study.data_start(&requests[1]),
-            Some(rising[1].time - TimeDelta::minutes(10000))
+            Some(rising[10].time - TimeDelta::minutes(10000))
         );
         assert_eq!(study.data_start(&request(Timeframe::Day1)), None);
         for (basis, label, rating, coverage, fill) in [
-            (1, "Moving averages", "Strong Buy", "40%", b),
+            (1, "Moving averages", "Strong Buy", "20%", b),
             (2, "Oscillators", "N/A", "0%", n),
         ] {
             study.set_input("basis", Choice(basis)).unwrap();
@@ -1593,7 +1571,7 @@ mod tests {
         assert_eq!(table(&study), vec![row(&["1h", "N/A", "0%"], &[h, n])]);
         // A trailing unusable bar has no latest rating, even if an earlier bar is usable.
         let mut missing = rising.clone();
-        missing[1].close = f64::NAN;
+        missing[10].close = f64::NAN;
         assert!(study.latest(&missing).is_none());
     }
 }
