@@ -1639,7 +1639,8 @@ impl AlertsPanel {
                                                 if self.options.source_icon {
                                                     let icon = match alert.source {
                                                         AlertSource::Price => &icons::CHART_LINE,
-                                                        AlertSource::Volume => {
+                                                        AlertSource::Volume
+                                                        | AlertSource::Footprint(_) => {
                                                             &icons::CHART_COLUMNS
                                                         }
                                                         AlertSource::Study { .. }

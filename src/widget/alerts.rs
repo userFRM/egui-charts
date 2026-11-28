@@ -137,7 +137,8 @@ impl Chart {
     /// the pane that paints the drawing, an anchored VWAP counting the executions the chart holds, for a
     /// [`Drawing`](AlertSource::Drawing) named as
     /// [`Drawing::alert_source`] does, and the price a [`TPOLevel`](AlertSource::TPOLevel)
-    /// keeps.
+    /// keeps, and the bar's buy volume, sell volume or delta of the executions the chart holds
+    /// for a [`Footprint`](AlertSource::Footprint).
     ///
     /// `None` for an unknown study, output or drawing, a bar the series does not have, and a value
     /// that is not finite.
@@ -148,6 +149,15 @@ impl Chart {
         let value = match source {
             AlertSource::Price => at.close,
             AlertSource::Volume => at.volume,
+            AlertSource::Footprint(metric) => {
+                let executions = self.drawing_executions()?;
+                let bar = executions.bar_at(at.time)?;
+                match metric {
+                    crate::model::FootprintMetric::BuyVolume => bar.ask,
+                    crate::model::FootprintMetric::SellVolume => bar.bid,
+                    crate::model::FootprintMetric::Delta => bar.delta(),
+                }
+            }
             AlertSource::Study { id, output } => self
                 .indicators()
                 .find(|(study, _)| study.0.to_string() == *id)?
@@ -194,7 +204,8 @@ impl Chart {
     /// and each visible TPO study, come the extended levels it draws of completed profiles that no
     /// later bar has reached, at their current prices, named `TPO {session}: {level} {price}` or
     /// after the study, the session written as [`Self::format_time`] writes it; see
-    /// [`TPOLevelSource`].
+    /// [`TPOLevelSource`]. On a volume footprint chart come last the bar's total buy volume,
+    /// total sell volume and volume delta.
     ///
     /// [`Indicator::alert_outputs`]: crate::studies::Indicator::alert_outputs
     pub fn alert_sources(&self) -> Vec<(AlertSource, AlertSourceName)> {
@@ -316,7 +327,25 @@ impl Chart {
                 tpo.push((source, name));
             }
         }
-        studies.chain(drawings).chain(tpo).collect()
+        let footprint = (self.chart_type == ChartType::VolumeFootprint)
+            .then_some(crate::model::FootprintMetric::ALL)
+            .into_iter()
+            .flatten()
+            .map(|metric| {
+                (
+                    AlertSource::Footprint(metric),
+                    AlertSourceName::new(
+                        "Footprint: {metric}",
+                        &[],
+                        &[("metric", &metric.to_string())],
+                    ),
+                )
+            });
+        studies
+            .chain(drawings)
+            .chain(tpo)
+            .chain(footprint)
+            .collect()
     }
 
     /// The scale mode the levels of drawing `id` resolve with, what they mark and the study that

@@ -462,7 +462,7 @@ impl AlertEngine {
 
     /// Updates active conditions of `symbol` on `timeframe` against the newest of `bars`, oldest
     /// first, at the time `now`. Feed every interval in [`Alert::timeframes`]. `value` resolves a
-    /// study or drawing source at a bar index of `bars`, for instance with `Chart::alert_value`;
+    /// study, drawing or footprint metric source at a bar index of `bars`, for instance with `Chart::alert_value`;
     /// price and volume come from `bars`, and a [`TPOLevel`](AlertSource::TPOLevel) is the price
     /// it keeps. `exchange` is the exchange of `symbol` for the
     /// `{{exchange}}` placeholder, as [`Alert::expand_message`] takes it. Call it each frame with

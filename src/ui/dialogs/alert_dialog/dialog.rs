@@ -1367,6 +1367,7 @@ fn rule_preview(
                     match source {
                         AlertSource::Price => "Price".into(),
                         AlertSource::Volume => "Volume".into(),
+                        AlertSource::Footprint(metric) => format!("Footprint: {metric}"),
                         _ => format!("{source:?}"),
                     },
                 )
@@ -1400,7 +1401,15 @@ fn source_picker(
         .iter()
         .find(|(value, _)| value == source)
         .map_or_else(
-            || l10n::text(ui.ctx(), format!("{source:?}")),
+            || {
+                l10n::text(
+                    ui.ctx(),
+                    match source {
+                        AlertSource::Footprint(metric) => format!("Footprint: {metric}"),
+                        _ => format!("{source:?}"),
+                    },
+                )
+            },
             |(_, name)| name.text(ui.ctx()),
         );
     egui::ComboBox::from_id_salt(id)

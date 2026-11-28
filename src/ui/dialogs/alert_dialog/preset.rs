@@ -448,6 +448,7 @@ fn offered(
 ) -> bool {
     match source {
         AlertSource::Price | AlertSource::Volume => true,
+        AlertSource::Footprint(_) => sources.iter().any(|(offered, _)| offered == source),
         AlertSource::Study { .. } | AlertSource::StudyCondition { .. } => {
             let mut matching = sources.iter().filter(|(offered, _)| offered == source);
             match names.iter().find(|(named, _)| named == source) {
