@@ -102,6 +102,12 @@ pub struct Alert {
     /// `None` before the first move and for other alerts; ignored while waiting for entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position_levels: Option<[f64; 3]>,
+    /// When a level edit last restarted a [`Position`](AlertCondition::Position) alert that
+    /// still awaits entry. Hosts keep this with its progress so a restore treats the edit's
+    /// bar as a baseline, without changing the actual `last_triggered_at`. Cleared on entry;
+    /// `None` for other alerts and older saves, which retain their existing restore behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_restarted_at: Option<DateTime<Utc>>,
     /// Draw the threshold across the pane in addition to its marker. Enabled by default.
     #[serde(default = "alert_display_enabled")]
     pub extend_line: bool,
@@ -422,6 +428,7 @@ impl Alert {
             last_triggered_at: None,
             member_triggered_at: BTreeMap::new(),
             position_levels: None,
+            position_restarted_at: None,
             extend_line: true,
             blink_on_trigger: true,
             symbol: symbol.into(),
@@ -454,6 +461,7 @@ impl Alert {
         copy.member_triggered_at
             .clone_from(&other.member_triggered_at);
         copy.position_levels = other.position_levels;
+        copy.position_restarted_at = other.position_restarted_at;
         copy.extend_line = other.extend_line;
         copy.blink_on_trigger = other.blink_on_trigger;
         copy.delivery.clone_from(&other.delivery);
@@ -2283,6 +2291,7 @@ mod tests {
                 last_triggered_at: None,
                 member_triggered_at: BTreeMap::new(),
                 position_levels: None,
+                position_restarted_at: None,
                 extend_line: true,
                 blink_on_trigger: true,
                 name: String::new(),

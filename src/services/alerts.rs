@@ -38,7 +38,8 @@ use crate::model::{Alert, AlertId, AlertTrigger};
 /// or disarming an alert that fires once. A [`Position`](crate::model::AlertCondition::Position)
 /// fires on its entry and its first exit and keeps its progress in the condition: push it with
 /// its new progress along with each trigger, also outside the schedule, where progress still
-/// moves, and when an edit of its levels starts it again.
+/// moves, and when an edit of its levels starts it again. Keep its `position_levels` and
+/// `position_restarted_at` too, so restoring it preserves the reached plan and restart baseline.
 ///
 /// A [`StrategyFills`](crate::model::AlertCondition::StrategyFills) alert receives each execution
 /// of a host-named run through `AlertEngine::strategy_fills`, and each alert its strategy raises

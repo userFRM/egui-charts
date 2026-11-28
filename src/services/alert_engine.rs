@@ -118,6 +118,8 @@ const TRIGGER_HISTORY: usize = 5_000;
 /// progress reached, such as "Position entered". Saving it active after its exit starts it again
 /// from the entry. Moving any level after entry or exit also starts it again from the entry
 /// with an `Upsert` and no trigger; the new entry needs a value observed after the edit.
+/// The alert keeps that restart time separately from its last firing, so restoring it cannot
+/// replay an entry crossing from before the edit.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
@@ -589,7 +591,7 @@ impl AlertEngine {
             if !matched || !ready {
                 continue;
             }
-            if restart_position(alert, run) {
+            if restart_position(alert, run, now) {
                 if let Some(events) = events {
                     events.push(AlertEvent::Upsert(Box::new(alert.clone())));
                 }
@@ -1204,6 +1206,7 @@ impl State {
             alert.created_at = Some(Utc::now());
             alert.last_triggered_at = None;
             alert.member_triggered_at.clear();
+            alert.position_restarted_at = None;
             loop {
                 self.next_id += 1;
                 let id = AlertId(self.next_id.to_string());
@@ -1541,9 +1544,9 @@ fn evaluate(
     let last = match &alert.watchlist {
         _ if !restored => None,
         Some(_) => alert.member_triggered_at.get(symbol).copied(),
-        None => alert.last_triggered_at,
+        None => alert.last_triggered_at.max(alert.position_restarted_at),
     };
-    // A restored alert takes its saved last firing on its first evaluation.
+    // A restored alert takes its saved last firing or position restart on its first evaluation.
     if run.joined.is_empty()
         && let Some(last) = last
     {
@@ -1656,6 +1659,7 @@ fn evaluate(
     if let (Some(value), Some(entry), Some(target), Some(stop)) = (value, entry, target, stop) {
         stages.extend(position_exit(value, entry, target, stop));
         alert.position_levels = Some([entry, target, stop]);
+        alert.position_restarted_at = None;
     }
     let mut messages = Vec::new();
     for stage in stages {
@@ -1753,7 +1757,7 @@ fn ended_position(alert: &Alert) -> bool {
 /// Restarts a position when any level moved after entry or exit. The
 /// observation reading the edit becomes its baseline, so the edit cannot fire. Older saved
 /// alerts adopt the first resolved levels without changing their progress.
-fn restart_position(alert: &mut Alert, run: &mut Run) -> bool {
+fn restart_position(alert: &mut Alert, run: &mut Run, now: DateTime<Utc>) -> bool {
     let AlertCondition::Position { progress, .. } = &mut alert.condition else {
         return false;
     };
@@ -1777,6 +1781,7 @@ fn restart_position(alert: &mut Alert, run: &mut Run) -> bool {
         *progress = AlertPositionProgress::AwaitingEntry;
         alert.status = AlertStatus::Active;
         alert.position_levels = None;
+        alert.position_restarted_at = Some(now);
         run.joined = vec![newest.seen.clone()];
         run.fired = None;
         run.silent = None;
@@ -2647,18 +2652,23 @@ mod tests {
             };
             let host = Host::new(vec![
                 position(["p", "p#1", "p#2"], AwaitingEntry),
-                position(["q", "q#1", "q#2"], Entered),
+                serde_json::from_str(
+                    r#"{
+                    "symbol":"SYM", "timeframe":"Min1", "frequency":"Once",
+                    "condition":{"Position":{
+                        "levels":[{"Drawing":"q"},{"Drawing":"q#1"},{"Drawing":"q#2"}],
+                        "progress":"Entered"
+                    }}
+                }"#,
+                )
+                .unwrap(),
             ]);
             let levels = std::cell::Cell::new(before);
-            let now = std::cell::Cell::new(1_000);
+            let now = std::cell::Cell::new(0);
             let update = |host: &Host, bars: &[Bar]| {
-                host.engine.update(
-                    "SYM",
-                    None,
-                    Timeframe::Min1,
-                    bars,
-                    time(now.get()),
-                    |source, _| {
+                let at = now.get().max(bars.last().unwrap().time.timestamp());
+                host.engine
+                    .update("SYM", None, Timeframe::Min1, bars, time(at), |source, _| {
                         let AlertSource::Drawing(id) = source else {
                             return None;
                         };
@@ -2672,11 +2682,10 @@ mod tests {
                                     .position(|name| *name == id)
                                     .map(|n| [50.0, 1_000.0, 10.0][n])
                             })
-                    },
-                );
-                now.set(now.get() + 1);
+                    });
+                now.set(at + 1);
             };
-            let mut bars = vec![bar(0, history, 1.0)];
+            let mut bars = vec![bar(0, history, 1.0), bar(1, history, 1.0)];
             for close in closes {
                 bars.push(bar(bars.len() as i64, close, 1.0));
                 update(&host, &bars);
@@ -2709,11 +2718,22 @@ mod tests {
             );
             assert_eq!(restarted.status, AlertStatus::Active, "row {index}");
             assert_eq!(restarted.last_triggered_at, p.last_triggered_at);
+            assert_eq!(restarted.position_restarted_at, Some(time(now.get() - 1)));
             assert_eq!(host.events(), vec![AlertEvent::Upsert(Box::new(restarted))]);
 
-            let host = Host::new(
-                serde_json::from_value(serde_json::to_value(host.engine.alerts()).unwrap())
-                    .unwrap(),
+            let saved = host.engine.alerts();
+            let host =
+                Host::new(serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap());
+            host.events();
+            update(&host, &bars);
+            assert!(
+                host.events().is_empty(),
+                "row {index}: unchanged restore must not replay the crossing before the edit"
+            );
+            assert_eq!(
+                host.engine.alerts(),
+                saved,
+                "row {index}: restore keeps the restarted progress and actual last firing"
             );
             for close in reloaded {
                 bars.push(bar(bars.len() as i64, close, 1.0));
@@ -2743,6 +2763,7 @@ mod tests {
                 StopReached
             };
             assert_eq!(saved[0].status, AlertStatus::Triggered);
+            assert_eq!(saved[0].position_restarted_at, None);
             assert!(
                 matches!(saved[0].condition, AlertCondition::Position { progress, .. } if progress == ended)
             );
