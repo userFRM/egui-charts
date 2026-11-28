@@ -257,7 +257,10 @@ impl Indicator for RelativeVolumeAtTime {
             anchor.duration_ms() > 0
                 && chart.is_none_or(|chart| anchor.duration_ms() > chart.duration_ms())
         });
-        let calendar = anchor.is_some_and(|anchor| anchor.duration_ms() >= DAY_MS);
+        // Trading-date offsets apply only to anchors made of whole days.
+        let calendar = anchor.is_some_and(|anchor| {
+            anchor.duration_ms() >= DAY_MS && anchor.duration_ms() % DAY_MS == 0
+        });
         let clock = anchor.map(|anchor| {
             if calendar {
                 BarClock::new(anchor)
