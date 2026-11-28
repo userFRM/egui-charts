@@ -104,7 +104,7 @@ impl Default for CandleColorConfig {
     }
 }
 
-/// Status line display options. Saved settings without a field take its default.
+/// Status line display options. Saved omissions keep their former display.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -136,12 +136,25 @@ pub struct StatusLineOptions {
     pub show_change: bool,
     /// Whether the legend shows the percentage price change.
     pub show_change_percent: bool,
-    /// Whether the legend shows volume.
+    /// Whether the legend shows volume. Off by default; saved omissions keep it on.
+    #[serde(default = "saved_legend_volume")]
     pub show_volume: bool,
     /// Whether the legend shows the change of the last price from the previous session's close.
     pub show_last_day_change: bool,
+    /// Whether narrow legends show the close alone. New charts show the session change;
+    /// settings saved without the compact fields keep the bar change.
+    pub compact_legend: bool,
+    /// Retain the compact change choice through settings, templates and layouts.
+    #[serde(default)]
+    pub(crate) compact_legend_day_change: bool,
+    /// Whether the study rows' backdrop is shown; off keeps its opacity.
+    pub show_indicator_background: bool,
     /// Opacity of the study rows' backdrop, from 0 to 100 percent.
     pub indicator_background_opacity: u8,
+}
+
+fn saved_legend_volume() -> bool {
+    true
 }
 
 impl Default for StatusLineOptions {
@@ -159,8 +172,11 @@ impl Default for StatusLineOptions {
             show_ohlc: true,
             show_change: true,
             show_change_percent: true,
-            show_volume: true,
+            show_volume: false,
             show_last_day_change: false,
+            compact_legend: true,
+            compact_legend_day_change: true,
+            show_indicator_background: true,
             indicator_background_opacity: 60,
         }
     }
@@ -792,6 +808,7 @@ pub struct OrderFlowSettings {
 /// use egui_charts::widget::settings::ChartSettingsState;
 ///
 /// let mut settings = ChartSettingsState::default();
+/// settings.status_line = egui_charts::widget::settings::StatusLineOptions::default();
 /// settings.candle_colors.show_wick = false;
 /// settings.status_line.show_logo = false;
 /// settings.trading = egui_charts::widget::settings::TradingSettings::default();

@@ -3844,6 +3844,10 @@ impl Chart {
                     .unwrap_or(shown.len().saturating_sub(1))
             });
             if let Some((bar, previous_close)) = self.readout_bar_at(selected) {
+                let session_close = (self.config.compact_legend
+                    && self.config.compact_legend_day_change)
+                    .then(|| self.readout_session_close(selected, &exchange_session))
+                    .flatten();
                 let timeframe = self.timeframe.map(|tf| tf.as_str()).unwrap_or_default();
                 #[cfg(feature = "ui")]
                 let order_quantity = self.order_quantity.take();
@@ -3931,7 +3935,7 @@ impl Chart {
                 legend.show_indicator_values = self.config.show_indicator_last_val;
                 legend.day_change =
                     session_closes.filter(|_| values && self.config.show_last_day_change);
-                legend.study_backdrop = self.config.indicator_backdrop_opacity;
+                legend.study_backdrop = self.config.indicator_backdrop();
                 legend.extended_hours = &extended_hours;
                 let background = |pos: Pos2| self.background_at(rect, pos);
                 legend.background = Some(&background);
@@ -3940,6 +3944,8 @@ impl Chart {
                     .collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close = previous_close;
+                legend.compact = self.config.compact_legend;
+                legend.session_close = session_close;
                 legend.bar_index = selected;
                 legend.studies = self.rendered_studies().indicators();
                 legend.show_volume =

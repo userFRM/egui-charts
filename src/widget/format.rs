@@ -1050,6 +1050,7 @@ mod tests {
                 })
                 .collect();
             let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+            chart.config_mut().show_legend_volume = true;
             chart.set_timeframe(Timeframe::Min1);
             chart.chart_options.tooltip.enabled = false;
             frame(&ctx, &mut chart, 0.0, vec![]);

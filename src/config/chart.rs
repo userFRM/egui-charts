@@ -87,6 +87,16 @@ fn shaded() -> bool {
     true
 }
 
+/// Older saved configurations show the study rows' backdrop.
+fn backdrop_shown() -> bool {
+    true
+}
+
+/// Older saved configurations shorten narrow legends.
+fn compact_legend() -> bool {
+    true
+}
+
 /// Appearance of the price axis: its border, tick marks and which labels it shows. It applies to
 /// the main and series price axes; value tag settings also apply to study panes.
 ///
@@ -421,7 +431,8 @@ pub struct ChartConfig {
     pub show_ohlc_change: bool,
     /// Show percentage bar change in the legend.
     pub show_ohlc_change_percent: bool,
-    /// Show volume in the legend independently of the histogram.
+    /// Show volume in the legend independently of the histogram. Off by default; configurations
+    /// saved with this field keep theirs.
     pub show_legend_volume: bool,
     /// Show study inputs after their names in the legend: the host's caption, else one built
     /// from the study's inputs.
@@ -435,6 +446,20 @@ pub struct ChartConfig {
     pub show_market_status: bool,
     /// Show the change of the last price from the previous session's close in the legend.
     pub show_last_day_change: bool,
+    /// Below 600 points of legend width, show the close alone in place of open, high, low and
+    /// close, followed by its change from the previous session's close on new charts. Off shows
+    /// open, high, low, close and the bar change at every width. On by default; configurations
+    /// saved without the compact fields keep close alone with the bar change.
+    #[serde(default = "compact_legend")]
+    pub compact_legend: bool,
+    /// New compact legends use the session change; older saved legends keep the bar change.
+    #[serde(default)]
+    pub(crate) compact_legend_day_change: bool,
+    /// Show the backdrop behind the legend's volume and study rows, in the price pane and in
+    /// study panes, at [`indicator_backdrop_opacity`](Self::indicator_backdrop_opacity). Turning
+    /// it off keeps the opacity. On by default and in configurations saved without this field.
+    #[serde(default = "backdrop_shown")]
+    pub show_indicator_backdrop: bool,
     /// Opacity of the study rows' backdrop, from 0 to 1.
     pub indicator_backdrop_opacity: f32,
     /// Show the host-supplied currency above the price ticks.
@@ -729,11 +754,14 @@ impl Default for ChartConfig {
             quote_panel: false,
             show_ohlc_change: true,
             show_ohlc_change_percent: true,
-            show_legend_volume: true,
+            show_legend_volume: false,
             show_indicator_inputs: true,
             show_legend_badge: true,
             show_market_status: true,
             show_last_day_change: false,
+            compact_legend: true,
+            compact_legend_day_change: true,
+            show_indicator_backdrop: true,
             indicator_backdrop_opacity: 0.6,
             show_currency: true,
             show_unit: true,
@@ -885,6 +913,16 @@ impl ChartConfig {
         self
     }
 
+    /// The opacity of the legend rows' backdrop: `indicator_backdrop_opacity` while
+    /// `show_indicator_backdrop` is on, else 0.
+    pub(crate) fn indicator_backdrop(&self) -> f32 {
+        if self.show_indicator_backdrop {
+            self.indicator_backdrop_opacity
+        } else {
+            0.0
+        }
+    }
+
     /// The colour of the previous close line and its tag while `prev_close_line` sets none:
     /// mid grey, #555555, in a light theme, apart from the black scale text, and the theme's
     /// secondary text colour in a dark one.
@@ -910,6 +948,9 @@ mod tests {
         // A literal configuration saved by the base revision, before these fields existed.
         let saved = r#"{"bullish_color":[8,153,129,255],"bearish_color":[242,54,69,255],"bullish_border_color":[8,153,129,255],"bearish_border_color":[242,54,69,255],"bullish_wick_color":[8,153,129,255],"bearish_wick_color":[242,54,69,255],"price_source":"Close","conflation_threshold":1.0,"background_color":[0,0,0,255],"background_style":"Solid","grid_color":[34,34,34,255],"vertical_grid_color":null,"grid_line_style":"Dotted","vertical_grid_line_style":null,"text_color":[255,255,255,255],"axis_font_size":null,"axis_font_family":"Proportional","thousands_sep":",","candle_width":0.6,"wick_width":1.0,"candle_border_width":0.0,"show_grid":true,"show_horizontal_grid":true,"show_vertical_grid":true,"show_volume":false,"volume_height_fraction":0.12,"volume_baseline_inset":12.0,"padding":0.0,"show_time_labels":true,"show_ohlc_info":true,"title_as_description":true,"show_quote_boxes":false,"show_ohlc_change":true,"show_ohlc_change_percent":true,"show_legend_volume":true,"show_indicator_inputs":true,"show_legend_badge":true,"show_market_status":true,"show_last_day_change":false,"indicator_backdrop_opacity":0.6,"show_currency":true,"show_unit":true,"currency_unit_on_hover":false,"show_scale_mode_buttons":true,"show_plus_button":true,"show_extended_session_price":true,"extended_session_price_color":[251,142,1,255],"show_right_axis":true,"show_left_axis":false,"right_axis_width":70.0,"left_axis_width":70.0,"price_axis":{"allow_label_overlap":false,"show_study_values":true,"study_value_color":null,"show_symbol_name":false,"show_study_names":false,"border_visible":false,"border_color":null,"ticks_visible":false,"edge_ticks_visible":false,"hide_clipped_labels":true},"right_axis_scale_mode":"Normal","left_axis_scale_mode":"Normal","show_symbol_labels":true,"show_symbol_last_val":true,"show_symbol_last_change":false,"show_price_line":true,"show_prev_close_line":true,"show_symbol_prev_close":true,"show_indicator_labels":true,"show_indicator_last_val":true,"lock_price_to_bar_ratio":false,"scale_price_chart_only":false,"show_bid_ask":true,"show_high_low":true,"show_countdown":false,"show_realtime_btn":true,"realtime_button_pos":"BottomRight","realtime_button_text":null,"realtime_button_size":[28.0,28.0],"realtime_button_color":[64,254,0,128],"realtime_button_hover_color":[64,254,0,128],"realtime_button_text_color":[64,254,0,128],"navigation_buttons":"Never","pane_buttons":"OnHover","show_session_breaks":false,"session_break_color":[18,18,18,18],"session_break_style":"Solid","session_config":null,"show_extended_hours":true,"extended_hours_color":[64,254,0,128],"overnight_hours_color":[64,254,0,128],"show_watermark":false,"watermark_text":null,"watermark_description":false,"watermark_color":[34,34,34,255],"watermark_font_size":48.0,"watermark_pos":"Center","skip_background":false}"#;
         let restored: ChartConfig = serde_json::from_str(saved).unwrap();
+        assert!(restored.show_indicator_backdrop);
+        assert!(restored.compact_legend);
+        assert!(!restored.compact_legend_day_change);
         let original: serde_json::Value = serde_json::from_str(saved).unwrap();
         let current: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
