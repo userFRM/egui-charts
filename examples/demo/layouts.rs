@@ -300,26 +300,39 @@ impl DemoApp {
             return;
         }
         self.range_fit = None;
-        // An all charts replay covers the chart activated too, which takes over at its cursor.
-        let keep = self.replay.is_some()
-            && !self.recording_files.opened
-            && self.replay_slots.contains(&slot)
-            && self.replay_slots.contains(&self.layout_slot);
-        if !keep {
-            self.stop_replay();
-        }
         // `chart` always holds the active slot so every existing toolbar and dialog acts on it.
         let other = if slot < self.layout_slot {
             slot
         } else {
             slot - 1
         };
+        // An all charts replay covers the chart activated too, which takes over at its cursor;
+        // a recording does so on the charts its driver feeds.
+        let shares_recording = match (
+            self.chart.replay_driver(),
+            self.extra_charts
+                .get(other)
+                .and_then(|extra| extra.chart.replay_driver()),
+        ) {
+            (Some(active), Some(target)) => Arc::ptr_eq(active, target),
+            _ => false,
+        };
+        let keep = self.replay.is_some()
+            && (!self.recording_files.opened || shares_recording)
+            && self.replay_slots.contains(&slot)
+            && self.replay_slots.contains(&self.layout_slot);
+        if !keep {
+            self.stop_replay();
+        }
         if let Some(target) = self.extra_charts.get_mut(other) {
             let cutoff = self.chart.replay_time().filter(|_| keep);
             if keep {
                 // The chart leaving the active slot replays on as the other charts do.
                 self.live.set_paused(self.live_was_paused);
             }
+            // The recording's executions stay the replay's bars.
+            let recorded =
+                (keep && self.recording_files.opened).then(|| std::mem::take(&mut self.bars));
             std::mem::swap(&mut self.chart, &mut target.chart);
             std::mem::swap(&mut self.live, &mut target.live);
             std::mem::swap(&mut self.comparisons, &mut target.comparisons);
@@ -336,6 +349,9 @@ impl DemoApp {
             self.layout.set_active(slot);
             self.chart.set_storage(self.storage.clone());
             self.refresh_active_chart();
+            if let Some(bars) = recorded {
+                self.bars = bars;
+            }
             if keep {
                 self.take_over_replay(cutoff);
             }

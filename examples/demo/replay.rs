@@ -936,12 +936,14 @@ impl DemoApp {
     }
 
     /// Replays the charts of `scope`, keeping a fixed update interval that fits them all or else
-    /// taking their common one.
+    /// taking their common one; an open recording keeps its one-trade steps.
     pub(super) fn set_replay_scope(&mut self, scope: ReplayScope) {
+        self.replay_scope = scope;
         if self.recording_files.opened {
+            // A recording steps one trade at a time and keeps its driver's cursor.
+            self.push_market_replay_window();
             return;
         }
-        self.replay_scope = scope;
         let base = self.replayed_interval();
         let step = self.replay_interval;
         if self.replay_control.uses_automatic_update_interval() {
@@ -1108,7 +1110,8 @@ impl DemoApp {
     }
 
     /// Moves an all charts replay to the newly active chart, keeping the cursor, update
-    /// interval, speed and playback while pausing its feed and using its source history.
+    /// interval, speed and playback while pausing its feed and using its source history, or for
+    /// an open recording the recording's executions.
     pub(super) fn take_over_replay(&mut self, cutoff: Option<DateTime<Utc>>) {
         self.replay_selecting = false;
         self.replay_start.is_open = false;
@@ -1117,11 +1120,14 @@ impl DemoApp {
         self.replay_move = None;
         self.live_was_paused = self.live.paused();
         self.live.set_paused(true);
-        self.bars = self.live.snapshot(
-            self.state.timeframe,
-            self.chart.bar_clock(),
-            self.chart.extended_hours(),
-        );
+        if !self.recording_files.opened {
+            // A recording keeps its executions, which the chart taking over steps through.
+            self.bars = self.live.snapshot(
+                self.state.timeframe,
+                self.chart.bar_clock(),
+                self.chart.extended_hours(),
+            );
+        }
         self.replay_control.set_symbol(&self.state.symbol);
         // One-trade bars of the same symbol belong to the recording the shared driver holds.
         let same_trades = self.replay_interval.is_trade_based()
@@ -1188,15 +1194,19 @@ impl DemoApp {
             }
         }
         let source = self.layout_slot;
-        // A recording stays on its own chart, independently of the layout replay choice.
-        let scope = if self.recording_files.opened {
-            ReplayScope::ThisChart
-        } else {
-            self.replay_scope
-        };
+        let scope = self.replay_scope;
         let slots: Vec<_> = (0..self.extra_charts.len() + 1)
             .filter(|&slot| scope == ReplayScope::AllCharts || slot == source)
             .collect();
+        // An open recording plays on the covered charts of its symbol; other charts replay
+        // their own history to its cursor.
+        let recording = self
+            .chart
+            .replay_driver()
+            .filter(|_| self.recording_files.opened)
+            .cloned();
+        let symbol = self.chart.symbol().to_owned();
+        let mut released = Vec::new();
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
             let slot = if index >= source { index + 1 } else { index };
             if slots.contains(&slot) && !self.replay_slots.contains(&slot) {
@@ -1210,6 +1220,15 @@ impl DemoApp {
                 extra.chart.set_replay_time(Some(time));
                 let (bars, clock) = replay_source(&extra.live, self.replay_interval, &extra.chart);
                 extra.chart.set_replay_source(bars, clock);
+                if let Some(driver) = &recording
+                    && extra.chart.symbol() == symbol
+                {
+                    extra.chart.set_conversion(None);
+                    extra.chart.set_market_replay(Some(driver.clone()));
+                    extra.chart.set_signal_source(None);
+                }
+            } else if !slots.contains(&slot) && extra.chart.replay_driver().is_some() {
+                released.push(index);
             }
         }
         let mut charts: Vec<_> = self
@@ -1229,6 +1248,21 @@ impl DemoApp {
         if let Some(bar) = replay.visible_bars().last() {
             paper.set_replay_time(Some(bar.time));
             paper.set_price(self.chart.symbol(), bar.close);
+        }
+        if !released.is_empty() {
+            // A chart this scope releases from the driver gets its price unit and signals back,
+            // as on exit, while the charts still on it keep live analytics out.
+            for index in released {
+                let extra = &mut self.extra_charts[index];
+                restore_conversion(&mut extra.chart, &extra.live);
+            }
+            self.refresh_strategy_signals();
+            self.chart.set_signal_source(None);
+            for extra in &mut self.extra_charts {
+                if extra.chart.replay_driver().is_some() {
+                    extra.chart.set_signal_source(None);
+                }
+            }
         }
         if let Some(replay) = &mut self.replay {
             replay.state.scope = scope;
@@ -2896,23 +2930,17 @@ mod tests {
             assert_eq!(app.chart.replay_time(), cutoff);
         }
 
-        for recording in [true, false] {
-            app.recording_files.opened = recording;
-            if !recording {
-                app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Single);
-            }
-            click(&mut app, "Replay start");
-            let shown = texts(&mut app);
-            assert!(
-                !shown.iter().any(|(text, _)| matches!(
-                    text.as_str(),
-                    "CHARTS" | "This chart" | "All charts"
-                ))
-            );
-            ui_click(&ctx, size, egui::pos2(1400.0, 400.0), |ui| {
-                replay_test_ui(&mut app, ui)
-            });
-        }
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::Single);
+        click(&mut app, "Replay start");
+        let shown = texts(&mut app);
+        assert!(
+            !shown
+                .iter()
+                .any(|(text, _)| matches!(text.as_str(), "CHARTS" | "This chart" | "All charts"))
+        );
+        ui_click(&ctx, size, egui::pos2(1400.0, 400.0), |ui| {
+            replay_test_ui(&mut app, ui)
+        });
     }
 
     #[test]
@@ -3875,5 +3903,166 @@ mod tests {
         app.stop_replay();
         assert!(!app.recording_files.opened && app.chart.replay_driver().is_none());
         assert_eq!(app.bars, app.chart.bars(SeriesId::MAIN));
+    }
+
+    /// An imported recording under All charts replays on both charts of its symbol at their own
+    /// intervals, through steps, rewinds and activation; This chart leaves the other one live.
+    #[test]
+    fn imported_recording_keeps_the_all_charts_scope() {
+        use super::super::tests::{settle, ui_click};
+        use egui_charts::model::{OrderBook, Tick};
+
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let time: DateTime<Utc> = "2026-11-12T15:00:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            time,
+            true,
+        );
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.activate_chart_slot(1);
+        app.switch_timeframe(Timeframe::Min5);
+        app.activate_chart_slot(0);
+        app.switch_timeframe(Timeframe::Min1);
+        settle(&mut app, &ctx);
+        assert_eq!(app.replay_scope, ReplayScope::AllCharts);
+        // Executions at minutes 0, 1, 4 and 6 of 101 + i at size 1 + i.
+        let times: Vec<_> = [0, 1, 4, 6]
+            .map(|minute| time + chrono::TimeDelta::minutes(minute))
+            .to_vec();
+        let ticks: Vec<_> = (0..4)
+            .map(|i| {
+                Tick::new(
+                    times[i],
+                    101.0 + i as f64,
+                    1.0 + i as f64,
+                    Some(OrderSide::Buy),
+                )
+                .with_id(i as u64 + 1)
+            })
+            .collect();
+        let bars = egui_charts::data::aggregate_trades(
+            &ticks,
+            BarClock::new(Timeframe::Ticks(NonZeroU64::MIN)),
+        )
+        .unwrap();
+        let mut events = vec![ReplayEvent::new(
+            &app.state.symbol,
+            time,
+            0,
+            MarketEvent::DepthSnapshot {
+                sequence: 0,
+                book: OrderBook {
+                    ts: time,
+                    symbol: app.state.symbol.clone(),
+                    bids: Vec::new(),
+                    asks: Vec::new(),
+                },
+            },
+        )];
+        events.extend(ticks.into_iter().enumerate().map(|(i, tick)| {
+            ReplayEvent::new(
+                &app.state.symbol,
+                tick.ts,
+                i as u64 + 1,
+                MarketEvent::Trade(tick),
+            )
+        }));
+        let instrument = app.live.instrument();
+        let driver = Arc::new(ReplayDriver::new(events, vec![instrument.clone()]).unwrap());
+        app.open_recording(LoadedRecording {
+            driver: driver.clone(),
+            instrument,
+            bars,
+        })
+        .unwrap();
+        // Hand values per execution: last bar (minute, volume, close) at one and five minutes.
+        let expected = [
+            ((0, 1.0, 101.0), (0, 1.0, 101.0)),
+            ((1, 2.0, 102.0), (0, 3.0, 102.0)),
+            ((4, 3.0, 103.0), (0, 6.0, 103.0)),
+            ((6, 4.0, 104.0), (5, 4.0, 104.0)),
+        ];
+        let check = |app: &mut DemoApp, at: usize, scope: ReplayScope| {
+            settle(app, &ctx);
+            let slots = if scope == ReplayScope::AllCharts {
+                vec![0, 1]
+            } else {
+                vec![app.layout_slot]
+            };
+            assert_eq!(app.replay_slots, slots);
+            assert!(app.recording_files.opened);
+            assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, at);
+            assert_eq!(app.replay.as_ref().unwrap().state.scope, scope);
+            assert_eq!(driver.time(), times[at]);
+            for (active, chart) in [(true, &*app.chart), (false, &*app.extra_charts[0].chart)] {
+                let interval = chart.timeframe();
+                if !active && scope == ReplayScope::ThisChart {
+                    assert_eq!(chart.replay_time(), None, "{interval:?}");
+                    assert!(chart.replay_driver().is_none());
+                    continue;
+                }
+                assert_eq!(
+                    chart.replay_time(),
+                    Some(times[at] + chrono::TimeDelta::nanoseconds(1)),
+                    "{interval:?}"
+                );
+                assert!(Arc::ptr_eq(chart.replay_driver().unwrap(), &driver));
+                let (minute, volume, close) = if interval == Some(Timeframe::Min1) {
+                    expected[at].0
+                } else {
+                    expected[at].1
+                };
+                let last = chart.bars(SeriesId::MAIN).last().unwrap();
+                assert_eq!(
+                    (last.time, last.volume, last.close),
+                    (time + chrono::TimeDelta::minutes(minute), volume, close),
+                    "{interval:?}"
+                );
+            }
+        };
+        check(&mut app, 0, ReplayScope::AllCharts);
+        for (action, at) in [
+            (ReplayControlAction::NextBar, 1),
+            (ReplayControlAction::NextBar, 2),
+            (ReplayControlAction::GoToEnd, 3),
+            (ReplayControlAction::GoToStart, 0),
+            (ReplayControlAction::NextBar, 1),
+        ] {
+            app.handle_replay_control(action);
+            check(&mut app, at, ReplayScope::AllCharts);
+        }
+        // The five-minute chart takes over at the cursor with the recording's four executions.
+        app.activate_chart_slot(1);
+        assert_eq!(
+            (app.layout_slot, app.state.timeframe, app.bars.len()),
+            (1, Timeframe::Min5, 4)
+        );
+        check(&mut app, 1, ReplayScope::AllCharts);
+        app.handle_replay_control(ReplayControlAction::NextBar);
+        check(&mut app, 2, ReplayScope::AllCharts);
+        let size = egui::vec2(1440.0, 900.0);
+        for (scope, label) in [
+            (ReplayScope::ThisChart, "This chart"),
+            (ReplayScope::AllCharts, "All charts"),
+        ] {
+            click_replay_ui(&mut app, &ctx, "Replay start");
+            click_replay_ui(&mut app, &ctx, label);
+            ui_click(&ctx, size, egui::pos2(1400.0, 400.0), |ui| {
+                replay_test_ui(&mut app, ui)
+            });
+            check(&mut app, 2, scope);
+            app.handle_replay_control(ReplayControlAction::NextBar);
+            check(&mut app, 3, scope);
+            app.handle_replay_control(ReplayControlAction::PreviousBar);
+            check(&mut app, 2, scope);
+        }
+        app.handle_replay_control(ReplayControlAction::Stop);
+        assert!(!app.recording_files.opened);
+        for chart in [&app.chart, &app.extra_charts[0].chart] {
+            assert!(chart.replay_time().is_none() && chart.replay_driver().is_none());
+        }
     }
 }
