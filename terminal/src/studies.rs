@@ -117,7 +117,9 @@ impl Terminal {
             }
             Action::TopToolbar(TopToolbarAction::OpenIndicators) => self.open_indicators(None),
             Action::TopToolbar(TopToolbarAction::AddIndicator(name)) => {
-                if let Some(study) = self.studies.indicators.factory().create(&name) {
+                if let Some(IndicatorDialogAction::AddIndicator(study)) =
+                    self.studies.indicators.add(&name)
+                {
                     self.add_study(study);
                 }
             }
@@ -574,6 +576,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A favourite pair study added from the toolbar asks for its symbols before it reaches
+    /// the chart, instead of comparing the chart with itself.
+    #[test]
+    fn toolbar_pair_study_asks_for_symbols_before_adding() {
+        let mut terminal = terminal();
+        let before = terminal.chart().indicators().count();
+        terminal.run(Action::TopToolbar(TopToolbarAction::AddIndicator(
+            "Ratio".into(),
+        )));
+        assert_eq!(
+            terminal.chart().indicators().count(),
+            before,
+            "the study is not added before its symbols are confirmed"
+        );
+        assert!(
+            terminal.studies.indicators.is_open(),
+            "the dialog opens on the symbol prompt"
+        );
     }
 
     /// Guards the study menu's host part: a study added from another study's menu takes that
