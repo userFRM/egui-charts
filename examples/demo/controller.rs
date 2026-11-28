@@ -2742,10 +2742,7 @@ impl DemoApp {
                 }
             }
             TopToolbarAction::ApplyBuiltinIndicatorTemplate(id) => {
-                if let Some((_, template)) = StudyTemplateSet::builtin()
-                    .into_iter()
-                    .find(|(name, _)| *name == id)
-                {
+                if let Some(template) = StudyTemplateSet::builtin_named(&id) {
                     self.load_study_template(&template);
                 }
             }
@@ -10216,20 +10213,89 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let before = names(&app);
-        let (name, set) = &builtin[3];
-        app.handle_top_toolbar(
-            &ctx,
-            TopToolbarAction::ApplyBuiltinIndicatorTemplate((*name).to_owned()),
+        let before_panes = app.chart.panes();
+        let before_can_undo = app.chart.can_undo();
+        type Row = (
+            &'static str,
+            &'static [&'static str],
+            &'static [&'static [usize]],
         );
-        assert_eq!(
-            names(&app),
-            set.studies
+        let cases: [Row; 10] = [
+            (
+                "Bill Williams' 3 Lines",
+                &["Volume", "Williams Alligator"],
+                &[&[0, 1]],
+            ),
+            ("Displaced EMA", &["Volume", "EMA"], &[&[0, 1]]),
+            ("MA Exp Ribbon", &["Volume", "MA Ribbon"], &[&[0, 1]]),
+            (
+                "Oscillators",
+                &["Volume", "RSI", "StochRSI", "CCI"],
+                &[&[0], &[1], &[2], &[3]],
+            ),
+            (
+                "Swing Trading",
+                &["Volume", "BB", "MACD", "Stochastic"],
+                &[&[0, 1], &[2], &[3]],
+            ),
+            (
+                "Volume Based",
+                &["Volume", "OBV", "MFI"],
+                &[&[0], &[1], &[2]],
+            ),
+            (
+                "Williams Alligator",
+                &["Volume", "Williams Alligator"],
+                &[&[0, 1]],
+            ),
+            (
+                "Moving average ribbon",
+                &["Volume", "MA Ribbon"],
+                &[&[0, 1]],
+            ),
+            (
+                "Swing trading",
+                &["Volume", "BB", "MACD", "Stochastic"],
+                &[&[0, 1], &[2], &[3]],
+            ),
+            (
+                "Volume analysis",
+                &["Volume", "OBV", "MFI"],
+                &[&[0], &[1], &[2]],
+            ),
+        ];
+        for (name, studies, panes) in cases {
+            app.handle_top_toolbar(
+                &ctx,
+                TopToolbarAction::ApplyBuiltinIndicatorTemplate(name.to_owned()),
+            );
+            assert_eq!(names(&app), studies, "{name}");
+            let ids: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
+            let expected: Vec<Vec<_>> = panes
                 .iter()
-                .map(|study| study.name.clone())
-                .collect::<Vec<_>>()
-        );
-        assert!(app.chart.undo());
-        assert_eq!(names(&app), before);
+                .enumerate()
+                .map(|(at, pane)| {
+                    (at == 0)
+                        .then_some(egui_charts::widget::SeriesId::MAIN)
+                        .into_iter()
+                        .chain(pane.iter().map(|&position| ids[position]))
+                        .collect()
+                })
+                .collect();
+            assert_eq!(
+                app.chart
+                    .panes()
+                    .into_iter()
+                    .map(|pane| app.chart.pane_series(pane))
+                    .collect::<Vec<_>>(),
+                expected,
+                "{name}"
+            );
+            assert!(app.chart.undo(), "{name}");
+            assert_eq!(names(&app), before, "{name}");
+            assert_eq!(app.chart.panes(), before_panes, "{name}");
+            assert_eq!(app.chart.can_undo(), before_can_undo, "{name}");
+        }
     }
 
     #[test]
