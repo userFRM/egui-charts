@@ -2018,7 +2018,7 @@ mod tests {
             let b = (AlertSource::Footprint(SellVolume), OncePerBar);
             let c = (AlertSource::Footprint(Delta), OncePerBar);
             let d = (AlertSource::Footprint(BuyVolume), OncePerBarClose);
-            assert_eq!(*fired.lock().unwrap(), [a.clone()]);
+            assert_eq!(fired.lock().unwrap().as_slice(), std::slice::from_ref(&a));
             for subscription in feed.subscriptions.lock().unwrap().iter() {
                 subscription.sink.push_tick(
                     Tick::new(
