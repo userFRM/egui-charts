@@ -148,6 +148,7 @@ impl IndicatorInfo {
                 "Volume Profile Visible Range",
             ],
             "Zero-Trend Vol" => &["Volatility Zero Trend Close-to-Close"],
+            "ZigZag" => &["Zig Zag"],
             "Ziv Ghost Pivots" => &[
                 "Rob Booker Ziv Ghost Pivots",
                 "Rob Booker - Ziv Ghost Pivots",

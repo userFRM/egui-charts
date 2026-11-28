@@ -831,6 +831,9 @@ pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
     /// The stable factory key, independent of the wrapped study's display name.
     registered: String,
+    /// The factory's default-source migration decision when restored through a template.
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    pub(crate) builtin_source: Option<bool>,
     settings: StudySettings,
     timeframe: Option<Timeframe>,
     instrument_precision: Option<u8>,
@@ -896,6 +899,12 @@ impl std::fmt::Debug for ConfiguredStudy {
 }
 
 impl ConfiguredStudy {
+    /// The study before the wrapper adds chart controls and default overrides.
+    #[cfg(all(feature = "widget", feature = "studies"))]
+    pub(crate) fn declared_study(&self) -> &(dyn Indicator + 'static) {
+        self.study.as_ref()
+    }
+
     /// Only main-bar calculations can be regenerated from a trade checkpoint. In particular,
     /// an evicted prefix may have contributed to kept values that no longer follow from the
     /// retained bars alone.
@@ -933,6 +942,8 @@ impl ConfiguredStudy {
         Self {
             study,
             registered: self.registered.clone(),
+            #[cfg(all(feature = "widget", feature = "studies"))]
+            builtin_source: self.builtin_source,
             settings: self.settings.clone(),
             timeframe: self.timeframe,
             instrument_precision: self.instrument_precision,
@@ -999,9 +1010,15 @@ impl ConfiguredStudy {
         }
         match_declared_styles(study.as_ref(), &mut settings);
         let registered = study.registered_name().to_owned();
+        #[cfg(all(feature = "widget", feature = "studies"))]
+        let builtin_source = study
+            .concrete::<Self>()
+            .and_then(|study| study.builtin_source);
         Self {
             study,
             registered,
+            #[cfg(all(feature = "widget", feature = "studies"))]
+            builtin_source,
             settings,
             timeframe: None,
             instrument_precision: None,
