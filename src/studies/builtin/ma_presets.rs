@@ -8,12 +8,12 @@ pub struct MixedMACross {
     inner: MACombination,
 }
 impl MixedMACross {
-    /// Simple fast and exponential slow lengths, each at least one.
-    pub fn new(fast: usize, slow: usize) -> Self {
+    /// Simple and exponential lengths, each at least one.
+    pub fn new(simple: usize, exponential: usize) -> Self {
         Self {
             inner: MACombination::new(vec![
-                AverageLine::new(AverageType::Simple, fast, palette::ORANGE),
-                AverageLine::new(AverageType::Exponential, slow, palette::DARK_GREEN),
+                AverageLine::new(AverageType::Simple, simple, palette::ORANGE),
+                AverageLine::new(AverageType::Exponential, exponential, palette::DARK_GREEN),
             ])
             .unwrap(),
         }
@@ -21,7 +21,7 @@ impl MixedMACross {
 }
 impl Default for MixedMACross {
     fn default() -> Self {
-        Self::new(9, 21)
+        Self::new(10, 10)
     }
 }
 impl_ma_preset!(
@@ -37,7 +37,7 @@ pub struct TripleMA {
     inner: MACombination,
 }
 impl TripleMA {
-    /// Three lengths, each clamped to at least one. Marks crossings of the first two.
+    /// Three lengths, each clamped to at least one. Marks no crossings until a pair is chosen.
     pub fn new(fast: usize, middle: usize, slow: usize) -> Self {
         let colors = [palette::ORANGE, palette::LIGHT_BLUE, palette::CYAN];
         Self {
@@ -48,20 +48,43 @@ impl TripleMA {
                     .map(|(period, color)| AverageLine::new(AverageType::Simple, period, color))
                     .collect(),
             )
-            .unwrap(),
+            .unwrap()
+            .without_crossings(),
         }
     }
 }
 impl Default for TripleMA {
     fn default() -> Self {
-        Self::new(9, 21, 50)
+        Self::new(14, 21, 35)
     }
 }
-impl_ma_preset!(
-    TripleMA,
-    "Triple MA",
-    "Three simple moving averages with crossing markers"
-);
+impl_ma_preset!(TripleMA, "Triple MA", "Three simple moving averages");
+
+/// Two simple averages with independently chosen lengths, without crossing markers until a
+/// pair is chosen. [`MACross`](super::MACross) marks the crossings of two averages.
+#[derive(Clone, Debug)]
+pub struct DoubleMA {
+    inner: MACombination,
+}
+impl DoubleMA {
+    /// Two simple averages of the given lengths, each at least one.
+    pub fn new(first: usize, second: usize) -> Self {
+        Self {
+            inner: MACombination::new(vec![
+                AverageLine::new(AverageType::Simple, first, palette::ORANGE),
+                AverageLine::new(AverageType::Simple, second, palette::LIGHT_BLUE),
+            ])
+            .unwrap()
+            .without_crossings(),
+        }
+    }
+}
+impl Default for DoubleMA {
+    fn default() -> Self {
+        Self::new(14, 21)
+    }
+}
+impl_ma_preset!(DoubleMA, "Double MA", "Two simple moving averages");
 
 /// Twelve evenly spaced exponential averages coloured by their individual direction.
 #[derive(Clone, Debug)]

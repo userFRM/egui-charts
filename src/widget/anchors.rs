@@ -839,7 +839,8 @@ mod tests {
     /// whose smoothing equals its period. A Knoxville record stored while the study offered
     /// Symbol and Interval matches the Knoxville that offers neither. A Trading Sessions record
     /// from before session hours were times of day matches the study that reports them so.
-    /// Loading and pasting agree.
+    /// A Multi MA record from before its number of averages had an input matches the Multi MA
+    /// of four averages restored from it. Loading and pasting agree.
     #[cfg(feature = "studies")]
     #[test]
     fn stored_pane_survives_a_new_study_input() {
@@ -860,6 +861,16 @@ mod tests {
                 })
                 .with_overlay(false),
             )
+        };
+        let four: Study = || {
+            // Restored from a save with four averages, moved into its own pane.
+            let mut averages = crate::studies::MultipleMA::new();
+            averages
+                .set_input("average_count", InputValue::Length(4))
+                .unwrap();
+            let mut study = ConfiguredStudy::new(Box::new(averages));
+            study.set_overlay(false);
+            Box::new(study)
         };
         let smi: Study = || Box::new(StochasticMomentumIndex::new(10, 3, 3, 10));
         let adx: Study = || Box::new(ADX::new(20));
@@ -1012,6 +1023,7 @@ mod tests {
         };
         let (last, inner) = (without("wait_for_close"), without("smoothing_deviation"));
         let no_smoothing = without("adx_smoothing");
+        let no_count = without("average_count");
         let (no_average, sma, ema) = (without("smoothing"), earlier(1), earlier(2));
         let (equal, unequal) = (split(3), split(4));
         let wait = |on| Some(("wait_for_close", InputValue::Toggle(on)));
@@ -1024,7 +1036,7 @@ mod tests {
             Option<(&'a str, InputValue)>,
             bool,
         );
-        let cases: [Case<'_>; 17] = [
+        let cases: [Case<'_>; 18] = [
             // From before an input existed: the last one, which the chart adds after the study's
             // own, or one of the study's own, which comes before the chart's.
             (rsi, &last, None, true),
@@ -1052,6 +1064,7 @@ mod tests {
             (smi, &equal, length("smoothing", 4), false),
             // From before session hours were times of day and zones were time zones.
             (sessions, &minute_counts, None, true),
+            (four, &no_count, None, true),
         ];
         for (at, (study, edit, input, shown)) in cases.into_iter().enumerate() {
             let text = copied(study);

@@ -1154,6 +1154,17 @@ impl StudyTemplate {
                     template.settings.help_url = declared.help_url;
                 }
             }
+            // Multi MA drew four averages before its number had an input. A save without it
+            // restores as many averages as it holds plot styles.
+            "Multi MA" if declares("average_count") && !has("average_count") => {
+                template.inputs.insert(
+                    0,
+                    (
+                        "average_count".to_owned(),
+                        InputValue::Length(self.settings.plots.len()),
+                    ),
+                );
+            }
             // A Parabolic SAR drew its uptrend and downtrend bars as two plots, Up Trend and Down
             // Trend, before it drew one. The plot carries over the one that was shown, or both
             // when both or neither were: their style, Up Trend's of two, and a latest value line

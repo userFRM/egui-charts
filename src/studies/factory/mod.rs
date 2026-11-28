@@ -187,6 +187,7 @@ impl IndicatorFactory {
                 EMACross,
                 MACross,
                 MixedMACross,
+                DoubleMA,
                 TripleMA,
                 MARibbon,
             ],

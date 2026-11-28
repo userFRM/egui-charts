@@ -234,16 +234,21 @@ impl MACombination {
     }
 
     /// The inputs a preset offers: those of its averages, its crossing pair among them or None,
-    /// and, for a ribbon, its colouring by direction. A preset keeps its number of averages.
-    pub(super) fn preset_inputs(&self, ribbon: bool) -> Vec<StudyInput> {
+    /// and, for a ribbon, its colouring by direction. A preset keeps its number of averages;
+    /// `counted` lists that number as an input no editor shows, so that a save made while the
+    /// preset drew another number restores as saved.
+    pub(super) fn preset_inputs(&self, ribbon: bool, counted: bool) -> Vec<StudyInput> {
         self.inputs()
             .into_iter()
             .filter(|input| match input.id.as_str() {
-                "average_count" => false,
+                "average_count" => counted,
                 "directional" => ribbon,
                 _ => true,
             })
             .map(|mut input| {
+                if input.id == "average_count" {
+                    input = input.shown_when("cross_first", Vec::new());
+                }
                 if let ("cross_first" | "cross_second", InputKind::Choice(picks)) =
                     (input.id.as_str(), &mut input.kind)
                 {
@@ -582,7 +587,7 @@ macro_rules! impl_ma_preset {
     ($ty:ident, $name:literal, $description:literal $(, $marker:expr)?) => {
         impl crate::studies::Indicator for $ty {
             fn inputs(&self) -> Vec<crate::studies::StudyInput> {
-                self.inner.preset_inputs(matches!($name, "MA Ribbon"))
+                self.inner.preset_inputs(matches!($name, "MA Ribbon"), matches!($name, "Multi MA"))
             }
             fn set_input(
                 &mut self,
@@ -669,27 +674,99 @@ mod tests {
     use crate::studies::test_support::make_bar;
     use crate::studies::{IndicatorFactory, InputKind, InputValue};
 
-    /// Closes rise from 0 to 59, then fall from 60 to 1. At bar 59 the 9-bar mean (55) is above the
-    /// 21-bar mean (49) and the 20-bar (49.5) above the 50-bar (34.5); at bar 119 the 9-bar (5) is
-    /// below the 21-bar (11) and the 20-bar (10.5) below the 50-bar (25.5). So the first two
-    /// averages of every preset cross.
+    /// Closes rise from 0 to 59, fall from 60 to 1, then rise from 2 to 60. The first two
+    /// averages cross on the fall except the equal 10-bar means, which first part on the fall
+    /// and cross on bar 120: the simple mean 4.7 drops below the exponential one, about 4.864.
     #[test]
     fn presets_offer_their_crossing_pair_with_none() {
+        use crate::studies::{ConfiguredStudy, Indicator, StudyTemplate};
         use InputValue::Choice;
+        use egui::Color32;
         let bars: Vec<Bar> = (0..60)
             .chain((1..=60).rev())
+            .chain(2..=60)
             .map(|close| make_bar(f64::from(close)))
             .collect();
-        for (name, averages, marked) in [
-            ("MA Cross", 2, true),
-            ("EMA Cross", 2, true),
-            ("SMA/EMA Cross", 2, true),
-            ("Triple MA", 3, true),
-            ("Multi MA", 4, false),
-            ("MA Ribbon", 12, false),
+        let orange = Color32::from_rgb(0xFF, 0x6D, 0x00);
+        let green = Color32::from_rgb(0x43, 0xA0, 0x47);
+        let blue = Color32::from_rgb(0x21, 0x96, 0xF3);
+        let cyan = Color32::from_rgb(0x26, 0xC6, 0xDA);
+        for (name, names, colors, marked) in [
+            (
+                "MA Cross",
+                vec!["Fast SMA(9)", "Slow SMA(21)"],
+                vec![orange, green],
+                true,
+            ),
+            (
+                "EMA Cross",
+                vec!["Fast EMA(9)", "Slow EMA(26)"],
+                vec![orange, green],
+                true,
+            ),
+            (
+                "SMA/EMA Cross",
+                vec!["SMA(10)", "EMA(10)"],
+                vec![orange, green],
+                true,
+            ),
+            (
+                "Double MA",
+                vec!["SMA(14)", "SMA(21)"],
+                vec![orange, blue],
+                false,
+            ),
+            (
+                "Triple MA",
+                vec!["SMA(14)", "SMA(21)", "SMA(35)"],
+                vec![orange, blue, cyan],
+                false,
+            ),
+            (
+                "Multi MA",
+                vec![
+                    "SMA(14)", "SMA(21)", "SMA(35)", "SMA(50)", "SMA(100)", "SMA(200)",
+                ],
+                vec![
+                    Color32::from_rgb(0x9C, 0x27, 0xB0),
+                    orange,
+                    green,
+                    cyan,
+                    Color32::from_rgb(0xF5, 0x00, 0x57),
+                    blue,
+                ],
+                false,
+            ),
+            (
+                "MA Ribbon",
+                vec![
+                    "EMA(5)", "EMA(10)", "EMA(15)", "EMA(20)", "EMA(25)", "EMA(30)", "EMA(35)",
+                    "EMA(40)", "EMA(45)", "EMA(50)", "EMA(55)", "EMA(60)",
+                ],
+                vec![Color32::from_rgb(98, 55, 174); 12],
+                false,
+            ),
         ] {
+            let averages = names.len();
             let mut study = IndicatorFactory::new().create(name).unwrap();
+            assert_eq!(study.name(), name);
+            assert_eq!(study.line_names(), names, "{name}");
+            assert_eq!(study.colors(), colors, "{name}");
             let inputs = study.inputs();
+            if name == "Multi MA" {
+                let count = inputs
+                    .iter()
+                    .find(|input| input.id == "average_count")
+                    .unwrap();
+                assert_eq!(
+                    (&count.value, &count.default),
+                    (&InputValue::Length(6), &InputValue::Length(6))
+                );
+                assert!(
+                    !count.is_shown(&inputs),
+                    "the saved count stays out of the editor"
+                );
+            }
             for id in ["cross_first", "cross_second"] {
                 let input = inputs.iter().find(|input| input.id == id).unwrap();
                 let InputKind::Choice(picks) = &input.kind else {
@@ -716,50 +793,113 @@ mod tests {
                     .is_err(),
                 "{name} past its averages"
             );
+            study.set_input("period_0", InputValue::Length(99)).unwrap();
+            for input in study.inputs() {
+                study.set_input(&input.id, input.default).unwrap();
+            }
+            study.calculate(&bars);
+            assert_eq!(study.line_names(), names, "{name} reset");
+            assert_eq!(!study.markers().is_empty(), marked, "{name} reset");
+            let mut configured = ConfiguredStudy::new(study);
+            let mut edited = colors;
+            *edited.last_mut().unwrap() = Color32::from_rgb(1, 2, 3);
+            configured.set_colors(edited.clone());
+            let restored = StudyTemplate::from_study(&configured).create().unwrap();
+            assert_eq!(restored.name(), name);
+            assert_eq!(restored.line_names(), names, "{name} saved");
+            assert_eq!(restored.colors(), edited, "{name} saved");
+            assert_eq!(restored.settings(), configured.settings(), "{name} saved");
         }
     }
 
-    /// MA Cross draws each average from its own warm-up, as a standalone SMA does, and still
-    /// marks only bars where both exist. On the closes above, SMA(9) is 4 on bar 8 (closes 0 to
-    /// 8) and 15 on bar 19 (11 to 19), and SMA(21) is 10 on bar 20 (0 to 20). The one crossing
-    /// is down on bar 70: the 9-bar mean of closes 58 to 50 is 54, below the 21-bar mean 1150/21.
+    /// Each average draws from its own warm-up and crossings wait until both exist. On closes
+    /// 0 to 59 then 60 to 1, SMA(9) starts at 4 on bar 8 and SMA(21) at 10 on bar 20. Their
+    /// crossing is down on bar 70 at 54. SMA(10) and EMA(10) both seed at 4.5 on bar 9; they
+    /// stay equal on the rise, then the exponential mean stays below, so neither crosses.
     #[test]
-    fn ma_cross_draws_each_average_from_its_own_warm_up() {
-        use crate::studies::{CrossDirection, Indicator, SMA};
+    fn crossing_presets_draw_each_average_from_its_own_warm_up() {
+        use super::AverageType::{self, Exponential, Simple};
+        use crate::studies::CrossDirection;
         let bars: Vec<Bar> = (0..60)
             .chain((1..=60).rev())
             .map(|close| make_bar(f64::from(close)))
             .collect();
-        let mut study = IndicatorFactory::new().create("MA Cross").unwrap();
-        study.calculate(&bars);
-        let drawn = |line, bar| study.values().value(line, bar);
-        assert_eq!(
-            [
-                drawn(0, 7),
-                drawn(0, 8),
-                drawn(0, 19),
-                drawn(1, 19),
-                drawn(1, 20)
-            ],
-            [None, Some(4.0), Some(15.0), None, Some(10.0)]
+        type Row<'a> = (
+            &'a str,
+            &'a [(AverageType, usize)],
+            &'a [(usize, usize, Option<f64>)],
+            &'a [(usize, CrossDirection, f64)],
         );
-        for (line, period) in [(0, 9), (1, 21)] {
-            let mut sma = SMA::new(period);
-            sma.calculate(&bars);
-            for bar in 0..bars.len() {
+        let rows: &[Row<'_>] = &[
+            (
+                "MA Cross",
+                &[(Simple, 9), (Simple, 21)],
+                &[
+                    (0, 7, None),
+                    (0, 8, Some(4.0)),
+                    (0, 19, Some(15.0)),
+                    (1, 19, None),
+                    (1, 20, Some(10.0)),
+                ],
+                &[(70, CrossDirection::Down, 54.0)],
+            ),
+            (
+                "SMA/EMA Cross",
+                &[(Simple, 10), (Exponential, 10)],
+                &[
+                    (0, 8, None),
+                    (0, 9, Some(4.5)),
+                    (1, 8, None),
+                    (1, 9, Some(4.5)),
+                ],
+                &[],
+            ),
+        ];
+        for &(name, lines, probes, markers) in rows {
+            let mut study = IndicatorFactory::new().create(name).unwrap();
+            let inputs = study.inputs();
+            for (line, &(kind, period)) in lines.iter().enumerate() {
+                for (id, expected) in [
+                    (format!("period_{line}"), InputValue::Length(period)),
+                    (
+                        format!("kind_{line}"),
+                        InputValue::Choice(usize::from(kind == Exponential)),
+                    ),
+                ] {
+                    let input = inputs.iter().find(|input| input.id == id).unwrap();
+                    assert_eq!(
+                        (&input.value, &input.default),
+                        (&expected, &expected),
+                        "{name} {id}"
+                    );
+                }
+            }
+            study.calculate(&bars);
+            for &(line, bar, expected) in probes {
                 assert_eq!(
-                    drawn(line, bar),
-                    sma.values().value(0, bar),
-                    "line {line} bar {bar}"
+                    study.values().value(line, bar),
+                    expected,
+                    "{name} line {line} bar {bar}"
                 );
             }
+            for (line, &(kind, period)) in lines.iter().enumerate() {
+                let mut average = kind.build(period);
+                average.calculate(&bars);
+                for bar in 0..bars.len() {
+                    assert_eq!(
+                        study.values().value(line, bar),
+                        average.values().value(0, bar),
+                        "{name} line {line} bar {bar}"
+                    );
+                }
+            }
+            let actual: Vec<_> = study
+                .markers()
+                .iter()
+                .map(|marker| (marker.bar, marker.direction, marker.value))
+                .collect();
+            assert_eq!(actual, markers, "{name}");
         }
-        let markers: Vec<_> = study
-            .markers()
-            .iter()
-            .map(|marker| (marker.bar, marker.direction, marker.value))
-            .collect();
-        assert_eq!(markers, [(70, CrossDirection::Down, 54.0)]);
     }
 
     /// Each EMA starts at its simple seed; no crossing is marked before both exist.
