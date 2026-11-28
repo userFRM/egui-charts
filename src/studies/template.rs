@@ -285,8 +285,9 @@ impl StudyTemplate {
         let study_name = own
             .as_ref()
             .map_or(self.name.as_str(), |study| study.name());
+        let builtin_source = self.metric.is_none() && !factory.is_host(&self.name);
         let upgraded = if self.metric.is_none() {
-            self.upgraded(study_name, &own_inputs, !factory.is_host(&self.name))
+            self.upgraded(study_name, &own_inputs, builtin_source)
         } else {
             None
         };
@@ -349,6 +350,9 @@ impl StudyTemplate {
             Box::new(ConfiguredStudy::new(study))
         };
         study.set_registered_name(registered);
+        if let Some(configured) = study.concrete_mut::<ConfiguredStudy>() {
+            configured.builtin_source = Some(builtin_source);
+        }
         if !defaults.is_empty() {
             study.set_input_defaults(&defaults);
         }
@@ -3904,10 +3908,37 @@ mod tests {
                 );
                 let mut builtin = StudyTemplate::from_study(&crate::studies::WoodiesCCI::default());
                 builtin.inputs.retain(|(id, _)| id != "source");
+                host.register(name, || Box::<crate::studies::WoodiesCCI>::default());
+                let host_builtin = builtin.create_with(&host).unwrap();
+                assert_eq!(
+                    host_builtin.source(),
+                    Some(crate::studies::StudySource::Price(PriceSource::HLC3))
+                );
+                host.register(name, || {
+                    let mut study =
+                        ConfiguredStudy::new(Box::<crate::studies::WoodiesCCI>::default());
+                    let source =
+                        InputValue::Source(crate::studies::StudySource::Price(PriceSource::Open));
+                    study.set_input("source", source.clone()).unwrap();
+                    study.set_input_defaults(&[("source".into(), source)]);
+                    Box::new(study)
+                });
+                let host_configured = builtin.create_with(&host).unwrap();
+                assert_eq!(
+                    host_configured.source(),
+                    Some(crate::studies::StudySource::Price(PriceSource::Open))
+                );
+                let restored_builtin = builtin.create().unwrap();
+                assert_eq!(
+                    restored_builtin.source(),
+                    Some(crate::studies::StudySource::Price(PriceSource::Close))
+                );
                 for (declaration, mut study) in [
                     ("input", restored.clone_box()),
                     ("source method", source_only),
-                    ("built-in", builtin.create().unwrap()),
+                    ("host built-in type", host_builtin.clone_box()),
+                    ("host configured built-in type", host_configured.clone_box()),
+                    ("built-in", restored_builtin),
                 ] {
                     // Missing sources mean the host's default or the older built-in's Close.
                     let source = study.source();
@@ -3948,7 +3979,7 @@ mod tests {
                         .set_input(
                             "source",
                             InputValue::Source(crate::studies::StudySource::Price(
-                                PriceSource::HLC3,
+                                PriceSource::HL2,
                             )),
                         )
                         .unwrap();

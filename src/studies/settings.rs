@@ -831,6 +831,8 @@ pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
     /// The stable factory key, independent of the wrapped study's display name.
     registered: String,
+    /// The factory's default-source migration decision when restored through a template.
+    pub(crate) builtin_source: Option<bool>,
     settings: StudySettings,
     timeframe: Option<Timeframe>,
     instrument_precision: Option<u8>,
@@ -939,6 +941,7 @@ impl ConfiguredStudy {
         Self {
             study,
             registered: self.registered.clone(),
+            builtin_source: self.builtin_source,
             settings: self.settings.clone(),
             timeframe: self.timeframe,
             instrument_precision: self.instrument_precision,
@@ -1005,9 +1008,13 @@ impl ConfiguredStudy {
         }
         match_declared_styles(study.as_ref(), &mut settings);
         let registered = study.registered_name().to_owned();
+        let builtin_source = study
+            .concrete::<Self>()
+            .and_then(|study| study.builtin_source);
         Self {
             study,
             registered,
+            builtin_source,
             settings,
             timeframe: None,
             instrument_precision: None,

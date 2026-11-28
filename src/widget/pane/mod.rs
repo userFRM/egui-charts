@@ -80,9 +80,11 @@ fn upgraded_study(
         .map(|(id, value)| Some((id.clone(), serde_json::from_value(value.clone()).ok()?)))
         .collect::<Option<_>>()?;
     // A host may supply its Source through source() alone, just as the built-in does.
-    let own = study
-        .concrete::<crate::studies::ConfiguredStudy>()
-        .map_or(study, crate::studies::ConfiguredStudy::declared_study);
+    let configured = study.concrete::<crate::studies::ConfiguredStudy>();
+    let own = configured.map_or(study, crate::studies::ConfiguredStudy::declared_study);
+    let builtin_source = configured
+        .and_then(|study| study.builtin_source)
+        .unwrap_or_else(|| own.concrete::<crate::studies::WoodiesCCI>().is_some());
     let template = crate::studies::StudyTemplate {
         name: name.clone(),
         inputs,
@@ -92,11 +94,7 @@ fn upgraded_study(
         scale: None,
         metric: None,
     }
-    .upgraded(
-        name,
-        &own.inputs(),
-        own.concrete::<crate::studies::WoodiesCCI>().is_some(),
-    )?;
+    .upgraded(name, &own.inputs(), builtin_source)?;
     // A listed input the study lacks fails the match as stored too, so only `declared` counts.
     let takes = template
         .inputs
