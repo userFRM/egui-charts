@@ -5,10 +5,10 @@ use super::{
     Bracket, BracketMode, Kind, Market, OrderTicket, PresetLevel, Sizing, TrailUnit, exit_lines,
     levels_accepted, reward, risk,
 };
-use crate::chart::{COVERAGE_CELL, coverage_text, exit_coverage, paint_coverage};
+use crate::chart::{COVERAGE_CELL, coverage_text, entry_price, exit_coverage, paint_coverage};
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::model::{OrderRequest, OrderSide, OrderType, TimeInForce};
+use crate::model::{OrderRequest, OrderSide, OrderType, Position, PositionBracket, TimeInForce};
 use crate::scales::decimals;
 use crate::theme::ThemeExt;
 use crate::ui::top_toolbar::buttons::rule_color;
@@ -353,6 +353,14 @@ impl OrderTicket {
         }
 
         ui.add_space(8.0);
+        if let Some(position) = market
+            .positions
+            .iter()
+            .find(|position| position.symbol == self.symbol && position.quantity != 0.0)
+        {
+            position_info(ui, market, position);
+            return;
+        }
         title(ui, "Order info");
         let Some((request, entry)) = request.as_ref().ok().zip(entry) else {
             return;
@@ -941,6 +949,286 @@ impl OrderTicket {
                 None => last,
             };
             self.levels.push(PresetLevel::new(bracket, share));
+        }
+    }
+}
+
+/// The held position replaces the pending order's information. Reported broker figures take
+/// precedence; exit results use the entry price and remaining quantity of each linked exit.
+fn position_info(ui: &mut Ui, market: &Market<'_>, position: &Position) {
+    let theme = ui.active_theme();
+    let rules = market.rules;
+    let numbers = market.numbers();
+    let currency = market.currency;
+    let size = position.quantity.abs();
+    let sign = position.quantity.signum();
+    let per_point = size * rules.point_value;
+    let finite = |value: &f64| value.is_finite();
+    let (side, label) = if position.quantity > 0.0 {
+        (OrderSide::Buy, "Long")
+    } else {
+        (OrderSide::Sell, "Short")
+    };
+    title(ui, "Position info");
+    info(ui, "Side", label, "", side_color(&theme, side));
+    info(
+        ui,
+        "Quantity",
+        &numbers.quantity(size, decimals(rules.quantity_step)),
+        "",
+        theme.ui.text,
+    );
+    info(
+        ui,
+        "Average price",
+        &numbers.price(position.average_price),
+        "",
+        theme.ui.text,
+    );
+    let value = position
+        .trade_value
+        .filter(finite)
+        .unwrap_or(position.average_price * per_point);
+    info(
+        ui,
+        "Trade value",
+        &grouped(value, 2, false),
+        currency,
+        theme.ui.text,
+    );
+    if let Some(leverage) = position
+        .leverage
+        .filter(|leverage| leverage.is_finite() && *leverage > 0.0)
+        .or(rules.leverage)
+    {
+        info(ui, "Leverage", &format!("{leverage}:1"), "", theme.ui.text);
+    }
+    let last = position.last_price.or(market.last);
+    let pnl = position
+        .unrealized_pnl
+        .filter(finite)
+        .or_else(|| last.map(|last| (last - position.average_price) * sign * per_point));
+    if let Some(pnl) = pnl {
+        let color = if pnl > 0.0 {
+            theme.ui.take_profit
+        } else if pnl < 0.0 {
+            theme.ui.error
+        } else {
+            theme.ui.text
+        };
+        info(
+            ui,
+            "Unrealized P&L",
+            &grouped(pnl, 2, true),
+            currency,
+            color,
+        );
+    }
+    let at_exits = |bracket| {
+        market
+            .orders
+            .iter()
+            .filter(|order| {
+                order.request.symbol == position.symbol
+                    && (order.request.side == OrderSide::Buy) != (position.quantity > 0.0)
+                    && order.request.position_bracket == Some(bracket)
+            })
+            .filter_map(|order| {
+                let price = entry_price(&order.request.order_type)?;
+                let open = order.request.quantity - order.filled;
+                Some((price - position.average_price) * sign * open * rules.point_value)
+            })
+            .reduce(|sum, pnl| sum + pnl)
+    };
+    if let Some(reward) = at_exits(PositionBracket::TakeProfit) {
+        info(
+            ui,
+            "Reward",
+            &grouped(reward, 2, false),
+            currency,
+            theme.ui.take_profit,
+        );
+    }
+    if let Some(loss) = at_exits(PositionBracket::StopLoss) {
+        info(
+            ui,
+            "Risk",
+            &grouped(-loss, 2, false),
+            currency,
+            theme.ui.stop_loss,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Order, OrderId, OrderStatus, Position, PositionBracket, TradingRules};
+
+    /// The information follows the held symbol, uses broker figures before estimates and prices
+    /// a short position's exits for their remaining size. A flat position restores Order info.
+    #[test]
+    fn the_order_info_becomes_position_info_while_the_symbol_has_a_position() {
+        let mut rules = TradingRules::new("ES");
+        rules.leverage = Some(10.0);
+        let mut long = Position::new("ES", 500.0, 100.0);
+        long.unrealized_pnl = Some(1234.0);
+        let mut short = Position::new("ES", -200.0, 105.0);
+        short.trade_value = Some(21_500.0);
+        short.leverage = Some(20.0);
+        let other = Position::new("NQ", 3.0, 50.0);
+        let exit = |id, side, quantity, kind, bracket, filled| {
+            let mut request = OrderRequest::new("ES", side, quantity, kind);
+            request.position_bracket = bracket;
+            let mut order = Order::new(OrderId::new(id), request, OrderStatus::Working);
+            order.filled = filled;
+            order
+        };
+        let order_info = &[("Est. margin", "5,000.00 / 10,000.00")][..];
+        let ctx = egui::Context::default();
+        let mut ticket = OrderTicket {
+            symbol: "ES".into(),
+            quantity: 500.0,
+            ..OrderTicket::default()
+        };
+        for (positions, orders, expected) in [
+            (vec![other.clone()], vec![], order_info),
+            (
+                vec![other, long],
+                vec![
+                    exit(
+                        "1",
+                        OrderSide::Sell,
+                        500.0,
+                        OrderType::Limit(110.0),
+                        Some(PositionBracket::TakeProfit),
+                        0.0,
+                    ),
+                    exit(
+                        "2",
+                        OrderSide::Sell,
+                        500.0,
+                        OrderType::Stop(95.0),
+                        Some(PositionBracket::StopLoss),
+                        0.0,
+                    ),
+                    exit(
+                        "3",
+                        OrderSide::Buy,
+                        100.0,
+                        OrderType::Limit(90.0),
+                        None,
+                        0.0,
+                    ),
+                    exit(
+                        "4",
+                        OrderSide::Sell,
+                        100.0,
+                        OrderType::Limit(120.0),
+                        None,
+                        0.0,
+                    ),
+                ],
+                &[
+                    ("Side", "Long"),
+                    ("Quantity", "500"),
+                    ("Average price", "100.00"),
+                    ("Trade value", "50,000.00"),
+                    ("Leverage", "10:1"),
+                    ("Unrealized P&L", "+1,234.00"),
+                    ("Reward", "5,000.00"),
+                    ("Risk", "2,500.00"),
+                ][..],
+            ),
+            (
+                vec![short],
+                vec![
+                    exit(
+                        "5",
+                        OrderSide::Buy,
+                        200.0,
+                        OrderType::Limit(95.0),
+                        Some(PositionBracket::TakeProfit),
+                        50.0,
+                    ),
+                    exit(
+                        "6",
+                        OrderSide::Buy,
+                        200.0,
+                        OrderType::Stop(108.0),
+                        Some(PositionBracket::StopLoss),
+                        0.0,
+                    ),
+                ],
+                &[
+                    ("Side", "Short"),
+                    ("Quantity", "200"),
+                    ("Average price", "105.00"),
+                    ("Trade value", "21,500.00"),
+                    ("Leverage", "20:1"),
+                    ("Unrealized P&L", "+1,000.00"),
+                    ("Reward", "1,500.00"),
+                    ("Risk", "600.00"),
+                ][..],
+            ),
+            (vec![Position::new("ES", 0.0, 100.0)], vec![], order_info),
+            (vec![], vec![], order_info),
+        ] {
+            let market = Market {
+                positions: &positions,
+                orders: &orders,
+                ..super::super::tests::market(&rules)
+            };
+            let held = positions
+                .iter()
+                .any(|p| p.symbol == "ES" && p.quantity != 0.0);
+            let mut labels = Vec::new();
+            for _ in 0..2 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(340.0, 1600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| ticket.form(ui, &market, false),
+                );
+                labels = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.visual_bounding_rect().center().y,
+                        )),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                output.drop_without_applying_deltas();
+            }
+            for (name, shown) in [
+                ("Position info", held),
+                ("Order info", !held),
+                ("Est. margin", !held),
+                ("Average price", held),
+                ("Unrealized P&L", held),
+            ] {
+                assert_eq!(
+                    labels.iter().any(|(label, _)| label == name),
+                    shown,
+                    "{name}: {positions:?}"
+                );
+            }
+            for &(label, value) in expected {
+                assert!(
+                    labels.iter().any(|(name, y)| name == label
+                        && labels
+                            .iter()
+                            .any(|(text, value_y)| text == value && (y - value_y).abs() < 2.0)),
+                    "row {label}: {value}: {labels:?}"
+                );
+            }
         }
     }
 }

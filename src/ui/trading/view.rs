@@ -1,5 +1,5 @@
-//! The trading controller's chart view: the order ticket's panel, the orders, positions and fills
-//! drawn on the chart, the image exports, and the confirmations of what the user changes there.
+//! The trading controller's chart view: the order ticket's panel or window, the orders,
+//! positions and fills drawn on the chart, the image exports, and confirmations of their changes.
 
 use super::account_panel::quantity_decimals;
 use super::format::Numbers;
@@ -153,10 +153,13 @@ impl Trading {
         self.ticket = ticket;
     }
 
-    /// Draws the order ticket, while it is open, as a panel at the right of `ui` for the chart's
-    /// symbol. Call it before laying out the chart, so the chart takes the space left. Sends the
-    /// order the user submits, and the orders the user places from the depth ladder; a change to a
-    /// working order or the position waits for the confirmation [`show`](Self::show) asks for.
+    /// Draws the open order ticket for the chart's symbol, at the right of `ui` or, with
+    /// [`undocked_ticket`](crate::widget::settings::TradingSettings::undocked_ticket), in a
+    /// movable window over it. Call before laying out the chart so it takes the space left;
+    /// undocking leaves its full width. The ticket header changes `display.undocked_ticket`,
+    /// as its More menu changes `compact_ticket`; read both back when saving. Sends submitted
+    /// orders and depth ladder orders; changes to working orders and positions wait for the
+    /// confirmation [`show`](Self::show) asks for.
     pub fn show_ticket(&mut self, ui: &mut egui::Ui, chart: &Chart) {
         if !self.ticket.open {
             return;
@@ -173,6 +176,7 @@ impl Trading {
         let mut presets = std::mem::take(&mut self.presets);
         let mut one_click = self.display.instant_orders;
         let mut compact = self.display.compact_ticket;
+        let mut undocked = self.display.undocked_ticket;
         let trades: Vec<_> = if chart.replay_time().is_some() {
             Vec::new()
         } else {
@@ -185,26 +189,67 @@ impl Trading {
         market.session_open = trades
             .last()
             .and_then(|trade| session_open(chart, trade.ts));
-        let action = egui::Panel::right("order_ticket")
-            .resizable(false)
-            .exact_size(ui.available_width().min(340.0))
-            .frame(
-                egui::Frame::new()
-                    .fill(theme.ui.panel_bg)
-                    .inner_margin(egui::Margin::symmetric(16, 8)),
-            )
-            .show(ui, |ui| {
-                ticket.show(ui, &market, &mut presets, &mut one_click, &mut compact)
-            })
-            .inner;
-        // Later panels may grow to their contents, but must not cover the docked ticket.
-        ui.shrink_clip_rect(ui.available_rect_before_wrap());
+        let action = if self.display.undocked_ticket {
+            let area = ui.available_rect_before_wrap();
+            egui::Window::new(l10n::text(ui.ctx(), "Order ticket"))
+                .id(egui::Id::unique("order_ticket_window"))
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size(egui::vec2(
+                    area.width().min(340.0),
+                    area.height().min(720.0),
+                ))
+                .pivot(egui::Align2::RIGHT_TOP)
+                .default_pos(area.right_top() + egui::vec2(-8.0, 8.0))
+                .constrain_to(area)
+                .frame(
+                    egui::Frame::window(ui.style())
+                        .fill(theme.ui.panel_bg)
+                        .inner_margin(egui::Margin::symmetric(16, 8)),
+                )
+                .show(ui.ctx(), |ui| {
+                    ticket.show(
+                        ui,
+                        &market,
+                        &mut presets,
+                        &mut one_click,
+                        &mut compact,
+                        &mut undocked,
+                    )
+                })
+                .and_then(|response| response.inner)
+                .flatten()
+        } else {
+            let action = egui::Panel::right("order_ticket")
+                .resizable(false)
+                .exact_size(ui.available_width().min(340.0))
+                .frame(
+                    egui::Frame::new()
+                        .fill(theme.ui.panel_bg)
+                        .inner_margin(egui::Margin::symmetric(16, 8)),
+                )
+                .show(ui, |ui| {
+                    ticket.show(
+                        ui,
+                        &market,
+                        &mut presets,
+                        &mut one_click,
+                        &mut compact,
+                        &mut undocked,
+                    )
+                })
+                .inner;
+            // Later panels may grow to their contents, but must not cover the docked ticket.
+            ui.shrink_clip_rect(ui.available_rect_before_wrap());
+            action
+        };
         (
             self.ticket,
             self.presets,
             self.display.instant_orders,
             self.display.compact_ticket,
-        ) = (ticket, presets, one_click, compact);
+            self.display.undocked_ticket,
+        ) = (ticket, presets, one_click, compact, undocked);
         self.perform(action);
     }
 
@@ -2183,6 +2228,11 @@ mod tests {
             !defaults.separate_labels,
             "older settings keep labels at their prices"
         );
+        assert!(
+            !defaults.undocked_ticket,
+            "older settings keep the ticket docked"
+        );
+        assert!(!TradingSettings::default().undocked_ticket);
         assert!(defaults.extend_lines);
         assert_eq!(defaults.label_alignment, Right);
         assert!(!defaults.include_in_image);
@@ -3106,6 +3156,105 @@ mod tests {
                 // 20 and 10 ticks at 0.01 are 0.20 and 0.10 from the entry, mirrored for sells.
                 assert!((request.take_profit.unwrap() - (entry + sign * 0.20)).abs() < 1e-9);
                 assert!((request.stop_loss.unwrap() - (entry - sign * 0.10)).abs() < 1e-9);
+            }
+        }
+    }
+
+    /// The window gives the chart its width back, sends the panel's request unchanged and
+    /// restores its saved choice. The header can dock it again without losing the ticket.
+    #[test]
+    fn an_undocked_ticket_leaves_the_chart_its_width_and_places_the_same_order() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let host = |trading, chart| {
+            Harness::builder()
+                .with_accessibility_check(false)
+                .with_size(egui::vec2(1000.0, 700.0))
+                .with_context_setup(egui_extras::install_image_loaders)
+                .build_ui_state(
+                    |ui, (trading, chart, left): &mut (Trading, Chart, egui::Rect)| {
+                        trading.poll(ui.ctx(), &mut Toasts::new());
+                        trading.show_ticket(ui, chart);
+                        *left = ui.available_rect_before_wrap();
+                    },
+                    (trading, chart, egui::Rect::NOTHING),
+                )
+        };
+        for undock in [false, true] {
+            let broker = Arc::new(Recorder::default());
+            let mut trading = Trading::default();
+            trading.set_service(broker.clone());
+            trading.poll(&egui::Context::default(), &mut Toasts::new());
+            let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+            chart.symbol = "SYM".into();
+            let request = OrderRequest::new("SYM", OrderSide::Buy, 3.0, OrderType::Limit(100.0));
+            let mut h = host(trading, chart);
+            h.run();
+            let full = h.state().2;
+            h.state_mut().0.open_ticket(request.clone());
+            h.run();
+            broker
+                .rules
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("symbol rules")
+                .1
+                .send(Ok(TradingRules::new("SYM")));
+            h.run();
+            if undock {
+                h.get_by_label("Undock ticket").click();
+                h.run();
+                assert!(h.state().0.display.undocked_ticket);
+                assert!(
+                    (h.state().2.right() - full.right()).abs() < 0.5,
+                    "the window leaves the chart its width"
+                );
+            } else {
+                assert!((full.right() - h.state().2.right() - 340.0).abs() < 0.5);
+            }
+            h.query_all_by_role(egui::Role::Button)
+                .find(|node| {
+                    node.accesskit_node()
+                        .label()
+                        .is_some_and(|label| label.starts_with("Buy "))
+                })
+                .expect("send button")
+                .click();
+            h.run();
+            assert_eq!(
+                broker.placed.lock().unwrap().as_slice(),
+                std::slice::from_ref(&request)
+            );
+            if undock {
+                let saved = serde_json::to_string(&h.state().0.display).unwrap();
+                let mut restored = Trading::default();
+                restored.set_service(broker.clone());
+                restored.poll(&egui::Context::default(), &mut Toasts::new());
+                restored.display = serde_json::from_str(&saved).unwrap();
+                restored.open_ticket(request);
+                let mut chart = crate::widget::test_frames::chart(&[90.0], &[110.0]);
+                chart.symbol = "SYM".into();
+                let mut h = host(restored, chart);
+                h.run();
+                broker
+                    .rules
+                    .lock()
+                    .unwrap()
+                    .pop()
+                    .expect("restored rules")
+                    .1
+                    .send(Ok(TradingRules::new("SYM")));
+                h.run();
+                assert!((h.state().2.right() - full.right()).abs() < 0.5);
+                assert!(h.output().shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "SYM")
+                }));
+                h.get_by_label("Dock ticket").click();
+                h.run();
+                assert!(!h.state().0.display.undocked_ticket);
+                assert!((full.right() - h.state().2.right() - 340.0).abs() < 0.5);
             }
         }
     }

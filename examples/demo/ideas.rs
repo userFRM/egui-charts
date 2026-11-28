@@ -222,8 +222,8 @@ impl DemoApp {
                 self.chats.open_room(room);
                 self.open_panel = Some(SidePanel::Chats);
             }
-            NotificationsAction::OpenStory(id) => {
-                if let Some((highlight, story)) = super::feeds::story(&id, self.live.now()) {
+            NotificationsAction::OpenStory { id, time } => {
+                if let Some((highlight, story)) = super::feeds::story(&id, time, self.live.now()) {
                     let (panel, side) = if highlight {
                         (&mut self.highlights, SidePanel::Highlights)
                     } else {
