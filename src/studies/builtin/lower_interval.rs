@@ -78,9 +78,54 @@ pub(super) fn request(timeframe: Timeframe) -> StudyDataRequest {
     }
 }
 
+/// The Lower interval input and its Use custom timeframe switch. Off, the study reads the
+/// automatic interval and keeps the chosen one for when the switch is turned on again.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Choice {
+    /// The interval chosen in the Lower interval input; `None` is Auto.
+    pub(super) chosen: Option<Timeframe>,
+    /// The Use custom timeframe switch.
+    pub(super) custom: bool,
+}
+
+impl Choice {
+    pub(super) fn in_use(&self) -> Option<Timeframe> {
+        self.chosen.filter(|_| self.custom)
+    }
+
+    pub(super) fn inputs(&self, clock: &BarClock) -> [StudyInput; 2] {
+        // Restore the interval first, so the saved switch wins over its implicit enabling.
+        [
+            input(clock, self.chosen).shown_when("custom_interval", [1]),
+            StudyInput::new(
+                "custom_interval",
+                "Use custom timeframe",
+                InputValue::Toggle(self.custom),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
+        ]
+    }
+
+    /// Takes a lower-interval setting; setting an interval also enables it for older callers.
+    pub(super) fn set(&mut self, id: &str, value: &InputValue) -> bool {
+        match (id, value) {
+            ("lower_interval", InputValue::Timeframe(chosen)) => {
+                self.chosen = *chosen;
+                if chosen.is_some() {
+                    self.custom = true;
+                }
+            }
+            ("custom_interval", InputValue::Toggle(custom)) => self.custom = *custom,
+            _ => return false,
+        }
+        true
+    }
+}
+
 /// The Lower interval input. Unset, it reads the interval [`lower_timeframe`] picks on a chart of
 /// `clock`'s interval, which its kind names for the settings to show.
-pub(super) fn input(clock: &BarClock, chosen: Option<Timeframe>) -> StudyInput {
+fn input(clock: &BarClock, chosen: Option<Timeframe>) -> StudyInput {
     StudyInput::new(
         "lower_interval",
         "Lower interval",
@@ -283,6 +328,113 @@ mod tests {
         &'static [[f64; 4]],
         &'static [[f64; 3]],
     );
+
+    /// Disabling a chosen interval keeps it for the next enable and through template restore.
+    #[test]
+    fn custom_timeframe_switch_keeps_the_chosen_interval() {
+        use crate::studies::{InputValue, StudyTemplate};
+        let factory = IndicatorFactory::new();
+        for name in ["Up/Down Volume", "Volume Delta", "Cumulative Volume Delta"] {
+            let mut study = factory.create(name).unwrap();
+            let clock = BarClock::new(Timeframe::Min5);
+            study.set_bar_clock(&clock);
+            let requested = |study: &dyn crate::studies::Indicator| {
+                study.data_requests().first().and_then(|r| r.timeframe)
+            };
+            let value = |study: &dyn crate::studies::Indicator, id: &str| {
+                study
+                    .inputs()
+                    .into_iter()
+                    .find(|i| i.id == id)
+                    .unwrap()
+                    .value
+            };
+            study
+                .set_input(
+                    "lower_interval",
+                    InputValue::Timeframe(Some(Timeframe::Sec30)),
+                )
+                .unwrap();
+            assert_eq!(requested(study.as_ref()), Some(Timeframe::Sec30), "{name}");
+            assert_eq!(
+                value(study.as_ref(), "custom_interval"),
+                InputValue::Toggle(true)
+            );
+            study
+                .set_input("custom_interval", InputValue::Toggle(false))
+                .unwrap();
+            assert_eq!(requested(study.as_ref()), Some(Timeframe::Min1));
+            assert_eq!(
+                value(study.as_ref(), "lower_interval"),
+                InputValue::Timeframe(Some(Timeframe::Sec30))
+            );
+            study
+                .set_input("custom_interval", InputValue::Toggle(true))
+                .unwrap();
+            assert_eq!(requested(study.as_ref()), Some(Timeframe::Sec30));
+            study
+                .set_input(
+                    "lower_interval",
+                    InputValue::Timeframe(Some(Timeframe::Hour1)),
+                )
+                .unwrap();
+            assert!(study.table().is_some());
+            study
+                .set_input("custom_interval", InputValue::Toggle(false))
+                .unwrap();
+            assert!(study.table().is_none());
+            assert_eq!(requested(study.as_ref()), Some(Timeframe::Min1));
+            let mut restored = StudyTemplate::from_study(study.as_ref())
+                .create_with(&factory)
+                .unwrap();
+            restored.set_bar_clock(&clock);
+            assert_eq!(requested(restored.as_ref()), Some(Timeframe::Min1));
+            assert_eq!(
+                value(restored.as_ref(), "custom_interval"),
+                InputValue::Toggle(false)
+            );
+            assert_eq!(
+                value(restored.as_ref(), "lower_interval"),
+                InputValue::Timeframe(Some(Timeframe::Hour1))
+            );
+        }
+    }
+
+    /// Literal templates from before the new inputs keep their intervals, anchors and styles.
+    #[test]
+    fn studies_saved_before_the_switch_restore_as_drawn() {
+        use crate::studies::{Indicator, InputValue, StudyTemplate, UpDownVolume};
+        assert_eq!(UpDownVolume::new().plot_style(2).plot_type.name(), "Dashes");
+        let factory = IndicatorFactory::new();
+        for (saved, lower) in [
+            (
+                r#"{"name":"Up/Down Volume","inputs":[["lower_interval",{"Timeframe":"Min1"}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.UpDownVolume.html","plots":[{"color":[30,70,32,102],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[97,22,28,102],"width":1.0,"pattern":"Solid","plot_type":"Columns","visible":true},{"color":[120,123,134,255],"width":1.0,"pattern":"Solid","plot_type":"Crosses","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[2,4,2,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+                Timeframe::Min1,
+            ),
+            (
+                r#"{"name":"Cumulative Volume Delta","inputs":[["lower_interval",{"Timeframe":"Sec30"}],["anchor",{"Choice":1}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CumulativeVolumeDelta.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":false},{"color":[8,153,129,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[242,54,69,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dashed","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+                Timeframe::Sec30,
+            ),
+        ] {
+            let template: StudyTemplate = serde_json::from_str(saved).unwrap();
+            let mut restored = template.create_with(&factory).unwrap();
+            restored.set_bar_clock(&BarClock::new(Timeframe::Min5));
+            assert_eq!(restored.settings(), template.settings);
+            assert_eq!(restored.data_requests()[0].timeframe, Some(lower));
+            let inputs = restored.inputs();
+            let value = |id: &str| &inputs.iter().find(|i| i.id == id).unwrap().value;
+            assert_eq!(value("lower_interval"), &InputValue::Timeframe(Some(lower)));
+            assert_eq!(value("custom_interval"), &InputValue::Toggle(true));
+            if template.name == "Up/Down Volume" {
+                assert_eq!(restored.plot_style(2).plot_type.name(), "Crosses");
+            } else {
+                assert_eq!(value("anchor"), &InputValue::Choice(1));
+                assert_eq!(value("anchor_minutes"), &InputValue::Length(60));
+                assert_eq!(value("aggregation"), &InputValue::Choice(0));
+                assert!(restored.order_flow_inputs().is_empty());
+            }
+        }
+    }
 
     /// The three volume studies saved with the Lower interval unset, read or not read, on time,
     /// tick and subsecond charts, restore from their templates with the inputs they were saved
