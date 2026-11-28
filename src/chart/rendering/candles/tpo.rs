@@ -675,7 +675,7 @@ pub fn render_live_tpo(
             egui::Align2::CENTER_CENTER,
             l10n::format_text(
                 painter.ctx(),
-                "The {minutes} min TPO period needs a chart interval of {minutes} min or shorter",
+                "Use {minutes} min bars or shorter",
                 &[("minutes", base_config.period_minutes.max(1).to_string())],
             ),
             FontId::proportional(theme.text.title),
