@@ -11,7 +11,7 @@ use egui_charts::model::{
 };
 use egui_charts::services::{Marks, MarksPage, MarksRequest};
 use egui_charts::ui::trading::{ExecutionMark, ExecutionMarkStyle, render_executions};
-use egui_charts::widget::{SeriesId, Watermark, WatermarkLine};
+use egui_charts::widget::{Chart, SeriesId, Watermark, WatermarkLine};
 use std::sync::{Arc, Mutex, PoisonError};
 
 const LEVEL: Color32 = Color32::from_rgb(255, 152, 0);
@@ -31,6 +31,113 @@ pub(super) fn news_story(id: &str) -> Option<egui_charts::data::NewsStory> {
     Some(story)
 }
 
+fn corporate(kind: EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Earnings | EventKind::Dividend | EventKind::Split
+    )
+}
+
+#[derive(Default)]
+pub(super) struct StudyEvents {
+    history: Option<(&'static str, Timeframe, u64, usize, Option<DateTime<Utc>>)>,
+}
+
+impl StudyEvents {
+    pub(super) fn refresh(&mut self, chart: &mut Chart) {
+        if chart.replay_driver().is_some() {
+            return;
+        }
+        let Some(spec) = DemoSymbol::catalog()
+            .iter()
+            .find(|spec| spec.symbol.eq_ignore_ascii_case(chart.symbol()))
+        else {
+            return;
+        };
+        let Some(timeframe) = chart.timeframe() else {
+            return;
+        };
+        let bars = chart.bars(SeriesId::MAIN);
+        let history = (
+            spec.symbol,
+            timeframe,
+            chart.state().revision(),
+            bars.len(),
+            bars.last().map(|bar| bar.time),
+        );
+        if self.history != Some(history) {
+            supply_study_events(chart);
+            self.history = Some(history);
+        }
+    }
+}
+
+/// Studies need the loaded history's corporate events, independently of badge paging.
+pub(super) fn supply_study_events(chart: &mut Chart) {
+    if chart.replay_driver().is_some() {
+        return;
+    }
+    let events = DemoSymbol::catalog()
+        .iter()
+        .find(|spec| spec.symbol.eq_ignore_ascii_case(chart.symbol()))
+        .and_then(|spec| chart.timeframe().map(|timeframe| (spec, timeframe)))
+        .map(|(spec, timeframe)| {
+            chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .filter_map(|bar| demo_event(spec, timeframe, bar.time))
+                .filter(|event| corporate(event.kind))
+                .collect()
+        })
+        .unwrap_or_default();
+    chart.set_time_scale_events(events);
+}
+
+fn demo_event(
+    spec: &DemoSymbol,
+    timeframe: Timeframe,
+    time: DateTime<Utc>,
+) -> Option<TimeScaleEvent> {
+    let months = i64::from(time.year() - 1970) * 12 + i64::from(time.month0());
+    let index = match timeframe {
+        Timeframe::Month1 => months,
+        Timeframe::Months(count) => months.div_euclid(i64::from(count.get())),
+        Timeframe::Week1 => (time.timestamp().div_euclid(86_400) - 4).div_euclid(7),
+        Timeframe::Weeks(count) => {
+            (time.timestamp().div_euclid(86_400) - 4).div_euclid(7 * i64::from(count.get()))
+        }
+        timeframe => time
+            .timestamp_millis()
+            .div_euclid(timeframe.duration_ms().max(1)),
+    } - spec.seed as i64;
+    if index.rem_euclid(40) != 0 {
+        return None;
+    }
+    let kind = match index.div_euclid(40).rem_euclid(6) {
+        0 => EventKind::Dividend,
+        1 => EventKind::Split,
+        2 => EventKind::Earnings,
+        3 => EventKind::Economic,
+        4 => EventKind::News,
+        _ => EventKind::Idea,
+    };
+    let mut event = TimeScaleEvent::new(
+        format!("demo-event-{}-{}", spec.symbol, time.timestamp_millis()),
+        time,
+        kind,
+        format!("Synthetic {} event", kind.label()),
+    );
+    event.details = "Demonstration data supplied by the host.".into();
+    if kind == EventKind::News {
+        event.id = format!("demo-news-{}-{}", spec.symbol, time.timestamp_millis());
+        if let Some(story) = news_story(&event.id) {
+            event.title = story.headline;
+            event.details = story.body;
+        }
+    }
+    Some(event)
+}
+
 impl DemoApp {
     /// Annotates the bars on show with the time-axis events and, when the API samples are on, a
     /// fill and a stop marked at their prices, the fill also as a fill mark, marks of the live
@@ -42,6 +149,7 @@ impl DemoApp {
         }
         let samples = self.api_samples;
         self.refresh_strategy_signals();
+        supply_study_events(&mut self.chart);
         self.chart.set_mark_source(Some(Arc::new(DemoMarks {
             live: self.live.clone(),
             extended_hours: self.chart.extended_hours(),
@@ -199,7 +307,10 @@ type BarTimes = (
 
 impl Marks for DemoMarks {
     fn marks(&self, request: MarksRequest, reply: Reply<MarksPage>) {
-        reply.send(Ok(self.annotations(&request)));
+        let mut page = self.annotations(&request);
+        // Corporate badges are already supplied with the study events.
+        page.events.retain(|event| !corporate(event.kind));
+        reply.send(Ok(page));
     }
 }
 
@@ -250,43 +361,10 @@ impl DemoMarks {
         let first = times.partition_point(|time| *time < request.from);
         let end = times.partition_point(|time| *time <= request.to.min(now));
         for &time in &times[first..end.max(first)] {
-            let months = i64::from(time.year() - 1970) * 12 + i64::from(time.month0());
-            let index = match request.timeframe {
-                Timeframe::Month1 => months,
-                Timeframe::Months(count) => months.div_euclid(i64::from(count.get())),
-                Timeframe::Week1 => (time.timestamp().div_euclid(86_400) - 4).div_euclid(7),
-                Timeframe::Weeks(count) => {
-                    (time.timestamp().div_euclid(86_400) - 4).div_euclid(7 * i64::from(count.get()))
-                }
-                timeframe => time
-                    .timestamp_millis()
-                    .div_euclid(timeframe.duration_ms().max(1)),
-            } - spec.seed as i64;
-            if index.rem_euclid(40) != 0 {
+            let Some(event) = demo_event(spec, request.timeframe, time) else {
                 continue;
-            }
-            let kind = match index.div_euclid(40).rem_euclid(6) {
-                0 => EventKind::Dividend,
-                1 => EventKind::Split,
-                2 => EventKind::Earnings,
-                3 => EventKind::Economic,
-                4 => EventKind::News,
-                _ => EventKind::Idea,
             };
-            let mut event = TimeScaleEvent::new(
-                format!("demo-event-{}-{}", spec.symbol, time.timestamp_millis()),
-                time,
-                kind,
-                format!("Synthetic {} event", kind.label()),
-            );
-            event.details = "Demonstration data supplied by the host.".into();
-            if kind == EventKind::News {
-                event.id = format!("demo-news-{}-{}", spec.symbol, time.timestamp_millis());
-                if let Some(story) = news_story(&event.id) {
-                    event.title = story.headline;
-                    event.details = story.body;
-                }
-            }
+            let kind = event.kind;
             page.events.push(event);
             if kind == EventKind::News
                 && let Some(notifications) = &self.notifications
