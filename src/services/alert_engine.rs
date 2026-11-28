@@ -1022,14 +1022,16 @@ impl AlertEngine {
                         && (alert.frequency == AlertFrequency::OncePerBarClose) == event.closed
                 },
                 |_, seen, last| {
-                    // Saved firings cover every older bar, whatever time it is delivered.
-                    if last.is_some_and(|last| {
-                        if event.closed {
-                            event.bar_end.is_some_and(|end| end <= last)
-                        } else {
-                            event.bar <= last
-                        }
-                    }) || seen.fired.is_some_and(|bar| event.bar <= bar)
+                    // Until a new bar fires, saved firings cover all older deliveries.
+                    if (seen.fired.is_none()
+                        && last.is_some_and(|last| {
+                            if event.closed {
+                                event.bar_end.is_some_and(|end| end <= last)
+                            } else {
+                                event.bar <= last
+                            }
+                        }))
+                        || seen.fired.is_some_and(|bar| event.bar <= bar)
                     {
                         return Vec::new();
                     }
@@ -3058,6 +3060,93 @@ mod tests {
                     }
                 }
             }
+        }
+        #[cfg(feature = "detectors")]
+        {
+            use crate::data::MarketEvent;
+            use crate::model::{FootprintCondition::BuyImbalance, Instrument, OrderSide, Tick};
+            use crate::services::{DetectorSettings, OrderFlowDetectors};
+
+            let mut actual = Vec::new();
+            let mut expected = Vec::new();
+            for list in [false, true] {
+                let symbols: &[_] = if list { &["ES", "SECOND"] } else { &["ES"] };
+                let mut saved = alert(AlertCondition::Footprint(BuyImbalance), OncePerBarClose);
+                saved.id = Some(AlertId("1".into()));
+                saved.symbol = "ES".into();
+                saved.last_triggered_at = Some(time(60));
+                if list {
+                    saved.symbol.clear();
+                    saved.watchlist = Some("tech".into());
+                    for symbol in symbols {
+                        saved.member_triggered_at.insert((*symbol).into(), time(60));
+                    }
+                }
+                let serialized = serde_json::to_string(&saved).unwrap();
+                let restored: Alert = serde_json::from_str(&serialized).unwrap();
+                assert_eq!(restored, saved);
+                let host = Host::new(vec![restored]);
+                host.engine
+                    .set_watchlist("tech", symbols.iter().map(|s| (*s).into()).collect());
+                let detectors = OrderFlowDetectors::new();
+                let mut settings = DetectorSettings::default();
+                settings.footprint.rule.diagonal = false;
+                detectors.set_settings(settings);
+                detectors.watch_footprint_alerts(&host.engine.alerts());
+                for symbol in symbols {
+                    let mut instrument = Instrument::new(*symbol);
+                    instrument.tick_size = Some(0.25);
+                    detectors.track(&instrument).unwrap();
+                    let mut closed = Vec::new();
+                    for (feed, execution, side) in [
+                        (0, 0, Some(OrderSide::Buy)),
+                        (60, 60, Some(OrderSide::Buy)),
+                        (181, 181, None),
+                        (182, 125, Some(OrderSide::Buy)),
+                    ] {
+                        detectors.push(
+                            symbol,
+                            time(feed),
+                            &MarketEvent::Trade(Tick::new(time(execution), 100.0, 10.0, side)),
+                        );
+                        let events = detectors.take_footprint_events();
+                        closed.extend(
+                            events
+                                .iter()
+                                .filter(|e| e.closed && e.condition == BuyImbalance)
+                                .cloned(),
+                        );
+                        host.engine.footprint_events(&events, time(feed));
+                        host.engine.footprint_events(&events, time(feed));
+                    }
+                    assert_eq!(
+                        closed
+                            .iter()
+                            .map(|e| (e.bar, e.bar_end, e.time))
+                            .collect::<Vec<_>>(),
+                        [
+                            (time(60), Some(time(120)), time(181)),
+                            (time(120), Some(time(180)), time(182))
+                        ]
+                    );
+                    let times: Vec<_> = host
+                        .engine
+                        .triggers()
+                        .iter()
+                        .filter(|t| t.symbol == *symbol)
+                        .map(|t| t.time.timestamp())
+                        .collect();
+                    actual.push((list, *symbol, times));
+                    expected.push((list, *symbol, vec![181, 182]));
+                    host.fired();
+                    host.engine.footprint_events(&closed, time(183));
+                    assert!(host.fired().is_empty(), "both delivered bars stay silent");
+                }
+            }
+            assert_eq!(
+                actual, expected,
+                "delayed closes keep each newer bar eligible"
+            );
         }
     }
 
