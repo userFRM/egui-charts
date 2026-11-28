@@ -1349,9 +1349,15 @@ impl DemoApp {
         let slots: Vec<_> = (0..self.extra_charts.len() + 1)
             .filter(|&slot| scope == ReplayScope::AllCharts || slot == source)
             .collect();
-        // Rejoining charts of the same symbol keep the current market source and its cursor.
+        // Rejoining charts of a recorded symbol keep the current market source and its cursor;
+        // an imported recording holds the active chart's symbol alone.
         let driver = self.chart.replay_driver().cloned();
-        let symbol = self.chart.symbol().to_owned();
+        let recorded: Vec<String> = match &self.replay_recording {
+            Some(recording) => (recording.instruments.iter())
+                .map(|instrument| instrument.symbol.clone())
+                .collect(),
+            None => vec![self.chart.symbol().to_owned()],
+        };
         let unit = self.live.instrument().unit;
         let mut released = Vec::new();
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
@@ -1368,7 +1374,7 @@ impl DemoApp {
                 let (bars, clock) = replay_source(&extra.live, self.replay_interval, &extra.chart);
                 extra.chart.set_replay_source(bars, clock);
                 if let Some(driver) = &driver
-                    && extra.chart.symbol() == symbol
+                    && recorded.iter().any(|symbol| symbol == extra.chart.symbol())
                     && (self.recording_files.opened || extra.live.instrument().unit == unit)
                 {
                     extra.chart.set_conversion(None);
@@ -3598,6 +3604,114 @@ mod tests {
                 pauses
             );
         }
+    }
+
+    /// An all charts trade replay of two symbols at different intervals keeps both on the shared
+    /// recording when the scope goes to This chart and back at an unchanged cursor: the other
+    /// symbol shows the same candles and order book, and later steps match a replay that never
+    /// changed scope.
+    #[test]
+    fn expanding_the_scope_rejoins_other_recorded_symbols() {
+        use super::super::tests::settle;
+        let ctx = egui::Context::default();
+        let start = "2026-11-12T15:00:00Z".parse().unwrap();
+        let frame = |app: &mut DemoApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| demo(app, ui))
+                .drop_without_applying_deltas();
+            settle(app, &ctx);
+        };
+        let shown = |app: &DemoApp| {
+            let other = &app.extra_charts[0].chart;
+            (
+                [app.chart.replay_time(), other.replay_time()],
+                app.chart.bars(SeriesId::MAIN).to_vec(),
+                other.bars(SeriesId::MAIN).to_vec(),
+                other.order_book(SeriesId::MAIN).cloned(),
+            )
+        };
+        let mut runs = Vec::new();
+        for round_trip in [false, true] {
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                start,
+                true,
+            );
+            settle(&mut app, &ctx);
+            app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+            app.layout.sync.sync_symbol = false;
+            for (slot, symbol, interval) in [
+                (1, "TOKENB", Timeframe::Min5),
+                (0, "TOKENA", Timeframe::Min1),
+            ] {
+                app.activate_chart_slot(slot);
+                app.switch_symbol(symbol);
+                app.switch_timeframe(interval);
+                app.chart.set_order_book_visible(true);
+                settle(&mut app, &ctx);
+            }
+            // Each feed records executions while its chart is active.
+            for slot in [1, 0] {
+                app.activate_chart_slot(slot);
+                app.advance_sample_to(start + chrono::TimeDelta::seconds(90));
+                settle(&mut app, &ctx);
+            }
+            assert_eq!(app.replay_scope, ReplayScope::AllCharts);
+            app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - 10);
+            app.handle_replay_control(ReplayControlAction::SetUpdateInterval(Timeframe::Ticks(
+                NonZeroU64::MIN,
+            )));
+            let total = app.replay.as_ref().unwrap().state.total_bars;
+            app.replay
+                .as_mut()
+                .unwrap()
+                .handle_action(ReplayAction::JumpToBar(total - 4));
+            app.push_replay_window_to_chart();
+            frame(&mut app);
+            let driver = app.chart.replay_driver().cloned().unwrap();
+            let recorded: Vec<_> = (app.replay_recording.as_ref().unwrap().instruments.iter())
+                .map(|instrument| instrument.symbol.clone())
+                .collect();
+            assert_eq!(recorded, ["TOKENA", "TOKENB"]);
+            let mut steps = vec![shown(&app)];
+            // The cursor is in the 15:00 five-minute bar, the first that TOKENB recorded.
+            let other_times: Vec<_> = steps[0].2.iter().map(|bar| bar.time).collect();
+            assert_eq!(other_times, [start]);
+            assert!(steps[0].3.is_some(), "TOKENB shows its recorded book");
+            if round_trip {
+                app.handle_replay_control(ReplayControlAction::SetScope(ReplayScope::ThisChart));
+                frame(&mut app);
+                assert!(app.extra_charts[0].chart.replay_driver().is_none());
+                app.handle_replay_control(ReplayControlAction::SetScope(ReplayScope::AllCharts));
+                frame(&mut app);
+                assert_eq!(app.extra_charts[0].chart.symbol(), "TOKENB");
+                assert_eq!(
+                    shown(&app),
+                    steps[0],
+                    "TOKENB rejoins at the unchanged cursor"
+                );
+            }
+            for _ in 0..3 {
+                app.handle_replay_control(ReplayControlAction::NextBar);
+                frame(&mut app);
+                for chart in [&app.chart, &app.extra_charts[0].chart] {
+                    assert!(
+                        chart
+                            .replay_driver()
+                            .is_some_and(|shared| Arc::ptr_eq(shared, &driver))
+                    );
+                }
+                steps.push(shown(&app));
+            }
+            app.handle_replay_control(ReplayControlAction::Play);
+            frame(&mut app);
+            assert!(app.replay.as_ref().unwrap().state.is_playing());
+            assert_eq!(
+                app.chart.replay_time(),
+                app.extra_charts[0].chart.replay_time()
+            );
+            runs.push(steps);
+        }
+        assert_eq!(runs[0], runs[1]);
     }
 
     /// Resume validates execution sessions against their recording before starting anything:
