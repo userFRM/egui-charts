@@ -15,7 +15,7 @@
 //! # First value
 //!
 //! The first value is on the bar of the `period`-th finite close and equals the simple average
-//! of the first `period` finite closes; earlier bars have no value. Smoothing starts on the
+//! of the first `period` finite closes; earlier bars have no value. Recursive updates begin on the
 //! next bar. [`MACD`] seeds its averages the same way, so the standalone indicator and the
 //! composite agree bar for bar.
 //!

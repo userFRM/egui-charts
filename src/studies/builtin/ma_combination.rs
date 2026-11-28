@@ -1161,6 +1161,7 @@ mod tests {
                 &[],
                 &[(4, 4.), (5, 5.)],
             ),
+            ("EMA Cross", &[1., 2., 3., 4., f64::NAN, 2.], &[], &[]),
             (
                 "SMA/EMA Cross",
                 &[1., 2., 3., 4., 3.5, 2.],
@@ -1311,6 +1312,10 @@ mod tests {
             for (line, &period) in periods.iter().enumerate() {
                 assert!(study.values().value(line, period - 1).is_some());
             }
+            if name == "Double MA" {
+                assert_eq!(study.values().value(0, 0), Some(0.));
+                assert_eq!(study.values().value(1, 13), Some(910. / 105.));
+            }
             study.set_input("weighted_delay", Toggle(true)).unwrap();
             study.calculate(&bars);
             for (line, &period) in periods.iter().enumerate() {
@@ -1323,6 +1328,29 @@ mod tests {
                 );
                 assert_eq!(study.line_names()[line], format!("WMA({period})"));
             }
+            if name == "Double MA" {
+                assert_eq!(study.values().value(0, 1), Some(1.));
+                assert_eq!(study.values().value(1, 14), Some(1015. / 105.));
+            }
+            study
+                .set_input("calculation_symbol", InputValue::Symbol("EXAMPLE".into()))
+                .unwrap();
+            study.set_input("source_0", Choice(0)).unwrap();
+            study.set_input("method", Choice(1)).unwrap();
+            study.set_input("method", Choice(2)).unwrap();
+            let inputs = study.inputs();
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|i| i.id == "calculation_symbol")
+                    .unwrap()
+                    .value,
+                InputValue::Symbol("EXAMPLE".into())
+            );
+            assert_eq!(
+                inputs.iter().find(|i| i.id == "source_0").unwrap().value,
+                Choice(0)
+            );
             let restored = StudyTemplate::from_study(&study).create().unwrap();
             assert_eq!(
                 format!("{:?}", restored.inputs()),

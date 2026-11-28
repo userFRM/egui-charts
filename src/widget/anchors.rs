@@ -1122,7 +1122,12 @@ mod tests {
                 .declared_study()
                 .inputs()
                 .into_iter()
-                .filter(|input| input.id != "average_count")
+                .filter(|input| {
+                    !matches!(
+                        input.id.as_str(),
+                        "average_count" | "touch_crosses" | "method" | "weighted_delay"
+                    )
+                })
                 .collect();
             let mut legacy = CustomIndicator::new("Multi MA", |_| Vec::new())
                 .with_inputs(schema, |_, _, _, _| Vec::new())

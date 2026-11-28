@@ -651,8 +651,8 @@ impl TechnicalRatings {
     }
 }
 
-/// Whether the market rises, falls or is flat on clean bar `at` of `bars`: the direction of the
-/// EMA under the Elder Ray's `power`, given back as the high less Bull Power.
+/// Trend for the gates: EMA 13 direction, recovered as high less Bull Power, or close against
+/// EMA 50 under the alternative rules.
 fn trend(
     power: &IndicatorValues,
     bars: &[Bar],
