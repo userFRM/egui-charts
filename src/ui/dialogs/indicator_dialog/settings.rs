@@ -30,6 +30,17 @@ pub struct StudyEdit {
     pub settings: StudySettings,
 }
 
+impl StudyEdit {
+    /// Creates an edit for study `id`.
+    pub fn new(id: SeriesId, inputs: Vec<(String, InputValue)>, settings: StudySettings) -> Self {
+        Self {
+            id,
+            inputs,
+            settings,
+        }
+    }
+}
+
 /// Inputs, Style and Visibility editor for an applied study. Closing or cancelling discards
 /// staged values. Chart-aware previews retain an opening settings snapshot for restoration.
 #[derive(Debug, Default)]

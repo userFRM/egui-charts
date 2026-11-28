@@ -5,7 +5,7 @@ use super::layout::Region;
 use super::{Action, Terminal};
 use egui_charts::scales::{DefaultPriceFormatter, PriceFormatter, instrument_price_precision};
 use egui_charts::services::UserSettings;
-use egui_charts::studies::{Indicator, IndicatorFactory, InputKind, InputValue, StudySource};
+use egui_charts::studies::{Indicator, IndicatorFactory, StudySource};
 use egui_charts::ui::Control;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
@@ -14,6 +14,7 @@ use egui_charts::ui::dialogs::{
 use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
 use egui_charts::ui::top_toolbar::components::indicator_dialog::{
     IndicatorDialog, IndicatorDialogAction, IndicatorPreferences, IndicatorSettingsDialog,
+    StudyEdit,
 };
 use egui_charts::ui::top_toolbar::components::settings_menu::SettingsAction;
 use egui_charts::ui::top_toolbar::{SettingsDialog, SymbolSearchDialog, TopToolbarAction};
@@ -33,25 +34,6 @@ pub(super) struct State {
     shortcuts: KeyboardShortcutsDialog,
     /// The symbol last entered in the recent symbols of the search.
     recorded: Option<String>,
-}
-
-/// The legend caption of a study: its inputs, in order.
-pub(super) fn study_input_summary(study: &dyn Indicator) -> String {
-    study
-        .inputs()
-        .iter()
-        .map(|input| match (&input.kind, &input.value) {
-            (InputKind::Choice(choices), InputValue::Choice(index)) => {
-                choices.get(*index).cloned().unwrap_or_default()
-            }
-            (_, InputValue::Length(value)) => value.to_string(),
-            (_, InputValue::Integer(value)) => value.to_string(),
-            (_, InputValue::Number(value)) => value.to_string(),
-            (_, InputValue::Toggle(value)) => value.to_string(),
-            _ => String::new(),
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 impl Terminal {
@@ -283,13 +265,12 @@ impl Terminal {
     /// Adds `study` as one undoable step, captioned with its inputs. A chart at its study cap
     /// refuses it and the user is told.
     fn add_study(&mut self, study: Box<dyn Indicator>) {
-        let inputs = study_input_summary(study.as_ref());
         let added = self.user_action(|terminal| {
             let chart = terminal.chart_mut();
             chart
                 .try_add_indicator(study)
                 .inspect(|id| {
-                    chart.set_indicator_inputs(*id, inputs);
+                    chart.set_indicator_inputs(*id, "");
                 })
                 .map(drop)
         });
@@ -438,22 +419,15 @@ impl Terminal {
     }
 
     /// Applies the inputs and styles the study settings dialog returned as one undoable step.
-    fn apply_study_edit(
-        &mut self,
-        edit: egui_charts::ui::top_toolbar::components::indicator_dialog::StudyEdit,
-    ) {
+    fn apply_study_edit(&mut self, edit: StudyEdit) {
         let result: Result<(), String> = self.user_action(|terminal| {
             let chart = terminal.chart_mut();
-            let inputs = chart
+            chart
                 .indicator_mut(edit.id)
-                .ok_or_else(|| "Study was removed".to_owned())
-                .and_then(|study| {
-                    study
-                        .apply_settings(&edit.inputs, edit.settings)
-                        .map_err(|error| format!("Study settings not applied: {error}"))?;
-                    Ok(study_input_summary(study))
-                })?;
-            chart.set_indicator_inputs(edit.id, inputs);
+                .ok_or_else(|| "Study was removed".to_owned())?
+                .apply_settings(&edit.inputs, edit.settings)
+                .map_err(|error| format!("Study settings not applied: {error}"))?;
+            chart.set_indicator_inputs(edit.id, "");
             Ok(())
         });
         if let Err(error) = result {
@@ -469,7 +443,7 @@ mod tests {
     use egui::{Color32, Event, PointerButton, Pos2};
     use egui_charts::config::BackgroundStyle;
     use egui_charts::model::LineStyle;
-    use egui_charts::studies::SMA;
+    use egui_charts::studies::{InputValue, SMA};
     use egui_charts::ui::dialogs::SeriesContextMenuAction;
     use egui_charts::widget::settings::{BackgroundType, PrecisionMode, WatermarkMode};
     use std::sync::Arc;
@@ -879,5 +853,141 @@ mod tests {
             let visible = visible(&terminal);
             assert!(visible.len() >= 2 && visible.iter().all(|v| *v == shown));
         }
+    }
+
+    /// Adding a volume study, applying its settings, and loading a template use the library's
+    /// derived captions instead of manual summaries (#4470).
+    #[test]
+    fn derived_study_captions_in_terminal() {
+        use egui_charts::model::Timeframe;
+
+        let mut terminal = terminal();
+        terminal.run(Action::TopToolbar(TopToolbarAction::AddIndicator(
+            "Cumulative Volume Delta".into(),
+        )));
+        let id = terminal
+            .chart()
+            .indicators()
+            .find(|(_, study)| study.name() == "Cumulative Volume Delta")
+            .map(|(id, _)| id)
+            .expect("CVD is added");
+
+        // Add: default CVD caption is "Session" (omits false, 60 and Time).
+        assert_eq!(terminal.chart().indicator_inputs(id), Some("Session"));
+
+        let settings = terminal
+            .chart()
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap()
+            .1
+            .settings();
+
+        // Apply: Time vs Ticks
+        terminal.apply_study_edit(StudyEdit::new(
+            id,
+            vec![("aggregation".into(), InputValue::Choice(1))],
+            settings.clone(),
+        ));
+        assert_eq!(terminal.chart().indicator_inputs(id), Some("Session Ticks"));
+
+        // Apply: Session vs Interval
+        terminal.apply_study_edit(StudyEdit::new(
+            id,
+            vec![
+                ("anchor".into(), InputValue::Choice(7)),
+                ("anchor_minutes".into(), InputValue::Length(60)),
+            ],
+            settings.clone(),
+        ));
+        assert_eq!(
+            terminal.chart().indicator_inputs(id),
+            Some("Interval 60 Ticks")
+        );
+
+        // Switch back to Time aggregation: default Time is omitted.
+        terminal.apply_study_edit(StudyEdit::new(
+            id,
+            vec![("aggregation".into(), InputValue::Choice(0))],
+            settings.clone(),
+        ));
+        assert_eq!(terminal.chart().indicator_inputs(id), Some("Interval 60"));
+
+        // Switch back to Session anchor: unused anchor_minutes 60 is omitted.
+        terminal.apply_study_edit(StudyEdit::new(
+            id,
+            vec![("anchor".into(), InputValue::Choice(0))],
+            settings.clone(),
+        ));
+        assert_eq!(terminal.chart().indicator_inputs(id), Some("Session"));
+
+        // Retained custom interval: enabled shows timeframe; disabled omits retained timeframe.
+        terminal.apply_study_edit(StudyEdit::new(
+            id,
+            vec![
+                ("custom_interval".into(), InputValue::Toggle(true)),
+                (
+                    "lower_interval".into(),
+                    InputValue::Timeframe(Some(Timeframe::Min1)),
+                ),
+            ],
+            settings.clone(),
+        ));
+        assert_eq!(terminal.chart().indicator_inputs(id), Some("1min Session"));
+
+        terminal.apply_study_edit(StudyEdit::new(
+            id,
+            vec![("custom_interval".into(), InputValue::Toggle(false))],
+            settings.clone(),
+        ));
+        assert_eq!(terminal.chart().indicator_inputs(id), Some("Session"));
+
+        // Template loading: loading a template derives captions for restored studies.
+        let default_template = terminal.chart().study_template_set();
+        terminal.remove_all_studies();
+        assert_eq!(terminal.chart().indicators().count(), 0);
+
+        terminal.load_study_template(&default_template);
+        let restored_id = terminal
+            .chart()
+            .indicators()
+            .find(|(_, study)| study.name() == "Cumulative Volume Delta")
+            .map(|(id, _)| id)
+            .expect("CVD is restored");
+        assert_eq!(
+            terminal.chart().indicator_inputs(restored_id),
+            Some("Session")
+        );
+
+        // Template loading with custom settings (Interval 60 Ticks) also derives correctly.
+        terminal.apply_study_edit(StudyEdit::new(
+            restored_id,
+            vec![
+                ("anchor".into(), InputValue::Choice(7)),
+                ("anchor_minutes".into(), InputValue::Length(60)),
+                ("aggregation".into(), InputValue::Choice(1)),
+            ],
+            settings,
+        ));
+        assert_eq!(
+            terminal.chart().indicator_inputs(restored_id),
+            Some("Interval 60 Ticks")
+        );
+
+        let custom_template = terminal.chart().study_template_set();
+        terminal.remove_all_studies();
+        assert_eq!(terminal.chart().indicators().count(), 0);
+
+        terminal.load_study_template(&custom_template);
+        let restored_custom_id = terminal
+            .chart()
+            .indicators()
+            .find(|(_, study)| study.name() == "Cumulative Volume Delta")
+            .map(|(id, _)| id)
+            .expect("CVD with custom settings is restored");
+        assert_eq!(
+            terminal.chart().indicator_inputs(restored_custom_id),
+            Some("Interval 60 Ticks")
+        );
     }
 }
