@@ -22,6 +22,9 @@
 //! - Histogram shrinking toward zero: momentum slowing.
 //! - Divergence between MACD and price: potential reversal.
 //!
+//! Alert conditions fire when the histogram turns: from at or below zero to above it, and from
+//! at or above zero to below it.
+//!
 //! # Averages
 //!
 //! Each exponential average starts from the simple average of its first values. The MACD line
@@ -198,21 +201,19 @@ impl Indicator for MACD {
         true
     }
 
+    /// Histogram turns, keeping the upward condition first so saved alerts keep their direction.
     fn alert_conditions(&self) -> Vec<String> {
-        ["Crosses above signal line", "Crosses below signal line"]
+        ["Falling to rising", "Rising to falling"]
             .map(str::to_owned)
             .into()
     }
 
     fn alert_condition(&self, condition: usize, bar: usize) -> Option<bool> {
-        let previous = bar.checked_sub(1)?;
-        let macd = self.values.value(0, bar)?;
-        let signal = self.values.value(1, bar)?;
-        let before = self.values.value(0, previous)?;
-        let before_signal = self.values.value(1, previous)?;
+        let histogram = self.values.value(2, bar)?;
+        let before = self.values.value(2, bar.checked_sub(1)?)?;
         match condition {
-            0 => Some(before < before_signal && macd >= signal),
-            1 => Some(before > before_signal && macd <= signal),
+            0 => Some(before <= 0.0 && histogram > 0.0),
+            1 => Some(before >= 0.0 && histogram < 0.0),
             _ => None,
         }
     }
@@ -312,6 +313,46 @@ pub(super) fn histogram_color(
 mod tests {
     use super::*;
     use crate::studies::ConfiguredStudy;
+
+    /// Leaving zero fires a turn; touching it does not. The simple averages give exact
+    /// histograms of missing, missing, 1, 0, 1.
+    #[test]
+    fn alert_conditions_fire_where_the_histogram_turns_through_zero() {
+        let bars = |closes: Vec<f64>| -> Vec<Bar> {
+            closes
+                .into_iter()
+                .map(|close| Bar {
+                    close,
+                    ..crate::studies::test_support::make_range_bar(close + 1.0, close - 1.0, close)
+                })
+                .collect()
+        };
+        let mut study = MACD::default();
+        study.calculate(&bars([100.0; 40].into_iter().chain([99.0]).collect()));
+        assert_eq!(
+            study.alert_conditions(),
+            ["Falling to rising", "Rising to falling"]
+        );
+        for (condition, expected) in [(0, vec![]), (1, vec![40])] {
+            let got: Vec<_> = (0..41)
+                .filter(|&bar| study.alert_condition(condition, bar) == Some(true))
+                .collect();
+            assert_eq!(got, expected, "condition {condition}");
+        }
+        let mut study =
+            MACD::new(1, 2, 2).with_averages(OscillatorAverage::Simple, OscillatorAverage::Simple);
+        study.calculate(&bars(vec![100.0, 100.0, 104.0, 108.0, 116.0]));
+        for (condition, expected) in [
+            (0, [None, None, None, Some(false), Some(true)]),
+            (1, [None, None, None, Some(false), Some(false)]),
+        ] {
+            let got: Vec<_> = (0..5)
+                .map(|bar| study.alert_condition(condition, bar))
+                .collect();
+            assert_eq!(got, expected, "condition {condition}");
+        }
+        assert_eq!(study.alert_condition(2, 4), None);
+    }
 
     #[test]
     fn histogram_palette_survives_edits_and_saved_explicit_colours() {

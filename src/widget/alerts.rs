@@ -121,6 +121,10 @@ impl Chart {
                         .collect(),
                 })
                 .collect(),
+            footprint: Some(crate::model::FootprintAlertRule::from_chart(
+                &self.chart_type_params,
+                self.footprint_row_ticks(),
+            )),
         }
     }
 
@@ -411,11 +415,11 @@ mod tests {
                 vec![30., 60., 50., 80., 40.],
                 vec![
                     (
-                        "MACD: Crosses above signal line",
+                        "MACD: Falling to rising",
                         vec![None, None, None, Some(1.), Some(0.)],
                     ),
                     (
-                        "MACD: Crosses below signal line",
+                        "MACD: Rising to falling",
                         vec![None, None, None, Some(0.), Some(1.)],
                     ),
                 ],

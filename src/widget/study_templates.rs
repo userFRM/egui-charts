@@ -856,13 +856,13 @@ mod tests {
         );
         let expected: [Row; 6] = [
             (
-                "Williams Alligator",
+                "Bill Williams' 3 Lines",
                 &[("Volume", 0), ("Williams Alligator", 8)],
                 &[&[0, 1]],
             ),
             ("Displaced EMA", &[("Volume", 0), ("EMA", 5)], &[&[0, 1]]),
             (
-                "Moving average ribbon",
+                "MA Exp Ribbon",
                 &[("Volume", 0), ("MA Ribbon", 0)],
                 &[&[0, 1]],
             ),
@@ -872,12 +872,12 @@ mod tests {
                 &[&[0], &[1], &[2], &[3]],
             ),
             (
-                "Swing trading",
+                "Swing Trading",
                 &[("Volume", 0), ("BB", 0), ("MACD", 0), ("Stochastic", 0)],
                 &[&[0, 1], &[2], &[3]],
             ),
             (
-                "Volume analysis",
+                "Volume Based",
                 &[("Volume", 0), ("OBV", 0), ("MFI", 0)],
                 &[&[0], &[1], &[2]],
             ),

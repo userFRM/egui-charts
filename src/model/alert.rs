@@ -4,7 +4,7 @@ use chrono::{DateTime, Datelike, NaiveTime, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::{Bar, Timeframe, TimezoneId};
+use super::{Bar, ChartTypeParams, Timeframe, TimezoneId};
 
 /// The host's identifier of an alert.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -306,6 +306,10 @@ pub struct AlertInputs {
     pub logarithmic: bool,
     /// Independent calculation definitions, including study dependencies.
     pub studies: Vec<AlertStudy>,
+    /// How a footprint alert reads imbalances, captured from the chart it was created on.
+    /// `None`, as in records saved without it, reads the order-flow detectors' footprint rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footprint: Option<FootprintAlertRule>,
 }
 
 impl Default for AlertInputs {
@@ -323,6 +327,7 @@ impl Default for AlertInputs {
             visible: None,
             logarithmic: false,
             studies: Vec::new(),
+            footprint: None,
         }
     }
 }
@@ -731,6 +736,10 @@ pub enum AlertCondition {
     CustomEvents(String),
     /// A live footprint condition from the host's order-flow detectors. Feed
     /// `OrderFlowDetectors::take_footprint_events` to `AlertEngine::footprint_events`.
+    /// It reads the bars of the alert's own interval with the rule of its
+    /// `AlertInputs::footprint`, or the detectors' footprint rule when that is `None`; call
+    /// `OrderFlowDetectors::watch_footprint_alerts` with the alerts. An alert without a
+    /// time-based interval does not fire.
     /// At `Once` (the constructor default), fires at the execution that first meets the
     /// condition and ends; at `OncePerBar`, does so on every bar; at `OncePerBarClose`, fires
     /// when a bar closes meeting it. Uses the price source and no additional rules. No bars
@@ -1576,9 +1585,8 @@ impl CustomAlertEvent {
     }
 }
 
-/// An imbalance on the rows of the host's order-flow detectors, using their footprint rule's
-/// ratio, comparison, minimum volume, stack and row size. `FootprintRule::follow_chart` copies
-/// these settings from a chart for an [`AlertCondition::Footprint`] alert.
+/// An imbalance on the footprint rows an [`AlertCondition::Footprint`] alert reads, with the
+/// ratio, comparison, minimum volume, stack and row size of its [`FootprintAlertRule`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FootprintCondition {
@@ -1613,6 +1621,77 @@ impl std::fmt::Display for FootprintCondition {
     }
 }
 
+/// How an [`AlertCondition::Footprint`] alert reads imbalances, saved with the alert so that
+/// chart changes leave its ratio, comparison, minimum volume, stack and row size unchanged.
+/// Defaults match a footprint chart: ratio 3, diagonal comparison, no minimum volume, a stack
+/// of 3 and rows of one tick. Equality compares the ratio and minimum volume bit for bit,
+/// keeping rules with a not-a-number field equal to themselves.
+///
+/// ```
+/// use egui_charts::model::{AlertInputs, ChartTypeParams, FootprintAlertRule};
+///
+/// let mut rule = FootprintAlertRule::from_chart(&ChartTypeParams::default(), 2);
+/// rule.imbalance_ratio = 4.0;
+/// let mut inputs = AlertInputs::default();
+/// inputs.footprint = Some(rule);
+/// assert_eq!(inputs.footprint.map(|rule| rule.row_ticks), Some(2));
+/// ```
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct FootprintAlertRule {
+    /// Dominance multiple of an imbalance, 3 by default. Below 1 or not finite, none.
+    pub imbalance_ratio: f64,
+    /// Compare a side with the opposite side one row away rather than at the same price, by
+    /// default.
+    pub diagonal: bool,
+    /// Inclusive minimum volume of the dominant side, 0 by default. Negative or not finite, none.
+    pub imbalance_min_volume: f64,
+    /// Adjacent imbalances that make a stack; 3 by default, and 0 counts as 1.
+    pub stack: usize,
+    /// Instrument ticks per row, grouped downwards from price zero as the footprint groups them;
+    /// 1 by default, and 0 counts as 1.
+    pub row_ticks: u32,
+}
+
+impl Default for FootprintAlertRule {
+    fn default() -> Self {
+        Self {
+            imbalance_ratio: 3.0,
+            diagonal: true,
+            imbalance_min_volume: 0.0,
+            stack: 3,
+            row_ticks: 1,
+        }
+    }
+}
+
+impl PartialEq for FootprintAlertRule {
+    fn eq(&self, other: &Self) -> bool {
+        self.imbalance_ratio.to_bits() == other.imbalance_ratio.to_bits()
+            && self.diagonal == other.diagonal
+            && self.imbalance_min_volume.to_bits() == other.imbalance_min_volume.to_bits()
+            && self.stack == other.stack
+            && self.row_ticks == other.row_ticks
+    }
+}
+
+impl Eq for FootprintAlertRule {}
+
+impl FootprintAlertRule {
+    /// The rule of the footprint under `params`, such as a chart's `Chart::chart_type_params`,
+    /// with `row_ticks` instrument ticks per row, such as `Chart::footprint_row_ticks`.
+    pub fn from_chart(params: &ChartTypeParams, row_ticks: u32) -> Self {
+        Self {
+            imbalance_ratio: params.footprint_imbalance_ratio,
+            diagonal: params.footprint_diagonal,
+            imbalance_min_volume: params.footprint_imbalance_min_volume,
+            stack: params.footprint_stack,
+            row_ticks,
+        }
+    }
+}
+
 /// A footprint condition met by a live bar, drained by
 /// `OrderFlowDetectors::take_footprint_events` and delivered to [`AlertCondition::Footprint`]
 /// alerts by `AlertEngine::footprint_events`.
@@ -1623,12 +1702,18 @@ pub struct FootprintAlertEvent {
     pub symbol: String,
     /// Its exchange, when the tracked instrument names one.
     pub exchange: Option<String>,
-    /// The detectors' latest subscribed interval of this symbol.
+    /// The interval of the alerts it is for.
     pub timeframe: Timeframe,
+    /// The footprint rule of the alerts it is for, as their `AlertInputs::footprint` holds
+    /// it; `None` for alerts that read the detectors' footprint rule.
+    pub rule: Option<FootprintAlertRule>,
     /// The condition met.
     pub condition: FootprintCondition,
     /// Open time of the bar.
     pub bar: DateTime<Utc>,
+    /// When this bar closes on its detector's session and calendar, independent of delivery
+    /// time. `None` when its close is outside the representable date range.
+    pub bar_end: Option<DateTime<Utc>>,
     /// Whether the closed bar meets the condition; otherwise the forming bar first met it at
     /// the execution at `time` and `price`.
     pub closed: bool,
@@ -1675,6 +1760,12 @@ mod tests {
         for (key, value) in stored.as_object().unwrap() {
             assert_eq!(saved.get(key), Some(value), "{key}");
         }
+        // Inputs saved before footprint rules were captured keep the service rule and their
+        // serialized shape, including after being saved again.
+        let stored = r#"{"timezone":"UTC","calendar":null,"sources":[],"extended_hours":false,"overnight_hours":false,"dividend_adjusted":false,"conversion":null,"count":1000,"start":null,"visible":null,"logarithmic":false,"studies":[]}"#;
+        let inputs: AlertInputs = serde_json::from_str(stored).unwrap();
+        assert_eq!(inputs.footprint, None);
+        assert_eq!(serde_json::to_string(&inputs).unwrap(), stored);
     }
 
     #[test]

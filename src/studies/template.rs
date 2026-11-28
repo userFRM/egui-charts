@@ -121,16 +121,30 @@ impl<'de> serde::Deserialize<'de> for StudyTemplateSet {
 }
 
 impl StudyTemplateSet {
+    /// Find a built-in set by its menu name or an earlier name kept by a host.
+    pub fn builtin_named(name: &str) -> Option<Self> {
+        let name = match name {
+            "Williams Alligator" => "Bill Williams' 3 Lines",
+            "Moving average ribbon" => "MA Exp Ribbon",
+            "Swing trading" => "Swing Trading",
+            "Volume analysis" => "Volume Based",
+            name => name,
+        };
+        Self::builtin()
+            .into_iter()
+            .find_map(|(label, set)| (label == name).then_some(set))
+    }
+
     /// The built-in sets with their names, in the order a menu lists them, for a host to offer
     /// beside the user's own sets and apply as it applies those, for example with
     /// `Chart::apply_chosen_study_template_set`:
     ///
-    /// - "Williams Alligator": [`WilliamsAlligator`].
+    /// - "Bill Williams' 3 Lines": [`WilliamsAlligator`].
     /// - "Displaced EMA": an [`EMA`] drawn 5 bars ahead.
-    /// - "Moving average ribbon": [`MARibbon`].
+    /// - "MA Exp Ribbon": [`MARibbon`].
     /// - "Oscillators": [`RSI`], [`StochasticRSI`] and [`CCI`].
-    /// - "Swing trading": [`BollingerBands`], [`MACD`] and [`Stochastic`].
-    /// - "Volume analysis": [`OnBalanceVolume`] and [`MoneyFlowIndex`].
+    /// - "Swing Trading": [`BollingerBands`], [`MACD`] and [`Stochastic`].
+    /// - "Volume Based": [`OnBalanceVolume`] and [`MoneyFlowIndex`].
     ///
     /// Each set starts with a [`Volume`] study, so that applying it keeps the chart's volume,
     /// and its studies take their default inputs, apart from the displaced EMA's offset. The
@@ -143,11 +157,11 @@ impl StudyTemplateSet {
             .expect("an EMA reads a price, so it takes an offset");
         let sets: [(&'static str, Vec<Box<dyn Indicator>>); 6] = [
             (
-                "Williams Alligator",
+                "Bill Williams' 3 Lines",
                 vec![Box::new(WilliamsAlligator::default())],
             ),
             ("Displaced EMA", vec![Box::new(displaced)]),
-            ("Moving average ribbon", vec![Box::new(MARibbon::default())]),
+            ("MA Exp Ribbon", vec![Box::new(MARibbon::default())]),
             (
                 "Oscillators",
                 vec![
@@ -157,7 +171,7 @@ impl StudyTemplateSet {
                 ],
             ),
             (
-                "Swing trading",
+                "Swing Trading",
                 vec![
                     Box::new(BollingerBands::default()),
                     Box::new(MACD::default()),
@@ -165,7 +179,7 @@ impl StudyTemplateSet {
                 ],
             ),
             (
-                "Volume analysis",
+                "Volume Based",
                 vec![
                     Box::new(OnBalanceVolume::default()),
                     Box::new(MoneyFlowIndex::default()),
@@ -206,17 +220,25 @@ impl StudyTemplateSet {
 
 impl StudyTemplate {
     /// Capture the factory key, [`Indicator::registered_name`], calculation inputs, presentation
-    /// and value scale, without computed values. A host metric keeps its descriptor too.
+    /// and value scale, without computed values. A raw study also keeps its declared source.
+    /// A host metric keeps its descriptor too.
     /// An input that reads another study's plot keeps that study's chart id;
     /// `Chart::study_template_set` saves a chart's studies with the links between them.
     pub fn from_study(study: &dyn Indicator) -> Self {
+        let mut inputs: Vec<_> = study
+            .inputs()
+            .into_iter()
+            .map(|input| (input.id, input.value))
+            .collect();
+        // Raw studies declare their source without listing its configured input.
+        if let Some(source) = study.source()
+            && !inputs.iter().any(|(id, _)| id == "source")
+        {
+            inputs.push(("source".to_owned(), InputValue::Source(source)));
+        }
         Self {
             name: study.registered_name().into(),
-            inputs: study
-                .inputs()
-                .into_iter()
-                .map(|input| (input.id, input.value))
-                .collect(),
+            inputs,
             settings: study.settings(),
             visible: study.user_visible(),
             scale: Some(study.scale()),
@@ -263,8 +285,9 @@ impl StudyTemplate {
         let study_name = own
             .as_ref()
             .map_or(self.name.as_str(), |study| study.name());
+        let builtin_source = self.metric.is_none() && !factory.is_host(&self.name);
         let upgraded = if self.metric.is_none() {
-            self.upgraded(study_name, &own_inputs)
+            self.upgraded(study_name, &own_inputs, builtin_source)
         } else {
             None
         };
@@ -284,7 +307,15 @@ impl StudyTemplate {
         // for that built-in.
         let template = if template.inputs.iter().all(|(id, _)| {
             self.inputs.iter().any(|(saved, _)| saved == id)
-                || declared.iter().any(|input| input.id == *id)
+                || if id == "source" {
+                    // Built-in sources are supplied by the configuration wrapper, while a
+                    // host study keeps its own source when the save leaves it out.
+                    !factory.is_host(&self.name)
+                        && (study.source().is_some()
+                            || declared.iter().any(|input| input.id == *id))
+                } else {
+                    declared.iter().any(|input| input.id == *id)
+                }
         }) {
             template
         } else {
@@ -319,6 +350,10 @@ impl StudyTemplate {
             Box::new(ConfiguredStudy::new(study))
         };
         study.set_registered_name(registered);
+        #[cfg(feature = "widget")]
+        if let Some(configured) = study.concrete_mut::<ConfiguredStudy>() {
+            configured.builtin_source = Some(builtin_source);
+        }
         if !defaults.is_empty() {
             study.set_input_defaults(&defaults);
         }
@@ -419,7 +454,13 @@ impl StudyTemplate {
     /// the study being restored, which a host may register under another name. `own` holds the
     /// inputs of the study registered under the saved name, or the chart's study a stored pane is
     /// matched against; a saved input that study takes as saved is neither renamed nor converted.
-    pub(crate) fn upgraded(&self, study: &str, own: &[StudyInput]) -> Option<Self> {
+    /// `builtin_source` permits the default-source migration only for the built-in study.
+    pub(crate) fn upgraded(
+        &self,
+        study: &str,
+        own: &[StudyInput],
+        builtin_source: bool,
+    ) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
         let declares = |id: &str| own.iter().any(|input| input.id == id);
         let out_of_range = |id: &str| {
@@ -790,6 +831,15 @@ impl StudyTemplate {
                 template
                     .inputs
                     .push(("smoothing".to_owned(), InputValue::Choice(0)));
+            }
+            // A Woodies CCI read the close before it opened on the typical price.
+            "Woodies CCI" if !has("source") && builtin_source => {
+                template.inputs.push((
+                    "source".to_owned(),
+                    InputValue::Source(crate::studies::StudySource::Price(
+                        crate::model::PriceSource::Close,
+                    )),
+                ));
             }
             // A Rank Correlation had no average, and drew no levels, before it opened with an
             // average, three levels and the band between them filled.
@@ -2470,6 +2520,19 @@ mod tests {
                     ("as_drawings", Toggle(true)),
                 ],
             ),
+            // Saved without a source while the study read the close: restored on the close.
+            (
+                "Woodies CCI",
+                vec![("turbo_length", Length(6)), ("cci_length", Length(14))],
+                vec![
+                    ("turbo_length", Length(6)),
+                    ("cci_length", Length(14)),
+                    (
+                        "source",
+                        InputValue::Source(crate::studies::StudySource::Price(PriceSource::Close)),
+                    ),
+                ],
+            ),
             // Saved while each range included its largest size: the limit is the smallest number
             // above it with one more decimal place.
             (
@@ -2593,6 +2656,59 @@ mod tests {
                 "{name}"
             );
         }
+        // A new raw study's declared source is saved too, so it is not mistaken for an older
+        // source-less save when restored.
+        let captured = StudyTemplate::from_study(&crate::studies::WoodiesCCI::default());
+        let source = InputValue::Source(crate::studies::StudySource::Price(PriceSource::HLC3));
+        assert_eq!(
+            captured
+                .inputs
+                .iter()
+                .find(|(id, _)| id == "source")
+                .map(|(_, value)| value),
+            Some(&source)
+        );
+        let restored = captured.create().unwrap();
+        assert_eq!(
+            restored
+                .inputs()
+                .iter()
+                .find(|input| input.id == "source")
+                .map(|input| &input.value),
+            Some(&source)
+        );
+
+        // Literal saves captured on origin/main cf9bdb1e4, with and without an explicit source.
+        // Both keep their Close source, inputs, plot styles and scale.
+        for text in [
+            r#"{"name":"Woodies CCI","inputs":[["turbo_length",{"Length":6}],["cci_length",{"Length":14}],["down_color",{"Color":[244,67,54,255]}],["transition_color",{"Color":[244,67,54,255]}],["neutral_color",{"Color":[244,67,54,255]}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.WoodiesCCI.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"Histogram","visible":true},{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[244,67,54,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Solid","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+            r#"{"name":"Woodies CCI","inputs":[["turbo_length",{"Length":6}],["cci_length",{"Length":14}],["down_color",{"Color":[244,67,54,255]}],["transition_color",{"Color":[244,67,54,255]}],["neutral_color",{"Color":[244,67,54,255]}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":0}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.WoodiesCCI.html","plots":[{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"Histogram","visible":true},{"color":[0,150,136,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true},{"color":[244,67,54,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Solid","width":1.0,"visible":true,"price_line":false},{"value":null,"color":[120,123,134,255],"pattern":"Dotted","width":1.0,"visible":true,"price_line":false}],"fill_between_levels":false,"level_fill_color":[0,9,9,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[],[],[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#,
+        ] {
+            let saved: StudyTemplate = serde_json::from_str(text).unwrap();
+            let restored = saved.create().unwrap();
+            let inputs = restored.inputs();
+            let close = InputValue::Source(crate::studies::StudySource::Price(PriceSource::Close));
+            assert_eq!(
+                inputs
+                    .iter()
+                    .find(|input| input.id == "source")
+                    .map(|input| &input.value),
+                Some(&close)
+            );
+            for (id, value) in &saved.inputs {
+                assert_eq!(
+                    inputs
+                        .iter()
+                        .find(|input| input.id == *id)
+                        .map(|input| &input.value),
+                    Some(value),
+                    "Woodies CCI {id}"
+                );
+            }
+            assert_eq!(restored.settings(), saved.settings);
+            assert_eq!(Some(restored.scale()), saved.scale);
+        }
+
         // Saved on main 7c5548b22 before VWMA's offset range narrowed. Its saved value,
         // styles and input ids survive restoration unchanged.
         let saved: StudyTemplate = serde_json::from_str(r#"{"name":"VWMA","inputs":[["period",{"Length":20}],["source",{"Source":{"Price":"Close"}}],["plot_offset",{"Integer":-600}],["calculation_symbol",{"Symbol":""}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":"https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.VWMA.html","plots":[{"color":[41,98,255,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":null,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[3,6,16,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Main"}"#).unwrap();
@@ -3645,6 +3761,15 @@ mod tests {
         let rows = [
             ("RSI", vec![], 1),
             (
+                "Woodies CCI",
+                vec![(
+                    "source",
+                    InputValue::Source(crate::studies::StudySource::Price(PriceSource::Open)),
+                    InputKind::Source,
+                )],
+                1,
+            ),
+            (
                 "Echo",
                 vec![
                     (
@@ -3735,15 +3860,143 @@ mod tests {
                 original.set_input("fast", Length(21)).unwrap();
             }
             // Echo is a literal chart study saved on origin/main before source routing changed.
-            let saved = if name == "Echo" {
+            let mut saved = if name == "Echo" {
                 serde_json::from_str(r#"{"name":"Echo","inputs":[["source",{"Source":{"Price":"HL2"}}],["basis",{"Source":{"Price":"OHLC4"}}],["symbol",{"Symbol":"OTHER"}],["calculation_timeframe",{"Timeframe":null}],["wait_for_close",{"Toggle":true}]],"settings":{"show_legend_values":true,"user_edit_enabled":true,"help_url":null,"plots":[{"color":[240,145,40,255],"width":1.0,"pattern":"Solid","plot_type":"JoinedLine","visible":true}],"precision":2,"hidden_intervals":[],"timeframe_visibility":{"show_on_all":true,"visible_timeframes":[]},"levels":[],"fill_between_levels":false,"level_fill_color":[15,9,3,16],"untagged_plots":[],"price_line_plots":[],"plot_variants":[[]],"background":null,"background_visible":true,"fills":[],"gradients":[]},"visible":true,"scale":"Independent"}"#).unwrap()
             } else {
                 StudyTemplate::from_study(original.as_ref())
             };
+            if name == "Woodies CCI" {
+                // A host's default source is its own even when an older save leaves it out.
+                saved.inputs.retain(|(id, _)| id != "source");
+            }
             let mut restored = saved
                 .create_with(&factory)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!((restored.name(), restored.line_count()), (name, lines));
+            #[cfg(feature = "widget")]
+            if name == "Woodies CCI" {
+                #[derive(Clone, Default)]
+                struct SourceOnly(crate::studies::IndicatorValues);
+                impl Indicator for SourceOnly {
+                    fn name(&self) -> &str {
+                        "Woodies CCI"
+                    }
+                    fn source(&self) -> Option<crate::studies::StudySource> {
+                        Some(crate::studies::StudySource::Price(PriceSource::Open))
+                    }
+                    fn is_overlay(&self) -> bool {
+                        false
+                    }
+                    fn calculate(&mut self, _: &[crate::model::Bar]) {}
+                    fn values(&self) -> &crate::studies::IndicatorValues {
+                        &self.0
+                    }
+                    fn colors(&self) -> Vec<Color32> {
+                        vec![Color32::WHITE]
+                    }
+                    fn set_colors(&mut self, _: Vec<Color32>) {}
+                    fn set_visible(&mut self, _: bool) {}
+                    fn clone_box(&self) -> Box<dyn Indicator> {
+                        Box::new(self.clone())
+                    }
+                }
+                let mut host = IndicatorFactory::new();
+                host.register(name, || Box::<SourceOnly>::default());
+                let source_only = saved.create_with(&host).unwrap();
+                assert_eq!(
+                    source_only.source(),
+                    Some(crate::studies::StudySource::Price(PriceSource::Open))
+                );
+                let mut builtin = StudyTemplate::from_study(&crate::studies::WoodiesCCI::default());
+                builtin.inputs.retain(|(id, _)| id != "source");
+                host.register(name, || Box::<crate::studies::WoodiesCCI>::default());
+                let host_builtin = builtin.create_with(&host).unwrap();
+                assert_eq!(
+                    host_builtin.source(),
+                    Some(crate::studies::StudySource::Price(PriceSource::HLC3))
+                );
+                host.register(name, || {
+                    let mut study =
+                        ConfiguredStudy::new(Box::<crate::studies::WoodiesCCI>::default());
+                    let source =
+                        InputValue::Source(crate::studies::StudySource::Price(PriceSource::Open));
+                    study.set_input("source", source.clone()).unwrap();
+                    study.set_input_defaults(&[("source".into(), source)]);
+                    Box::new(study)
+                });
+                let host_configured = builtin.create_with(&host).unwrap();
+                assert_eq!(
+                    host_configured.source(),
+                    Some(crate::studies::StudySource::Price(PriceSource::Open))
+                );
+                let restored_builtin = builtin.create().unwrap();
+                assert_eq!(
+                    restored_builtin.source(),
+                    Some(crate::studies::StudySource::Price(PriceSource::Close))
+                );
+                for (declaration, mut study) in [
+                    ("input", restored.clone_box()),
+                    ("source method", source_only),
+                    ("host built-in type", host_builtin.clone_box()),
+                    ("host configured built-in type", host_configured.clone_box()),
+                    ("built-in", restored_builtin),
+                ] {
+                    // Missing sources mean the host's default or the older built-in's Close.
+                    let source = study.source();
+                    let legacy_inputs = study
+                        .inputs()
+                        .into_iter()
+                        .filter(|input| {
+                            input.id != "source"
+                                && !crate::studies::settings::CHART_INPUT_IDS
+                                    .contains(&input.id.as_str())
+                        })
+                        .collect();
+                    let legacy = CustomIndicator::new(name, |_| Vec::new())
+                        .with_overlay(false)
+                        .with_inputs(legacy_inputs, |_, _, _, _| Vec::new())
+                        .unwrap();
+                    let mut older = crate::widget::Chart::new(crate::model::BarData::new());
+                    let old_id = older.add_indicator(Box::new(legacy));
+                    let old_pane = older.series_pane(old_id).unwrap();
+                    let mut current = crate::widget::Chart::new(crate::model::BarData::new());
+                    study.set_overlay(false);
+                    let current_id = current.add_indicator(study);
+                    let current_pane = current.series_pane(current_id).unwrap();
+                    assert_eq!(
+                        older.linked_pane(old_pane, &current),
+                        Some(current_pane),
+                        "{declaration}: {source:?}"
+                    );
+                    #[cfg(feature = "drawings")]
+                    assert_eq!(
+                        current.stored_pane_owner(&older.stored_pane(old_pane).unwrap()),
+                        Some(current_id.0),
+                        "{declaration}: {source:?}"
+                    );
+                    current
+                        .indicator_mut(current_id)
+                        .unwrap()
+                        .set_input(
+                            "source",
+                            InputValue::Source(crate::studies::StudySource::Price(
+                                PriceSource::HL2,
+                            )),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        older.linked_pane(old_pane, &current),
+                        None,
+                        "{declaration}: {source:?}"
+                    );
+                    #[cfg(feature = "drawings")]
+                    assert_eq!(
+                        current.stored_pane_owner(&older.stored_pane(old_pane).unwrap()),
+                        None,
+                        "{declaration}: {source:?}"
+                    );
+                }
+            }
             if name == "Echo" {
                 assert_eq!(restored.settings(), saved.settings);
                 assert_eq!(

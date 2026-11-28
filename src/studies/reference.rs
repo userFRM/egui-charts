@@ -24,7 +24,8 @@
 //!   the conventional definition, aligned and centred.
 //! - Swenlin for the Price Momentum Oscillator; Pring for the Special K, whose 725-bar warm-up needs a
 //!   1000-bar series of its own; Spearman for the RCI Ribbon; Dorsey for the Relative Volatility Index;
-//!   Blau for the SMI Ergodic lines; Lambert's CCI of the close for Woodies CCI.
+//!   Blau for the SMI Ergodic lines; Lambert's CCI of the typical price for Woodies CCI, and of
+//!   the close for a Woodies CCI whose source is the close.
 //! - Chande and Kroll 1994 for the Chande Kroll Stop; Wilder's volatility system for the Volatility Stop;
 //!   the median of the bar midpoints with ATR bands for the Median; the angle of the 34-bar EMA for the
 //!   Chop Zone.
@@ -790,6 +791,18 @@ fn staple_studies_match_published_definitions() {
         ("SMIEI(20,5,5)", Box::new(SMIErgodicIndicator::default())),
         ("SMIEO(20,5,5)", Box::new(SMIErgodicOscillator::default())),
         ("Woodies(6,14)", Box::new(WoodiesCCI::default())),
+        ("Woodies(6,14,close)", {
+            let mut study = crate::studies::ConfiguredStudy::new(Box::new(WoodiesCCI::default()));
+            study
+                .set_input(
+                    "source",
+                    crate::studies::InputValue::Source(crate::studies::StudySource::Price(
+                        crate::model::PriceSource::Close,
+                    )),
+                )
+                .unwrap();
+            Box::new(study)
+        }),
         ("Fractals(2)", Box::new(WilliamsFractals::default())),
         ("Fractals(3)", Box::new(WilliamsFractals::new(3))),
         (
